@@ -16,6 +16,33 @@ nonisolated struct WatchConfigs: Codable, Sendable, Equatable {
     var features: [String: [String]]? = nil
 }
 
+nonisolated extension WatchConfigs {
+    /// The watch keeps what the phone sent in its keychain: the configs carry hub tokens and Cloudflare Access service
+    /// tokens. Builds before this kept them as plain JSON in defaults ("configs", or "config" from before several hubs);
+    /// `stored` moves those over.
+    static let keychainAccount = "watchConfigs"
+
+    static func stored(_ defaults: UserDefaults = .standard) -> WatchConfigs? {
+        switch Keychain.read(account: keychainAccount) {
+        case .found(let data): return try? JSONDecoder().decode(Self.self, from: data)
+        case .failed: return nil // not readable yet (before the first unlock): leave the old copy for next time
+        case .missing: break
+        }
+        let old = defaults.data(forKey: "configs").flatMap { try? JSONDecoder().decode(Self.self, from: $0) }
+            ?? defaults.data(forKey: "config").flatMap { try? JSONDecoder().decode(ServerConfig.self, from: $0) }
+                .map { WatchConfigs(configs: ["": $0]) }
+        old?.store(defaults)
+        return old
+    }
+
+    /// Saves to the keychain and drops the plain copy older builds left in defaults.
+    func store(_ defaults: UserDefaults = .standard) {
+        guard let data = try? JSONEncoder().encode(self), Keychain.save(data, account: Self.keychainAccount) else { return }
+        defaults.removeObject(forKey: "configs")
+        defaults.removeObject(forKey: "config")
+    }
+}
+
 nonisolated extension Interaction {
     /// Whether the phone passes it to the watch: not an MCP form or link, which the watch can't fill in, and which a
     /// watch build from before the kind would fail to decode, losing the whole summary with it.
@@ -62,6 +89,8 @@ final class WatchSync: NSObject, WCSessionDelegate {
     var configProvider: (() -> ServerConfig?)?
     var configsProvider: (() -> WatchConfigs?)?
     var onRecording: ((RecordingTransfer) -> Void)?
+    /// Watch side: the meetings' minutes the phone relays (`WatchMinutes`).
+    var onMinutes: ((WatchMinutes) -> Void)?
     var onRecordingReceipt: ((RecordingReceipt) -> Void)?
     var onRecordingEvent: (() -> Void)?
 
@@ -145,6 +174,15 @@ final class WatchSync: NSObject, WCSessionDelegate {
         update(["summary": data])
     }
 
+    /// iPhone side: the meetings' minutes for the watch, when they changed.
+    func push(minutes: WatchMinutes) {
+        #if os(iOS) || os(visionOS)
+        guard WCSession.isSupported(), WCSession.default.activationState == .activated, WCSession.default.isWatchAppInstalled,
+              let data = minutes.data, WCSession.default.applicationContext[WatchMinutes.key] as? Data != data else { return }
+        update([WatchMinutes.key: data])
+        #endif
+    }
+
     private func update(_ values: [String: Any], removing gone: [String] = []) {
         guard WCSession.isSupported(), WCSession.default.activationState == .activated else { return }
         var ctx = WCSession.default.applicationContext
@@ -153,7 +191,11 @@ final class WatchSync: NSObject, WCSessionDelegate {
         try? WCSession.default.updateApplicationContext(ctx)
     }
 
+    /// The iPhone side sets this once it can hold rolling recordings; an older phone never does, so the watch keeps to plain recordings.
+    static let phoneRollingKey = "recording.phoneRolling"
+
     private func apply(_ ctx: [String: Any]) {
+        if let rolling = ctx["recordingRolling"] as? Bool { UserDefaults.standard.set(rolling, forKey: Self.phoneRollingKey) }
         #if os(watchOS)
         if let language = ctx["language"] as? String {
             LanguageStore.shared.follow(language)
@@ -171,12 +213,16 @@ final class WatchSync: NSObject, WCSessionDelegate {
         if let data = ctx["summary"] as? Data, let s = try? JSON.decoder.decode(WatchSummary.self, from: data) {
             onSummary?(s)
         }
+        if let minutes = WatchMinutes(data: ctx[WatchMinutes.key] as? Data) { onMinutes?(minutes) }
     }
 
     nonisolated func session(_ session: WCSession, activationDidCompleteWith state: WCSessionActivationState, error: Error?) {
         nonisolated(unsafe) let ctx = session.receivedApplicationContext
         Task { @MainActor in
             self.apply(ctx)
+            #if os(iOS) || os(visionOS)
+            self.update(["recordingRolling": true])
+            #endif
             self.onActivated?()
             self.onRecordingEvent?()
         }

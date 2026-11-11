@@ -23,6 +23,7 @@ import (
 	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -35,6 +36,7 @@ import (
 func (h *Hub) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", h.health)
+	h.passwordLoginRoutes(mux)
 	api := http.NewServeMux()
 	h.apiMux = api
 	if h.upd != nil {
@@ -45,6 +47,7 @@ func (h *Hub) routes() http.Handler {
 	h.machineTrustRoutes(api)
 	h.machineRenameRoutes(api)
 	h.deviceRoutesRelayed(api) // the manager's own: reconnect, engine, herdr, deploy, claude-dirs (devices_routes.go)
+	h.sharingRoutes(api)
 	h.fileRoutes(api)
 	h.gitRoutes(api)
 	h.agentSettingsRoutes(api)
@@ -75,6 +78,7 @@ func (h *Hub) routes() http.Handler {
 	h.lookUploadRoutes(api)
 	// usage windows (#2432): the manager's (devices_routes.go)
 	h.usageRoutesRelayed(api)
+	h.transferRoutesRelayed(api) // computer to computer file transfers, the manager's (devices_routes.go)
 	h.inboxRoutesRelayed(api)
 	// the extensions', connectors', bots', mail's, Cua's and ego's: the manager's (extensions_link.go)
 	h.extensionRoutesRelayed(api)
@@ -91,7 +95,7 @@ func (h *Hub) routes() http.Handler {
 	h.runtimeCLIRoutes(api)
 	// What the center serves: its own apps' requests and those the members pass on (peer_http.go), whose source the
 	// member judged (no gate here for them). A member passes everything but its own few routes on (memberForward).
-	centerAPI := h.auth(h.extensionAPIs(jsonRouteErrors(api), api))
+	centerAPI := h.centerSharing(h.auth(h.extensionAPIs(jsonRouteErrors(api), api)))
 	h.mesh.centerAPI.Store(centerAPI)
 	appAPI := h.gate(h.memberForward(centerAPI))
 	h.busRoutes(mux)
@@ -99,7 +103,7 @@ func (h *Hub) routes() http.Handler {
 	h.managerInstallRoutes(mux) // GET /i/<code>: the install script (managers_install.go)
 	mux.Handle("/api/", appAPI)
 	mux.Handle("/", h.adminRoutes(mux, appAPI, webApp(filepath.Join(h.cfg.dir, "web"))))
-	return h.outerLayers(jsonRouteErrors(mux))
+	return h.outerLayers(h.sharingDispatcher(h.plaintextLoopbackOnly(jsonRouteErrors(mux))))
 }
 
 // outerLayers are what every request goes through around the routes, outermost first: the auth layer's marks
@@ -208,7 +212,14 @@ func (h *Hub) auth(next http.Handler) http.Handler {
 		if ext {
 			p, ok, p.extOpens, p.extScope, sure = h.authorizeExtension(r.Context(), tok, r)
 		} else {
-			p, ok = h.authenticate(r.Context(), tok)
+			var err error
+			if p, ok, err = h.lookupToken(r.Context(), tok); err != nil {
+				// The token store did not answer: no verdict on the token. A 401 would tell the app its credential is
+				// revoked (Android then forgets the hub), so say "try again" and don't count it against the source.
+				retryAfter(w, 5*time.Second)
+				h.securityError(w, r, http.StatusServiceUnavailable, codeTokenStoreUnavailable, 0)
+				return
+			}
 		}
 		if !ok && ext && !sure && (!public || h.proofVouches(r, proof, tok)) {
 			// A manager did not answer (timed out, not ready yet): no verdict on the token, so neither counted nor
@@ -363,6 +374,11 @@ func logRequests(h *Hub, next http.Handler) http.Handler {
 
 // loggedPath is a request's path as the log may show it: an install code in /i/<code> (a credential) is masked.
 func loggedPath(p string) string {
+	for _, prefix := range []string{"/share/", publicSharePrefix} {
+		if strings.HasPrefix(p, prefix) {
+			return prefix + "<capability>"
+		}
+	}
 	if rest, ok := strings.CutPrefix(p, installScriptPath); ok {
 		code, tail, _ := strings.Cut(rest, "/")
 		if code != "" {
@@ -391,6 +407,30 @@ func requestID(client string) string {
 }
 
 func writeJSON(w http.ResponseWriter, v any) { apierr.WriteJSON(w, v) }
+
+// marshalItems is v, a page or push of transcript items, as JSON with < > & as they are. Escaped, each costs six
+// bytes, and a tool input or text of HTML or code went to the apps at up to three times its size (#2907). Escapes the
+// node already wrote stay as they are, and U+2028 and U+2029 are still escaped, as encoding/json does without HTML
+// escaping.
+func marshalItems(v any) ([]byte, error) {
+	var b bytes.Buffer
+	if err := itemsEncoder(&b).Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(b.Bytes(), []byte("\n")), nil
+}
+
+// writeItemsJSON is writeJSON for a body of transcript items (marshalItems).
+func writeItemsJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = itemsEncoder(w).Encode(v)
+}
+
+func itemsEncoder(w io.Writer) *json.Encoder {
+	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(false)
+	return enc
+}
 
 func atoi(s string) int {
 	n := 0
@@ -500,11 +540,11 @@ func (h *Hub) sessionItems(w http.ResponseWriter, r *http.Request, m *Machine) {
 		callErr(w, err)
 		return
 	}
-	res.Items = localizedItems(h.requestLang(r), h.withInjected(res.Items))
+	res.Items = cardCompatItems(h.requestLang(r), h.requestWants(r, featureCardRing), localizedItems(h.requestLang(r), h.withInjected(res.Items)))
 	if q.Get("lazy_images") == "1" {
 		res.Items = proto.WithoutImageData(res.Items)
 	}
-	writeJSON(w, res)
+	writeItemsJSON(w, res)
 }
 
 // sessionItemFull serves one item whole: pages cut long text (the item says full_size), the app fetches the rest when
@@ -520,7 +560,7 @@ func (h *Hub) sessionItemFull(w http.ResponseWriter, r *http.Request, m *Machine
 	// The whole item for the channels that follow the conversation, or show its view (the manager's, fleet_follow.go).
 	h.asstOf(h.sessionOwner(m.cfg.ID, r.PathValue("sid"))).notify(assistantwire.EventSessionItems, assistantwire.SessionItems{MachineID: m.cfg.ID, SessionID: r.PathValue("sid"),
 		Items: []proto.Item{it}})
-	writeJSON(w, localizedItems(h.requestLang(r), h.withInjected([]proto.Item{it}))[0])
+	writeItemsJSON(w, cardCompatItems(h.requestLang(r), h.requestWants(r, featureCardRing), localizedItems(h.requestLang(r), h.withInjected([]proto.Item{it})))[0])
 }
 
 // sessionImage serves one item's image as raw bytes. An item's image never changes, so the app may cache it forever.
@@ -611,9 +651,13 @@ func (h *Hub) interruptSession(w http.ResponseWriter, r *http.Request, m *Machin
 }
 
 func (h *Hub) listSessions(w http.ResponseWriter, r *http.Request) {
+	named, ok := h.sessionsManager(w, r) // ?manager=<id>: that manager's computers only (sessions_list.go)
+	if !ok {
+		return
+	}
 	_, lookup := r.URL.Query()["session_id"]
 	if lookup || sessionlist.Enabled(r.URL.Query()) {
-		h.pagedSessions(w, r)
+		h.pagedSessions(w, r, named)
 		return
 	}
 	mid := r.URL.Query().Get("machine_id")
@@ -626,10 +670,11 @@ func (h *Hub) listSessions(w http.ResponseWriter, r *http.Request) {
 	// sessions, a copy of all the lists and the whole answer in one buffer were most of what an answer allocated.
 	var lists []stampedList
 	for _, m := range h.machinesNow() {
-		if mid != "" && m.cfg.ID != mid || em != "" && h.machineOwner(m.cfg.ID) != em {
+		owner := h.machineOwner(m.cfg.ID)
+		if mid != "" && m.cfg.ID != mid || em != "" && owner != em || named != "" && owner != named {
 			continue
 		}
-		lists = append(lists, stampedList{h.shown(m.cfg.ID, m.keptSessions()), h.machineOwner(m.cfg.ID)})
+		lists = append(lists, stampedList{h.shown(m.cfg.ID, m.keptSessions()), owner})
 	}
 	writeSessionLists(w, lists)
 }
@@ -694,6 +739,7 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		Cwd             string `json:"cwd"`
 		Launcher        string `json:"launcher"`
 		AgentType       string `json:"agent_type,omitempty"`
+		WorkSession     bool   `json:"work_session,omitempty"`
 		Model           string `json:"model,omitempty"` // picked in "New agent" for this start; empty: applyModel's
 		Prompt          string `json:"prompt"`
 		ResumeSessionID string `json:"resume_session_id"`
@@ -722,6 +768,12 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		writeBodyErr(w, err, err)
 		return
 	}
+	if p.WorkSession && (p.Launcher == "" || p.AgentType == "" || strings.TrimSpace(p.Cwd) == "" ||
+		p.ResumeSessionID != "" || p.TodoID != "" || p.WorkspaceID != "" || p.Host != "") {
+		writeErrCode(w, http.StatusBadRequest, "work_target_required", errors.New("Choose a computer, project folder, harness and launcher for the new session."))
+		return
+	}
+	r = h.captureHumanSubmission(r, p.Prompt)
 	if p.TodoID != "" && principalOf(r.Context()).Role != roleFull {
 		writeErr(w, http.StatusForbidden, errors.New("read-only role cannot modify todos"))
 		return
@@ -788,7 +840,7 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		// Finish an accepted start even if its HTTP response is lost; client_ops records the outcome.
 		parent = context.WithoutCancel(parent)
 	}
-	ctx, cancel := context.WithTimeout(parent, startBudget(async))
+	ctx, cancel := context.WithTimeout(parent, startBudget(async && !p.WorkSession))
 	defer cancel()
 	var res struct {
 		Session proto.Session `json:"session"`
@@ -811,7 +863,25 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		callErr(w, err) // 503 assistant_offline without the manager (the machine is its to reach), else 502
 		return
 	}
-	if err := m.call(ctx, "session.start", params, &res); err != nil {
+	method := "session.start"
+	if p.WorkSession {
+		method = devicewire.MethodStartWorkSession // An old node must refuse, never silently ignore strict start options.
+		if params["launcher"] != p.Launcher || (strings.TrimSpace(p.Model) != "" && params["model"] != strings.TrimSpace(p.Model)) {
+			writeErrCode(w, http.StatusConflict, "work_target_changed", errors.New("The selected launcher or model changed."))
+			return
+		}
+		if strings.TrimSpace(p.Model) == "" {
+			// In this picker "Launcher default" is the launcher's own model,
+			// even if Models › Agents happens to configure the same launcher.
+			delete(params, "model")
+			delete(params, "model_fingerprint")
+		}
+		if p.Effort == "" {
+			delete(params, "effort")
+		}
+		setWorkLauncherConfig(m, p.Launcher, params)
+	}
+	if err := m.call(ctx, method, params, &res); err != nil {
 		h.startEnded(m.cfg.ID, p.ResumeSessionID, params, err)
 		callErr(w, apierr.OnMachine(err, m.name())) // a launcher the new tab cannot run "on <name>'s MacBook"
 		return
@@ -881,6 +951,11 @@ func (h *Hub) startEnded(mid, resume string, params map[string]any, err error) {
 		r.Error = err.Error()
 		var re *rpc.Error
 		if errors.As(err, &re) {
+			// Work picker refusals happen before the launcher runs. Counting
+			// them as failures could hide a working launcher from the picker.
+			if strings.HasPrefix(re.Code, "work_") {
+				return
+			}
 			r.Code, r.Data = re.Code, re.Data
 		}
 	}
@@ -1077,13 +1152,14 @@ func (h *Hub) itemsToSubscribers(machineID, sessionID string, items []proto.Item
 		if moreAfter {
 			out["more_after"] = true
 		}
-		b, _ := json.Marshal(out)
+		b, _ := marshalItems(out)
 		return b
 	}
 	// One message per language and image mode: the node's Chinese lines read in each connection's (transcript_text.go).
 	type form struct {
 		lang i18n.Lang
 		lazy bool
+		ring bool // draws ```persona-card rings (card_compat.go)
 	}
 	msgs := map[form][]byte{}
 	key := [2]string{machineID, sessionID}
@@ -1096,10 +1172,10 @@ func (h *Hub) itemsToSubscribers(machineID, sessionID string, items []proto.Item
 		if !sub {
 			continue
 		}
-		f := form{c.lang(), wantsLazy}
+		f := form{c.lang(), wantsLazy, c.has(featureCardRing)}
 		b, ok := msgs[f]
 		if !ok {
-			its := localizedItems(f.lang, items)
+			its := cardCompatItems(f.lang, f.ring, localizedItems(f.lang, items))
 			if f.lazy {
 				its = proto.WithoutImageData(its)
 			}
@@ -1396,6 +1472,7 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 			h.mu.Lock()
 			c.runtimeCLI, c.sim, c.name, c.since = true, msg.Simulator, msg.DeviceName, time.Now()
 			h.mu.Unlock()
+			h.noteClientAppSimulator(c, msg.Simulator)
 			return
 		}
 		deviceID := msg.DeviceID
@@ -1414,6 +1491,7 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 			c.phoneToolNames[tool.Name] = true
 		}
 		h.mu.Unlock()
+		h.noteClientAppSimulator(c, msg.Simulator)
 		if strings.HasPrefix(c.device, "pair_") {
 			// A pairing token is traded for a device token within seconds and the phone registers again under it:
 			// calls still reach this connection, but nothing is saved under a credential about to disappear.
@@ -1466,7 +1544,7 @@ func (h *Hub) sendBacklog(ctx context.Context, c *client, m *Machine, sid string
 			c.sendJSON(failure)
 			return
 		}
-		res.Items = localizedItems(c.lang(), h.withInjected(res.Items))
+		res.Items = cardCompatItems(c.lang(), c.has(featureCardRing), localizedItems(c.lang(), h.withInjected(res.Items)))
 		if lazy {
 			res.Items = proto.WithoutImageData(res.Items)
 		}
@@ -1482,7 +1560,9 @@ func (h *Hub) sendBacklog(ctx context.Context, c *client, m *Machine, sid string
 			out["more_after"] = true
 			more = false
 		}
-		c.sendJSON(out)
+		if b, err := marshalItems(out); err == nil {
+			c.queue(b)
+		}
 		if !more {
 			h.sendLiveText(c, m.cfg.ID, sid)
 			return

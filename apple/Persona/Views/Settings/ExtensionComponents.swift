@@ -4,11 +4,12 @@ import SwiftUI
 // The components of an extension's View (docs/extensions/extensions.md「Declarative UI」「UI 版本 3」), drawn by `ExtensionItemRow`.
 
 /// A row's look: what leads it (an icon, an avatar or a thumbnail), its title and subtitle, its value and badge, and a
-/// chevron when it can be used (a spinner while it runs).
-struct ExtensionComponentRowLabel: View {
+/// chevron when it can be used (a spinner while it runs); `trailing` at its very end (a control, UI version 6).
+struct ExtensionComponentRowLabel<Trailing: View>: View {
     var row: ExtensionRowComponent
     var model: (any ExtensionViewControlling)?
     var chevron: Bool
+    @ViewBuilder var trailing: Trailing
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -36,6 +37,7 @@ struct ExtensionComponentRowLabel: View {
                     ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
                 }
             }
+            trailing
         }
         .contentShape(.rect)
     }
@@ -71,6 +73,12 @@ struct ExtensionComponentRowLabel: View {
     static func image(_ s: String) -> URL? {
         guard let u = URL(string: s), u.scheme?.lowercased() == "https" else { return nil }
         return u
+    }
+}
+
+extension ExtensionComponentRowLabel where Trailing == EmptyView {
+    init(row: ExtensionRowComponent, model: (any ExtensionViewControlling)?, chevron: Bool) {
+        self.init(row: row, model: model, chevron: chevron) { EmptyView() }
     }
 }
 
@@ -324,7 +332,8 @@ enum ExtensionOutcome {
     }
 }
 
-/// An extension's `chart`: its title, the chart (bars or lines, stacked when it says so), what it says under it. A
+/// An extension's `chart`: its title, the chart (bars or lines, stacked when it says so; a donut or pie a `RingChart` of
+/// the first series), what it says under it. A
 /// series' tone is a role color, without one it takes the next data hue; values the extension did not write are compact
 /// numbers with its unit. Compact (a card) when the environment says so.
 struct ExtensionChartItem: View {
@@ -342,6 +351,10 @@ struct ExtensionChartItem: View {
                 if let t = item.title, !t.isEmpty {
                     Text(t).font(compact ? Theme.Font.labelStrong : Theme.Font.secondaryStrong).foregroundStyle(compact ? .secondary : .primary).lineLimit(1)
                 }
+                if item.kind == ExtensionChartKind.donut || item.kind == ExtensionChartKind.pie, let s = series.first {
+                    RingChart(parts: s.points.map { RingChart.Part(label: $0.label, value: $0.value, display: $0.display ?? format($0.value)) },
+                              center: item.center, pie: item.kind == ExtensionChartKind.pie)
+                } else {
                 DataChart(kind: item.kind == "line" ? .line : .bar, labels: labels,
                           series: series.enumerated().map { i, s in
                               DataChart.Series(name: s.name?.isEmpty == false ? s.name! : String(localized: "Series \(i + 1)"),
@@ -351,6 +364,7 @@ struct ExtensionChartItem: View {
                           stacked: item.stacked == true, format: format, compact: compact)
                 // Drawn again with other values, the bars and lines move to them (#37).
                 .animation(reduceMotion ? nil : Theme.Motion.layout, value: item.series)
+                }
                 if let d = item.detail, !d.isEmpty, !compact {
                     Text(d).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(3)
                 }

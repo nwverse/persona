@@ -89,6 +89,18 @@ struct ComposerRow<MenuItems: View>: View {
                 .keyboardShortcut(.return, modifiers: .command)
                 .accessibilityLabel("Send")
             }
+            #if os(iOS)
+            if focused.wrappedValue {
+                Button(action: dismissKeyboard) {
+                    ThemedIcon(Theme.Icon.dismissKeyboard).font(Theme.Font.heading).frame(width: Self.glyph, height: Self.glyph)
+                }
+                .themedButton()
+                .clipShape(.circle)
+                .accessibilityLabel("Hide Keyboard")
+                .accessibilityIdentifier("composer-row-dismiss-keyboard")
+                .transition(.scale.combined(with: .opacity))
+            }
+            #endif
         }
     }
 }
@@ -104,6 +116,15 @@ extension ComposerRow {
         #endif
         send()
     }
+
+    #if os(iOS)
+    fileprivate func dismissKeyboard() {
+        Haptics.tap()
+        if focused.wrappedValue { TypedText.commitFocused(into: $text) }
+        focused.wrappedValue = false
+        Keyboard.dismiss()
+    }
+    #endif
 }
 
 /// A chat's composer's photos, videos and file uploads (#2626): kept by `AppModel.composerAttachments(_:)` per
@@ -133,6 +154,37 @@ final class StarterDraft {
         held.images = []
         held.videos.sent()
         generation += 1
+    }
+
+    /// The first message as it goes, from what was typed (`typed`, trimmed) and the box: the quoted sessions as
+    /// <persona-context> tags first, as in a chat; with nothing typed, a line saying what to look at; then the videos.
+    func message(_ typed: String, files: [AttachedFile]) -> String {
+        let said = typed.isEmpty
+            ? (held.images.isEmpty ? (files.isEmpty ? String(localized: "See the context above.") : String(localized: "Please look at the image [Assistant View a3e0a0]"))
+                                   : String(localized: "Please look at the image [Assistant View 5ad878]"))
+            : typed
+        let body = AttachedFile.message(said, files: files)
+        return quotes.isEmpty ? body : quotes.map(\.xml).joined(separator: "\n") + "\n\n" + body
+    }
+}
+
+/// The composer's Take Photo and Glasses Photo, in a conversation and a new one alike: the system camera over the page,
+/// the glasses' viewfinder in a sheet (iOS); each picture taken goes to `add`.
+struct ComposerCaptureSheets: ViewModifier {
+    @Binding var camera: Bool
+    @Binding var glasses: Bool
+    var add: (UIImage) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .fullScreenCover(isPresented: $camera) {
+                CameraPicker { img in add(img) }.ignoresSafeArea()
+            }
+            #if os(iOS)
+            .sheet(isPresented: $glasses) {
+                GlassesCaptureSheet { img in add(img) }
+            }
+            #endif
     }
 }
 

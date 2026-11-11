@@ -8,6 +8,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Launcher, Machine } from "../lib/types";
 
 const state = vi.hoisted(() => ({ loaded: true, features: [] as string[], machines: [] as Machine[] }));
+// one assistant: its computers are the store's (lib/current-assistant.ts reads the roster, which this store stand-in has none of)
+vi.mock("../lib/current-assistant", async () => {
+  const store = (await import("../lib/store")) as unknown as { useStore: <T>(select: (s: { machines: unknown[] }) => T) => T };
+  return { useScopedMachines: () => store.useStore((s) => s.machines) };
+});
 vi.mock("../lib/store", () => ({
   getState: () => state,
   useStore: (selector: (value: typeof state) => unknown) => selector(state),
@@ -110,6 +115,13 @@ describe("New agent's launcher health", () => {
     act(() => button("添加模型供应商").click());
     expect(closed).toBe(1);
     expect(navigated).toEqual(["/settings?tab=models&add=1"]);
+  });
+
+  it("Manage launchers under the launchers opens Settings › Model providers (#4384)", async () => {
+    await open("m");
+    act(() => q('[data-testid="new-agent-manage-launchers"]')!.click());
+    expect(closed).toBe(1);
+    expect(navigated).toEqual(["/settings?tab=models#settings-providers"]);
   });
 
   it("lists a lone blocked launcher too, rather than hiding the field", async () => {

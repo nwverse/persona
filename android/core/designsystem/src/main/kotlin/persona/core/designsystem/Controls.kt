@@ -21,10 +21,12 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
@@ -32,7 +34,11 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.addOutline
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -60,6 +66,9 @@ import persona.core.designsystem.icons.PhIcons
 
 // ------------------------------------------------------------------ icons
 
+/** A [JIcon]'s size when the caller gives none. */
+internal val JIconDefaultSize: Dp = Tokens.Size.iconS
+
 /**
  * A Phosphor icon in the weight the style uses: regular in glass and brief, bold on the board, filled when
  * [selected]. [decorative] icons (leading icons of settings rows) use the duotone weight in glass.
@@ -69,7 +78,7 @@ fun JIcon(
     icon: PhIcon,
     contentDescription: String? = null,
     modifier: Modifier = Modifier,
-    size: Dp = 22.dp,
+    size: Dp = JIconDefaultSize,
     tint: Color = LocalContentColor.current,
     selected: Boolean = false,
     decorative: Boolean = false,
@@ -94,6 +103,16 @@ fun JIcon(
  * its alpha changes.
  */
 fun Modifier.stableAlpha(alpha: Float): Modifier = graphicsLayer { this.alpha = alpha }
+
+/**
+ * Clips what the rest of the chain draws to [shape], but not where it takes touches. `Modifier.clip` also cuts off
+ * the 48dp touch target Compose gives a smaller child at its own edge: a 36dp segment inside a clipped frame lost the
+ * taps just above it (DS-06, `TouchTargetTest`).
+ */
+internal fun Modifier.clipDrawing(shape: Shape): Modifier = drawWithCache {
+    val outline = Path().apply { addOutline(shape.createOutline(size, layoutDirection, this@drawWithCache)) }
+    onDrawWithContent { clipPath(outline) { this@onDrawWithContent.drawContent() } }
+}
 
 enum class JButtonKind { Primary, Secondary, Quiet, Destructive }
 
@@ -133,7 +152,7 @@ fun JButton(
     }
     val busy = loading
     Row(
-        modifier.heightIn(min = size.height).scale(scale).then(frame)
+        modifier.heightIn(min = size.height).minimumInteractiveComponentSize().scale(scale).then(frame)
             .clickable(interaction, indication = androidx.compose.material3.ripple(), enabled = enabled && !busy, role = Role.Button, onClick = onClick)
             .stableAlpha(if (enabled || busy) 1f else 0.4f)
             .padding(horizontal = if (kind == JButtonKind.Quiet) 8.dp else size.padding),
@@ -400,7 +419,7 @@ fun JSegmented(options: List<JSegment>, selected: Int, onSelect: (Int) -> Unit, 
     fun text(segment: JSegment) = segment.label + (segment.count?.let { " $it" } ?: "")
     when (PersonaTheme.style) {
         AppStyle.Glass -> Row(
-            modifier.clip(CircleShape).background(palette.surface)
+            modifier.clipDrawing(CircleShape).background(palette.surface)
                 .border(1.dp, Brush.verticalGradient(listOf(palette.strokeTop, palette.strokeBottom)), CircleShape).padding(4.dp),
         ) {
             options.forEachIndexed { index, segment ->
@@ -410,7 +429,7 @@ fun JSegmented(options: List<JSegment>, selected: Int, onSelect: (Int) -> Unit, 
                         .clickable(role = Role.Tab) { onSelect(index) }.semantics { this.selected = on }
                         .padding(horizontal = 16.dp, vertical = 9.dp),
                     contentAlignment = Alignment.Center,
-                ) { Text(text(segment), style = type.labelSmall, color = if (on) palette.onAction else palette.ink2, maxLines = 1) }
+                ) { Text(text(segment), style = type.labelSmall, color = if (on) palette.onAction else palette.ink2, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) }
             }
         }
         AppStyle.Brief -> Row(modifier, horizontalArrangement = Arrangement.spacedBy(22.dp)) {
@@ -420,14 +439,14 @@ fun JSegmented(options: List<JSegment>, selected: Int, onSelect: (Int) -> Unit, 
                     Modifier.clickable(role = Role.Tab) { onSelect(index) }.semantics { this.selected = on }.padding(vertical = 6.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    Text(text(segment), style = type.label, color = if (on) palette.ink else palette.ink3, maxLines = 1)
+                    Text(text(segment), style = type.label, color = if (on) palette.ink else palette.ink3, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                     Spacer(Modifier.height(6.dp))
                     Box(Modifier.size(20.dp, 2.5.dp).clip(CircleShape).background(if (on) palette.ink else Color.Transparent))
                 }
             }
         }
         AppStyle.Board -> Row(
-            modifier.height(IntrinsicSize.Min).clip(RoundedCornerShape(8.dp)).background(palette.surface).border(1.dp, palette.line, RoundedCornerShape(8.dp)),
+            modifier.height(IntrinsicSize.Min).clipDrawing(RoundedCornerShape(8.dp)).background(palette.surface).border(1.dp, palette.line, RoundedCornerShape(8.dp)),
         ) {
             options.forEachIndexed { index, segment ->
                 val on = index == selected
@@ -445,7 +464,8 @@ fun JSegmented(options: List<JSegment>, selected: Int, onSelect: (Int) -> Unit, 
                 ) {
                     Text(
                         text(segment), style = type.labelSmall.copy(fontWeight = if (on) FontWeight.Bold else FontWeight.Medium),
-                        color = if (on) palette.ink else palette.ink2, maxLines = 1, modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        color = if (on) palette.ink else palette.ink2, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                     )
                 }
             }
@@ -474,7 +494,8 @@ object JChipTokens {
 /**
  * A filter or a fact. With [onClick] it toggles; without, it is a quiet label. [onLongClick] (with [onClick]) is a long
  * press for more (a menu of other ways to use it); the chip looks the same. [dot] is a plain colored mark in the place
- * of a [status] dot, for a category rather than a state.
+ * of a [status] dot, for a category rather than a state. Pass [Role.Button] as [role] for an action instead of a toggle.
+ * [trailingIcon] adds a compact affordance such as an expansion chevron.
  */
 @Composable
 fun JChip(
@@ -489,6 +510,8 @@ fun JChip(
     muted: Boolean = false,
     onLongClick: (() -> Unit)? = null,
     dot: Color? = null,
+    role: Role = Role.Checkbox,
+    trailingIcon: PhIcon? = null,
 ) {
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
@@ -500,11 +523,15 @@ fun JChip(
     }
     val ink = if (muted && (!selected || style == AppStyle.Board)) palette.ink3 else plainInk
     Row(
-        modifier.heightIn(min = if (onClick != null) JChipTokens.height else JChipTokens.quietHeight).clip(shape).background(fill).border(JChipTokens.border, border, shape)
+        modifier.heightIn(min = if (onClick != null) JChipTokens.height else JChipTokens.quietHeight)
+            .then(if (onClick != null) Modifier.minimumInteractiveComponentSize() else Modifier)
+            .clip(shape).background(fill).border(JChipTokens.border, border, shape)
             .then(when {
                 onClick != null && onLongClick != null ->
-                    Modifier.combinedClickable(role = Role.Checkbox, onClick = onClick, onLongClick = onLongClick).semantics { this.selected = selected }
-                onClick != null -> Modifier.clickable(role = Role.Checkbox, onClick = onClick).semantics { this.selected = selected }
+                    Modifier.combinedClickable(role = role, onClick = onClick, onLongClick = onLongClick)
+                        .semantics { if (role == Role.Checkbox) this.selected = selected }
+                onClick != null -> Modifier.clickable(role = role, onClick = onClick)
+                    .semantics { if (role == Role.Checkbox) this.selected = selected }
                 else -> Modifier
             })
             .padding(horizontal = JChipTokens.horizontalPadding),
@@ -516,7 +543,11 @@ fun JChip(
         Text(text, style = PersonaTheme.type.labelSmall.copy(fontWeight = FontWeight.Medium), color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
         count?.let {
             Spacer(Modifier.width(JChipTokens.countGap))
-            Text("$it", style = PersonaTheme.type.micro, color = if (selected && style != AppStyle.Board) ink else palette.ink3)
+            Text("$it", style = PersonaTheme.type.micro, color = if (selected && style != AppStyle.Board) ink else palette.ink3, maxLines = 1, softWrap = false)
+        }
+        trailingIcon?.let {
+            Spacer(Modifier.width(JChipTokens.iconGap))
+            JIcon(it, null, size = JChipTokens.iconSize, tint = ink)
         }
     }
 }
@@ -531,7 +562,7 @@ fun JBadge(count: Int, modifier: Modifier = Modifier, text: String? = null) {
         Box(modifier.heightIn(min = HomeTokens.sidebarBadgeSize).widthIn(min = HomeTokens.sidebarBadgeSize)
             .clip(CircleShape).background(fill).padding(horizontal = Tokens.Space.xs), contentAlignment = Alignment.Center) {
             Text(label, style = PersonaTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
-                color = ExtensionThemeColors.on(fill), maxLines = 1)
+                color = palette.onAccentFill(fill), maxLines = 1)
         }
         return
     }

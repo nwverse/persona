@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { isRemovable, openAsk, TODO_STATUS_INFO } from "../../lib/todos";
 import { TodoAskLine } from "../TodoAsk";
+import { reportText } from "../../lib/supervision";
+import { LatestReport } from "./Supervision";
 import { useStore } from "../../lib/store";
 import { Button, IconButton, Menu, useMenu, type MenuItem } from "../../ui/atoms";
 import { ChatView } from "../chat/ChatView";
@@ -12,6 +14,8 @@ import { stateOf } from "../../lib/format";
 import { usageLimitLabel } from "../../lib/usage-limit";
 import { href, type Route } from "../../lib/router";
 import { t } from "../../i18n";
+import { useFeed } from "../../lib/feed";
+import { TaskWorkspaceLine } from "./TaskWorkspace";
 
 /** ⋯'s "Open in new window": the page the panel shows, as its own tab (⌘-click on the link does the same). */
 function openInWindow(to: Route): MenuItem {
@@ -24,6 +28,7 @@ export function TaskPanel({ todoId, onClose }: { todoId: string; onClose: () => 
   const sessions = useStore((s) => s.sessions);
   const [picked, setPicked] = useState<string | null>(null);
   const retrying = useRetrying(todoId);
+  const planned = useFeed((s) => Object.values(s.plans).flatMap((p) => p.tasks).find((t) => t.todo_id === todoId));
   if (!todo || !st) {
     return (
       <>
@@ -42,7 +47,7 @@ export function TaskPanel({ todoId, onClose }: { todoId: string; onClose: () => 
   const head = st.status === "usage_limit" && usageLimitLabel(shown ?? lead) ? "" : info.label;
   const subtitle = [head, chosen ? place({ ...todo, agents: [chosen] }, shown ?? lead) : place(todo, lead)].filter(Boolean).join(" · ");
   const taskItems: MenuItem[] = [
-    openInWindow({ name: "todos", id: todo.id }),
+    openInWindow(chosen ? { name: "session", mid: chosen.machine_id, sid: chosen.session_id } : { name: "todos", id: todo.id }),
     ...(isRemovable(st.status) ? [{ key: "remove", label: t("assistant-taskpanel.remove_ellipsis"), icon: "trash" as const, danger: true, onSelect: () => removeTaskNow(todo) }] : []),
   ];
   // several agents: the ⌄ beside the title switches between them (iOS #3255)
@@ -59,8 +64,15 @@ export function TaskPanel({ todoId, onClose }: { todoId: string; onClose: () => 
           mid={chosen.machine_id}
           sid={chosen.session_id}
           panel={{ onClose, title: todo.title, sub: subtitle, items: taskItems, agents: switcher }}
-          // what the task's result waits on from the user (#2056), over its agent's chat
-          banner={openAsk(todo) ? <TodoAskLine todo={todo} className="border-b border-line bg-inset px-4 py-2.5" /> : undefined}
+          // what the task's result waits on from the user (#2056), and what its agent last reported, as it wrote it (#3181),
+          // over its agent's chat
+          banner={openAsk(todo) || reportText(todo.supervision) || planned?.workspace ? (
+            <>
+              {planned?.workspace && <div className="border-b border-line px-4 py-2"><TaskWorkspaceLine task={planned} /></div>}
+              {openAsk(todo) && <TodoAskLine todo={todo} className="border-b border-line bg-inset px-4 py-2.5" />}
+              <LatestReport todo={todo} banner />
+            </>
+          ) : undefined}
         />
       </div>
     );
@@ -69,6 +81,7 @@ export function TaskPanel({ todoId, onClose }: { todoId: string; onClose: () => 
     <>
       <PanelHeader icon="todo" title={todo.title} subtitle={subtitle} actions={<PanelMore items={taskItems} />} onClose={onClose} />
       <div className="flex min-h-0 flex-1 flex-col">
+        {planned?.workspace && <div className="border-b border-line px-4 py-2"><TaskWorkspaceLine task={planned} /></div>}
         {st.failure || todo.agents?.some((a) => a.start_error) ? (
           <div className="flex flex-col items-start gap-3 p-6 text-[13px]">
             <div className="font-semibold text-red">{t("assistant-taskpanel.start_failed")}</div>

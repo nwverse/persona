@@ -132,6 +132,9 @@ func (h *Hub) adminRoutes(mux *http.ServeMux, api, web http.Handler) http.Handle
 	h.adminMachineRoutes(closed)
 	h.adminUsageRoutesRelayed(closed) // the usage sources page, the manager's (devices_routes.go, #2595)
 	h.adminDeviceRoutes(closed)
+	h.adminPasswordLoginRoutes(closed)
+	h.adminOwnerRoutes(closed)
+	h.adminShareRoutes(closed)
 	h.adminNetworkRoutes(closed)
 	h.adminExtensionRoutes(closed)
 	// Hub mesh (docs/archive/operations/plan-hub-mesh.md 2.7): /peers and /routes, from the mesh's own file.

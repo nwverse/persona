@@ -41,20 +41,33 @@ nonisolated enum AppStyle: String, CaseIterable, Identifiable, Sendable {
 nonisolated enum Theme {
     #if os(iOS)
     /// By Repository's tree on iOS (#2531): a card per repository, its worktrees and their agents a level in each, every
-    /// line's mark in one column per level, a worktree's agents on a thin line down from its mark.
+    /// line's mark in one column per level; the agents in the display's rows (#3753).
     enum Tree {
         /// A level in.
         static let indent: CGFloat = 22
         /// The column a line's mark sits in: the folder, a worktree's mark, an agent's state.
         static let column: CGFloat = 18
-        /// Above and below a line: its height is its own, so the guide line runs on from row to row.
+        /// Above and below a line's words: the line is its whole row, at least a finger's height (`RepoTreeLine`).
         static let rowPadding = Space.sm
-        /// The line down a worktree's agents.
-        static let guide = Color(uiColor: .separator)
         /// The agent or worktree open beside the list (regular width).
         static let selected = Palette.systemBlue.opacity(0.1)
     }
     #endif
+
+    /// The handle on the line between a split's list and its page (#2624, `SplitDividerHandle`).
+    enum Split {
+        static let handle = Color.secondary.opacity(0.45)
+        static let handleHeld = Color.secondary.opacity(0.8)
+        /// Its touch area: narrow (what it takes from the list's and the page's edges), tall.
+        static let handleWidth: CGFloat = 28
+        static let handleHeight: CGFloat = 88
+        /// How far it moves before it is a drag; past the least width, how far until letting go closes the list; from
+        /// the page's edge, how far to the right brings the list back; a step of VoiceOver's adjust.
+        static let slop: CGFloat = 6
+        static let closesPast: CGFloat = 80
+        static let opensPast: CGFloat = 40
+        static let step: CGFloat = 40
+    }
 
     /// Orca-compatible workspace cards. Scoped to repository browsing, including nested selection surfaces.
     enum WorkspaceSidebar {
@@ -425,6 +438,8 @@ nonisolated enum Theme {
     /// inbox's Select, #2059; the web uses the same 45%).
     enum Fade {
         static let unavailable: Double = 0.45
+        /// An offline assistant's row in the switcher's list: the whole row, still pickable (the web and Android use 55%).
+        static let offline: Double = 0.55
     }
 
     /// How much of a rich card must intersect the scroll viewport before its isolated content runs.
@@ -461,6 +476,7 @@ nonisolated enum Theme {
     /// Small / Standard / Large and the system's text size (up to 1.6 ×, `Theme.sizeScale`); the lines stay as they are, in a
     /// plain `.frame`. Nothing on a page writes a size as a number (`TokenRatchetTests`).
     enum Size {
+        static let nonvisualProbe: CGFloat = 0
         // Lines, rules and bars: do not scale.
         static let hairline: CGFloat = 0.5
         /// The width of the small window's source layer (VNC's picture in picture, #1839): a normal size, behind the
@@ -474,6 +490,8 @@ nonisolated enum Theme {
         static let rule: CGFloat = 2
         static let ruleWide: CGFloat = 2.5
         static let bar: CGFloat = 3
+        /// How much of a long quote in a reply shows while it is folded (about four lines of body text, #2984).
+        static let quoteFold: CGFloat = 104
         static let barWide: CGFloat = 4
         /// A share bar's thickness (the assistant's stacked-bar card).
         static let meter: CGFloat = 12
@@ -528,8 +546,9 @@ nonisolated enum Theme {
         static let box72: CGFloat = 72
         static let box76: CGFloat = 76
         static let box80: CGFloat = 80
-        /// The height of a saved place's map in its editor: the reminder's circle and a street or two around it.
-        static let placeMap: CGFloat = 160
+        /// The height of the map in a saved place's editor: the reminder's circle with the streets around it, and room to
+        /// pan the map and tap where the place is (#4248).
+        static let placeMap: CGFloat = 220
         static let box110: CGFloat = 110
         static let box120: CGFloat = 120
         /// The longest a tab's name gets in the chat header's strip of the space's tabs: one long name cannot push the
@@ -557,6 +576,10 @@ nonisolated enum Theme {
         static let headerTitle: CGFloat = 480
         /// The list column of a split on iPad: wide enough for the agents' cards and the inbox rows.
         static let sidebarMin: CGFloat = 340
+        /// The least an iPhone Duo's list column is dragged to (#2624): its open display is narrower than an iPad.
+        static let sidebarMinPhone: CGFloat = 200
+        /// What a split's page keeps beside its list column when the list is dragged wider (#2624).
+        static let splitDetailMin: CGFloat = 300
         static let sidebar: CGFloat = 400
         static let sidebarMax: CGFloat = 480
         /// The narrowest column of a card grid (Machines' cards): two side by side in an iPad's detail column.
@@ -612,15 +635,18 @@ nonisolated enum Theme {
         static let lineStrong = Color.primary.opacity(0.18)
     }
 
-    /// Motion: a state change snaps, a layout change glides. Nothing repeats except the Needs You dot, the work spinner and
-    /// the persona's dot in the Persona tab's top bar (docs/apple/persona.md) and the dot of a held mic (`DictationHold`), and those stop with Reduce Motion (the spinner
-    /// is the system's).
+    /// Motion: a state change snaps, a layout change glides. Nothing repeats except the Needs You dot, the work spinner,
+    /// the persona's dot in the Persona tab's top bar (docs/apple/persona.md), the dot of a held mic (`DictationHold`) and,
+    /// when it is turned on, the composer's glow while a reply is generating (`ComposerGlow`); those stop with Reduce Motion
+    /// (the spinner is the system's).
     enum Motion {
         static let state = Animation.snappy(duration: 0.25)
         static let layout = Animation.smooth(duration: 0.3)
         /// Opening and closing things (a work card, a menu, a section): a state change, 0.25 s (it was the system's
         /// default snappy, 0.5 s, which trailed behind the finger).
         static let standard = state
+        /// Task-draft dismissal uses the same six-second Undo window as the web.
+        static let draftUndo: Duration = .seconds(6)
         /// A block of content unfolding in place, its height growing (the Feishu pinned shelf's rows): slower than a
         /// state change so the eye can follow the rows coming in. `standard` read faster than Feishu's own (2026-11-04).
         static let expand = Animation.smooth(duration: 0.4)
@@ -856,6 +882,9 @@ nonisolated enum Theme {
         static let drawer = Color(light: 0xF9F9F9, dark: 0x171717)
         /// The composer: its field's corner when it is one line (a capsule) and when it has grown into a card.
         static let composerRadius: CGFloat = 32
+        /// The colors that travel around the composer while a reply is generating (Glow While Replying, `ComposerGlow`):
+        /// blue through violet to pink, each in its light and dark shade.
+        static let composerGlow: [Color] = [Hue.blue, Hue.indigo, Hue.purple, Hue.pink]
         /// Reserve most of the keyboard-visible viewport for the conversation, not the draft.
         static let composerHeightFraction: CGFloat = 0.22
         static let composerMinimumLines = 3
@@ -887,6 +916,12 @@ nonisolated enum Theme {
 
     static let primaryText = Color(light: 0x1C1C1E, dark: 0xF2F2F7)
     static let codeBackground = Color(light: 0xF3F1EC, dark: 0x1C1D21)
+    /// Inline code in a reply (#2984): a light gray under the body's color (blue is for what opens).
+    static let inlineCodeBackground = Color(light: 0xEBEBEF, dark: 0x2C2C31)
+    /// A reply's code block's title bar (#2984): its language and Copy, a shade off `codeBackground`.
+    static let codeBar = Color(light: 0xE8E5DE, dark: 0x27282D)
+    /// A reply's quote (#2984): its card under the accent bar, the accent faint.
+    static var quoteBackground: Color { accent.opacity(0.08) }
 
     /// Syntax colors in the file viewer (docs/apple/ios.md「File viewer」), on `codeBackground` in every style (it does not
     /// change with the style, so neither do they): GitHub's palette, every one ≥ 4.5:1 on that background in light

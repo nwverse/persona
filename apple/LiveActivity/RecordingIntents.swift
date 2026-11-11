@@ -10,7 +10,7 @@ import Foundation
 /// (the system stops a recording without one). Before the microphone has ever been allowed it opens the app to ask.
 struct StartMeetingRecordingIntent: AudioRecordingIntent {
     nonisolated static let title: LocalizedStringResource = "Record a Meeting"
-    nonisolated static let description = IntentDescription("Starts recording a meeting in Persona, named after the calendar event happening now. The audio stays on your iPhone; its transcript goes to Knowledge.")
+    nonisolated static let description = IntentDescription("Starts recording a meeting in Persona, named after the calendar event happening now. The audio stays on this device; its transcript goes to Knowledge.")
     nonisolated static var supportedModes: IntentModes { [.background, .foreground(.dynamic)] }
 
     nonisolated init() {}
@@ -47,6 +47,46 @@ struct StopRecordingIntent: LiveActivityIntent {
     nonisolated func perform() async throws -> some IntentResult {
         #if !WIDGET_EXTENSION
         await MeetingRecorder.shared.stop(recordingID: recordingID)
+        #endif
+        return .result()
+    }
+}
+
+/// The recording activity's Ask Persona, in a meeting Persona attends (#2981): asks about what was just said. The answer
+/// shows in the activity, and taking part it is said out loud through the headset or the loudspeaker. From the Lock
+/// Screen too, without unlocking: the hub answers a meeting only from meeting material.
+struct AskPersonaInMeetingIntent: LiveActivityIntent {
+    nonisolated static let title: LocalizedStringResource = "Ask Persona in the Meeting"
+    nonisolated static let isDiscoverable = false
+    nonisolated static var authenticationPolicy: IntentAuthenticationPolicy { .alwaysAllowed }
+
+    @Parameter(title: "Recording") var recordingID: String?
+
+    nonisolated init() {}
+    nonisolated init(recordingID: String?) { self.recordingID = recordingID }
+
+    nonisolated func perform() async throws -> some IntentResult {
+        #if !WIDGET_EXTENSION
+        await MeetingRecorder.shared.ask(recordingID: recordingID)
+        #endif
+        return .result()
+    }
+}
+
+/// The recording activity's Turn Off (#2981): Persona stops attending the meeting; the recording goes on.
+struct TurnOffMeetingAttendanceIntent: LiveActivityIntent {
+    nonisolated static let title: LocalizedStringResource = "Turn Off Persona in the Meeting"
+    nonisolated static let isDiscoverable = false
+    nonisolated static var authenticationPolicy: IntentAuthenticationPolicy { .alwaysAllowed }
+
+    @Parameter(title: "Recording") var recordingID: String?
+
+    nonisolated init() {}
+    nonisolated init(recordingID: String?) { self.recordingID = recordingID }
+
+    nonisolated func perform() async throws -> some IntentResult {
+        #if !WIDGET_EXTENSION
+        await MeetingRecorder.shared.setRole(.off, recordingID: recordingID)
         #endif
         return .result()
     }

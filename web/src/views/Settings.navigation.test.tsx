@@ -14,7 +14,14 @@ vi.mock("../lib/store", async (original) => ({
 }));
 vi.mock("./settings/ShortcutSettings", () => ({ ShortcutSettings: () => <div data-page="shortcuts" /> }));
 vi.mock("./settings/NotificationSettings", () => ({ NotificationSettings: () => <div data-page="notifications" /> }));
-vi.mock("./settings/ModelConfiguration", () => ({ ModelConfiguration: ({ open }: { open: string | null }) => <div data-page="model-config" data-open={open} /> }));
+vi.mock("./settings/ModelConfiguration", () => ({
+  ModelConfiguration: ({ open, onOpen }: { open: string | null; onOpen: (id: string | null) => void }) => (
+    <div data-page="model-config" data-open={open}>
+      <button type="button" data-purpose="open" onClick={() => onOpen("agent.triage")} />
+      <button type="button" data-purpose="close" onClick={() => onOpen(null)} />
+    </div>
+  ),
+}));
 vi.mock("./settings/KnowledgeSelection", () => ({ KnowledgeSelection: () => <div data-page="knowledge-selection" /> }));
 vi.mock("./settings/TranslationSettings", () => ({ TranslationSettings: () => <div data-page="translation" /> }));
 vi.mock("./settings/AssistantSettings", () => ({ AssistantSettings: () => <div data-page="persona" /> }));
@@ -71,11 +78,11 @@ const popped = (go: () => void) => act(async () => {
 const category = (label: string) => [...nav().querySelectorAll("button")].find((button) => button.textContent?.startsWith(label))!;
 
 describe("Settings category navigation", () => {
-  it("opens knowledge selection and retains its explicit configuration manager", async () => {
+  it("opens knowledge selection as the current assistant's, with no manager in the address", async () => {
     await mount("/settings?tab=models&manager=remote");
     await act(async () => category(t("settings-nav.tab_knowledge")).click());
     expect(host.querySelector('[data-page="knowledge-selection"]')).not.toBeNull();
-    expect(location.search).toBe("?tab=knowledge&manager=remote");
+    expect(location.search).toBe("?tab=knowledge");
     expect(category(t("settings-nav.tab_knowledge")).getAttribute("aria-current")).toBe("page");
   });
   it("places desktop navigation beside a separately focusable, named content region", async () => {
@@ -88,7 +95,8 @@ describe("Settings category navigation", () => {
     expect(region.classList.contains("overflow-y-auto")).toBe(true);
     expect(region.getAttribute("tabindex")).toBe("0");
     expect(region.getAttribute("aria-label")).toBe(t("settings-nav.tab_shortcuts"));
-    for (const button of nav().querySelectorAll("button")) {
+    // every category controls the region (the current assistant's Switch opens its list of assistants instead)
+    for (const button of nav().querySelectorAll<HTMLButtonElement>("button:not([data-settings-switch])")) {
       expect(button.type).toBe("button");
       expect(button.getAttribute("aria-controls")).toBe(region.id);
       expect(button.tabIndex).toBe(0);
@@ -111,19 +119,21 @@ describe("Settings category navigation", () => {
     expect(category(t("settings-nav.tab_notifications")).getAttribute("aria-current")).toBe("page");
   });
 
-  it("keeps deep-linked configuration purpose and manager when choosing its category again", async () => {
+  it("keeps a deep-linked configuration purpose, and the current assistant's page drops a manager from the address", async () => {
     await mount("/settings?tab=model-config&purpose=agent.triage&manager=example");
     expect(location.search).toBe("?tab=models&purpose=agent.triage&manager=example");
     expect(location.hash).toBe("#settings-model-config");
     expect(host.querySelector('[data-page="model-config"]')?.getAttribute("data-open")).toBe("agent.triage");
     await act(async () => category(t("settings-nav.tab_models")).click());
-    expect(location.search).toBe("?tab=models&manager=example");
+    expect(location.search).toBe("?tab=models");
   });
 
   it("redirects old agent, translation, and assistant links to their new categories", async () => {
     await mount("/settings?tab=codex");
     expect(location.pathname + location.search + location.hash).toBe("/settings?tab=agents#settings-codex");
     expect([...host.querySelectorAll('[data-page="agent"]')].map((el) => el.getAttribute("data-agent"))).toEqual(["claude", "codex", "agy", "omp"]);
+    expect(host.querySelector("#settings-codex-body")?.hasAttribute("hidden")).toBe(false);
+    expect(host.querySelector("#settings-claude-body")?.hasAttribute("hidden")).toBe(false);
     await act(async () => root.render(null));
     await mount("/settings?tab=translate");
     expect(location.pathname + location.search + location.hash).toBe("/settings?tab=general#settings-translation");
@@ -134,6 +144,18 @@ describe("Settings category navigation", () => {
     expect(host.querySelector('[data-page="persona"]')).not.toBeNull();
   });
 
+  it("starts with every agent open, and a heading folds just that one", async () => {
+    await mount("/settings?tab=agents");
+    const rows = [...host.querySelectorAll<HTMLButtonElement>("button[aria-expanded]:not([data-settings-switch])")];
+    expect(rows.map((b) => b.textContent)).toEqual(["Claude Code", "Codex", "Antigravity", "omp"]);
+    expect(rows.map((b) => b.getAttribute("aria-expanded"))).toEqual(["true", "true", "true", "true"]);
+    await act(async () => rows[1].click());
+    expect(host.querySelector("#settings-codex-body")?.hasAttribute("hidden")).toBe(true);
+    expect(host.querySelector("#settings-claude-body")?.hasAttribute("hidden")).toBe(false);
+    await act(async () => rows[1].click());
+    expect(host.querySelector("#settings-codex-body")?.hasAttribute("hidden")).toBe(false);
+  });
+
   it("scrolls a shared old link to its section in the combined page", async () => {
     const scroll = vi.fn();
     Element.prototype.scrollIntoView = scroll;
@@ -142,6 +164,44 @@ describe("Settings category navigation", () => {
     expect(location.hash).toBe("#settings-agy");
     await act(async () => {});
     expect(scroll).toHaveBeenCalledWith({ block: "start" });
+  });
+
+  it("leaves the Models page where it is scrolled when a model purpose's dialog opens and closes", async () => {
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    // the page scrolled to a section; the sidebar keeping its current category in view (block "nearest") is not one
+    const toSection = () => scroll.mock.calls.filter(([options]) => options?.block === "start").length;
+    vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+    await mount("/settings?tab=models");
+    const page = host.querySelector<HTMLElement>('[role="region"]')!;
+    const purpose = (name: string) => host.querySelector<HTMLButtonElement>(`[data-purpose="${name}"]`)!;
+    page.scrollTop = 400;
+    page.dispatchEvent(new Event("scroll"));
+    await act(async () => purpose("open").click());
+    expect(host.querySelector('[data-page="model-config"]')?.getAttribute("data-open")).toBe("agent.triage");
+    expect(location.search + location.hash).toBe("?tab=models&purpose=agent.triage");
+    expect(page.scrollTop).toBe(400);
+    await act(async () => purpose("close").click());
+    expect(host.querySelector('[data-page="model-config"]')?.hasAttribute("data-open")).toBe(false);
+    expect(location.search + location.hash).toBe("?tab=models");
+    expect(page.scrollTop).toBe(400);
+    expect(toSection()).toBe(0);
+  });
+
+  it("scrolls a link to a model purpose to its section once, and closing the dialog leaves the page there", async () => {
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    const toSection = () => scroll.mock.calls.filter(([options]) => options?.block === "start").length;
+    vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+    await mount("/settings?tab=models&purpose=agent.triage#settings-model-config");
+    await act(async () => {});
+    expect(toSection()).toBe(1);
+    const page = host.querySelector<HTMLElement>('[role="region"]')!;
+    page.scrollTop = 400;
+    page.dispatchEvent(new Event("scroll"));
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-purpose="close"]')!.click());
+    expect(page.scrollTop).toBe(400);
+    expect(toSection()).toBe(1);
   });
 
   it("preserves legacy extension deep links", async () => {

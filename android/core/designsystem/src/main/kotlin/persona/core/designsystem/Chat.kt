@@ -54,6 +54,8 @@ fun ChatTopBar(
     status: Status? = null,
     statusText: String? = null,
     source: String? = null,
+    /** Said instead of [source] when that doesn't fit on the line (iOS: the computer goes first, the place stays). */
+    sourceShort: String? = null,
     busy: Boolean = false,
     onTitleClick: (() -> Unit)? = null,
     /** Which agent runs here, and in which client (#6390): its mark before the status line's dot. */
@@ -72,19 +74,28 @@ fun ChatTopBar(
             }
             if (statusText != null || source != null) Row(verticalAlignment = Alignment.CenterVertically) {
                 agentMark?.let { JAgentMark(it, size = AgentMarkInBar); Spacer(Modifier.width(Tokens.Space.xs + Tokens.Space.xxs)) }
-                if (status != null && statusText != null) {
-                    when {
-                        style == AppStyle.Brief && status == Status.NeedsYou -> MarkerText(statusText, type.micro.copy(fontWeight = FontWeight.Bold))
-                        else -> {
-                            if (style == AppStyle.Brief && status == Status.Working) JSpinner(Modifier.size(11.dp), stroke = 1.6.dp) else JStatusDot(status, size = 7.dp)
-                            Spacer(Modifier.width(5.dp))
-                            Text(statusText, style = type.caption, color = if (style == AppStyle.Brief) palette.ink else tone!!.text, maxLines = 1)
-                        }
+                // The gap after the dot, and after the state's words.
+                val afterDot = 5.dp
+                if (status != null && statusText != null && style == AppStyle.Brief && status == Status.NeedsYou) {
+                    MarkerText(statusText, type.micro.copy(fontWeight = FontWeight.Bold))
+                } else if (status != null) {
+                    // A quiet state says nothing in words (iOS): its dot alone, which TalkBack reads by its name.
+                    val spoken = stringResource(status.labelRes)
+                    if (statusText != null && style == AppStyle.Brief && status == Status.Working) JSpinner(Modifier.size(11.dp), stroke = 1.6.dp)
+                    else Box(if (statusText == null) Modifier.semantics { contentDescription = spoken } else Modifier) { JStatusDot(status, size = 7.dp) }
+                    statusText?.let {
+                        Spacer(Modifier.width(afterDot))
+                        Text(it, style = type.caption, color = if (style == AppStyle.Brief) palette.ink else tone!!.text, maxLines = 1)
                     }
                 } else statusText?.let { Text(it, style = type.caption, color = palette.ink2, maxLines = 1) }
                 source?.let {
-                    Spacer(Modifier.width(8.dp))
-                    Text(it, style = type.caption.copy(fontWeight = FontWeight.Normal), color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Spacer(Modifier.width(if (statusText == null && status != null) afterDot else Tokens.Space.s))
+                    val sourceStyle = type.caption.copy(fontWeight = FontWeight.Normal)
+                    val measurer = androidx.compose.ui.text.rememberTextMeasurer()
+                    BoxWithConstraints {
+                        val fits = sourceShort == null || measurer.measure(it, sourceStyle, maxLines = 1, softWrap = false).size.width <= constraints.maxWidth
+                        Text(if (fits) it else sourceShort!!, style = sourceStyle, color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
                 }
             }
         }
@@ -101,9 +112,8 @@ fun ChatTopBar(
         }
         AppStyle.Board -> Column(modifier.fillMaxWidth().background(palette.background).statusBarsPadding()) {
             Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                back()
-                if (status != null) { JStatusMark(status); Spacer(Modifier.width(8.dp)) }
-                titleBlock(); actions()
+                // The state is said once, in the title's line (#3957, as iOS #3719): no second mark before the title.
+                back(); titleBlock(); actions()
             }
             Box(Modifier.fillMaxWidth().height(1.dp).background(palette.line))
         }
@@ -409,18 +419,15 @@ fun ComposerFrame(
             .clip(shape).background(fill).border(HomeTokens.composerStroke, stroke, shape)
             .then(keepsKeyboard).padding(Tokens.Space.s)) {
             accessory?.let { Column(Modifier.padding(horizontal = Tokens.Space.s), content = it) }
-            if (expanded) {
-                Box(Modifier.fillMaxWidth().heightIn(min = Tokens.MinTouch.android).padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.m),
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (!expanded) leading?.invoke(this)
+                Box(Modifier.weight(1f).heightIn(min = Tokens.MinTouch.android).padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.m),
                     contentAlignment = Alignment.CenterStart, content = field)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    leading?.invoke(this)
-                    Spacer(Modifier.weight(1f))
-                    trailing?.invoke(this)
-                }
-            } else Row(verticalAlignment = Alignment.CenterVertically) {
+                if (!expanded) trailing?.invoke(this)
+            }
+            if (expanded) Row(verticalAlignment = Alignment.CenterVertically) {
                 leading?.invoke(this)
-                Box(Modifier.weight(1f).heightIn(min = Tokens.MinTouch.ios).padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.m),
-                    contentAlignment = Alignment.CenterStart, content = field)
+                Spacer(Modifier.weight(1f))
                 trailing?.invoke(this)
             }
         }
@@ -430,18 +437,15 @@ fun ComposerFrame(
         AppStyle.Glass -> Column(modifier.fillMaxWidth().padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s)
             .floatingSurface(RoundedCornerShape(HomeTokens.composerRadius)).then(keepsKeyboard).padding(Tokens.Space.s)) {
             accessory?.let { Column(Modifier.padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.xs), content = it) }
-            if (expanded) {
-                Box(Modifier.fillMaxWidth().heightIn(min = Tokens.MinTouch.ios).padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.m),
-                    contentAlignment = Alignment.CenterStart, content = field)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    leading?.invoke(this)
-                    Spacer(Modifier.weight(1f))
-                    trailing?.invoke(this)
-                }
-            } else Row(verticalAlignment = Alignment.CenterVertically) {
-                leading?.invoke(this)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (!expanded) leading?.invoke(this)
                 Box(Modifier.weight(1f).heightIn(min = Tokens.MinTouch.ios).padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.m),
                     contentAlignment = Alignment.CenterStart, content = field)
+                if (!expanded) trailing?.invoke(this)
+            }
+            if (expanded) Row(verticalAlignment = Alignment.CenterVertically) {
+                leading?.invoke(this)
+                Spacer(Modifier.weight(1f))
                 trailing?.invoke(this)
             }
         }
@@ -530,8 +534,10 @@ fun SendButton(onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Bool
     val fill = when { kind == SendKind.Stop -> palette.danger.dot; enabled -> palette.action; else -> palette.surfaceStrong }
     val ink = when { kind == SendKind.Stop -> palette.danger.onDot; enabled -> palette.onAction; else -> palette.ink3 }
     val spoken = stringResource(if (kind == SendKind.Stop) R.string.designsystem_send_stop else R.string.designsystem_send)
+    // Send and Stop are felt, as on iOS (DESIGN_SYSTEM.md 4.3).
+    val haptics = rememberHaptics()
     Box(
-        modifier.size(48.dp).clickable(enabled = enabled && !loading, role = Role.Button, onClick = onClick)
+        modifier.size(48.dp).clickable(enabled = enabled && !loading, role = Role.Button, onClick = haptics.tapped(onClick))
             .semantics { contentDescription = spoken },
         contentAlignment = Alignment.Center,
     ) {

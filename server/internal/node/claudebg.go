@@ -17,7 +17,7 @@ import (
 
 // Claude sessions that run where Persona has no terminal pane: a background session Claude's own daemon runs (/fork,
 // /background: kind "bg"), a session open in Claude's desktop app (entrypoint claude-desktop…), claude in a terminal
-// that herdr, Orca or botmux do not run (entrypoint cli). Each writes sessions/<pid>.json in its config directory with
+// that herdr, Orca, Tern or botmux do not run (entrypoint cli). Each writes sessions/<pid>.json in its config directory with
 // the session it has open, its status (busy / idle / waiting) and, since Claude Code 2.1.29x, its peer inbox
 // (claudepeer.go). They listed as offline while they worked, and a message from the phone was refused (a second
 // claude --resume would write the same transcript, openelsewhere.go). The node lists every live one as running, with
@@ -183,10 +183,16 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool) []proto.
 		if s.Cwd == "" {
 			s.Cwd = m.cwd
 		}
-		if s.Title == "" {
+		// The transcript's title first, then a name something chose for this claude, then its first message (untitled)
+		// as for any session. The name Claude derives itself only stands in while there is nothing else: it is the
+		// directory's base name and two hex digits, so the sessions of one directory differed by those alone.
+		if s.Title == "" && c.NameSource != "derived" {
 			s.Title = c.Name
 		}
 		untitled(&s, m)
+		if s.Title == "" {
+			s.Title = c.Name
+		}
 		setContext(&s, m)
 		s.ModelFallback = m.modelFallback
 		s.Activity, s.ActivityAt = m.activityOf()
@@ -382,13 +388,14 @@ func (n *Node) enginePaneRefs(env map[string]string) []string {
 	add(host.Orca, env[orcaPaneEnv])
 	add(host.Orca, env[orcaLegacyPaneEnv])
 	add(host.Botmux, env[botmuxPaneEnv])
+	add(host.Tern, env[ternPaneEnv])
 	return out
 }
 
 // enginePaneEnvs are the variables Persona's engines set in their panes' processes.
 // herdrSessionEnv and herdrSocketEnv come along to tell which herdr server's pane HERDR_PANE_ID is.
 var enginePaneEnvs = []string{herdrPaneEnv, herdrSessionEnv, herdrSocketEnv, herdrCorePaneEnv, orcaPaneEnv, orcaLegacyPaneEnv,
-	botmuxPaneEnv}
+	botmuxPaneEnv, ternPaneEnv}
 
 // tmuxEnv is tmux's own variable in a pane's processes: "<socket>,<server pid>,<session index>". Its socket names the
 // server the pane belongs to, which a pane id alone does not (tmuxHost).

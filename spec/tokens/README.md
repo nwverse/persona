@@ -15,8 +15,8 @@
 | 同上 | `system.<mode>` | `Theme.systemPage/systemCard`、SwiftUI 的 `Color.primary/secondary`、UIKit 系统 fill 的显式回退值；见下文限制 |
 | `color.status.json` | `status.<mode>.<state>` | `ios/Shared/StatusPalette.swift`；待唤醒和已屏蔽的映射取 `ios/Persona/Views/Chats/ChatsView.swift` 的分组表 |
 | `dimension.json` | `radius`、`space`、`watch` | `Theme.Radius`、`Theme.Space`、`Theme.Watch`；触控区取 `docs/archive/redesign/README.md` D7，胶囊按短边的一半 |
-| `type.json` | `type.<role>` | `Theme.Font` 的文本样式、默认字号和字重；行高是跨端默认值，iOS 没有写死这些行高 |
-| `motion.json` | `motion` | `Theme.Motion.state/layout` 的配置时长；减少动态效果时用零时长。它们不是运行耗时的实测数据 |
+| `type.json` | `type.<level>` | `Theme.Font` 的九个层级（display、title、heading、body、secondary、caption、sectionHeader、label、code）：文本样式、字重，以及 `Theme.Level` 的 iPhone 字号和行高倍数 |
+| `motion.json` | `motion` | `Theme.Motion` 的共享动效：state、layout、expand、drawer、springBack 是弹簧（时长和弹性，Compose 取阻尼比 `1 - bounce`、刚度 `(2π / 时长)²`），reveal、conceal 是时长和曲线，keyboard 是系统键盘的刚度和阻尼，needsYouBreath 是“需要你”呼吸环；减少动态效果时所有时长为零。它们是配置值，不是运行耗时的实测数据 |
 | `surface.json` | `surface.<style>` | `ios/Persona/Views/Styling.swift` 的 `Surface`：材质、阴影颜色与偏移、描边；原生回退使用无阴影实心表面 |
 | `rules.json` | `$extensions.persona` | `docs/apple/ios.md` 可读性底线、`docs/archive/redesign/ux.md` 第 7、8 节，以及 WCAG AA |
 
@@ -78,7 +78,7 @@
 
 iOS 的系统背景、文字与 fill 随系统环境变化，源码没有唯一 RGB。JSON 明确保存普通对比度下的跨端回退：主文字为黑白，次要文字为浅色 `#3C3C43 / 0.6`、深色 `#EBEBF5 / 0.6`；其余值在 `system` 分组中逐项说明。**这些值没有在 iOS 设备上采样，不能据此保证系统灰色与 iOS 渲染逐像素一致。** 固定写在 Swift 中的状态 RGB 和 opacity 则由测试直接对照源码。
 
-字体的 size、weight 和 `iosTextStyle` 来自 `Theme.Font`。lineHeight 是为生成 Android `TextStyle` 补齐的默认值，尚未做中文大字号截图验收；组件应允许换行和高度增长。`family` 是角色提示，由平台选系统字体或等宽字体，黏土风格另选圆体。不要用固定容器裁掉字体缩放后的文字。
+字体的 weight 和 `iosTextStyle` 来自 `Theme.Font`，size 和 lineHeight 来自 `Theme.Level`（iPhone 分支），由 `scripts/assets/test_gen_tokens.py` 对照检查。lineHeight 是字号的倍数，iOS 只给正文类内容加这段行距；Android 的 Glass 风格目前不读它，行高交给平台；组件应允许换行和高度增长。`family` 是角色提示，由平台选系统字体或等宽字体，黏土风格另选圆体。不要用固定容器裁掉字体缩放后的文字。
 
 `Theme.Radius` 的五档圆角用于实际界面。`AppStyle.corner` 中的 20、24、26、10 只供设置预览，源码已说明它们不是实际卡片圆角，因此没有用它们覆盖 `radius.card`。胶囊输出 `shape.capsulePercent = 50`，Compose 用百分比圆角；圆形用平台 `CircleShape`。
 
@@ -100,7 +100,7 @@ python3 scripts/assets/gen_tokens.py --check \
 python3 -m unittest discover -s scripts/assets -p test_gen_tokens.py -v
 ```
 
-三个输出参数可以单独使用，参数值是文件路径。包名默认 `persona.android.core.designsystem`，可用 `--package example.design` 或 `--kotlin-package example.design` 改。默认 token 目录相对脚本定位，任意工作目录均可调用；`--source <目录>` 可检查独立的测试用 token。
+三个输出参数可以单独使用，参数值是文件路径。包名默认 `persona.core.designsystem`，可用 `--package example.design` 或 `--kotlin-package example.design` 改。默认 token 目录相对脚本定位，任意工作目录均可调用；`--source <目录>` 可检查独立的测试用 token。
 
 普通生成先校验结构与引用，打印对比度失败但仍输出文件，成功写入时返回 0。这样可以在修色前先审阅色板。`--check` 全程只读：结构、引用、底线对比度（不含已知例外）、已知例外是否已经达标、指定文件的字节一致性有任一失败就返回 1，成功返回 0；建议项只报告；参数用法错误返回 2。未传输出路径时只检查 JSON 与对比度，不会推测客户端中的产物位置。已有对比度失败不会跳过产物比较，文件不存在也算失败。
 
@@ -113,9 +113,9 @@ val corner = Tokens.Radius.card
 val body = TextStyle(
     fontSize = Tokens.Type.Body.size,
     fontWeight = Tokens.Type.Body.weight,
-    lineHeight = Tokens.Type.Body.lineHeight,
+    lineHeight = Tokens.Type.Body.size * Tokens.Type.Body.lineHeight,
 )
-val duration = if (reduceMotion) Tokens.Motion.reduced else Tokens.Motion.state
+val duration = if (reduceMotion) Tokens.Motion.reduced else Tokens.Motion.State.duration
 ```
 
 颜色输出浮点 RGBA，保留 `0.14` 等 alpha，避免先压成 8 位后与 CSS 不同。JSON 的双精度数到 Compose 浮点数存在常规数值精度差异。
@@ -128,7 +128,7 @@ CSS 在 `:root` 暴露全路径变量，例如 `--semantic-native-light-accent`�
 </div>
 ```
 
-原型原有的 `--primary / --needs-dot` 等名称不会被自动改写，接入方需要映射或替换。CSS 的 `prefers-reduced-motion` 会把 `--motion-state/layout` 改为零；循环动效仍须由组件停止。触控区、读屏完整计数、装饰图标隐藏、字号放大后的布局调整，以及按钮不得换行，都需要组件层实现，token 检查不代替 UI 验收。
+原型原有的 `--primary / --needs-dot` 等名称不会被自动改写，接入方需要映射或替换。CSS 的 `prefers-reduced-motion` 会把每个 `--motion-*-duration` 改为零；循环动效仍须由组件停止。触控区、读屏完整计数、装饰图标隐藏、字号放大后的布局调整，以及按钮不得换行，都需要组件层实现，token 检查不代替 UI 验收。
 
 ## 对比度规则与现有冲突
 

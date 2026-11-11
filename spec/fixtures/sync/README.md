@@ -79,7 +79,7 @@ Reads a device makes on its own (filling a gap, a latest page, the card list aft
 | `cards` | `{id: state}` for cards on screen or just answered: `open` (its buttons work), `answering` (this device's answer is in flight: hidden or locked), `answered` (shown as answered, or gone). Ids not listed are not on screen. Only `open` against not-`open` is strict; see "Allowed differences" |
 | `status` | The chat's state: `working`, `needs_you`, `unread`, `idle` |
 | `live` | The streamed text on screen, or `null` |
-| `requests` | Requests the device must have sent since the last step that listed `requests` for it (or the start), in this order; others may come in between: `{"get": "/items", "after_seq": 4}`, `{"ws": "subscribe", "since_seq": 4}`, `{"post": "resolve", "id": "ix1"}`, `{"post": "messages", "id": "m1"}`, `{"post": "conversations", "id": "c1"}` (a start; `id` is the op id; `"new_op": true` instead: an op id this message never had) |
+| `requests` | Requests the device must have sent since the last step that listed `requests` for it (or the start), in this order; others may come in between: `{"get": "/items", "after_seq": 4}`, `{"ws": "subscribe", "since_seq": 4}`, `{"post": "resolve", "id": "ix1"}`, `{"post": "messages", "id": "m1"}`, `{"post": "conversations", "id": "c1"}` (a start; `id` is the op id; `"new_op": true` instead: an op id this message never had), `{"get": "/ops", "id": "m1"}` (the receipt of the op a write went with, by the write's id). Where the protocol allows several ways, an entry `{"one_of": [request, request…]}` is met by any one of them: a send in flight posted again or its op's receipt read; the rest of a capped replay asked from its cap or the whole gap read when the socket came back (#2770) |
 
 ### Allowed differences
 
@@ -113,6 +113,7 @@ The clients draw the same states differently. A consumer maps what it draws onto
 | iOS / Mac | `apple/PersonaTests/Sync/SyncScenarioTests.swift`: the real `AppModel`, as Demo Mode drives it; a fake hub (`Sync/SyncHub.swift`) answers reads from the case and holds writes; a transport and a state folder per device, a test clock (#1112) | `known` in the test, each with its issue |
 | Android | `android/core/data/src/test/kotlin/persona/core/data/sync/ChatSyncScenariosTest.kt` (#1111): the real `HubChatRepository`, `HubInteractionCenter`, `OutboxMessageSender` and `HubSessionsRepository`, and the chat page's own taps and bubbles (`ChatTaps`); a fake hub answers reads from the case and holds writes (`sync/SyncDevice.kt`, `sync/SyncHub.kt`) | `KNOWN` in the test, each with the reason it must fail for |
 | Web, end to end | `web/e2e/sync-cases.mjs` (#2777): the real web app in a browser against the mock hub playing the case (below), one browser context per device | `KNOWN` in the runner, each with its issue |
+| iOS, end to end | `scripts/app/cli-tests/sync_cases.py` (#2952): the DEBUG app in the simulator against the mock hub playing the case, driven and read through the Runtime CLI (`docs/operations/runtime-cli.md`, "UI tests written with the CLI"); the app is one device and a two-device case's other device is scripted, once for each | `KNOWN` in the runner, each with its issue |
 
 ## The mock hub plays a case
 
@@ -126,6 +127,7 @@ For runs against the real apps (#1073 step 4), `MOCK_SYNC_CASE=<file>#<name>` ma
   - `drop` closes the device's socket. New sockets from that device then wait for the `open` step, whose hello says `resumed` or not; the step's frames follow the snapshot.
   - `hold` arms the device's next read of the path; it is answered with the state it read at the `release`.
 - `GET /mock/case` shows where the case is and, per device, its socket, the requests it made (`seen`) and its writes in flight. `POST /mock/case/load {"case": …}` plays another case in the same mock.
+- The cases' times are in January 2026, and the web's runners pin their clock there (2026-01-02T03:05:00Z). An app on the real clock (the iOS simulator) loads with `"now": true`: every time in the case moves by the same amount so that clock reads the present. Otherwise each line is months older than the messages the app sends, and iOS takes a line without `client_msg_id` for a bubble only when it was written after it.
 
 `scripts/mock/test_sync_case_mock.py` plays every case's hub side with a scripted device per case device (a socket and HTTP, no app):
 

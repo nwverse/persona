@@ -33,7 +33,7 @@ data class Subagent(
 @Serializable(with = TaskNoteSerializer::class)
 data class TaskNote(
     @WireEnum("shell", "monitor", "agent", "task", "unknown") val kind: String = "unknown",
-    @WireEnum("completed", "failed", "killed", "stopped", "event", "ended", "waiting", "unknown") val status: String = "unknown",
+    @WireEnum("running", "completed", "failed", "killed", "stopped", "event", "ended", "waiting", "unknown") val status: String = "unknown",
     val title: String = "",
     @SerialName("task_id") val taskId: String? = null,
     @SerialName("tool_use_id") val toolUseId: String? = null,
@@ -50,6 +50,8 @@ data class Fold(
     @SerialName("through_seq") val throughSeq: Int = 0,
     @SerialName("through_id") val throughId: String = "",
     val tasks: List<FoldTaskSnapshot> = emptyList(),
+    /** The folded run belongs to a supervision round the user must see (`fold_supervision.go`); older hubs omit it. */
+    @SerialName("supervision_user") val supervisionUser: Boolean? = null,
 )
 
 @Serializable

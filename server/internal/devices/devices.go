@@ -99,6 +99,8 @@ type Devices struct {
 	opts Options
 	logf func(format string, args ...any)
 
+	transfers transfers // computer to computer file transfers running or just over (transfer.go)
+
 	mu    sync.Mutex
 	cfg   devicewire.Config
 	got   bool          // a config came from the hub
@@ -122,12 +124,16 @@ type Devices struct {
 	byID      map[string]*Machine
 	warm      *savedWarm // taken at start, for the machines when they come
 
-	fleet    fleet
-	tailcat  tailcatDialer
-	engines  engineChoices
-	links    linkSet
-	stopping atomic.Bool
-	workers  sync.WaitGroup
+	fleet   fleet
+	tailcat tailcatDialer
+	engines engineChoices
+	// clipboard: the machines the user turned clipboard sharing on for (clipboard.go).
+	clipboard clipboardSwitches
+	// fileTransfer: the machines the user turned file transfer on for (transfer_settings.go).
+	fileTransfer fileTransferSwitches
+	links        linkSet
+	stopping     atomic.Bool
+	workers      sync.WaitGroup
 
 	// attention: the assistant's latest "Needs you" summary for Persona Link (attention.go); nil before the first.
 	attention atomic.Pointer[link.Attention]
@@ -219,6 +225,8 @@ func (d *Devices) Run(ctx context.Context) error {
 		}()
 	}
 	go d.usageLoop(mctx)
+	d.workers.Add(1)
+	go func() { defer d.workers.Done(); d.runShareIngestion(mctx) }()
 	go d.usageGW.run(ctx) // the account-pool gateways (usagegateways.go)
 	// The hub's hand-over, or after ownListWait the manager's own list (ownlist.go) until it comes.
 	wait := time.NewTimer(d.ownWait)
@@ -382,6 +390,20 @@ func (d *Devices) startMachines(ctx context.Context) {
 			old.mu.Lock()
 			for id := range old.watched { // what the hub watches is watched again on the new connection
 				m.watched[id], m.lastSeq[id] = true, old.lastSeq[id]
+			}
+			// So are the manager's own follows (Follow: a channel's turn), and a follow the old node did not take
+			// stays unsettled: the assistant keeps its mark and never asks again.
+			for id := range old.followed {
+				if m.followed == nil {
+					m.followed = map[string]bool{}
+				}
+				m.followed[id], m.lastSeq[id] = true, old.lastSeq[id]
+				if old.unsettled[id] {
+					if m.unsettled == nil {
+						m.unsettled = map[string]bool{}
+					}
+					m.unsettled[id] = true
+				}
 			}
 			old.mu.Unlock()
 		} else {
@@ -617,12 +639,25 @@ func (d *Devices) Call(ctx context.Context, p devicewire.NodeCall) (json.RawMess
 	if len(params) == 0 {
 		params = json.RawMessage(`{}`)
 	}
+	if refusesHandoff(p.Method, params) {
+		return nil, errHandoffRefused
+	}
 	m.noteWatch(p.Method, params)
 	if p.Method == "session.unwatch" && m.follows(params) {
 		return json.RawMessage(`{}`), nil // the manager still follows it: the node keeps sending its items
 	}
+	var receipt string
+	var prepareErr error
+	params, receipt, prepareErr = d.prepareShareCall(ctx, p, params)
+	if prepareErr != nil {
+		return nil, wireError(prepareErr)
+	}
+	if refusesHandoff(p.Method, params) { // and on what actually goes (prepareShareCall re-marshals it)
+		return nil, errHandoffRefused
+	}
 	var out json.RawMessage
 	err := m.call(ctx, p.Method, params, &out)
+	d.finishShareCall(ctx, p, receipt, out, err)
 	m.noteOpened(p.Method, params, err)
 	if err != nil {
 		return nil, wireError(err)
@@ -853,6 +888,7 @@ func (d *Devices) Follow(ctx context.Context, machine, session string, on bool) 
 		m.followed[session] = true
 	} else {
 		delete(m.followed, session)
+		m.forgetSeqLocked(session)
 	}
 	m.mu.Unlock()
 	var err error
@@ -897,3 +933,12 @@ func (w *wrapped) Error() string   { return w.message.Error() }
 func (w *wrapped) Unwrap() []error { return []error{w.message, w.err} }
 
 func explain(message, err error) error { return &wrapped{message: message, err: err} }
+
+// A hand-off is the manager's own, after its card (CallNode, in this process): never the hub's or another manager's
+// to ask for (Devices.Call), so nobody else can stage values or start an Agent with them.
+var errHandoffRefused = &rpc.Error{Code: devicewire.CodeHandoffRefused, Message: "secret hand-offs are made only by the manager that connects this computer"}
+
+// refusesHandoff: a hub-relayed call that would stage values or start with a ticket.
+func refusesHandoff(method string, params json.RawMessage) bool {
+	return method == proto.MethodSecretStage || devicewire.IsSessionStart(method) && startHasSecretTicket(params)
+}

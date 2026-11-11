@@ -5,6 +5,14 @@ import persona.core.contracts.FeedResponse
 import persona.core.contracts.TaskPlan
 import persona.core.contracts.Todo
 
+/** A confirmed card-scoped dismissal, retaining the token required for a lightweight Undo. */
+data class MessageDraftDismissal(val item: FeedItem, val dismissalId: String)
+
+/** One bounded feed range, with its request owner captured before the first page. */
+fun interface FeedPageReader {
+    suspend fun read(since: String?, cursor: String?): FeedResponse
+}
+
 /** Tasks dispatched from an assistant conversation (docs/assistant/unified-entry.md; docs/protocol/protocol.md "Tasks and the chat feed"). */
 interface TasksApi {
     /** Exact metadata for a bound agent, independent of the Agents list filter and page. */
@@ -12,6 +20,10 @@ interface TasksApi {
     suspend fun todos(): List<Todo>
     suspend fun createTodo(title: String, notes: String = ""): Todo = error("createTodo not implemented")
     suspend fun patchTodo(id: String, title: String? = null, notes: String? = null, done: Boolean? = null): Todo = error("patchTodo not implemented")
+    /** Moves a to-do's due date (`PATCH /api/v1/todos/{id}` with `due_at` or `due_date`, the other cleared; #2045). */
+    suspend fun setTodoDue(id: String, due: persona.core.contracts.TodoDue): Todo = error("setTodoDue not implemented")
+    /** The detail page's due date, reminder and priority, all three in one PATCH (#4636). */
+    suspend fun setTodoPlan(id: String, plan: persona.core.contracts.TodoPlan): Todo = error("setTodoPlan not implemented")
     suspend fun deleteTodo(id: String) = Unit
     suspend fun linkTodoAgent(todoId: String, machineId: String, sessionId: String) = Unit
     suspend fun unlinkTodoAgent(todoId: String, machineId: String, sessionId: String) = Unit
@@ -27,6 +39,8 @@ interface TasksApi {
 
     /** A conversation's feed after [since] (an ISO time; null: all of it), with the plans its `plan` items name. */
     suspend fun feed(conversation: String, since: String?): FeedResponse
+    /** Paginated reads retain the original since and owner; transports without cursors keep their existing read. */
+    fun feedPages(conversation: String): FeedPageReader = FeedPageReader { since, _ -> feed(conversation, since) }
     suspend fun startPlan(id: String, remember: Boolean): TaskPlan
     /** "Start" after "Edit": [tasks] replaces the plan's tasks by index with what the user changed (null: as planned). */
     suspend fun startPlan(id: String, remember: Boolean, tasks: List<persona.core.contracts.PlanTask>?): TaskPlan = startPlan(id, remember)
@@ -40,6 +54,13 @@ interface TasksApi {
     suspend fun removeTask(todoId: String)
     /** Accept only the owner's displayed round, never a newer ask under the same todo id. */
     suspend fun acceptTask(todoId: String, askedAt: String): Unit = error("Task acceptance unavailable")
+    /**
+     * Answer a decision's round through the same accept route (#3804, docs/assistant/todos.md "Decisions the owner can
+     * answer"): one of its options, or a fixed answer that says the owner cannot answer it as asked.
+     */
+    suspend fun answerTask(todoId: String, askedAt: String, answer: AskAnswer): Unit = error("Task answers unavailable")
+    /** Mark a question left for a briefing as handled (`POST /api/v1/later/{id}/handled`). */
+    suspend fun markLaterHandled(questionId: String): Unit = error("Later-question handling unavailable")
     /** Sends text straight to a task's agent; the answer is the conversation's new `routed` item. */
     suspend fun route(conversation: String, todoId: String, text: String): FeedItem
     /** The conversation's "Today" card for the user's day (made on the first call of the day). */
@@ -51,6 +72,13 @@ interface TasksApi {
      * the card ([card], the card's id: sent once per card however many taps or devices).
      */
     suspend fun inboxReply(itemId: String, text: String, card: String? = null)
+
+    /** Retain the authoritative live event owner before a card can be acted on, including the unstamped built-in manager. */
+    fun noteFeedOwner(item: FeedItem, manager: String?) = Unit
+    /** Dismiss only the displayed message card, checking its exact original draft on the hub. */
+    suspend fun dismissMessage(cardId: String, draft: String): MessageDraftDismissal = error("Draft dismissal unavailable")
+    /** Undo only this dismissal; the hub rejects a sent, filed or superseded draft. */
+    suspend fun undoDismissMessage(cardId: String, dismissalId: String): FeedItem = error("Draft dismissal undo unavailable")
 
     /**
      * The features the hub these requests go to said in its last hello (`assistant_views`, `assistant_html_bridge`);
@@ -65,4 +93,12 @@ interface TasksApi {
     /** What an assistant's HTML page asked for through its bridge, after the user confirmed it. */
     suspend fun viewHtmlAction(conversation: String, key: String, input: persona.core.contracts.generated.ExtensionAssistantHTMLActionInput): AssistantViewAnswer =
         error("viewHtmlAction not implemented")
+}
+
+/** An owner's answer to a decision (`POST /api/v1/todos/{id}/accept`): an option by its label, or a fixed response. */
+sealed interface AskAnswer {
+    data class Option(val label: String) : AskAnswer
+
+    /** [code]: `decide_yourself`, `not_what_i_asked` or `explain_first`. */
+    data class Response(val code: String) : AskAnswer
 }

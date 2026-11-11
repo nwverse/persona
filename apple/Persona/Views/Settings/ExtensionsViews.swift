@@ -331,7 +331,7 @@ struct ExtensionDetailView: View {
         }
         if d.readOnly {
             Section {
-                Text("This extension is set in its manager's manager.json; change its switch and settings there, then restart the manager.")
+                Text("This extension is set in its assistant's manager.json; change its switch and settings there, then restart the assistant.")
                     .font(Theme.Font.label).foregroundStyle(.secondary)
             }
         }
@@ -517,7 +517,7 @@ struct ExtensionDetailView: View {
         if let members = d.extensionPack, !members.isEmpty {
             Section {
                 ForEach(members, id: \.id) { member in
-                    LabeledContent(member.id, value: member.version ?? "")
+                    ExtensionPackMemberRow(line: ExtensionPackMemberLine(member, name: page.memberNames[member.id]))
                 }
             } header: { SettingsHeading(String(localized: "Pack Members")) }
         }
@@ -553,6 +553,8 @@ private struct ExtensionFieldRow: View {
     var path: [String]
     @Bindable var page: ExtensionModel
     var templates: [ExtensionTextTemplate]
+    /// A switch with x-confirm waiting on its alert before it is turned on.
+    @State private var asking = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
@@ -582,9 +584,17 @@ private struct ExtensionFieldRow: View {
     @ViewBuilder private var control: some View {
         switch field.type {
         case "boolean":
-            Toggle(isOn: Binding(get: { page.value(path)?.bool ?? field.default?.bool ?? false },
-                                 set: { page.set(.bool($0), at: path) })) {
+            // With x-confirm, turning it on asks first, in the machine switches' alert (#3215); Turn On only edits the draft.
+            Toggle(isOn: Binding(get: { page.value(path)?.bool ?? field.default?.bool ?? false }, set: { on in
+                if on, let ask = field.confirm, !ask.isEmpty { asking = true } else { page.set(.bool(on), at: path) }
+            })) {
                 Text(title).lineLimit(2)
+            }
+            .alert("Turn On “\(field.label)”?", isPresented: $asking) {
+                Button("Cancel", role: .cancel) {}
+                Button(String(localized: "action.turnOn", defaultValue: "Turn On")) { page.set(.bool(true), at: path) }
+            } message: {
+                Text(field.confirm ?? "")
             }
         case "array":
             if field.items?.format == "machine" {

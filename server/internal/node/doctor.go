@@ -73,8 +73,11 @@ type DoctorOptions struct {
 	NodeSock, RuntimeSock, HerdrSock string
 	// ClaudeConfigDir is where the user's own Claude Code settings are (read, never written).
 	ClaudeConfigDir string
-	// ClaudeVersion asks claude's version ("" when unknown).
+	// ClaudeVersion asks claude's version ("" when unknown); ClaudeProbe, when set, is asked instead and also says
+	// whether the shell found no claude at all (claudeProbe), so a version that could not be read this time is not
+	// reported as Claude Code missing.
 	ClaudeVersion func(context.Context) string
+	ClaudeProbe   func(context.Context) (version string, missing bool)
 	// LaunchAgent is the resident node's launchd agent on a Mac (NodeLaunchAgentPath; pickNodeLaunchdLabel says which
 	// when a Mac keeps its previously installed label); "" elsewhere, and the launchd-process-type check is
 	// left out.
@@ -111,7 +114,7 @@ func DefaultDoctorOptions() (DoctorOptions, error) {
 	opts := DoctorOptions{
 		Dir: identity.DataDir(home), Bin: bin,
 		NodeSock: nodeclient.SocketPath(), RuntimeSock: RuntimeSocketPath(), HerdrSock: herdr.SocketPath(),
-		ClaudeConfigDir: claudeDirOf(home), ClaudeVersion: claudeVersion,
+		ClaudeConfigDir: claudeDirOf(home), ClaudeVersion: claudeVersion, ClaudeProbe: claudeProbe,
 	}
 	opts.withLaunchd(home)
 	// Under the node's agent (a claude the node started runs the doctor) a reload would stop the doctor too: under
@@ -154,22 +157,58 @@ var generatedGroups = []string{"claude-settings.json", "claude-hooks", "assistan
 
 const agentPluginGroup = "agent-plugin"
 
+// cuaMCPMatcher is the PreToolUse matcher of Cua Driver's MCP tools, under whatever name with "cua" in it the
+// user gave the server (cuaToolOf decides).
+const cuaMCPMatcher = "mcp__.*cua.*__.*"
+
 // hookSettings is the settings with Persona's hooks for a claude whose program is bin, of the node whose directory is
 // dir: the agents' (assistant false) or the assistant's, which add the Feishu gate on Bash (larkgate.go). The hook
 // names dir itself (rootAssign): Claude Code runs it with the claude's environment, which is its pane's (agentenv.go).
 func hookSettings(bin, dir string, assistant bool) map[string]any {
+	return hookSettingsForOS(runtime.GOOS, bin, dir, assistant)
+}
+
+func hookSettingsForOS(goos, bin, dir string, assistant bool) map[string]any {
 	cmd := shellQuote(bin) + " hook"
 	if dir != "" {
 		cmd = rootAssign(dir, shellQuote) + cmd
 	}
-	blocking := func(matcher string) map[string]any {
-		return map[string]any{"matcher": matcher, "hooks": []any{map[string]any{"type": "command", "command": cmd, "timeout": 86400}}}
+	hook := func(timeout int) map[string]any {
+		h := map[string]any{"type": "command", "command": cmd, "timeout": timeout}
+		if goos == "windows" {
+			// Native hook argv avoids Git Bash consuming the quotes around Windows paths.
+			// Keep the same node and gates, with its data directory passed explicitly.
+			args := []string{"hook"}
+			if dir != "" {
+				args = append(args, nodeclient.HomeFlag, dir)
+			}
+			h["command"], h["args"] = bin, args
+		}
+		return h
 	}
-	notify := map[string]any{"hooks": []any{map[string]any{"type": "command", "command": cmd, "timeout": 10}}}
+	blocking := func(matcher string) map[string]any {
+		return map[string]any{"matcher": matcher, "hooks": []any{hook(86400)}}
+	}
+	notify := map[string]any{"hooks": []any{hook(10)}}
 	postQuestion := map[string]any{"matcher": "AskUserQuestion", "hooks": notify["hooks"]}
 	pre := []any{blocking("AskUserQuestion")}
 	if assistant {
 		pre = append(pre, blocking("Bash"))
+	}
+	if goos == "darwin" {
+		// An Agent's own Cua Driver never operates System Settings or a permission prompt (cua_gate.go, #4349): its
+		// MCP tools, and Bash commands running cua-driver. Decided at once, so a short timeout. The assistant's
+		// Bash hook above takes its commands to the gate too; an Agent's goes to the node only when the command
+		// mentions cua-driver (nodeclient.CuaOnlyFlag), so other Bash commands cost a process start and nothing else.
+		quick := func(matcher, command string) map[string]any {
+			h := hook(60)
+			h["command"] = command
+			return map[string]any{"matcher": matcher, "hooks": []any{h}}
+		}
+		pre = append(pre, quick(cuaMCPMatcher, cmd))
+		if !assistant {
+			pre = append(pre, quick("Bash", cmd+" "+nodeclient.CuaOnlyFlag))
+		}
 	}
 	return map[string]any{"hooks": map[string]any{
 		"PreToolUse":        pre,
@@ -237,7 +276,10 @@ func generatedFiles(bin, dir string) ([]generatedFile, error) {
 	if dir != "" {
 		server["env"] = map[string]string{"PERSONA_HOME": dir}
 	}
-	mcp, err := marshalJSON(map[string]any{"mcpServers": compat.AddMCPAliases(map[string]any{"persona": server})})
+	// This shared file also serves automatic Agent resumes, before any hub handshake.
+	// Keep both namespaces here so historical tool calls remain available. Assistant
+	// starts choose their own per-process registration after capability negotiation.
+	mcp, err := marshalJSON(map[string]any{"mcpServers": compat.MCPRegistrationServers(map[string]any{"persona": server}, true)})
 	if err != nil {
 		return nil, err
 	}
@@ -344,7 +386,7 @@ func doctorChecks(ctx context.Context, opts DoctorOptions) DoctorReport {
 		add(c)
 	}
 	add(checkCommandPaths(opts.Dir))
-	add(checkClaudeVersion(ctx, opts.ClaudeVersion))
+	add(checkClaudeVersion(ctx, opts.claudeProbe()))
 	add(checkHerdr(ctx, opts.HerdrSock))
 	add(checkGlobalPermissionHooks(opts.ClaudeConfigDir))
 	add(checkAgentSandbox(opts.Dir))
@@ -601,13 +643,35 @@ func runnable(path string) error {
 	return nil
 }
 
-func checkClaudeVersion(ctx context.Context, ask func(context.Context) string) DoctorCheck {
+// ClaudeVersionUnanswered is the claude-version check's state when no version was read but the shell did find claude
+// (it ran out of time, or printed none): the assistant's readiness then says unknown, not claude_missing. The hub
+// matches the literal (assistant/readiness.go); "" is every other outcome, as with nodes from before it.
+const ClaudeVersionUnanswered = "unanswered"
+
+// claudeProbe is ClaudeProbe, or ClaudeVersion read as it always was: no version is no claude.
+func (o DoctorOptions) claudeProbe() func(context.Context) (string, bool) {
+	if o.ClaudeProbe != nil {
+		return o.ClaudeProbe
+	}
+	if o.ClaudeVersion == nil {
+		return nil
+	}
+	return func(ctx context.Context) (string, bool) {
+		v := o.ClaudeVersion(ctx)
+		return v, v == ""
+	}
+}
+
+func checkClaudeVersion(ctx context.Context, ask func(context.Context) (string, bool)) DoctorCheck {
 	c := DoctorCheck{Name: "claude-version"}
-	v := ""
+	v, missing := "", true
 	if ask != nil {
-		v = ask(ctx)
+		v, missing = ask(ctx)
 	}
 	switch {
+	case v == "" && !missing:
+		c.Status, c.State, c.Detail = DoctorWarn, ClaudeVersionUnanswered, "这次没读到 claude 的版本（超时或出错），claude 本身找得到"
+		c.Hint = "机器很忙或登录 shell 启动慢时会这样，稍后再查；一直这样就在终端运行 zsh -ic 'claude --version' 看看"
 	case v == "":
 		c.Status, c.Detail = DoctorWarn, "读不到 claude 的版本"
 		c.Hint = "没装 Claude Code，或登录 shell 里找不到它；读不到时 Persona 按不支持 --plugin-dir 处理，hooks 走 --settings"
@@ -647,7 +711,8 @@ func checkHerdr(ctx context.Context, path string) DoctorCheck {
 func checkAgentSandbox(dir string) DoctorCheck {
 	c := DoctorCheck{Name: "agent-sandbox", Status: DoctorOK, Items: []string{}}
 	on, from := agentSandboxOn(dir)
-	sup := sandbox.AgentSupport(agentSandboxProbe()) // on macOS sandbox-exec runs true once; elsewhere nothing runs
+	support := agentSandboxProbe() // macOS runs sandbox-exec true; Linux runs a real default-allow bwrap probe
+	sup := sandbox.AgentSupport(support)
 	last := readAgentSandboxStatus(dir)
 	wheres := make([]string, 0, len(last))
 	for w := range last {
@@ -684,7 +749,7 @@ func checkAgentSandbox(dir string) DoctorCheck {
 		c.Status, c.Detail = DoctorWarn, "已开启，但工具不可用："+sup.Why
 		c.Hint = "agent 照常启动，不进沙箱"
 	default:
-		c.Detail = "已开启（" + from + "）；" + agentSandboxLimits
+		c.Detail = "已开启（" + from + "）；" + agentSandboxLimits(support.OS)
 		c.Hint = "环境变量 " + agentSandboxEnv + " 只对设置它的进程生效（node 看 launchd 的环境，personad launch 看 pane 的 shell）"
 		for _, w := range wheres {
 			if s := last[w].State; s == sandbox.AgentSkipped || s == sandbox.AgentUnavailable {
@@ -702,9 +767,19 @@ func checkAgentSandbox(dir string) DoctorCheck {
 }
 
 // agentSandboxLimits is what the doctor reminds of while the sandbox is on (docs/server/agent-sandbox.md): what it does not
-// stop, which agents it does not cover, and what stops working in it.
-const agentSandboxLimits = "挡不住 docker；在 herdr 或 Orca 里不经托管启动器（personad launch）启动的 agent，" +
-	"比如直接用 claude 或 ~/.zshrc 里的启动器，包括 herdr 重启后接着跑的，不在沙箱里；沙箱里 ps、top、sudo 这类 setuid 程序起不来"
+// stop, which agents it does not cover, and platform-specific behavior that needs a restart or stops working.
+func agentSandboxLimits(goos string) string {
+	limits := "挡不住 docker；在 herdr 或 Orca 里不经托管启动器（personad launch）启动的 agent，" +
+		"比如直接用 claude 或 ~/.zshrc 里的启动器，包括 herdr 重启后接着跑的，不在沙箱里"
+	switch goos {
+	case "darwin":
+		return limits + "；沙箱里 ps、top、sudo 这类 setuid 程序起不来"
+	case "linux":
+		return limits + "；node 重启后沙箱内 agent 也要一并重启（node.sock 是启动时快照）"
+	default:
+		return limits
+	}
+}
 
 // agentSandboxWords are the statuses in the doctor's words.
 var agentSandboxWords = map[string]string{

@@ -220,6 +220,28 @@ class InboxAssistantTransportTest {
         }
     }
 
+    /** The health space (#4329): its chats are listed with `?space=health` and a new one is started in it, never as the main one. */
+    @Test fun theHealthSpaceListsAndStartsItsChatsByName() = runBlocking {
+        MockWebServer().use { server ->
+            val transport = HttpInboxAssistantTransport("scope", server.url("/").toString(), "test-token", OkHttpClient())
+            server.enqueue(MockResponse().setBody("""{"machine_id":"mac","conversations":[]}"""))
+            transport.assistantIn("health")
+            val listed = server.takeRequest()
+            assertEquals("GET", listed.method)
+            assertEquals("/api/v1/assistant", listed.requestUrl?.encodedPath)
+            assertEquals("health", listed.requestUrl?.queryParameter("space"))
+            server.enqueue(MockResponse().setBody("""{"session":{"machine_id":"mac","session_id":"h","space":"health"}}"""))
+            transport.createConversationIn("health")
+            val started = server.takeRequest()
+            assertEquals("POST", started.method)
+            assertEquals("/api/v1/assistant/conversations", started.requestUrl?.encodedPath)
+            assertEquals("health", started.requestUrl?.queryParameter("space"))
+            val body = JsonCodec.parseToJsonElement(started.body.readUtf8()).jsonObject
+            assertEquals("health", body["space"]?.jsonPrimitive?.content)
+            assertNull("a space has no main chat", body["main"])
+        }
+    }
+
     @Test fun aConversationOnALauncherNamesItInThePost() = runBlocking {
         MockWebServer().use { server ->
             val transport = HttpInboxAssistantTransport("scope", server.url("/").toString(), "test-token", OkHttpClient())

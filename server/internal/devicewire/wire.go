@@ -158,6 +158,9 @@ type Accept struct {
 // Config is what the hub hands the manager: the defaults of what the manager carries, as the hub's hello has them
 // (manager.hello's answer, field devices) and devices.config again whenever they change.
 type Config struct {
+	ShareRoutingHandle []byte                    `json:"share_routing_handle,omitempty"`
+	SharePublicOrigin  string                    `json:"share_public_origin,omitempty"`
+	ShareAuthorities   map[string]ShareAuthority `json:"share_authorities,omitempty"`
 	// AutoUpdateNodes is an explicit opt-in; older hubs omit it and leave nodes unchanged.
 	AutoUpdateNodes bool `json:"auto_update_nodes,omitempty"`
 	// Machines are hub.json's machines (and those the admin page added since), each the JSON hub.json has.
@@ -314,14 +317,20 @@ type NodeEvent struct {
 
 // NodeCall is devices.call's and devices.request's params.
 type NodeCall struct {
-	MachineID string          `json:"machine_id"`
-	Method    string          `json:"method"`
-	Params    json.RawMessage `json:"params,omitempty"`
+	Caller     *Caller         `json:"caller,omitempty"`
+	Submission *Submission     `json:"submission,omitempty"`
+	Authority  *ShareAuthority `json:"share_authority,omitempty"`
+	MachineID  string          `json:"machine_id"`
+	Method     string          `json:"method"`
+	Params     json.RawMessage `json:"params,omitempty"`
 	// TimeoutMS bounds the call on the manager's side too, a little before the caller gives up: the manager's
 	// CodeDeadline answer comes back in time.
 	TimeoutMS int64 `json:"timeout_ms,omitempty"`
 	// Request is devices.request's key, the manager's (EventRequestEnd names it).
 	Request string `json:"request,omitempty"`
+	// Fallback (a connection's calls only): sent instead when the node answers unknown method, a node from before
+	// Method (launchers.catalog falls back to launchers.managed).
+	Fallback *NodeCall `json:"fallback,omitempty"`
 }
 
 // RequestEnd is devices.request_end's params.
@@ -377,6 +386,23 @@ var Routes = []string{
 	"PUT /api/v1/machines/{mid}/claude-dirs/blocked",
 	"GET /api/v1/machines/{mid}/claude-live-replies",
 	"PUT /api/v1/machines/{mid}/claude-live-replies",
+	// Sharing the machine's clipboard with the phone (#3064, internal/devices clipboard.go).
+	"GET /api/v1/machines/{mid}/clipboard",
+	"PUT /api/v1/machines/{mid}/clipboard",
+	"GET /api/v1/machines/{mid}/clipboard/settings",
+	"PUT /api/v1/machines/{mid}/clipboard/settings",
+	// The file transfer switch (#3065, internal/devices transfer_settings.go).
+	"GET /api/v1/machines/{mid}/file-transfer/settings",
+	"PUT /api/v1/machines/{mid}/file-transfer/settings",
+}
+
+// TransferRoutes are computer to computer file transfers (internal/devices transfer.go, docs/protocol/file-transfer.md),
+// relayed the same way: a POST to the manager of its source computer (from.machine in the body), GET and DELETE to the
+// one the request names (?manager=, as the transfer's events say), else the default.
+var TransferRoutes = []string{
+	"POST /api/v1/files/transfer",
+	"GET /api/v1/files/transfer/{id}",
+	"DELETE /api/v1/files/transfer/{id}",
 }
 
 // MetricsRoutes are the machines' monitoring's routes (internal/devices metrics.go), relayed the same way: every
@@ -411,4 +437,7 @@ const (
 	CodeMachineOffline = "machine_offline" // its node is not connected
 	CodeNodeClosed     = "node_closed"     // the connection to its node dropped during the call
 	CodeDeadline       = "deadline"        // the call's time ran out with the node on it (it may have done it)
+	// CodeHandoffRefused: secret.stage, or a session.start with a secret_ticket, asked by the hub or another manager:
+	// only the manager that connects the computer makes a hand-off, after its own card (docs/extensions/secret-providers.md).
+	CodeHandoffRefused = "handoff_refused"
 )

@@ -160,7 +160,7 @@ type Item struct {
 	// Unknown nonempty kinds are still not user-authored input.
 	Source *MessageSource `json:"source,omitempty"`
 	Fold   *Fold          `json:"fold,omitempty"`
-	// Task: this notice is a background task reporting back (a command, a Monitor, a subagent, or a workflow).
+	// Task: a background task notice, or a subagent tool result associated with its launching call.
 	Task         *TaskNote     `json:"task,omitempty"`
 	TurnDuration *TurnDuration `json:"turn_duration,omitempty"`
 	// Compact: this notice is where the context was compacted (Claude Code's compact_boundary).
@@ -169,8 +169,9 @@ type Item struct {
 	ModelRefusal *ModelRefusal `json:"model_refusal,omitempty"`
 }
 
-// ModelRefusal is a Claude Code model_refusal_* record. Values are kept as recorded, including unknown categories
-// and scopes; Raw preserves the complete JSONL row for clients that need the original signal.
+// ModelRefusal is a Claude Code model_refusal_* record as clients see it: its known fields, values kept as recorded
+// (unknown subtypes, categories and scopes included), and Text, the refusal's own words (the record's string
+// content). Nothing else of the record leaves the node (#2528): the line may carry fields no one reviewed.
 type ModelRefusal struct {
 	Subtype       string `json:"subtype"`
 	OriginalModel string `json:"original_model,omitempty"`
@@ -178,8 +179,23 @@ type ModelRefusal struct {
 	Category      string `json:"category,omitempty"`
 	Scope         string `json:"scope,omitempty"`
 	Explanation   string `json:"explanation,omitempty"`
-	Raw           string `json:"raw,omitempty"`
+	Text          string `json:"text,omitempty"`
+	// Raw is the whole JSONL line, for the node's own use only (telling one record from another): never encoded, so
+	// no RPC, REST answer, push or snapshot carries it. Older builds sent it as "raw"; clients must not show that.
+	Raw string `json:"-"`
 }
+
+// ModelRestore is a pending "back to the configured model" (node session.restore_model, #2528): State
+// ModelRestoreNextStart says the session's idle headless process was closed (or none ran), so its next start asks for
+// To, the model the conversation is configured with as the node read it at At. Nothing about which model runs.
+type ModelRestore struct {
+	State string    `json:"state"`
+	To    string    `json:"to,omitempty"`
+	At    time.Time `json:"at"`
+}
+
+// ModelRestoreNextStart: the next start of the session's process uses the configured model.
+const ModelRestoreNextStart = "next_start"
 
 // MessageSource preserves an input's provenance without changing the model's role.
 // ConversationID is a stable session id, never a peer's display name (Item.From).
@@ -187,6 +203,9 @@ type MessageSource struct {
 	Kind           string `json:"kind"`
 	ConversationID string `json:"conversation_id,omitempty"`
 	Title          string `json:"title,omitempty"`
+	// Push is a scheduled input's delivery mode, persisted with the input so a queued user message cannot change it.
+	// "asked" suppresses that run's normal completion; absent keeps the existing every-answer behavior.
+	Push string `json:"push,omitempty"`
 }
 
 const (
@@ -194,6 +213,9 @@ const (
 	SourcePatrol       = "patrol"
 	SourceFollowup     = "followup"
 	SourceSupervision  = "supervision"
+	// SourceMeeting is a batch of a recorded meeting the session attends (docs/assistant/meeting-minutes.md "Feeding
+	// the attending session"): other people's words, never the user's; Title is the meeting's name.
+	SourceMeeting = "meeting"
 )
 
 // SourceFromInjected upgrades existing metadata without guessing from ordinary text.
@@ -271,7 +293,7 @@ type TurnDuration struct {
 // subagent finishing. Title, Detail and Text come decoded (Claude Code writes &gt; &lt; &amp; in them).
 type TaskNote struct {
 	Kind   string `json:"kind"`             // shell | monitor | agent | workflow | task (anything else)
-	Status string `json:"status,omitempty"` // completed | failed | killed | stopped | event | ended | waiting
+	Status string `json:"status,omitempty"` // running | completed | failed | killed | stopped | event | ended | waiting
 	// Title: the call's description, or the first line of its command when it had none.
 	Title      string `json:"title"`
 	TaskID     string `json:"task_id,omitempty"`

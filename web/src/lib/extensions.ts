@@ -395,6 +395,9 @@ export function listSummary(list?: HubExtension[] | null): string {
 
 export const fieldLabel = (f: ExtensionField) => f.title || f.name;
 
+/** Whether flipping a switch of the field asks its x-confirm sentence first: only turning one on, and only with a sentence. */
+export const asksFirst = (f: ExtensionField, on: boolean) => on && !!f.confirm;
+
 /** The title with "(required)" when it has to be filled in and has no default to fall back to. */
 export const fieldTitle = (f: ExtensionField) => (f.required && f.default === undefined ? t("lib-extensions.field_required", { label: fieldLabel(f) }) : fieldLabel(f));
 

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	jsonv2 "encoding/json/v2"
+	"math"
 	"slices"
 	"time"
 
@@ -40,20 +41,30 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 		}
 		switch {
 		case sess.Status == proto.StatusWorking && prev != proto.StatusWorking:
-			s.takeTaskAnswerRetry(machine, sess.SessionID)
-			s.turnsBook().working(key, now)
-			s.replyWorked(machine, sess.SessionID) // answered: a question it asks next is a new one (agents_reply.go)
-			ref := SessionRef{MachineID: machine, SessionID: sess.SessionID}
 			// A first list or an offline-to-working transition can be a
 			// reconnect to the same turn. Only a known stopped turn proves a
 			// new one and resets its persisted loop state.
 			newTurn := prev == proto.StatusDone || prev == proto.StatusIdle || prev == proto.StatusInterrupted
+			s.justMeStarted(machine, sess.SessionID, newTurn, sess.WokeByTask) // meeting_justme.go
+			if s.meetingTurnStarted(machine, sess.SessionID, newTurn) {
+				break // a meeting's batch: a side exchange, neither the turn tracker's nor a task's or the Agents' (meeting_turns.go)
+			}
+			s.takeTaskAnswerRetry(machine, sess.SessionID)
+			s.turnsBook().working(key, now)
+			s.replyWorked(machine, sess.SessionID) // answered: a question it asks next is a new one (agents_reply.go)
+			ref := SessionRef{MachineID: machine, SessionID: sess.SessionID}
 			s.inOrder(func() { s.turnStartedObserved(context.Background(), ref, newTurn) }) // after the items that came before it
 		case prev == proto.StatusWorking && (sess.Status == proto.StatusDone || sess.Status == proto.StatusIdle):
+			ref := SessionRef{MachineID: machine, SessionID: sess.SessionID}
+			// After its finished push is decided against the mark; held while its background work runs.
+			defer s.justMeEnded(machine, sess.SessionID, backgroundRunning(sess))
+			if s.meetingTurnEnded(machine, sess.SessionID) { // no finished push, and the other turns' stay as they were
+				s.inOrder(func() { go s.turnEnded(context.Background(), ref, true) })
+				break
+			}
 			s.notifyFinished(machine, sess.SessionID, s.turnsBook().ended(key, now, backgroundRunning(sess)))
 			// A new assistant conversation is named after its first turn; a task from one may be done. After the
 			// items of the turn (a channel's answer is read from them).
-			ref := SessionRef{MachineID: machine, SessionID: sess.SessionID}
 			s.inOrder(func() { go s.TurnEnded(context.Background(), ref) })
 		case (sess.Status == proto.StatusDone || sess.Status == proto.StatusIdle) &&
 			(sess.Status != prev || sess.Rev != was.Rev || sess.LastText != was.LastText || !sess.UpdatedAt.Equal(was.UpdatedAt)) &&
@@ -61,7 +72,11 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 			ref := SessionRef{MachineID: machine, SessionID: sess.SessionID}
 			s.inOrder(func() { s.afterSettle(context.Background(), s.taskTurnSettled, ref.MachineID, ref.SessionID) })
 		}
-		if sess.Status == proto.StatusWorking && backgroundRunning(sess) {
+		if sess.Status != prev && sess.Status != proto.StatusWorking && !(prev == proto.StatusWorking && (sess.Status == proto.StatusDone || sess.Status == proto.StatusIdle)) {
+			// Stopped with no end seen (a restart, an interrupt, a card): a meeting turn there is over (meeting_turns.go).
+			s.meetingTurnStopped(machine, sess.SessionID, sess, prev == "")
+		}
+		if sess.Status == proto.StatusWorking && backgroundRunning(sess) && !s.meetingTurnNow(machine, sess.SessionID) {
 			s.turnsBook().sawBackground(key, now)
 		}
 	}
@@ -283,9 +298,12 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 			list[i].Archived = shown[list[i].SessionID].Archived
 			v := shown[list[i].SessionID]
 			list[i].Origin, list[i].OriginRef, list[i].OpenedBy = v.Origin, v.OriginRef, v.OpenedBy // origins.go
-			// Messages from other conversations wait in the assistant while it runs: shown like typed-ahead input.
+			// Messages from other conversations wait in the assistant while it runs: shown like typed-ahead input, after
+			// the user's own (the node's), and counted so the apps leave them alone: the assistant delivers them when the
+			// turn ends, and the queue's actions are claude's (#4342).
 			if q := shown[list[i].SessionID].Queued; len(q) > 0 {
 				list[i].Queued = append(slices.Clip(list[i].Queued), q...) // the node's slice is shared: never write into it
+				list[i].QueuedRelayed = uint16(min(len(q), math.MaxUint16))
 			}
 		}
 		list[i].SeenAt = seen[list[i].SessionID]
@@ -324,8 +342,9 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 // the node lists is decorated alone (as readinessMain does), not the machine's whole list for each finished turn; one
 // the node does not list may still be an archived row (archivedSessions), found in the whole list.
 func (s *Service) decoratedSession(machine, sid string) (proto.Session, bool) {
+	mark := s.archiveMark()
 	if row, ok := s.nodeSession(machine, sid); ok {
-		list, _, err := s.archivedSessions(context.Background(), machine, s.decorateInventory(machine, []proto.Session{row}, false))
+		list, _, err := s.archivedSessions(context.Background(), machine, s.decorateInventory(machine, []proto.Session{row}, false), mark)
 		if err != nil {
 			s.logf("load agent archives: %v", err)
 		}

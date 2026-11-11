@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/closeout"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcript"
@@ -38,7 +39,10 @@ type quickMeta struct {
 	model    string
 	surface  string // the client it runs in (transcript.Meta.Surface)
 	lastText string
-	// asks is what lastText asks the user (transcript.AskOf), when no message came in after it (#5096).
+	// answer is the latest turn's answer from its first words on (transcript.Meta.TurnAnswer); "" when the tail read
+	// held none of its words.
+	answer string
+	// asks is what lastText asks the user (closeout.AskOf), when no message came in after it (#5096).
 	asks string
 	// lastTextAt is when the agent last wrote text (botmux's sentinel included: it said something, it is no probe).
 	lastTextAt time.Time
@@ -269,6 +273,9 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 	}
 	rewound := tail.Settle(&tm)
 	m.title, m.cwd, m.model, m.lastText, m.first, m.activity, m.queue = tm.Title, tm.Cwd, tm.Model, tm.LastText, first, tm.LastActivity, tm.Queue
+	if tm.LastText != "" {
+		m.answer = tm.TurnAnswer()
+	}
 	m.start = start
 	if identity.IsAssistantDir(start) || start != "" && identity.IsAssistantDir(m.cwd) {
 		// An assistant or health conversation is where it started: its space, CLAUDE.md, memory and resume project.
@@ -289,13 +296,13 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 		if !rewound && prev.size > 0 && prev.size >= off && prev.size <= st.Size() {
 			// Nothing written since the last read is out of the tail: no newer words. Not after a turn in the tail was
 			// gone back over: the last read's words may be that turn's.
-			m.lastText = prev.lastText
+			m.lastText, m.answer = prev.lastText, prev.answer
 		} else {
 			m.lastText = lastWordsBefore(f, off)
 		}
 	}
 	if !m.lastPromptAt.After(m.lastTextAt) { // a message after the question answered it (#5096)
-		m.asks = transcript.AskOf(m.lastText)
+		m.asks = closeout.AskOf(m.lastText)
 	}
 	if t := tm.LastTool; t != nil {
 		m.doing, m.doingAt = transcript.Activity(t.Name, t.Input), t.At

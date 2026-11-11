@@ -95,15 +95,18 @@ function differences(got, want) {
 /** The requests since the last check, matched in order against what the case names (others may come between). */
 function matchRequests(want, seen, before) {
   let at = 0;
+  // one_of: any one of these, where the protocol allows several ways (#2770); an op's receipt goes by the write's id
+  const one = (w, s) => {
+    if (w.one_of) return w.one_of.some((o) => one(o, s));
+    if (w.get === "/ops") return s.get === "/ops" && s.key === w.id;
+    if (w.get) return s.get === w.get && (w.after_seq === undefined || s.after_seq === w.after_seq);
+    if (w.ws) return s.ws === w.ws && (w.since_seq === undefined || s.since_seq === w.since_seq);
+    if (w.post !== s.post) return false;
+    if (w.new_op) return s.op !== undefined && !before.has(s.op);
+    return s.key === w.id;
+  };
   for (const w of want) {
-    const k = seen.findIndex((s, i) => {
-      if (i < at) return false;
-      if (w.get) return s.get === w.get && (w.after_seq === undefined || s.after_seq === w.after_seq);
-      if (w.ws) return s.ws === w.ws && (w.since_seq === undefined || s.since_seq === w.since_seq);
-      if (w.post !== s.post) return false;
-      if (w.new_op) return s.op !== undefined && !before.has(s.op);
-      return s.key === w.id;
-    });
+    const k = seen.findIndex((s, i) => i >= at && one(w, s));
     if (k < 0) return `no ${JSON.stringify(w)} in ${JSON.stringify(seen.slice(at))}`;
     at = k + 1;
   }
@@ -153,6 +156,12 @@ async function typeAndSend(page, words) {
   const box = page.locator(BOX).first();
   await box.fill(words);
   await box.press("Enter");
+}
+
+/** The main conversation mounts its cards in Pending; ordinary chats have no tray. Keep it open for reads and answers. */
+async function showCards(page) {
+  const pending = page.locator('[data-assistant-actionbar] [data-tray-entry="pending"][aria-expanded="false"]');
+  if (await pending.count()) await pending.click();
 }
 
 /** Taps a failed bubble's Retry or Delete for the message with these words (by the button's text, as the jsdom
@@ -209,7 +218,10 @@ async function playOn(browser, c, devices) {
     if (i === 59) failures.push(`start: not every device subscribed to the chat: ${JSON.stringify(seen)}`);
   }
 
-  const look = (d) => d.page.evaluate(project, d.sent.filter((s) => !s.discarded).map((s) => s.text));
+  const look = async (d) => {
+    await showCards(d.page);
+    return d.page.evaluate(project, d.sent.filter((s) => !s.discarded).map((s) => s.text));
+  };
   const invariants = async (where) => {
     for (const [name, d] of Object.entries(devices)) {
       const v = await look(d);
@@ -253,6 +265,7 @@ async function playOn(browser, c, devices) {
         } else if (u.answer) {
           d.answering.add(u.answer.id);
           const label = u.answer.resolution.allow === false ? interactionsText.deny : interactionsText.allow;
+          await showCards(d.page);
           await d.page.locator(`[data-card="${u.answer.id}"]`).getByRole("button", { name: label, exact: true }).first().click();
         } else if (u.retry) {
           await onFailed(d.page, d.sent.find((s) => s.id === u.retry).text, outboxText.retry);

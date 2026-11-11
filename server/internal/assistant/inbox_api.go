@@ -43,8 +43,7 @@ func (s *Service) inboxRoutes() {
 		if !s.inboxUp(w, r) {
 			return
 		}
-		items, asOf := s.inboxListAt(r.URL.Query().Get("sources") == "all")
-		apierr.WriteJSON(w, map[string]any{"items": items, "as_of": asOf, "triage": s.inboxTriage()})
+		s.writeInboxList(w, r.URL.Query().Get("sources") == "all") // from each item's kept bytes (inbox_list_memo.go)
 	})
 	s.handle("GET /api/v1/inbox/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if !s.inboxUp(w, r) {
@@ -153,6 +152,8 @@ func (s *Service) inboxRoutes() {
 		switch {
 		case errors.Is(err, errMailReplyTargetChanged):
 			apierr.WriteBody(w, http.StatusConflict, map[string]any{"code": "mail_reply_target_changed", "error": i18n.T(i18n.OfWriter(w), "assistant-inbox.mail_target_changed"), "retryable": false, "delivered": "none"})
+		case errors.Is(err, errDraftDismissed):
+			apierr.WriteBody(w, http.StatusConflict, map[string]any{"code": "task_draft_dismissed", "error": i18n.T(i18n.OfWriter(w), "assistant-tasks.draft_dismissed"), "retryable": false, "delivered": "none"})
 		case errors.Is(err, errInboxItemDone):
 			apierr.WriteBody(w, http.StatusConflict, map[string]any{"code": "inbox_item_done", "error": i18n.T(i18n.OfWriter(w), "assistant-inbox.item_done"), "retryable": false, "delivered": "none"})
 		case errors.Is(err, errNoInboxItem):
@@ -203,8 +204,7 @@ func (s *Service) inboxRoutes() {
 				"error": i18n.T(l, "assistant-inbox.refresh_failed"), "detail": i18n.Localize(err, l), "retryable": true})
 			return
 		}
-		items, asOf := s.inboxListAt(r.URL.Query().Get("sources") == "all")
-		apierr.WriteJSON(w, map[string]any{"items": items, "as_of": asOf, "triage": s.inboxTriage()})
+		s.writeInboxList(w, r.URL.Query().Get("sources") == "all")
 	})
 }
 
@@ -259,6 +259,9 @@ func (s *Service) inboxList(all bool) []InboxItem {
 
 // inboxListAt is inboxList and the moment it was read (as_of): everything listed arrived by then.
 func (s *Service) inboxListAt(all bool) ([]InboxItem, time.Time) {
+	if inboxMemoVerify { // tests: every list checks the bytes GET /api/v1/inbox keeps too (inbox_list_memo.go)
+		s.inboxListRaw(all)
+	}
 	b := &s.inbox
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -272,7 +275,9 @@ func (s *Service) inboxListAt(all bool) ([]InboxItem, time.Time) {
 		it.arrived(now)
 		out = append(out, it.listed())
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt.After(out[j].UpdatedAt) })
+	sort.Slice(out, func(i, j int) bool {
+		return inboxListOrder(out[i].UpdatedAt, out[i].ID, out[j].UpdatedAt, out[j].ID) < 0
+	})
 	return out, now
 }
 

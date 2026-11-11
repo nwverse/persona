@@ -68,7 +68,7 @@ func noticeKeyOf(s string) noticeKey {
 }
 
 func userText(mk func(int, string, string) proto.Item, s string, meta *Meta) []proto.Item {
-	s = dropTagged(caveatRe, "<local-command-caveat>", dropTagged(pastedRe, "pasted_content", dropTagged(ContextRe, "-context>", s)))
+	s = dropTagged(caveatRe, "<local-command-caveat>", dropTagged(pastedRe, "pasted_content", dropTagged(ContextRe, "-context>", dropTagged(ViewErrorsRe, "<persona-view-errors", s))))
 	trimmed := legacyLarkAgent(strings.TrimSpace(s))
 	if trimmed == "" {
 		return nil
@@ -163,6 +163,7 @@ func userText(mk func(int, string, string) proto.Item, s string, meta *Meta) []p
 		it.Task, it.Text = taskNote(trimmed)
 		meta.noteCall(it.Task)
 		meta.reportFor(it.Task)
+		meta.agentNotification(&it)
 		return []proto.Item{it}
 	}
 	if trimmed == "[Request interrupted by user]" || trimmed == "[Request interrupted by user for tool use]" {

@@ -23,7 +23,7 @@ func (s *Service) workLoop(ctx context.Context) {
 			return
 		case now := <-t.C:
 			s.checkToolLoops(ctx)
-			if s.workOn(ctx) {
+			if s.workActive(ctx) {
 				s.workTick(ctx, now)
 			}
 		}
@@ -37,12 +37,17 @@ func (s *Service) workTick(ctx context.Context, now time.Time) {
 		return
 	}
 	v := s.newWorkView(ctx)
+	full := s.workOn(ctx) // off: only transient errors' "Continue" (transient_retry)
 	s.work.mu.Lock()
 	s.work.init()
 	var due, waits, cards [][2]string
 	agents := map[[2]string]proto.WorkAgent{}
 	for k, e := range s.work.entries {
 		switch {
+		case !full:
+			if e.WakeAt != nil && !e.WakeAt.After(now) && e.Work.On == proto.WaitTransient && e.Work.CI == nil {
+				due = append(due, k)
+			}
 		case e.WakeAt != nil && !e.WakeAt.After(now):
 			due = append(due, k)
 		case e.WakeAt != nil && e.Work.On == proto.WaitAgent && e.Work.Agent != nil:
@@ -51,7 +56,7 @@ func (s *Service) workTick(ctx context.Context, now time.Time) {
 			cards = append(cards, k)
 		}
 	}
-	sample := now.Sub(s.work.sampleAt) >= workSampleGap
+	sample := full && now.Sub(s.work.sampleAt) >= workSampleGap
 	if sample {
 		s.work.sampleAt = now
 	}
@@ -131,6 +136,12 @@ func (s *Service) workGuard(v *workView, e db.SessionWork, ownCard bool) (proto.
 	if closed {
 		return c, "task done"
 	}
+	if !ownCard && s.followUpsHeld(e.MachineID, e.SessionID) {
+		return c, "held: the owner said this task is not what they asked" // until its supervisor looks (decision.go)
+	}
+	if !ownCard && s.parkedSession(e.MachineID, e.SessionID) {
+		return c, "held: its task is parked" // a turn of its agent would end the parking (parked.go)
+	}
 	switch {
 	case !ok:
 		return c, "gone"
@@ -186,7 +197,7 @@ func (s *Service) workWake(ctx context.Context, v *workView, k [2]string, now ti
 		return
 	}
 	sw := s.triageSwitches(ctx)
-	if continues(e.Work) && !sw.AutoContinue || !continues(e.Work) && !sw.Wake {
+	if !sw.wakes(e.Work) {
 		before := e
 		e.WakeAt, e.Work.WakeAt = nil, nil // turned off since it was set
 		if before.Work.CI != nil {
@@ -195,6 +206,10 @@ func (s *Service) workWake(ctx context.Context, v *workView, k [2]string, now ti
 		} else {
 			s.putWork(ctx, e)
 		}
+		return
+	}
+	if e.Work.CloseoutAsk == closeoutAskPending {
+		s.sendCloseoutAsk(ctx, e, c, now)
 		return
 	}
 	if e.Work.CI != nil {
@@ -256,12 +271,14 @@ func (s *Service) workWake(ctx context.Context, v *workView, k [2]string, now ti
 	case e.Work.On == proto.WaitTransient:
 		e.Retries++
 		text, kind = continueText, "continued"
+		s.logf("work %s/%s: auto-continue: sending %q after a transient model error (attempt %d/%d)", k[0], short(k[1]), text,
+			e.Retries, e.Work.Max)
 	case e.Work.On == proto.WaitExternal || e.Work.On == proto.WaitAgent:
 		e.Wakes++
 		wk := agentWake{Attempt: e.Wakes, Wait: e.Work.Wait, Then: e.Work.Then}
 		s.work.mu.Lock()
 		if a, ok := s.work.approved[k]; ok && risky(e.Work.Then) && a.covers(&e.Work) {
-			wk.Approved = a.then // the user said yes to it: the wake must not tell it to ask again
+			wk.Approved, wk.ApprovedByTask = a.then, a.task != "" // said yes to: the wake must not tell it to ask again
 		}
 		s.work.mu.Unlock()
 		if a := e.Work.Agent; a != nil && s.agentStopped(v, *a) {
@@ -420,6 +437,7 @@ func (s *Service) cardTick(ctx context.Context, v *workView, k [2]string, now ti
 func (s *Service) backfillWork(ctx context.Context, v *workView, now time.Time) {
 	n := 0
 	settle := settleOf(s.triageCfg(ctx))
+	full := s.workOn(ctx) // off: only the turns a transient error ended (transient_retry)
 	for _, d := range v.machines() {
 		if !d.Reachable {
 			continue
@@ -429,7 +447,7 @@ func (s *Service) backfillWork(ctx context.Context, v *workView, now time.Time) 
 				return
 			}
 			if c.Assistant || c.State != proto.StateUnread || c.Work != nil || now.Sub(c.UpdatedAt) > workBackfill ||
-				now.Sub(c.UpdatedAt) < settle {
+				now.Sub(c.UpdatedAt) < settle || !full && (c.TurnError == "" || !turnErrorTransient(c)) {
 				continue
 			}
 			k := [2]string{d.ID, c.SessionID}

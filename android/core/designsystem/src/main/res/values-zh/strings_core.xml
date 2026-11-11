@@ -11,9 +11,9 @@
         <item quantity="other">%1$d 个做完了</item>
     </plurals>
     <string name="designsystem_core_fleet_all_done">都处理完了</string>
-    <string name="designsystem_core_fleet_permission_waiting">等你授权</string>
+    <string name="designsystem_core_fleet_permission_waiting">需要你授权</string>
     <string name="designsystem_core_fleet_permission_detail">授权：%1$s</string>
-    <string name="designsystem_core_fleet_plan_waiting">计划等你批准</string>
+    <string name="designsystem_core_fleet_plan_waiting">计划等你审批</string>
     <string name="designsystem_core_fleet_plan_detail">计划：%1$s</string>
     <string name="designsystem_core_fleet_question_waiting">在问你</string>
     <string name="designsystem_core_fleet_item_working">工作中</string>
@@ -92,6 +92,7 @@
     <string name="designsystem_core_state_unread">完成未看</string>
     <string name="designsystem_core_state_awaiting_reply">待你回复</string>
     <string name="designsystem_core_state_working">工作中</string>
+    <string name="designsystem_core_state_background_waiting">后台等待中</string>
     <string name="designsystem_core_state_waiting">待唤醒</string>
     <string name="designsystem_core_state_muted">已屏蔽</string>
     <string name="designsystem_core_state_idle">已看</string>
@@ -178,6 +179,24 @@
         <item quantity="other">%1$d 小时后叫醒</item>
     </plurals>
     <string name="designsystem_core_wake_in_hours_minutes">%1$d 小时 %2$d 分后叫醒</string>
+    <string name="designsystem_core_dot_joined">%1$s · %2$s</string>
+    <string name="designsystem_core_closeout_merged_yes">已合并</string>
+    <string name="designsystem_core_closeout_merged_no">未合并</string>
+    <string name="designsystem_core_closeout_merged_confirmed">已合并 ✓</string>
+    <string name="designsystem_core_closeout_merged_contradicted">✗ 说已合并，实际没有</string>
+    <string name="designsystem_core_closeout_deployed_yes">已部署</string>
+    <string name="designsystem_core_closeout_deployed_no">未部署</string>
+    <string name="designsystem_core_closeout_deployed_confirmed">已部署 ✓</string>
+    <string name="designsystem_core_closeout_deployed_contradicted">✗ 说已部署，实际没有</string>
+    <string name="designsystem_core_closeout_blocked_on">卡在：%1$s</string>
+    <string name="designsystem_core_closeout_blocked">卡住了</string>
+    <string name="designsystem_core_closeout_not_done_missing">没做完：%1$s</string>
+    <string name="designsystem_core_closeout_not_done">没做完</string>
+    <string name="designsystem_core_closeout_done">自述已完成</string>
+    <string name="designsystem_core_todo_orphaned">没人在做</string>
+    <string name="designsystem_core_todo_orphaned_error">出错后关闭</string>
+    <string name="designsystem_core_todo_orphaned_closed">已关闭</string>
+    <string name="designsystem_core_todo_orphaned_offline">电脑离线</string>
     <string name="designsystem_core_source_codex_live">Codex 实时</string>
     <string name="designsystem_core_source_codex_history">Codex 历史</string>
     <string name="designsystem_core_source_identity_conflict">身份冲突</string>
@@ -190,7 +209,9 @@
     <string name="designsystem_core_engine_herdr">终端里的 herdr</string>
     <string name="designsystem_core_engine_herdr_app">桌面 App 里开的终端</string>
     <string name="designsystem_core_engine_orca">Orca 里的终端</string>
+    <string name="designsystem_core_engine_tern">Tern 里的终端</string>
     <string name="designsystem_core_engine_paseo">Paseo 里的 Agent</string>
+    <string name="designsystem_core_engine_cindy">Cindy 里的 Agent</string>
     <string name="designsystem_core_engine_offline">离线，暂无检测信息</string>
     <string name="designsystem_core_engine_unknown">暂无检测信息</string>
     <string name="designsystem_core_engine_found">检测到可用</string>
@@ -287,19 +308,19 @@
     <string name="designsystem_core_mail_outlook">Outlook · Microsoft 账号登录</string>
     <string name="designsystem_core_mail_gmail">Gmail · Google 账号登录</string>
     <string name="designsystem_core_mail_lark">飞书邮箱</string>
-    <string name="designsystem_core_headline_question">%1$s 有问题问你</string>
+    <string name="designsystem_core_headline_question">%1$s 在问你</string>
     <string name="designsystem_core_headline_elicitation">MCP 表单等你填写</string>
     <string name="designsystem_core_headline_permission">请求使用 %1$s</string>
     <string name="designsystem_core_headline_permission_detail">请求使用 %1$s：%2$s</string>
     <string name="designsystem_core_headline_agent_permission">%1$s 请求使用 %2$s</string>
     <string name="designsystem_core_headline_agent_permission_detail">%1$s 请求使用 %2$s：%3$s</string>
     <string name="designsystem_core_headline_secret_run">用你的密码在 %1$s 上运行</string>
-    <string name="designsystem_core_headline_screen">终端里有对话框等你处理</string>
-    <string name="designsystem_core_headline_needs_you">需要你处理</string>
+    <string name="designsystem_core_headline_screen">终端等你处理</string>
+    <string name="designsystem_core_headline_needs_you">需要你</string>
     <string name="designsystem_core_ask_question">在问你</string>
-    <string name="designsystem_core_ask_permission">需要授权</string>
-    <string name="designsystem_core_ask_plan">计划待批准</string>
-    <string name="designsystem_core_ask_screen">终端对话框</string>
+    <string name="designsystem_core_ask_permission">需要你授权</string>
+    <string name="designsystem_core_ask_plan">计划等你审批</string>
+    <string name="designsystem_core_ask_screen">终端等你处理</string>
     <string name="designsystem_core_ask_elicitation">MCP 请求</string>
     <string name="designsystem_core_ask_line">%1$s：%2$s</string>
     <string name="designsystem_core_todo_done">已完成</string>
@@ -334,6 +355,8 @@
     <string name="designsystem_core_endpoint_protocol">响应格式不对</string>
     <string name="designsystem_core_endpoint_rejected">hub 拒绝了请求</string>
     <string name="designsystem_core_endpoint_rate_limited">请求太频繁，稍后再试</string>
+    <string name="designsystem_core_endpoint_access_required">这个 hub 在 Cloudflare Access 后面，需要服务令牌</string>
+    <string name="designsystem_core_endpoint_access_rejected">Cloudflare Access 拒绝了服务令牌</string>
     <string name="designsystem_core_endpoint_failed">连接失败</string>
     <string name="designsystem_core_address_empty">请输入地址</string>
     <string name="designsystem_core_address_spaces">地址里不能有空格</string>
@@ -422,7 +445,9 @@
     <string name="designsystem_core_workflow_failed">失败</string>
     <string name="designsystem_core_workflow_killed">已停止</string>
     <string name="designsystem_core_workflow_stalled">没动静了</string>
-    <string name="designsystem_core_workflow_agents_done">%1$d/%2$d 个 agent 完成</string>
+    <plurals name="designsystem_core_workflow_agents_done">
+        <item quantity="other">%2$d/%1$d 个 agent 完成</item>
+    </plurals>
     <string name="designsystem_core_always_scope_commands">这段对话里的所有命令</string>
     <string name="designsystem_core_always_scope_read_directory">这段对话中，这个目录里的所有读取操作</string>
     <string name="designsystem_core_always_scope_edit_directory">这段对话中，这个目录里的所有文件编辑</string>

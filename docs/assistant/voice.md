@@ -42,6 +42,8 @@ Phase one is done and this document follows the code; how it was split into issu
 - A call lives only on screen: on a phone, going to the background, leaving the chat or an incoming call ends it (6.5), and its captions are not saved into the conversation (section 2's table).
 - No voice on the Mac, and Android opens voice for the main chat only.
 
+**Meeting mode** (#3862, planned): a call bound to a recorded meeting's room conversation (`start` with `mode: "meeting"` and `recording_id`), connected for the whole meeting on the recorder's own capture, hearing only what the user says while holding Talk (`talk` frames; Talk's audio in either transcription mode), with `delegate_task` to the room as its only tool and no owner notes in its instructions. A room takes no other call (`meeting_room`); the contract is [meeting-minutes.md](./meeting-minutes.md) "Phase 4: realtime voice in the meeting".
+
 **Not yet** (phase two, unscheduled): saved captions interleaved by time in the thread; background and lock-screen calls (Live Activities); switching chats by voice; voice on the Mac and the watch; Android's entry for agents; an entry without a chat (`ShellHome`); dedicated realtime-voice settings with `POST /test` (5.6); other upstream protocols (decision 3) and several upstreams in the App.
 
 **GPT-Live constraints** (upstream docs and existing code, expanded through tests in #3495)
@@ -171,7 +173,7 @@ Phase one is done and this document follows the code; how it was split into issu
 
 **M. Disconnection**
 
-- **Upstream drops**: reconnect at most 3 times, resetting after 60 seconds stable. Reconnecting plays a tone and shows "Reconnecting".
+- **Upstream drops**: reconnect at most 3 times, resetting after 60 seconds stable. An upstream that stays connected but takes no frame for 10 seconds counts as a drop. Reconnecting plays a tone and shows "Reconnecting".
 - **App-to-hub drops**: automatically retry 3 times after 1, 4, 10 seconds, with `resume` in `start`. Rounds finished during the gap are still spoken. After all three failures, show "Continue".
 
 ### 1.3 Errors
@@ -725,7 +727,7 @@ How #3505 does it (`suspend.go`; constants from lessons "Recommended constants",
 
 ### 4.10 Reconnect and resume
 
-- **Upstream drops**: existing `lost()`, at most 3 attempts, reset after 60 seconds stable. New instructions include refreshed snapshot, last 40 utterances, pending runs; old delegations invalid. Pausing and waking are not drops (4.9).
+- **Upstream drops**: existing `lost()`, at most 3 attempts, reset after 60 seconds stable. Every write to the upstream waits at most `upWriteTimeout` (10 s); on that deadline the WebSocket closes itself, `readUpstream` fails and `lost()` runs, so an upstream that stops reading cannot hold the call (or the app hanging up) forever. New instructions include refreshed snapshot, last 40 utterances, pending runs; old delegations invalid. Pausing and waking are not drops (4.9).
   #3502: both protocols reset if this session survives 60 seconds (`stableAfter`); three failed attempts or three consecutive drops send fatal `upstream_failed`; protocol 2 App receives `link{reconnecting}` / `link{live}`.
   If Agent-written snapshot parts (title, goal, progress, recent turns, card questions, Agent titles) differ from the prior session (more text during disconnect), the new session has read Agent content: close user-speech gate on coming online, rejecting delegation as `unprompted` until user speaks again. Unchanged snapshot does not close it, allowing the user's pre-disconnect utterance.
 - **App-extension drops** (network switch; forwarded WS closed by hub redeploy; manager restart also restarts extension):
@@ -1062,7 +1064,7 @@ Reject (ii), "add realtime type to model providers": it would need a new API ret
 - **First row**: `VoiceBarStatus.make` gives the words beside the orb and the orb's phase: Connecting… / Listening / Hearing you / Speaking / Muted / Voice Paused / Resuming… / Reconnecting… / "<tool>…" (read-only tools). Where the words do not fit between mute, orb and end (accessibility sizes: "Voice Pa…" was cut, or wrapped), they go under the row (`ViewThatFits`).
 - **Height**: the bar lays itself out at its own height (`fixedSize(vertical:)`); with many cards the cards' area scrolls (squeezed, the second line was cut to one and the first row's words shrank). During a call, where the page is short (large text), the cards' area stops where the footer would run over the conversation, keeping `Theme.Size.voiceThreadRoom` (44 pt, about a caption line) of it in sight (`PendingCards.cap`); at standard sizes the cards keep their half page, and nothing changes outside calls. It is worked out only from values the cards do not move: the page height, the open header (`fixedHeader`), the bar's own measured height (`VoiceBarRoom`) and the count's. A folding header or the measured footer fed back into it and changed it every frame (CPU at 99%, UI tests never saw the app idle).
 - **Thread tail**: `VoiceThreadTail(key:held:)` reads `VoiceCalls` itself; ChatView only places it at the newest end (next to the sentinel): at most 6 captions under "Voice · This call only", in the order they were said (a caption with `before` is put in front of that row, #5673). Bottom-pinning: `VoiceTailFollow`, written like `ChatStreamFollow`, calls `contentArrived` when the shown rows change (a new caption, appended or put before another) or the last grows by 40 characters; while the user reads history (`frozen`) the tail stays as it was (`held`). Full text in `VoiceTranscriptSheet`.
-- **During call**: main-chat footer hides TaskDock and RouteChip, restores on end.
+- **During call**: main-chat footer hides the action bar (`AssistantActionBar`) and RouteChip, restores on end.
 - **"⋯"**: type an utterance (`text` frame), full captions, voice, model.
   Voice (#2411) is the voices of the call's model with the current one named under it (picked on this device, else the model's default). The list (`VoiceVoicesLoader`, shared with the settings row) is asked for when the bar shows, again 2, 5 and 15 seconds after a failure, whenever the menu opens without a list or with a stale one (at most once per 2 seconds, so a menu redrawn as the state changes cannot ask in a loop), and on Retry. While it is asked for the item says "Loading voices…" (disabled); after a failure "Couldn't load · Retry" (a tap asks again; short enough for one line in a menu in every language); a model with no voices "None for this model". A stale list is shown as it is and asked for again on the next open.
 - **Cards**: unchanged `PendingCards`, resolved through `model.resolve`; the asked card shows "Asking by Voice" in its title row (`VoiceAskMark` after `InteractionPanel`'s title, from the `ask` frame; an icon alone where the row is short, so it never widens the card and the page). New cards play haptic/tone.

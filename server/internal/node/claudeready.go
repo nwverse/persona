@@ -130,7 +130,11 @@ func (n *Node) waitReady(ctx context.Context, pane string, probe *startProbe) (*
 		if a.AgentStatus == proto.StatusBlocked {
 			return a, nil // some other dialog; the phone shows it as a screen interaction
 		}
-		if (a.AgentStatus == proto.StatusIdle || a.AgentStatus == proto.StatusDone) && inputBoxVisible(screen) {
+		// An Orca fork that cannot read claude's title once the tab is renamed reports no state until claude's first hook
+		// (#4438): with claude in front, the screen decides, as long as it does not show a turn running.
+		quiet := a.AgentStatus == proto.StatusIdle || a.AgentStatus == proto.StatusDone ||
+			a.AgentStatus == proto.StatusUnknown && !strings.Contains(screen, "esc to interrupt")
+		if quiet && inputBoxVisible(screen) {
 			readyStreak++
 			if readyStreak >= 2 {
 				return a, nil
@@ -350,6 +354,9 @@ func styleChoice(line string) string {
 // These wait for a person, so the caller reports them at once instead of polling until the timeout.
 func firstRunScreen(screen string) string {
 	switch {
+	case strings.Contains(screen, "WARNING: Claude Code running in Bypass Permissions mode") && strings.Contains(screen, "Yes, I accept"):
+		return "Claude Code is waiting for its first Bypass Permissions confirmation: choose default permission mode, " +
+			"or review and confirm that mode in a terminal on this machine before retrying"
 	case strings.Contains(screen, "Select login method:"):
 		return "this machine's Claude Code has not been set up yet: it is showing the sign-in screen, run claude once in a terminal there"
 	case strings.Contains(screen, "Welcome to Claude Code") && strings.Contains(screen, "Select"):

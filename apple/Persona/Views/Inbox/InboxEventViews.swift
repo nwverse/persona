@@ -333,6 +333,7 @@ struct InboxSuggestionEditor: View {
 struct InboxChainSection: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openURL) private var openURL
+    @Environment(\.pushInboxChat) private var pushChat
     var item: InboxItem
     var sourceShown = false
     var openItem: ((InboxItem) -> Void)?
@@ -429,7 +430,7 @@ struct InboxChainSection: View {
         case .url(let u):
             Button { openURL(u) } label: { label() }.buttonStyle(.plain)
         case .session(let key, let manager):
-            Button { InboxEventOpen.session(key, manager: manager, owner: item.manager, model: model) } label: { label() }
+            Button { InboxEventOpen.session(key, manager: manager, owner: item.manager, model: model, push: pushChat) } label: { label() }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("inbox.chain.session")
         case .item(let id):
@@ -520,16 +521,32 @@ struct InboxRelatedSection: View {
 }
 
 /// Opening a chain's conversation: the processing one is the assistant's (Persona's own conversations), a sub-session
-/// an Agent's.
+/// an Agent's. On the iPhone's shell either is pushed over the item instead (`pushInboxChat`).
 @MainActor enum InboxEventOpen {
-    /// `owner`: the item's manager, whose Persona the processing conversation is.
-    static func session(_ key: SessionKey, manager: Bool, owner: String?, model: AppModel) {
-        if manager && model.session(key) == nil {
+    /// `owner`: the item's manager, which a conversation not listed yet is read through (`InboxChatRoute`, or the
+    /// Persona page's `assistantItemManagers`).
+    static func session(_ key: SessionKey, manager: Bool, owner: String?, model: AppModel, push: ((InboxChatRoute) -> Void)? = nil) {
+        if let push {
+            push(InboxChatRoute(key: model.inHub(key), manager: owner))
+        } else if manager && model.session(key) == nil {
             model.openAssistantConversation(model.inHub(key), manager: owner)
         } else {
             model.open(key)
         }
     }
+}
+
+/// A conversation an inbox item links to (the AI's handling, an Agent it started), pushed over the item. `manager`: the
+/// item's, which a conversation not listed yet is read for.
+struct InboxChatRoute: Hashable {
+    var key: SessionKey
+    var manager: String?
+}
+
+extension EnvironmentValues {
+    /// The iPhone shell's Assistant stack: a conversation an inbox item links to goes on top of the item, so Back comes
+    /// back to it (#3114). Nil elsewhere, where the conversation opens on its own page.
+    @Entry var pushInboxChat: ((InboxChatRoute) -> Void)? = nil
 }
 
 // MARK: - view original

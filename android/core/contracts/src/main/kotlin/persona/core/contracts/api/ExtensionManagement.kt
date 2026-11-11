@@ -29,6 +29,15 @@ interface ExtensionManagement : ExtensionUi, ExtensionMarkets {
     /** Badge changes the hub pushes (`extension_ui` events) for nav pages. */
     val uiEvents: Flow<persona.core.contracts.ExtensionUiEvent> get() = kotlinx.coroutines.flow.emptyFlow()
 
+    /**
+     * Whether the hub shows source subscriptions (#2041, `source_subscriptions` in its features: they deliver to the Inbox and
+     * the knowledge base): only then the entry rows show. The pages are drawn as an extension's under [SUBSCRIPTIONS_UI].
+     */
+    val subscriptionsAvailable: Flow<Boolean> get() = kotlinx.coroutines.flow.flowOf(false)
+
+    /** `GET /api/v1/subscriptions/summary`: each connector's counts, for the entry rows. */
+    suspend fun subscriptionSummary(): List<SubscriptionSummaryLine> = emptyList()
+
     /** `GET /api/v1/extensions`. */
     suspend fun extensions(): List<HubExtension>
 
@@ -93,6 +102,18 @@ class ExtensionConfigRejected(val field: String, message: String) : Exception(me
 /** 409 `has_dependents`: enabled extensions depend on it (deepest first); asked, the call goes on with `cascade`. */
 class ExtensionHasDependents(val dependents: List<ExtensionDependent>, message: String) : Exception(message)
 
+/**
+ * 409 `partial_uninstall` (#1154): some of a pack's members were uninstalled and some were not, so the pack is still
+ * installed. Nothing was put back: [removed] stay uninstalled, [failed] say why, [remaining] were not tried.
+ */
+class ExtensionPartialUninstall(
+    val removed: List<String>, val failed: List<ExtensionFailedMember>, val remaining: List<String>, message: String,
+) : Exception(message)
+
+/** A pack member a `partial_uninstall` couldn't remove, and the hub's reason. */
+@Serializable
+data class ExtensionFailedMember(val id: String = "", val error: String = "", val detail: String? = null)
+
 /** One extension of a `has_dependents` answer. */
 @Serializable
 data class ExtensionDependent(val id: String = "", val name: String = "") {
@@ -110,7 +131,10 @@ data class ExtensionField(
     val default: JsonElement? = null,
     val required: Boolean? = null,
     val enum: List<ExtensionChoice>? = null,
+    /** `uri | email | hostname`, or `machine` (one of the hub's machines, of the systems in [os]) / `launcher` (one of its launchers), both picked from a list. */
     val format: String? = null,
+    /** x-os of a `machine` field: the systems its machine may run (none is any). */
+    val os: List<String>? = null,
     val pattern: String? = null,
     @SerialName("min_length") val minLength: Int? = null,
     @SerialName("max_length") val maxLength: Int? = null,
@@ -129,6 +153,12 @@ data class ExtensionField(
     val label: String get() = title?.takeIf { it.isNotBlank() } ?: name
     /** The default it falls back to, when there is one (JSON null is none). */
     val fallback: JsonElement? get() = default?.takeIf { it != JsonNull }
+    /** One of the hub's machines, picked from them by name (a string of format machine without choices of its own). */
+    val picksMachine: Boolean get() = type == "string" && enum == null && format == "machine"
+    /** One of the hub's launchers, picked from them (a string of format launcher without choices of its own). */
+    val picksLauncher: Boolean get() = type == "string" && enum == null && format == "launcher"
+    /** Whether flipping a switch of it asks [confirm] first: only turning one on, and only with a sentence. */
+    fun asksFirst(on: Boolean): Boolean = on && !confirm.isNullOrBlank()
 }
 
 /**
@@ -226,4 +256,27 @@ data class ExtensionDetail(
             )
         }
     }
+}
+
+/**
+ * The id the source subscription pages (#2041) are drawn under as an extension's page: no extension can have it (ids never
+ * start with "-"); the hub answers them at `POST /api/v1/subscriptions/-/ui`.
+ */
+const val SUBSCRIPTIONS_UI = "-subscriptions"
+
+/** One connector's line of `GET /api/v1/subscriptions/summary`; [subscribable] is null until its catalog was read. */
+@Serializable
+data class SubscriptionSummaryLine(
+    val connector: String,
+    val extension: String = "",
+    val subscribable: Boolean? = null,
+    val on: Int = 0,
+    val failing: Int = 0,
+)
+
+/** How many are on and failing for the lines one entry row stands for; null when none can be subscribed (the row is hidden). */
+fun List<SubscriptionSummaryLine>.subscriptionCounts(pick: (SubscriptionSummaryLine) -> Boolean): Pair<Int, Int>? {
+    val mine = filter(pick)
+    if (mine.none { it.subscribable == true || it.on > 0 }) return null
+    return mine.sumOf { it.on } to mine.sumOf { it.failing }
 }

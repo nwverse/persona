@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // The plan pill's "is the plan card out of view" (usePlanOutOfView): an IntersectionObserver rooted at the chat's scroller
-// says so, so scrolling the chat queries no DOM and reads no layout; the body's ResizeObserver only looks for the card
-// again once it left the DOM. Without IntersectionObserver it measures on every scroll, as it always did.
+// says so, so scrolling the chat queries no DOM and reads no layout; the body's ResizeObserver, or a scroll that finds the
+// watched card no longer in the DOM, looks for it again. Without IntersectionObserver it measures on every scroll.
 import { act, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -131,7 +131,7 @@ describe("usePlanOutOfView", () => {
 
   it("is out once the card is gone, and finds it again when it is back", async () => {
     await render({ id: "p1", cards: ["p1"] });
-    await render({ id: "p1", cards: [] }); // the hub folded it away with the work around it (#5602)
+    await render({ id: "p1", cards: [] }); // the hub folded it away with the work around it
     await resize();
     expect(out()).toBe(true);
     expect(observers.io!.targets.size).toBe(0);
@@ -143,9 +143,13 @@ describe("usePlanOutOfView", () => {
     expect(out()).toBe(false);
   });
 
-  it("is out at once when the card is not drawn", async () => {
+  it("is out at once when the card is not drawn, and a scroll looks for nothing then", async () => {
     await render({ id: "p1", cards: [] });
     expect(out()).toBe(true);
+    const sc = scroller();
+    const query = vi.spyOn(Element.prototype, "querySelector");
+    for (let i = 0; i < 10; i++) await act(() => sc.dispatchEvent(new Event("scroll")));
+    expect(query).not.toHaveBeenCalled();
   });
 
   it("follows a card redrawn at the same size, which the body's ResizeObserver does not see", async () => {
@@ -161,6 +165,34 @@ describe("usePlanOutOfView", () => {
     expect(out()).toBe(true);
   });
 
+  it("follows a card redrawn at the same size while out of view on the next scroll", async () => {
+    await render({ id: "p1", cards: ["p1"] });
+    await intersect(card("p1"), false);
+    expect(out()).toBe(true);
+    const old = card("p1");
+    // redrawn in a new element of the same size while out of view: the body's ResizeObserver does not fire, and the
+    // browser reports nothing for the old element, which was not intersecting before it left and is not after
+    await render({ id: "p1", cards: ["p1"], gen: 1 });
+    const fresh = card("p1");
+    expect(fresh).not.toBe(old);
+    expect(out()).toBe(true);
+    const sc = scroller();
+    const query = vi.spyOn(Element.prototype, "querySelector");
+    const rect = vi.spyOn(Element.prototype, "getBoundingClientRect");
+    await act(() => sc.dispatchEvent(new Event("scroll")));
+    // toEqual would match the old element too (same markup): compare identity
+    expect(observers.io!.targets.size).toBe(1);
+    expect(observers.io!.targets.has(fresh)).toBe(true);
+    // the new card scrolled into view: the pill goes away
+    await intersect(fresh, true);
+    expect(out()).toBe(false);
+    // it looked once and read no layout; scrolls after it look for nothing
+    expect(query).toHaveBeenCalledTimes(1);
+    for (let i = 0; i < 10; i++) await act(() => sc.dispatchEvent(new Event("scroll")));
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(rect).not.toHaveBeenCalled();
+  });
+
   it("follows a new plan, and ignores what the old card reports", async () => {
     await render({ id: "p1", cards: ["p1"] });
     const old = card("p1");
@@ -170,6 +202,19 @@ describe("usePlanOutOfView", () => {
     expect(out()).toBe(false);
     await intersect(card("p2"), false);
     expect(out()).toBe(true);
+  });
+
+  it("stops listening to the scroller once it watches another plan", async () => {
+    await render({ id: "p1", cards: ["p1"] });
+    await render({ id: "p2", cards: ["p2"] }); // the old plan's card is gone with it
+    await intersect(card("p2"), true);
+    expect(out()).toBe(false);
+    const sc = scroller();
+    const query = vi.spyOn(Element.prototype, "querySelector");
+    for (let i = 0; i < 3; i++) await act(() => sc.dispatchEvent(new Event("scroll")));
+    // a scroll listener left from p1 would find its card gone, look for p1, find none and show the pill
+    expect(out()).toBe(false);
+    expect(query).not.toHaveBeenCalled();
   });
 
   it("is not out without a plan", async () => {

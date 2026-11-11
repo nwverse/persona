@@ -63,7 +63,17 @@ data class PersonaPalette(
         else StatusColors(Color(0xFF1D5FD6), Color(0xFF1C52BA), Color(0x1A1D5FD6)),
     val sourceTerminal: StatusColors = if (dark) StatusColors(Color(0xFFBEA3FF), Color(0xFFBEA3FF), Color(0x29BEA3FF))
         else StatusColors(Color(0xFF6A46C2), Color(0xFF6A46C2), Color(0x1A6A46C2)),
+    /** A fixed colour for [codeString] / [codeNumber] in place of the role (only the default look keeps its original ones). */
+    val codeStringOverride: Color? = null,
+    val codeNumberOverride: Color? = null,
+    /** Words on the accent are white, as on iOS (Glass); otherwise whichever of black and white reads better. */
+    val whiteOnAccent: Boolean = false,
 ) {
+    /** Strings in a Lark code block (#934): the style's added-line green, so it follows light / dark and the style. */
+    val codeString: Color get() = codeStringOverride ?: diffAdd
+    /** Numbers in a Lark code block (#934): the style's caution text, so it follows light / dark, the style and theme packages. */
+    val codeNumber: Color get() = codeNumberOverride ?: cautionText
+
     /** Neutral backing for state, advice and outcome content. Color belongs to its mark or words, not its area. */
     val statusSurface: Color get() = surfaceOpaque
 
@@ -76,10 +86,16 @@ data class PersonaPalette(
     /** Media overlays stay readable over a photograph/video, independent of the page's appearance. */
     val mediaBackdrop: Color get() = Color.Black
     val onMediaBackdrop: Color get() = Color.White
+    /** Outside the circle an avatar crop keeps (New from photo, #2407): dimmed in every style and appearance, as iOS `Theme.Crop.outside`. */
+    val cropOutside: Color get() = mediaBackdrop.copy(alpha = 0.5f)
+    /** The crop circle's edge, as iOS `Theme.Crop.edge`. */
+    val cropEdge: Color get() = onMediaBackdrop.copy(alpha = 0.9f)
     val mediaScrim: Color get() = mediaBackdrop.copy(alpha = 0.85f)
     val mediaControlFill: Color get() = mediaBackdrop.copy(alpha = 0.6f)
     val mediaLabelFill: Color get() = mediaBackdrop.copy(alpha = 0.7f)
-    val onAccent: Color get() = ExtensionThemeColors.on(accent)
+    val onAccent: Color get() = if (whiteOnAccent) Color.White else ExtensionThemeColors.on(accent)
+    /** Words on a fill that stands for the accent (the compact sidebar's): white in Glass, as on iOS, else whichever reads. */
+    fun onAccentFill(fill: Color): Color = if (whiteOnAccent) onAccent else ExtensionThemeColors.on(fill)
 
     fun source(kind: SourceKind): StatusColors = when (kind) {
         SourceKind.Feishu -> sourceFeishu
@@ -98,41 +114,20 @@ data class PersonaPalette(
 }
 
 internal object Palettes {
-    /** Preserve iPhone hues while meeting Android's existing text floors, including links on user bubbles. */
-    internal fun glassText(color: Color, dark: Boolean): Color {
-        val page = if (dark) Tokens.Semantic.Glass.Dark.pageBackground else Tokens.Semantic.Glass.Light.pageBackground
-        val card = if (dark) Tokens.Semantic.Glass.Dark.card else Tokens.Semantic.Glass.Light.card
-        val bubble = if (dark) Tokens.Semantic.Glass.Dark.userBubble else Tokens.Semantic.Glass.Light.userBubble
-        val ink = if (dark) Color.White else Color.Black
-        val strong = if (dark) Tokens.Common.Dark.Fill.pressed else Tokens.Common.Light.Fill.chip
-        val well = if (dark) Tokens.Common.Dark.Fill.well else Tokens.Common.Light.Fill.well
-        val dots = if (dark) listOf(Tokens.Semantic.Glass.Dark.accent, Tokens.Status.Dark.Working.dot,
-            Tokens.Status.Dark.Unread.dot, Tokens.Common.Dark.danger) else listOf(Tokens.Semantic.Glass.Light.accent,
-            Tokens.Status.Light.Working.dot, Tokens.Status.Light.Unread.dot, Tokens.Common.Light.danger)
-        val backgrounds = listOf(page) + dots.map { it.copy(alpha = if (dark) 0.12f else 0.06f).compositeOn(page) }
-        val fills = listOf(Color.Transparent, card, card.copy(alpha = if (dark) 0x14 / 255f else 0x9E / 255f), strong, well)
-        val surfaces = backgrounds.flatMap { back -> fills.map { it.compositeOn(back) } } +
-            listOf(bubble, strong.compositeOn(card), well.compositeOn(card))
-        val start = color.compositeOn(page)
-        for (step in 0..100) {
-            val candidate = androidx.compose.ui.graphics.lerp(start, ink, step / 100f)
-            if (surfaces.all { ExtensionThemeColors.contrast(candidate, it) >= 4.5 }) return candidate
-        }
-        return ink
-    }
-
-    private fun PersonaPalette.readableGlass(): PersonaPalette {
-        fun StatusColors.readable() = copy(text = glassText(text, dark), onDot = ExtensionThemeColors.on(dot))
-        return copy(ink2 = glassText(ink2, dark), ink3 = glassText(ink3, dark), accent = glassText(accent, dark),
-            needsYou = needsYou.readable(), working = working.readable(), done = done.readable(),
-            idle = idle.readable(), offline = offline.readable(), danger = danger.readable(),
-            cautionText = glassText(cautionText, dark), ai = glassText(ai, dark),
-            positiveRole = positiveRole?.readable(), cautionRole = cautionRole?.readable(),
-            diffAdd = glassText(diffAdd, dark), diffDel = glassText(diffDel, dark))
+    /**
+     * Glass keeps the iPhone's colours as they are (#4209, decision 2 of #4194): iOS holds them to its own floors (white on
+     * the accent 3.5:1, links 3:1, words on the bubble 4.5:1), not 4.5:1 for every word. Only the words on a state's fill
+     * are chosen here: white on Needs You's blue, as on the accent, else whichever of black and white reads better.
+     */
+    private fun PersonaPalette.glassFills(): PersonaPalette {
+        fun StatusColors.onFill() = copy(onDot = ExtensionThemeColors.on(dot))
+        return copy(needsYou = needsYou.copy(onDot = Color.White), working = working.onFill(), done = done.onFill(),
+            idle = idle.onFill(), offline = offline.onFill(), danger = danger.onFill(),
+            positiveRole = positiveRole?.onFill(), cautionRole = cautionRole?.onFill(), whiteOnAccent = true)
     }
 
     // Liquid Glass on the system's white/black pages. The translucent fill retains the Android glass fallback.
-    // Generated NeedsYou and colored tints predate the current iPhone StatusPalette; reuse only matching values.
+    // State dots and texts come from the generated iPhone StatusPalette; every state keeps the neutral tint (Offline's).
     val GlassDark = PersonaPalette(
         background = Tokens.Semantic.Glass.Dark.pageBackground,
         surface = Tokens.Semantic.Glass.Dark.card.copy(alpha = 0x14 / 255f),
@@ -145,7 +140,7 @@ internal object Palettes {
         action = Tokens.Semantic.Glass.Dark.text, onAction = Tokens.Semantic.Glass.Dark.pageBackground,
         accent = Tokens.Semantic.Glass.Dark.accent, accentSoft = Tokens.Semantic.Glass.Dark.accent.copy(alpha = 0.16f),
         marker = Tokens.Semantic.Glass.Dark.accent.copy(alpha = 0.16f), onMarker = Tokens.Semantic.Glass.Dark.text,
-        needsYou = StatusColors(Tokens.Semantic.Glass.Dark.accent, Color(0xFF409CFF), Tokens.Status.Dark.Offline.tint, Color.Black),
+        needsYou = StatusColors(Tokens.Status.Dark.NeedsYou.dot, Tokens.Status.Dark.NeedsYou.text, Tokens.Status.Dark.Offline.tint, Color.Black),
         working = StatusColors(Tokens.Status.Dark.Working.dot, Tokens.Status.Dark.Working.text, Tokens.Status.Dark.Offline.tint, Color.Black),
         done = StatusColors(Tokens.Status.Dark.Unread.dot, Tokens.Status.Dark.Unread.text, Tokens.Status.Dark.Offline.tint, Color.Black),
         idle = StatusColors(Tokens.Status.Dark.Idle.dot, Tokens.Status.Dark.Idle.text, Tokens.Status.Dark.Idle.tint),
@@ -157,7 +152,7 @@ internal object Palettes {
         scrim = Color.Black.copy(alpha = 0.45f), dark = true, ai = Tokens.Common.Dark.ai,
         positiveRole = StatusColors(Tokens.Common.Dark.positive, Tokens.Common.Dark.positive, Tokens.Common.Dark.positive.copy(alpha = 0.12f), Color.Black),
         cautionRole = StatusColors(Tokens.Common.Dark.caution, Tokens.Common.Dark.cautionText, Tokens.Common.Dark.caution.copy(alpha = 0.12f), Color.Black),
-    ).readableGlass()
+    ).glassFills()
     val GlassLight = PersonaPalette(
         background = Tokens.Semantic.Glass.Light.pageBackground,
         surface = Tokens.Semantic.Glass.Light.card.copy(alpha = 0x9E / 255f),
@@ -170,7 +165,7 @@ internal object Palettes {
         action = Tokens.Semantic.Glass.Light.text, onAction = Tokens.Semantic.Glass.Light.pageBackground,
         accent = Tokens.Semantic.Glass.Light.accent, accentSoft = Tokens.Semantic.Glass.Light.accent.copy(alpha = 0.12f),
         marker = Tokens.Semantic.Glass.Light.accent.copy(alpha = 0.12f), onMarker = Tokens.Semantic.Glass.Light.text,
-        needsYou = StatusColors(Tokens.Semantic.Glass.Light.accent, Color(0xFF0064C8), Tokens.Status.Light.Offline.tint, Color.Black),
+        needsYou = StatusColors(Tokens.Status.Light.NeedsYou.dot, Tokens.Status.Light.NeedsYou.text, Tokens.Status.Light.Offline.tint, Color.Black),
         working = StatusColors(Tokens.Status.Light.Working.dot, Tokens.Status.Light.Working.text, Tokens.Status.Light.Offline.tint, Color.Black),
         done = StatusColors(Tokens.Status.Light.Unread.dot, Tokens.Status.Light.Unread.text, Tokens.Status.Light.Offline.tint, Color.Black),
         idle = StatusColors(Tokens.Status.Light.Idle.dot, Tokens.Status.Light.Idle.text, Tokens.Status.Light.Idle.tint),
@@ -182,7 +177,9 @@ internal object Palettes {
         scrim = Color.Black.copy(alpha = 0.2f), dark = false, ai = Tokens.Common.Light.ai,
         positiveRole = StatusColors(Tokens.Common.Light.positive, Tokens.Common.Light.positive, Tokens.Common.Light.positive.copy(alpha = 0.12f)),
         cautionRole = StatusColors(Tokens.Common.Light.caution, Tokens.Common.Light.cautionText, Tokens.Common.Light.caution.copy(alpha = 0.12f), Color.Black),
-    ).readableGlass()
+        // the default look keeps the Lark code block's original colours (#4228, #934)
+        codeStringOverride = Color(0xFF2E7D32), codeNumberOverride = Color(0xFFE65100),
+    ).glassFills()
 
     // Brief: paper and ink; the highlighter is the only colour and only marks advice and what needs you.
     val BriefLight = PersonaPalette(

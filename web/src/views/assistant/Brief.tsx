@@ -71,10 +71,11 @@ function acceptLabel(row: BriefRow): { label: string; title: string } {
   return { label: t("assistant-brief.accept"), title: t("assistant-brief.accept_row", { title: row.title }) };
 }
 
-export function AcceptRow({ row, stacked = false }: { row: BriefRow; stacked?: boolean }) {
+export function AcceptRow({ row, stacked = false, admission, onBusyChange, blocked = false }: { row: BriefRow; stacked?: boolean; admission?: { current: boolean }; onBusyChange?: (busy: boolean) => void; blocked?: boolean }) {
   const [state, setState] = useState<Accepting>("idle");
   // Admit either action synchronously, before React disables the other button.
-  const admitted = useRef(false);
+  const ownAdmission = useRef(false);
+  const admitted = admission ?? ownAdmission;
   const button = acceptLabel(row);
   const deciding = row.outcome === "decide";
   const settled = state === "accepted" || state === "handled" || state === "finished";
@@ -83,11 +84,13 @@ export function AcceptRow({ row, stacked = false }: { row: BriefRow; stacked?: b
   const accept = () => {
     if (!row.asked_at || admitted.current || state !== "idle") return;
     admitted.current = true;
+    onBusyChange?.(true);
     setState("busy");
     acceptBrief(row.id, row.asked_at).then(
       (res) => setState(res),
       (e) => {
         admitted.current = false;
+        onBusyChange?.(false);
         setState("idle");
         toast(t("assistant-brief.accept_failed", { error: errorText(e) }), "error");
       },
@@ -96,6 +99,7 @@ export function AcceptRow({ row, stacked = false }: { row: BriefRow; stacked?: b
   const finish = () => {
     if (!stacked || !row.asked_at || admitted.current || state !== "idle") return;
     admitted.current = true;
+    onBusyChange?.(true);
     setState("finishing");
     // User completion only: unlike /accept, PATCH never routes the recommendation to the Agent.
     updateTodo(row.id, { done: true }).then(
@@ -108,6 +112,7 @@ export function AcceptRow({ row, stacked = false }: { row: BriefRow; stacked?: b
       },
       (e) => {
         admitted.current = false;
+        onBusyChange?.(false);
         setState("idle");
         toast(t("assistant-brief.finish_failed", { error: errorText(e) }), "error");
       },
@@ -131,7 +136,7 @@ export function AcceptRow({ row, stacked = false }: { row: BriefRow; stacked?: b
       </Button>
       {/* Only the live Pending row can finish a task; historical brief snapshots must not end a newer run. */}
       {stacked && deciding && !settled && (
-        <Button busy={state === "finishing"} disabled={!row.asked_at || state === "busy"} title={t("assistant-brief.finish_row", { title: row.title })} onClick={finish}>
+        <Button busy={state === "finishing"} disabled={blocked || !row.asked_at || state === "busy"} title={t("assistant-brief.finish_row", { title: row.title })} onClick={finish}>
           {t("assistant-brief.finish")}
         </Button>
       )}
@@ -140,7 +145,7 @@ export function AcceptRow({ row, stacked = false }: { row: BriefRow; stacked?: b
           {t(state === "finished" ? "assistant-brief.finished" : state === "handled" ? "assistant-brief.handled" : deciding ? "assistant-brief.taken" : row.outcome ? "assistant-brief.noted" : "assistant-brief.accepted")}
         </span>
       ) : takes ? (
-        <Button tone="primary" busy={state === "busy"} disabled={!row.asked_at || state === "finishing"} title={button.title} onClick={accept}>
+        <Button tone="primary" busy={state === "busy"} disabled={blocked || !row.asked_at || state === "finishing"} title={button.title} onClick={accept}>
           {button.label}
         </Button>
       ) : null}
@@ -151,12 +156,12 @@ export function AcceptRow({ row, stacked = false }: { row: BriefRow; stacked?: b
 /** What the Handled button of a question that can wait says: idle, the hub took it, or it was not in the queue any more. */
 type Marking = "idle" | "busy" | "marked" | "handled";
 
-function LaterRow({ row }: { row: BriefRow }) {
+function LaterRow({ row, conversation }: { row: BriefRow; conversation: string }) {
   const [state, setState] = useState<Marking>("idle");
   const mark = () => {
     if (state !== "idle") return;
     setState("busy");
-    handledLater(row.id).then(
+    handledLater(row.id, conversation).then(
       (res) => setState(res),
       (e) => {
         setState("idle");
@@ -247,7 +252,7 @@ export function BriefCard({ item }: { item: FeedItem }) {
       {body.later.length > 0 && (
         <Section icon="chat" tint="bg-field text-ink-2" title={t("assistant-brief.later_head", { n: body.later_total })}>
           {body.later.map((r) => (
-            <LaterRow key={r.id} row={r} />
+            <LaterRow key={r.id} row={r} conversation={item.conversation} />
           ))}
           <More n={body.later_total - body.later.length} text="assistant-brief.later_more" />
         </Section>
@@ -260,7 +265,7 @@ export function BriefCard({ item }: { item: FeedItem }) {
                 <div className="min-w-0 flex-1 text-[13.5px] font-medium [overflow-wrap:anywhere]">{p.title}</div>
                 <Button onClick={() => openPanel({ kind: "task", todo: p.id })}>{t("assistant-brief.open")}</Button>
               </div>
-              <TodoStageBar stage={p.stage} />
+              <TodoStageBar stage={p.stage} stageKind={p.stage_kind} />
             </div>
           ))}
           <More n={body.progress_total - body.progress.length} />

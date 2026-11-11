@@ -1,7 +1,10 @@
 // One main conversation's newest page, for rendering before the hub answers. This is never a source of authority.
 import { BASE } from "./base";
-import type { Item } from "./types";
+import { credentialEpoch } from "./credential-epoch";
+import type { AssistantInfo, Item } from "./types";
 import { injectedOf } from "./injected";
+import { hasPrivateRefusal, publicRefusalItem } from "./refusal-public";
+import { taskCalls } from "./task-association";
 
 const PREFIX = "persona.feedCache.v1:";
 export const FEED_CACHE_MAX_BYTES = 256 * 1024;
@@ -26,10 +29,10 @@ function fingerprint(value: string): string {
 }
 
 /** Includes the proxy prefix: two hubs behind the same origin must not share their cached conversation. */
-export function feedCacheKey(hub: string, token: string, deviceID = ""): string | null {
+export function feedCacheKey(hub: string, token: string, deviceID = "", epoch = ""): string | null {
   if (!token) return null;
   // A saved device id can be stale after pasting a different jd_ token or pairing against an older hub.
-  return `${PREFIX}${fingerprint(hub)}:${fingerprint(JSON.stringify([deviceID, token]))}`;
+  return `${PREFIX}${fingerprint(hub)}:${fingerprint(JSON.stringify(epoch ? [deviceID, token, epoch] : [deviceID, token]))}`;
 }
 
 let generation = 0;
@@ -42,11 +45,12 @@ export function feedCacheScope(): string | null {
     const token = localStorage.getItem("persona.token") ?? "";
     const deviceID = localStorage.getItem("persona.tokenId") ?? "";
     const hub = location.origin + BASE;
-    const now = JSON.stringify([hub, token, deviceID]);
+    const epoch = credentialEpoch();
+    const now = JSON.stringify([hub, token, deviceID, epoch]);
     if (identity !== now) {
       if (identity) clearFeedCache();
       identity = now;
-      key = feedCacheKey(hub, token, deviceID);
+      key = feedCacheKey(hub, token, deviceID, epoch);
     }
     return key ? `${key}.${generation}` : null;
   } catch {
@@ -133,7 +137,8 @@ export function readFeedCache(scope: string | null = feedCacheScope()): FeedCach
     const parsed: unknown = JSON.parse(raw);
     if (!validFeed(parsed)) return null;
     // A record with embedded image bytes was not written by this version. Never hydrate an unsanitized record.
-    if (JSON.stringify(parsed, withoutImageBodies) !== JSON.stringify(parsed) || containsCredential(raw)) {
+    // Nor one an older version wrote with a refusal record's whole line in it (#2528): it is never shown again.
+    if (JSON.stringify(parsed, withoutImageBodies) !== JSON.stringify(parsed) || containsCredential(raw) || parsed.items.some(hasPrivateRefusal)) {
       discardFeedCache(scope);
       return null;
     }
@@ -150,15 +155,30 @@ function containsCredential(raw: string): boolean {
 
 /** Only the newest two user-question turns, matching GET items?turns=2; injected prompts do not consume the budget. */
 function newestTurns(value: FeedCache): FeedCache {
+  const userQuestion = (item: Item) => item.role === "user" && item.kind === "text" && !item.queued && !item.wake && !injectedOf(item);
   let start = value.items.length, turns = 0;
   while (start > 0 && turns < 2) {
-    const item = value.items[--start];
-    if (item.role === "user" && item.kind === "text" && !item.queued && !item.wake && !injectedOf(item)) turns++;
+    if (userQuestion(value.items[--start])) turns++;
+  }
+  // A retained report must not lose the earlier launch it belongs under. Extend the contiguous prefix, including
+  // that call's user turn, rather than caching a detached call that would break paging coverage.
+  const calls = taskCalls(value.items);
+  const needed = new Set<string>();
+  for (let at = value.items.length - 1; at >= 0 && (at >= start || needed.size); at--) {
+    const item = value.items[at];
+    if (item.task?.kind === "agent") {
+      const call = item.tool_use_id || calls.get(item.id);
+      if (call) needed.add(call);
+    }
+    if (item.kind === "tool_use" && (item.tool_name === "Agent" || item.tool_name === "Task") && needed.delete(item.tool_use_id ?? "") && at < start) {
+      start = at;
+      while (start > 0 && !userQuestion(value.items[start])) start--;
+    }
   }
   while (start > 0 && value.items[start].seq === value.items[start - 1].seq) start--;
   return {
     machineID: value.machineID, sessionID: value.sessionID, manager: value.manager,
-    items: value.items.slice(start), hasMore: value.hasMore || start > 0, history: value.history,
+    items: value.items.slice(start).map(publicRefusalItem), hasMore: value.hasMore || start > 0, history: value.history,
   };
 }
 
@@ -212,4 +232,12 @@ export function writeMemoryPage(scope: string | null, value: FeedCache): void {
   if (!value.items.length) return;
   memory.set(key, newestTurns(value));
   if (memory.size > MEMORY_PAGES) memory.delete(memory.keys().next().value!);
+}
+
+/** A confirmed main stays on its routing node when the new-chat default changes. */
+export function mainConversationMachine(assistant: AssistantInfo | null | undefined): string | undefined {
+  if (!assistant?.main) return assistant?.machine_id;
+  return assistant.main_machine_id ||
+    assistant.conversations.find((c) => c.session_id === assistant.main)?.machine_id ||
+    assistant.machine_id;
 }

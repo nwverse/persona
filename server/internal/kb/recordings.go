@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,8 +22,10 @@ import (
 // Recordings (docs/assistant/knowledge.md "Recordings", docs/protocol/protocol.md "Recording sync"): the phone uploads each recording's transcript,
 // keyed by its UUID, the whole state every time (revision orders them), so replays, reordering and a transcript
 // completed later all land on one entry. Only text: the audio stays on the phone. A directory per recording:
-// meta.json, segments.json, transcript.md (what the searches read), summary.md (the model's, once it is complete).
-// Uploads journal the accepted files until all replacements commit (recording_commit.go).
+// meta.json, segments.json, transcript.md (what the searches read), summary.md (the model's, once it is complete), and
+// for an attended meeting live.json (live.go). Uploads journal the accepted files until all replacements commit
+// (recording_commit.go). Past recording_days a recording with minutes keeps only meta.json and its minutes until
+// minutes_days (recording_trim.go); any other goes.
 // recordings/.deleted.json is the tombstones: a late upload of a deleted one is refused. Kept recordingDays.
 
 // KindRecording is the recordings' kind and directory.
@@ -30,6 +33,10 @@ const KindRecording = "recordings"
 
 // DefaultRecordingDays is how long recordings are kept unless the user says otherwise (assistant.recording_days).
 const DefaultRecordingDays = 14
+
+// DefaultMinutesDays is how long a meeting's minutes are kept unless the user says otherwise (assistant.minutes_days);
+// 0 means forever; a finite window is never shorter than the recording itself (MinutesDaysFor).
+const DefaultMinutesDays = 0
 
 // Limits of one upload.
 const (
@@ -81,6 +88,18 @@ type RecordingUpload struct {
 	Complete  bool                `json:"complete"`
 	Kind      string              `json:"kind"`
 	Calendar  *RecordingCalendar  `json:"calendar,omitempty"`
+	// Attendance is the role Persona attends the meeting in ("" or AttendanceOff: none) and AttendingSession the
+	// session that attends (nil: the main chat); see normalizeAttendance and live.go.
+	Attendance       string      `json:"attendance,omitempty"`
+	AttendingSession *SessionRef `json:"attending_session,omitempty"`
+	// Private is the meeting's private mark as it starts (meeting.go): taken only while the recording has none.
+	Private *bool `json:"private,omitempty"`
+	// badRole, badSession: the JSON held a value of the wrong type for these two fields (UnmarshalJSON), which
+	// turns attending off rather than failing the upload.
+	badRole, badSession bool
+	// room is the upload's room (meeting.go), nil without one; roomProblem what was wrong with its role.
+	room        *roomUpload
+	roomProblem string
 }
 
 // MeetingRef is the knowledge base's calendar item (meetings or events) a recording overlaps.
@@ -121,6 +140,10 @@ type Recording struct {
 	// Meeting minutes (minutes.go). Kind and Calendar are the phone's, replaced by every upload; the rest is the hub's.
 	Kind     string             `json:"kind,omitempty"`
 	Calendar *RecordingCalendar `json:"calendar,omitempty"`
+	// Attending the meeting (live.go): the phone's too, replaced by every upload. Attendance is "" when off (never
+	// AttendanceOff on disk); AttendingSession is nil for the main chat, and always when attendance is off.
+	Attendance       string      `json:"attendance,omitempty"`
+	AttendingSession *SessionRef `json:"attending_session,omitempty"`
 	// Meeting is the overlapping calendar item, matched once per revision (MatchedRev); Items links it ("events/<id>").
 	Meeting      *MeetingRef `json:"meeting,omitempty"`
 	Items        []string    `json:"items,omitempty"`
@@ -128,15 +151,28 @@ type Recording struct {
 	MinutesState string      `json:"minutes_state,omitempty"`
 	MinutesAsked bool        `json:"minutes_asked,omitempty"` // the user asked for minutes: a meeting whatever its kind
 	// MinutesRev is the revision minutes.json was made from (0: none, or asked to be made again); MinutesVersion counts
-	// the minutes written; MinutesFails the unusable answers for MinutesFailRev (failed after minutesTries).
-	MinutesRev     int64 `json:"minutes_rev,omitempty"`
-	MinutesVersion int   `json:"minutes_version,omitempty"`
-	MinutesFails   int   `json:"minutes_fails,omitempty"`
-	MinutesFailRev int64 `json:"minutes_fail_rev,omitempty"`
+	// the minutes written; MinutesFails the unusable answers for MinutesFailRev (failed after minutesTries), and
+	// MinutesTimeouts its tries that ran out of time, the next not before MinutesRetryAt (minutes_timeout.go).
+	MinutesRev      int64     `json:"minutes_rev,omitempty"`
+	MinutesVersion  int       `json:"minutes_version,omitempty"`
+	MinutesFails    int       `json:"minutes_fails,omitempty"`
+	MinutesFailRev  int64     `json:"minutes_fail_rev,omitempty"`
+	MinutesTimeouts int       `json:"minutes_timeouts,omitempty"`
+	MinutesRetryAt  time.Time `json:"minutes_retry_at,omitzero"`
 	// MinutesAsks counts the user's requests: minutes made from before the latest one don't settle it.
 	MinutesAsks int `json:"minutes_asks,omitempty"`
+	// TrimmedAt is the hub's: when its transcript went with recording_days and only meta.json and the minutes stayed
+	// (recording_trim.go); nil while it is whole.
+	TrimmedAt *time.Time `json:"trimmed_at,omitempty"`
 	Tagging
+
+	// Conv is the recording's meeting.json (meeting.go: its room, private mark and follow-up), read with it; nil
+	// without one. Never written to meta.json.
+	Conv *Meeting `json:"-"`
 }
+
+// Trimmed: the transcript went with recording_days; only the metadata and the minutes are left.
+func (r *Recording) Trimmed() bool { return r.TrimmedAt != nil }
 
 // RecordingState is a recording as the phone reconciles against it (GET /api/v1/recordings).
 type RecordingState struct {
@@ -145,6 +181,9 @@ type RecordingState struct {
 	Complete     bool      `json:"complete"`
 	StartedAt    time.Time `json:"started_at"`
 	MinutesState string    `json:"minutes_state,omitempty"`
+	// TrimmedAt: only its minutes are kept (Recording.TrimmedAt). Listed all the same, at the revision it had, so a phone
+	// that still holds it sees the hub has it and sends nothing (an upload of it would be expired).
+	TrimmedAt *time.Time `json:"trimmed_at,omitempty"`
 }
 
 // What PutRecording did.
@@ -153,6 +192,20 @@ const (
 	RecordingStale   = "stale"
 	RecordingExpired = "expired"
 )
+
+// RecordingPut is PutRecording's result: Status is RecordingStored, RecordingStale or RecordingExpired; Attendance the
+// role in effect after it (AttendanceOff, AttendanceListener or AttendanceParticipant: the stored recording's, so the
+// one already there for a stale upload and off for an expired one), and AttendanceProblem what was wrong with this
+// upload's attendance fields ("" or an Attendance* problem), whatever Status is.
+type RecordingPut struct {
+	Status            string
+	Attendance        string
+	AttendanceProblem string
+	// Room: the recording is a room meeting (meeting.go), or this upload asked for one; Meeting is its meeting.json
+	// after it (nil without one).
+	Room    bool
+	Meeting *Meeting
+}
 
 var (
 	// ErrRecordingDeleted: the recording was deleted (a tombstone); the phone must not upload it again.
@@ -187,6 +240,14 @@ func (s *Store) Recording(id string) (*Recording, bool) {
 		return nil, false
 	}
 	r.persisted = true
+	s.recFilesMu.RLock()
+	m, err := s.readMeeting(id)
+	s.recFilesMu.RUnlock()
+	if err != nil {
+		// Unreadable: as a room meeting whose role is off (it feeds nothing, takes no question), and private.
+		m = &Meeting{Room: &MeetingRoom{State: RoomNone}}
+	}
+	r.Conv = m
 	return &r, true
 }
 
@@ -311,34 +372,76 @@ func (u *RecordingUpload) cleanCalendar() error {
 }
 
 // PutRecording stores an upload (the whole state of recording id): RecordingStale when a newer revision is there,
-// RecordingExpired when it started before the retention, ErrRecordingDeleted after a delete.
-func (e *Engine) PutRecording(rawID string, u RecordingUpload, now time.Time) (string, error) {
+// RecordingExpired when it started before the retention or was trimmed, ErrRecordingDeleted after a delete.
+// Attendance fields that are wrong never fail it: attending is then off, and the result says why
+// (normalizeAttendance). Engine.LiveChanged hears of a stored upload of a recording that attends or attended until now.
+func (e *Engine) PutRecording(rawID string, u RecordingUpload, now time.Time) (RecordingPut, error) {
+	put, live, err := e.putRecording(rawID, u, now)
+	if err == nil && live && e.LiveChanged != nil {
+		e.LiveChanged(put.id)
+	}
+	return put.RecordingPut, err
+}
+
+type recordingPut struct {
+	RecordingPut
+	id string
+}
+
+// putRecording is PutRecording; live reports a stored upload the attending feeder should look at.
+func (e *Engine) putRecording(rawID string, u RecordingUpload, now time.Time) (put recordingPut, live bool, err error) {
+	put.Attendance = AttendanceOff
+	put.Room = u.room != nil
 	if e.Store.ReadOnly() {
-		return "", ErrReadOnly
+		return put, false, ErrReadOnly
 	}
 	id, ok := RecordingID(rawID)
 	if !ok {
-		return "", badRecording("id must be a UUID")
+		return put, false, badRecording("id must be a UUID")
 	}
+	put.id = id
 	if err := u.clean(); err != nil {
-		return "", err
+		return put, false, err
 	}
+	put.AttendanceProblem = u.normalizeAttendance()
 	st := e.Store
 	st.recMu.Lock()
 	defer st.recMu.Unlock()
 	if _, gone := st.tombstones()[id]; gone {
-		return "", ErrRecordingDeleted
+		return put, false, ErrRecordingDeleted
 	}
 	if u.StartedAt.Before(now.UTC().AddDate(0, 0, -recordingDays(e.RecordingDays()))) {
-		return RecordingExpired, nil
+		put.Status = RecordingExpired
+		return put, false, nil
 	}
 	r, exists := st.Recording(id)
-	if exists && r.Revision > u.Revision {
-		return RecordingStale, nil
+	if exists {
+		put.Room, put.Meeting = put.Room || r.RoomMeeting(), r.Conv
 	}
+	if exists && r.Trimmed() {
+		// Its transcript went with the retention (recording_days made longer since lets it back in the window): the
+		// minutes stay what they are, and the hub takes no transcript back.
+		put.Status = RecordingExpired
+		return put, false, nil
+	}
+	if exists && r.Revision > u.Revision {
+		put.Status, put.Attendance = RecordingStale, r.AttendanceRole()
+		return put, false, nil
+	}
+	wasAttending := exists && r.Attending()
+	meeting, parts, err := e.putMeetingFields(id, &u)
+	if err != nil {
+		return put, false, err
+	}
+	defer e.meetingChanged(id, parts)
+	if meeting != nil && meeting.Room != nil {
+		put.Room, put.AttendanceProblem = true, u.roomProblem
+	}
+	put.Meeting = meeting
 	if !exists {
 		r = &Recording{ID: id}
 	}
+	r.Conv = meeting
 	r.Revision, r.StartedAt, r.EndedAt, r.Duration = u.Revision, u.StartedAt.UTC(), u.EndedAt, u.Duration
 	if r.EndedAt != nil {
 		t := r.EndedAt.UTC()
@@ -346,20 +449,29 @@ func (e *Engine) PutRecording(rawID string, u RecordingUpload, now time.Time) (s
 	}
 	r.Language, r.Device, r.Title, r.Bookmarks, r.Complete = u.Language, u.Device, u.Title, u.Bookmarks, u.Complete
 	r.Kind, r.Calendar = u.Kind, u.Calendar
-	r.planMinutes()
+	r.Attendance, r.AttendingSession = u.Attendance, u.AttendingSession // never a room meeting's (putMeetingFields)
 	r.Segments, r.Chars = len(u.Segments), 0
 	for _, sg := range u.Segments {
 		r.Chars += len([]rune(sg.Text))
 	}
+	r.planMinutes() // after Chars: a meeting that completed with no text gets none
 	r.Name = st.recordingName(r)
 	r.Updated = now.UTC()
 	if err := st.commitRecording(r, u.Segments); err != nil {
-		return "", err
+		return put, false, err
 	}
+	put.Status, put.Attendance = RecordingStored, r.AttendanceRole()
 	st.notify(KindRecording, id, "metadata")
 	st.notify(KindRecording, id, "messages")
 	e.index(KindRecording, id, r.Name, r.Tagging, r.OneLine, r.StartedAt)
-	return RecordingStored, nil
+	if r.EndedAt != nil {
+		// The end batch is timed from when the hub first saw the end (live.go); the upload stands either way, and the
+		// next one carrying ended_at tries again.
+		if err := st.liveEnded(id, r.Attending() || r.RoomMeeting(), now); err != nil {
+			e.logf("recording %s: live end: %v", id, err)
+		}
+	}
+	return put, wasAttending || r.Attending() || r.RoomMeeting(), nil
 }
 
 func nonNilSegments(s []RecordingSegment) []RecordingSegment {
@@ -445,11 +557,12 @@ func (e *Engine) unlinkRecording(id string, projects []string) {
 	}
 }
 
-// RecordingStates is every recording kept and every tombstone, for the phone to reconcile.
+// RecordingStates is every recording kept (trimmed ones too) and every tombstone, for the phone to reconcile.
 func (e *Engine) RecordingStates() (kept []RecordingState, deleted []string) {
 	kept, deleted = []RecordingState{}, []string{}
 	for _, r := range e.Store.Recordings() {
-		kept = append(kept, RecordingState{ID: r.ID, Revision: r.Revision, Complete: r.Complete, StartedAt: r.StartedAt, MinutesState: r.MinutesState})
+		kept = append(kept, RecordingState{ID: r.ID, Revision: r.Revision, Complete: r.Complete, StartedAt: r.StartedAt,
+			MinutesState: r.MinutesState, TrimmedAt: r.TrimmedAt})
 	}
 	sort.Slice(kept, func(i, j int) bool { return kept[i].StartedAt.After(kept[j].StartedAt) })
 	for id := range e.Store.tombstones() {
@@ -459,19 +572,32 @@ func (e *Engine) RecordingStates() (kept []RecordingState, deleted []string) {
 	return kept, deleted
 }
 
-// PruneRecordings removes the recordings that started before the retention (files and index), and the tombstones
-// older than it; how many recordings went.
+// PruneRecordings applies retention to files and the index. Past recording_days, minutes are kept forever or within
+// a finite minutes_days window, and the recording is trimmed to them (recording_trim.go); other recordings go.
+// Interrupted trims finish whatever the window. Tombstones older than recording_days go too.
+// It returns how many recordings were deleted, not counting trimmed ones.
 func (e *Engine) PruneRecordings(now time.Time) int {
 	if e.Store.ReadOnly() {
 		return 0
 	}
 	cut := now.UTC().AddDate(0, 0, -recordingDays(e.RecordingDays()))
+	minutesDays := e.MinutesDays()
+	minutesCut := now.UTC().AddDate(0, 0, -minutesDays)
 	st := e.Store
 	st.recMu.Lock()
 	defer st.recMu.Unlock()
 	var gone []string
 	for _, r := range st.Recordings() {
 		if !r.StartedAt.Before(cut) {
+			// Within recording_days only a trimmed one has anything to do: the files an interrupted trim left (a crash
+			// after its meta.json, a failed removal) go even once recording_days made longer lets it back in the window.
+			if r.Trimmed() {
+				e.trimPruned(r, now)
+			}
+			continue
+		}
+		if (minutesDays == 0 || !r.StartedAt.Before(minutesCut)) && (r.Trimmed() || st.hasMinutes(r.ID)) {
+			e.trimPruned(r, now)
 			continue
 		}
 		st.recFilesMu.Lock()
@@ -484,6 +610,12 @@ func (e *Engine) PruneRecordings(now time.Time) int {
 		}
 	}
 	e.unindex(KindRecording, gone)
+	// Tombstones keep the recording_days window, not minutes_days. One only has to outlive the uploads it refuses, and
+	// an upload of a recording that started before that window is expired anyway (putRecording), whether the recording
+	// is gone, trimmed or deleted by the user. A tombstone is never older than its recording's start (it is written when
+	// the recording is deleted), so one that falls out of the window stands for a recording past it: keeping it longer,
+	// as long as a trimmed recording could have stayed, would refuse nothing more. Its other use, the phone dropping a
+	// copy deleted elsewhere, ends with the window too: the phone drops every recording older than days itself.
 	t := st.tombstones()
 	n := len(t)
 	for id, at := range t {
@@ -497,12 +629,45 @@ func (e *Engine) PruneRecordings(now time.Time) int {
 	return len(gone)
 }
 
+// trimPruned trims recording r for PruneRecordings (which holds recMu), or finishes its trim: idempotent, it says
+// what changed and indexes the recording again only when something did.
+func (e *Engine) trimPruned(r *Recording, now time.Time) {
+	st := e.Store
+	if trimmed, err := st.trimRecording(r, now); err != nil {
+		e.logf("recording %s: trim: %v", r.ID, err)
+	} else if trimmed {
+		st.notify(KindRecording, r.ID, "metadata")
+		st.notify(KindRecording, r.ID, "messages")
+		st.notify(KindRecording, r.ID, "summary")
+		e.index(KindRecording, r.ID, r.Name, r.Tagging, r.OneLine, r.StartedAt)
+	}
+}
+
 // RecordingDays is the retention in days (Engine.RecordingDaysFunc, the assistant's setting), the default without one.
 func (e *Engine) RecordingDays() int {
 	if e.RecordingDaysFunc != nil {
 		return recordingDays(e.RecordingDaysFunc())
 	}
 	return DefaultRecordingDays
+}
+
+// MinutesDays is how many days a meeting's minutes are kept (Engine.MinutesDaysFunc, the assistant's setting, the
+// default without one): 0 means forever; otherwise never fewer than RecordingDays.
+func (e *Engine) MinutesDays() int {
+	d := 0
+	if e.MinutesDaysFunc != nil {
+		d = e.MinutesDaysFunc()
+	}
+	return MinutesDaysFor(d, e.RecordingDays())
+}
+
+// MinutesDaysFor is the minutes' retention in effect for the setting minutes (<= 0: DefaultMinutesDays) and the
+// recordings' days: 0 means forever; minutes never go before the recording they belong to.
+func MinutesDaysFor(minutes, recording int) int {
+	if minutes <= 0 {
+		return DefaultMinutesDays
+	}
+	return max(minutes, recordingDays(recording))
 }
 
 func (e *Engine) unindex(kind string, ids []string) {
@@ -528,76 +693,103 @@ type recordingSummary struct {
 // recordingPromptChars bounds the transcript the model reads (the start and the end kept).
 const recordingPromptChars = 24000
 
-// SummarizeRecordings writes the summary and tags of up to max complete recordings whose latest revision has none
-// yet, newest first; how many it did.
+// SummarizeRecordings writes the summary and tags of complete recordings whose latest revision has none yet, newest
+// first, at most max model calls per run (failed ones included; one that needed no call, changed meanwhile, costs none);
+// how many it did. A recording whose summary failed waits like a project whose rewrite failed (retryWait) and the next
+// one goes on, so one transcript the model keeps failing on neither costs a call every round nor holds back the others;
+// a new revision of it is tried at once. A paused connection or no model set up stops the run without counting: the
+// rest stay due.
 func (e *Engine) SummarizeRecordings(ctx context.Context, max int) int {
 	if e.Model == nil && e.ModelFor == nil {
 		return 0
 	}
+	now := time.Now()
 	var todo []*Recording
+	due := map[string]bool{}
 	for _, r := range e.Store.Recordings() {
-		if r.Complete && r.SummarizedRev < r.Revision && r.Chars > 0 {
+		if r.Complete && r.SummarizedRev < r.Revision && r.Chars > 0 && !r.Trimmed() {
+			due[r.ID] = true
+			if e.retries().recordings.waits(r.ID, recordingAbout(r), now) {
+				continue
+			}
 			todo = append(todo, r)
 		}
 	}
+	e.retries().recordings.keep(due) // summarized, trimmed or gone in the meantime
 	sort.Slice(todo, func(i, j int) bool { return todo[i].StartedAt.After(todo[j].StartedAt) })
-	n := 0
+	n, calls := 0, 0
 	for _, r := range todo {
-		if n >= max || ctx.Err() != nil {
+		if calls >= max || ctx.Err() != nil {
 			break
 		}
-		if err := e.summarizeRecording(ctx, r); err != nil {
-			// No model, the model paused or failing: the others would fail alike; they stay due for the next round.
-			e.logf("recording %s: %v", r.ID, err)
-			break
+		called, err := e.summarizeRecording(ctx, r)
+		if called {
+			calls++
 		}
-		n++
+		if err != nil {
+			if deferred(ctx, err) { // the connection is held, no model, or the run ended: they stay due
+				break
+			}
+			f := e.retries().recordings.fail(r.ID, recordingAbout(r))
+			e.logf("recording %s: %v (failed %d time(s) in a row, next try in %s)", r.ID, err, f.failures, retryWait(f.failures))
+			continue
+		}
+		e.retries().recordings.clear(r.ID)
+		if called {
+			n++
+		}
 	}
 	return n
 }
 
-func (e *Engine) summarizeRecording(ctx context.Context, r *Recording) error {
+// recordingAbout is what a recording's summary is asked about: its revision (a new upload is tried at once).
+func recordingAbout(r *Recording) string { return strconv.FormatInt(r.Revision, 10) }
+
+// summarizeRecording writes r's summary; called: the model was asked (not when r changed meanwhile so that it needs
+// none, or could not be read).
+func (e *Engine) summarizeRecording(ctx context.Context, r *Recording) (called bool, err error) {
 	files, err := e.Store.recordingSnapshot(r.ID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	var snapshot Recording
 	if files["meta.json"] == nil {
-		return nil
+		return false, nil
 	}
 	if err := json.Unmarshal(files["meta.json"], &snapshot); err != nil {
-		return err
+		return false, err
 	}
 	r = &snapshot
-	if !r.Complete || r.Chars == 0 || r.SummarizedRev >= r.Revision {
-		return nil
+	if !r.Complete || r.Chars == 0 || r.SummarizedRev >= r.Revision || r.Trimmed() {
+		return false, nil
 	}
 	var segs []RecordingSegment
 	if err := json.Unmarshal(files["segments.json"], &segs); err != nil {
-		return err
+		return false, err
 	}
+	called = true
 	zone := e.Store.Zone()
 	in := prompts.KBRecordingInput{Pinned: r.Pinned, Title: r.Title, Device: r.Device, Language: r.Language,
 		Start: r.StartedAt.In(zone), Minutes: int(r.Duration / 60), Projects: e.knownProjects(), Tags: e.TopTags(40),
 		Transcript: clipMiddle(e.Store.renderTranscript(r, segs), recordingPromptChars)}
 	var out recordingSummary
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
-	err = e.modelFor("kb.compress").JSONMax(cctx, prompts.RenderKBRecording(prompts.KBOwner{Owner: e.Owner}), prompts.RenderKBRecordingInput(in), 4000, &out)
+	err = e.modelFor("kb.compress").JSONMax(cctx, prompts.RenderKBRecording(prompts.KBOwner{Owner: e.ownerName()}), prompts.RenderKBRecordingInput(in), 4000, &out)
 	cancel()
 	if err != nil {
-		return err
+		return true, err
 	}
 	st := e.Store
 	st.recMu.Lock()
 	defer st.recMu.Unlock()
 	cur, ok := st.Recording(r.ID)
-	if !ok {
-		return nil // deleted meanwhile
+	if !ok || cur.Trimmed() {
+		return true, nil // deleted or trimmed meanwhile: no summary of a transcript that is gone
 	}
 	now := time.Now().UTC()
 	if s := strings.TrimSpace(out.Summary); s != "" && !cur.fieldLocked("summary") {
 		if err := st.putSummary(KindRecording, cur.ID, s+"\n", false); err != nil {
-			return err
+			return true, err
 		}
 	}
 	applyTags(&cur.Tagging, out.Importance, int(out.Relevance), out.Tags, now)
@@ -622,10 +814,10 @@ func (e *Engine) summarizeRecording(ctx context.Context, r *Recording) error {
 		_ = st.putEntity(KindProject, pr.Slug, pr, &pr.Tagging, false)
 	}
 	if err := st.putEntity(KindRecording, cur.ID, cur, &cur.Tagging, false); err != nil {
-		return err
+		return true, err
 	}
 	e.index(KindRecording, cur.ID, cur.Name, cur.Tagging, cur.OneLine, cur.StartedAt)
-	return nil
+	return true, nil
 }
 
 // clipMiddle keeps the first and last of s within n runes, marking the cut.

@@ -16,8 +16,11 @@ import persona.core.domain.answer.AnswerDraft
 import persona.core.domain.answer.AnswerRetry
 import persona.core.domain.answer.RequestExpiry
 import persona.core.domain.answer.needsFieldValues
+import persona.core.contracts.api.QuietHours
 import androidx.annotation.StringRes
+import java.time.DateTimeException
 import java.time.Instant
+import java.time.ZoneId
 import java.util.UUID
 
 internal data class NotificationAction(
@@ -94,6 +97,24 @@ internal object NotificationPolicy {
     fun suppressed(session: SessionKey, foreground: Boolean, visibleSession: SessionKey?): Boolean =
         foreground && session == visibleSession
 
+    /**
+     * The same window as the hub's quiet hours, for the one-shot fetch that has no hub-approved event. A null or
+     * unreadable zone falls back to the phone's zone, which it reports as the user's zone, as on the Apple client.
+     */
+    fun hushForCatchUp(
+        quiet: QuietHours?,
+        now: Instant = Instant.now(),
+        fallbackZone: ZoneId = ZoneId.systemDefault(),
+    ): Boolean {
+        if (quiet?.enabled != true) return false
+        val start = QuietHours.minutes(quiet.start) ?: return false
+        val end = QuietHours.minutes(quiet.end) ?: return false
+        if (start == end) return false
+        val zone = try { quiet.tz?.let(ZoneId::of) ?: fallbackZone } catch (_: DateTimeException) { fallbackZone }
+        val minute = now.atZone(zone).let { it.hour * 60 + it.minute }
+        return if (start < end) minute >= start && minute < end else minute >= start || minute < end
+    }
+
     fun channel(event: NotifyEvent): String? = when (event.kind) {
         "done" -> Notifier.CH_DONE
         "reply" -> Notifier.CH_DONE // an agent still waiting on the user's answer (#5096): with its finished turn's
@@ -107,6 +128,14 @@ internal object NotificationPolicy {
 
     /** The tags of a session's result notifications (done, assistant): put away once it is seen. Its cards stay. */
     fun resultTags(session: SessionKey): List<String> = listOf("done", "assistant", "reply").map { "$it:${session.path}" }
+
+    /**
+     * The notifications [Notifier.clear] takes down when the phone is unpaired or a notification setting is turned off
+     * (lock-screen details: notifications posted with details are public). Every kind [tag] gives, the request
+     * notifications and their result notices (`interaction:`), and the "stopped" notice; not the ongoing status.
+     */
+    fun cleared(tag: String): Boolean =
+        tag == "stopped" || listOf("interaction:", "failure:", "done:", "reply:", "assistant:", "alert:").any(tag::startsWith)
 
     /** An alert with an id keeps one tag per id (another group's id carries its suffix); one without is its own. */
     fun tag(event: NotifyEvent): String = if (event.kind == "alert") event.id?.takeIf { it.isNotEmpty() }?.let { "alert:id:$it" } ?: "alert:${UUID.randomUUID()}"

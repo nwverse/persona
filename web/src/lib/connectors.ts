@@ -23,6 +23,12 @@ export interface HubConnector {
   account?: string;
   via?: string;
   error?: string;
+  /** Permissions the connector still needs, when the hub can name them. */
+  missing_scopes?: string[];
+  /** The open-platform page where the connector's missing permissions can be enabled (the hub sends it as guide_url). */
+  guide_url?: string;
+  /** Alias of guide_url, accepted as well. */
+  permission_url?: string;
   /** How to fix it, a step a sentence. */
   guide?: string[];
   last_sync?: string;
@@ -62,6 +68,10 @@ export interface ConnectorPrompt {
   user_code?: string;
   interval?: number;
   hint?: string;
+  /** Where this step's hint points at (the provider's console, to create the app); the page opens it in a new tab. */
+  link?: string;
+  /** link's button label (the hub localizes it). */
+  link_text?: string;
   error?: string;
   done?: boolean;
   account?: string;
@@ -191,7 +201,7 @@ export function isStarting(c?: HubConnector | null): boolean {
 /** The connectors that get rows of their own after "Mail" and Lark (those two keep their own groups; Lark's only shows on a
  * hub with feature `lark`, `larkGroup`, so without it a connector named lark is listed like any other). */
 export function otherConnectors(list: HubConnector[], larkGroup = true): HubConnector[] {
-  return list.filter((c) => c.id !== "mail" && !(larkGroup && c.id === "lark"));
+  return list.filter((c) => c.id !== "mail" && c.id !== "larkcli" && !(larkGroup && c.id === "lark"));
 }
 
 // ── brand and wording, by id ─────────────────────────────
@@ -218,6 +228,7 @@ interface ConnectorProfile {
 const PROFILES = new Map<string, ConnectorProfile>([
   ["github", { brand: "github" }],
   ["lark", { brand: "lark" }],
+  ["larkcli", { brand: "lark" }],
   [
     "telegram",
     {
@@ -358,6 +369,26 @@ export function githubOptions(raw: unknown): GitHubInboxOptions | null {
   if (typeof o.ci !== "string") return null;
   const strings = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : undefined);
   return { ci: o.ci, muted_repos: strings(o.muted_repos) ?? [], ignore_branches: strings(o.ignore_branches) };
+}
+
+/** lark-cli's Inbox options: group chats taken whole, watched documents and Wiki spaces, and whether every comment on
+ * a watched document the user owns comes in (PUT …/larkcli/settings {options}, sent whole). */
+export interface LarkCLIInboxOptions {
+  inbox_all_chats: string[];
+  documents: string[];
+  wiki_spaces: string[];
+  owned_all_comments: boolean;
+  /** What counts as Needs you / FYI / Collapsed for these items, in the user's words (empty: the Inbox's own rules). */
+  triage_rules: string;
+}
+
+/** lark-cli's options as the hub gives them, or null when it gives none (or not that shape). */
+export function larkcliOptions(raw: unknown): LarkCLIInboxOptions | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  if (!Array.isArray(o.documents)) return null;
+  const strings = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+  return { inbox_all_chats: strings(o.inbox_all_chats), documents: strings(o.documents), wiki_spaces: strings(o.wiki_spaces), owned_all_comments: o.owned_all_comments === true, triage_rules: typeof o.triage_rules === "string" ? o.triage_rules : "" };
 }
 
 /** The CI choices, most quiet first. */

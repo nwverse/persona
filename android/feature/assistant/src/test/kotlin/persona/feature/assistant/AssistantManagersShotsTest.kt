@@ -47,9 +47,9 @@ import java.io.File
 import java.time.Instant
 
 /**
- * The assistant page with several managers (docs/assistant/managers.md step 4): the switcher under the top bar (the default
- * first), an offline manager chosen (greyed, its composer off and saying 最后同步于, nothing sent), an online one, and
- * one manager (no switcher), in every style, light and dark. Written to `build/managers-shots/assistant-*.png`.
+ * The assistant page with several assistants: selection belongs to the sidebar, an offline current assistant is
+ * read-only and says when it last synced, and an online one can send. With one installed assistant the product
+ * header stays unchanged in every style, light and dark. Written to `build/managers-shots/assistant-*.png`.
  */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -88,7 +88,7 @@ class AssistantManagersShotsTest {
 
     private val res get() = ApplicationProvider.getApplicationContext<Context>().resources
 
-    @Test fun theSwitcherAndAnOfflineManagersComposer() {
+    @Test fun switchingAndAnOfflineManagersComposer() {
         val hub = Hub()
         var style by mutableStateOf(AppStyle.Glass)
         var dark by mutableStateOf(false)
@@ -118,9 +118,8 @@ class AssistantManagersShotsTest {
         // Nothing is queued for it: the empty state says so instead of 「连上后继续发送」.
         assertTrue(rule.onAllNodesWithText("家里离线，能看历史，暂时不能发消息。").fetchSemanticsNodes().isNotEmpty())
         assertEquals(0, rule.onAllNodesWithText("发出的内容会先保存在本机，连上后继续发送。").fetchSemanticsNodes().size)
-        // The installed ones only, the default first.
-        val chips = listOf("助手", "工作", "家里").map { rule.onNode(hasText(it) and hasClickAction()).fetchSemanticsNode().boundsInRoot.left }
-        assertEquals(chips.sorted(), chips)
+        // The page draws no chips: no manager's name is a button on it (the sidebar's switcher lists them).
+        assertEquals(0, rule.onAllNodes(hasText("工作") and hasClickAction()).fetchSemanticsNodes().size)
         assertEquals(0, rule.onAllNodesWithText("测试").fetchSemanticsNodes().size)
         val dir = File(System.getProperty("persona.shots") ?: "build/managers-shots").also { it.mkdirs() }
         fun capture(name: String) {
@@ -133,23 +132,28 @@ class AssistantManagersShotsTest {
             capture("offline-${s.key}-${if (d) "dark" else "light"}")
         }
         assertTrue(hub.sent.isEmpty())
-        // Picking another one: the choice moves (the requests then name it), the composer is back.
+        // Switching to another one: the choice moves (the requests then name it), the composer is back.
         style = AppStyle.Glass; dark = false
-        rule.onNode(hasText("工作") and hasClickAction()).performClick()
+        AssistantManagerChoice.pick("m-3fa21c")
         rule.waitForIdle()
         assertEquals("m-3fa21c", AssistantManagerChoice.current.value.manager)
         assertEquals(0, rule.onAllNodesWithText(offline).fetchSemanticsNodes().size)
         capture("online-glass-light")
         // The default: no header at all.
-        rule.onNode(hasText("助手") and hasClickAction()).performClick()
+        AssistantManagerChoice.pick("assistant")
         rule.waitForIdle()
         assertNull(AssistantManagerChoice.current.value.manager)
         assertNull(AssistantManagerChoice.header("hub"))
-        // One manager: no switcher, the page as before.
-        shown = one
+        // One installed assistant keeps the product title and no personal identity in every style.
+        shown = one.copy(managers = listOf(one.managers.first().copy(name = "Personal assistant name")))
         rule.waitForIdle()
-        assertEquals(0, rule.onAllNodes(hasText("助手") and hasClickAction()).fetchSemanticsNodes().size)
-        capture("single-glass-light")
+        for (s in AppStyle.entries) for (d in listOf(false, true)) {
+            rule.runOnIdle { style = s; dark = d }
+            assertTrue(rule.onAllNodesWithText("Persona").fetchSemanticsNodes().isNotEmpty())
+            assertEquals(0, rule.onAllNodesWithText("Personal assistant name").fetchSemanticsNodes().size)
+            assertEquals(0, rule.onAllNodes(hasText("工作") and hasClickAction()).fetchSemanticsNodes().size)
+            capture("single-${s.key}-${if (d) "dark" else "light"}")
+        }
     }
 
     @Test fun whatThePageKnowsOfItsManager() {

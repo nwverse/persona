@@ -1,6 +1,7 @@
 package link
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,8 +10,11 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"os"
 	"runtime"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unicode"
@@ -24,13 +28,43 @@ import (
 type link struct {
 	conn    *websocket.Conn
 	ep      Endpoint
+	baseURL string       // https base URL for streams (ep.URL when direct; tunnelBaseURL when over SSH)
+	tunnel  *sshTunnel   // non-nil when this link runs over an SSH tunnel
 	local   netip.Addr   // this side's address of the link's TCP connection
 	streams *http.Client // checked the same way (pin or system CAs); streams go where the link went
 	token   string
+	epsMu   sync.Mutex
+	eps     []Endpoint
 	// named: the hub said what it calls this computer (endpoints), so it renames computers (rename.go).
 	named atomic.Bool
 	// gen counts this run's links, this one included (Status.Conn): the app's confirmations say which link's they are.
 	gen uint64
+	// again: link.json turned out to hold another pairing while writing to it (errPairedAgain); serve ends the link.
+	again chan struct{}
+}
+
+func (l *link) closeNow() {
+	l.conn.CloseNow()
+	l.tunnel.close()
+}
+
+func (l *link) tunnelDone() <-chan struct{} {
+	if l.tunnel == nil {
+		return nil
+	}
+	return l.tunnel.done
+}
+
+func (l *link) setEndpoints(eps []Endpoint) {
+	l.epsMu.Lock()
+	l.eps = slices.Clone(eps)
+	l.epsMu.Unlock()
+}
+
+func (l *link) getEndpoints() []Endpoint {
+	l.epsMu.Lock()
+	defer l.epsMu.Unlock()
+	return slices.Clone(l.eps)
 }
 
 func dial(ctx context.Context, c *Config) (*link, error) {
@@ -47,11 +81,12 @@ func dial(ctx context.Context, c *Config) (*link, error) {
 		}
 		conn.SetReadLimit(1 << 20)
 		return &link{conn: conn, local: local, streams: hubClient(c, nil), token: c.Token}, nil
-	}, func(l *link) { l.conn.CloseNow() })
+	}, func(l *link) { l.closeNow() })
 	if err != nil {
 		return nil, err
 	}
 	l.ep = ep
+	l.baseURL = ep.URL
 	return l, nil
 }
 
@@ -59,18 +94,25 @@ var streamID = lazyre.New(`^[A-Za-z0-9_-]{1,64}$`)
 
 // serve runs the link until it ends and says why.
 func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) error {
+	l.again = make(chan struct{}, 1)
+	l.setEndpoints(c.Endpoints)
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
+	defer l.tunnel.close()
 	defer l.conn.CloseNow()
 	defer l.streams.CloseIdleConnections()
-	hello := Message{Type: "hello", Machine: c.Machine, Version: o.Version, Address: l.ep.URL, Features: []string{FeatureAttention}}
+	helloAddr := l.ep.URL
+	if l.ep.Kind == KindSSH {
+		helloAddr = ""
+	}
+	hello := Message{Type: "hello", Machine: c.Machine, Version: o.Version, Address: helloAddr, Features: []string{FeatureAttention}}
 	if err := l.send(ctx, hello); err != nil {
 		return err
 	}
 	since := time.Now()
 	rep.set(func(s *Status) {
 		*s = Status{State: "connected", Conn: l.gen, Machine: c.Machine, HubName: c.HubName, MachineName: c.MachineName, Address: l.ep.URL,
-			Kind: l.ep.Kind, Since: &since, Node: "unknown", Trust: trustOf(c), Endpoints: ranked(c.Endpoints)}
+			Kind: l.ep.Kind, Since: &since, Node: "unknown", Trust: trustOf(c), Endpoints: ranked(c.Endpoints), SSH: cloneSSH(c.SSH)}
 	})
 	go l.renames(ctx, o, rep)
 	go l.presence(ctx, o)
@@ -80,12 +122,29 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) e
 		cancel(err)
 		l.conn.CloseNow()
 	}
+	// reconnect ends the link the way the hub expects for one that comes straight back (runActive dials at once).
+	reconnect := func(err error) {
+		cancel(err)
+		_ = l.conn.Close(websocket.StatusNormalClosure, "reconnect")
+	}
 	// The heartbeat is o's until the hub says another (endpoints); beat hands the pinger the latest, the link stays.
 	beat := make(chan heartbeat, 1)
 	go func() {
 		hb := heartbeat{every: o.PingEvery, timeout: o.PingTimeout}
 		t := time.NewTicker(hb.every)
 		defer t.Stop()
+		// A new pairing (persona-link pair, the tray's or the App's) is followed while the link is up, not only after
+		// it drops. The zero stamp makes the first look compare: a pairing written while this link was dialing counts.
+		pairT := time.NewTicker(cmp.Or(o.PairCheck, pairCheck))
+		defer pairT.Stop()
+		var directC <-chan time.Time
+		if l.ep.Kind == KindSSH && c.SSH != nil && !c.SSH.Always {
+			directT := time.NewTicker(cmp.Or(o.DirectRetryEvery, DirectRetryEvery))
+			defer directT.Stop()
+			directC = directT.C
+		}
+		var seen time.Time
+		var looked bool
 		// A ping waits for its pong on its own, so a reconnect or a network change is not held up behind one that is
 		// out (with a slow link's heartbeat, for up to the hub's timeout). One of each kind at a time; the first that
 		// fails drops the link.
@@ -94,7 +153,8 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) e
 			err   error
 		}
 		pongs := make(chan pong)
-		var beating, checking bool
+		directProbe := make(chan bool, 1)
+		var beating, checking, probingDirect bool
 		ping := func(check bool, d time.Duration) {
 			go func() {
 				err := l.ping(ctx, d)
@@ -104,10 +164,41 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) e
 				}
 			}()
 		}
+		tryDirect := func() {
+			eps := l.getEndpoints()
+			if len(eps) == 0 {
+				return
+			}
+			probingDirect = true
+			probeCfg := Config{FP: c.FP, Trust: c.Trust, Endpoints: eps}
+			go func() {
+				ok := probeDirect(ctx, &probeCfg)
+				select {
+				case directProbe <- ok:
+				case <-ctx.Done():
+				}
+			}()
+		}
 		for {
 			select {
 			case <-ctx.Done():
 				return
+			case <-l.tunnelDone():
+				if ctx.Err() == nil {
+					drop(l.tunnel.classifyExit(l.tunnel.waitErr))
+				}
+				return
+			case ok := <-directProbe:
+				probingDirect = false
+				if ok && ctx.Err() == nil {
+					o.Logf("link: direct hub reachable again; switching off ssh tunnel")
+					reconnect(errDirectReady)
+					return
+				}
+			case <-directC:
+				if !probingDirect {
+					tryDirect()
+				}
 			case p := <-pongs:
 				why := "hub 没有回应心跳"
 				if p.check {
@@ -142,9 +233,23 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) e
 					checking = true
 					ping(true, hb.check())
 				}
+				if directC != nil && !probingDirect {
+					tryDirect()
+				}
 			case <-o.Redial:
-				cancel(errRedial)
-				_ = l.conn.Close(websocket.StatusNormalClosure, "reconnect")
+				reconnect(errRedial)
+				return
+			case <-pairT.C:
+				// Only the mtime says when to look: endpoints and renames rewrite link.json with the same pairing.
+				if now := stampOf(o.Path); !looked || !now.Equal(seen) {
+					looked, seen = true, now
+					if repaired(o.Path, c) {
+						reconnect(errRepaired)
+						return
+					}
+				}
+			case <-l.again:
+				reconnect(errRepaired)
 				return
 			}
 		}
@@ -188,6 +293,9 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) e
 			}
 			go func(id string) {
 				if err := l.forward(ctx, id, o.Target); err != nil {
+					if ctx.Err() != nil { // called off because the link ended: that says nothing about the node
+						return
+					}
 					o.Logf("link: stream %s: %v", id, err)
 					_ = l.send(ctx, Message{Type: "open_failed", ID: id, Error: err.Error()})
 					rep.set(func(s *Status) { s.Node, s.NodeError = "offline", err.Error() })
@@ -235,9 +343,13 @@ func (l *link) endpoints(m Message, c *Config, o Options, rep *reporter) {
 			return nil
 		})
 		if err != nil {
+			if errors.Is(err, errPairedAgain) {
+				l.pairedAgain()
+			}
 			return
 		}
 		c.Endpoints = eps
+		l.setEndpoints(eps)
 		if name != "" {
 			c.HubName = name
 		}
@@ -254,6 +366,24 @@ func (l *link) endpoints(m Message, c *Config, o Options, rep *reporter) {
 		}
 		s.Pending = m.Pending
 	})
+}
+
+// pairedAgain tells serve that link.json holds another pairing than this link's: the link moves to it.
+func (l *link) pairedAgain() {
+	select {
+	case l.again <- struct{}{}:
+	default:
+	}
+}
+
+// repaired: link.json now holds another credential, computer, hub or SSH tunnel than c, or was removed (unpaired). A
+// file that cannot be read for another reason changes nothing: the link stays as it is.
+func repaired(path string, c *Config) bool {
+	f, err := Read(path)
+	if err != nil {
+		return errors.Is(err, os.ErrNotExist)
+	}
+	return f.Token != c.Token || f.FP != c.FP || f.Trust != c.Trust || f.Machine != c.Machine || !f.SSH.Equal(c.SSH)
 }
 
 // heartbeat is how a link is pinged: every, and how long a pong may take; hub: the hub said so (endpoints).
@@ -378,8 +508,8 @@ func (l *link) forward(ctx context.Context, id, target string) error {
 	defer node.Close()
 	dctx, dcancel := context.WithTimeout(ctx, dialTimeout) // the handshake only: the stream lives as long as the link
 	defer dcancel()
-	ws, resp, err := websocket.Dial(dctx, wsURL(l.ep.URL, StreamPath+"?id="+id), &websocket.DialOptions{
-		HTTPClient: l.streams, HTTPHeader: bearer(l.token), CompressionMode: websocket.CompressionContextTakeover})
+	ws, resp, err := websocket.Dial(dctx, wsURL(cmp.Or(l.baseURL, l.ep.URL), StreamPath+"?id="+id), &websocket.DialOptions{
+		HTTPClient: l.streams, HTTPHeader: bearer(l.token), CompressionMode: StreamCompression})
 	if err != nil {
 		return fmt.Errorf("开不了流：%w", handshakeError(resp, err))
 	}

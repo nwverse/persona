@@ -556,16 +556,32 @@ def git(*args):
     return subprocess.run(["git", "-C", ROOT, *args], capture_output=True, check=True).stdout
 
 
+# Git's exit status for an option it does not know (parse-options' usage error).
+GIT_USAGE_ERROR = 129
+
+
+def git_batch(names, prefix):
+    """`git cat-file --batch` output for prefix + each name, in order (no name holds a line break). Requests are
+    NUL-separated with -z; Git before 2.36 has no -z for cat-file and refuses it as an unknown option (#3224), so
+    they then go one per line, which reads the same objects."""
+    for z in (True, False):
+        end = b"\0" if z else b"\n"
+        requests = b"".join((prefix + name).encode() + end for name in names)
+        try:
+            return subprocess.run(["git", "-C", ROOT, "cat-file", "--batch", *(["-z"] if z else [])],
+                                  input=requests, capture_output=True, check=True, timeout=120).stdout
+        except subprocess.CalledProcessError as e:
+            if not z or e.returncode != GIT_USAGE_ERROR:
+                raise
+
+
 def git_file_data(files, prefix):
     """Read the same index/commit blobs as git show, using one bounded Git process."""
     safe = [name for name in files if "\n" not in name and "\r" not in name]
     data = {}
     fallback = [name for name in files if "\n" in name or "\r" in name]
     if safe:
-        requests = b"".join((prefix + name).encode() + b"\0" for name in safe)
-        output = subprocess.run(["git", "-C", ROOT, "cat-file", "--batch", "-z"],
-                                input=requests, capture_output=True, check=True, timeout=120).stdout
-        stream = io.BytesIO(output)
+        stream = io.BytesIO(git_batch(safe, prefix))
         for name in safe:
             header = stream.readline()
             if header.endswith(b" missing\n"):

@@ -119,6 +119,7 @@ final class SyncRun {
         // A new chat's first message starts it from the new-conversation page (AssistantStart, #1349), not through
         // AppModel's send, so there is no chat page to project until it has started.
         if c["chat"]?["new"]?.bool == true { throw SyncUnplayable(description: "a new chat: its start is the new-conversation page's, not AppModel's") }
+        AgentSync.shared.forgetChatsForTests()
         for n in names { try await start(n) }
         for (i, step) in (c["steps"]?.array ?? []).enumerated() {
             try await run(step)
@@ -401,9 +402,13 @@ final class SyncRun {
             }
             if let want = e["requests"]?.array {
                 var from = d.requestsChecked
+                // one_of: any one of these, where the protocol allows several ways (#2770)
+                func matches(_ got: [String: JSONValue], _ want: JSONValue) -> Bool {
+                    if let any = want["one_of"]?.array { return any.contains { matches(got, $0) } }
+                    return (want.object ?? [:]).allSatisfy { got[$0.key] == $0.value }
+                }
                 for r in want {
-                    let wanted = r.object ?? [:]
-                    guard let i = d.requests[from...].firstIndex(where: { got in wanted.allSatisfy { got[$0.key] == $0.value } }) else {
+                    guard let i = d.requests[from...].firstIndex(where: { matches($0, r) }) else {
                         failures.append("\(at): \(d.name) no request \(r) after \(Array(d.requests[d.requestsChecked...]))")
                         break
                     }

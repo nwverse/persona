@@ -1,7 +1,5 @@
 package persona.feature.settings
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -20,7 +18,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -38,7 +35,7 @@ import java.time.Instant
 // Settings › Sent as you (#5278, docs/extensions/connectors.md "Sent as the user"): what Persona wrote in the user's name through the
 // connectors, newest first. A row has the connector, where it went, how long ago, the first lines of what it said, how the gate
 // let it through (orange where the user did not decide) and the chat that asked, which opens. A row opens a sheet with every
-// field and the whole text. Load earlier follows `next`; the chips (Lark and the connectors the loaded rows show) filter by
+// field and the whole text, and Recall (asked once in a dialog) when the hub can take the message back. Load earlier follows `next`; the chips (Lark and the connectors the loaded rows show) filter by
 // connector. The logic and the words are in SentState.kt; the web page is SentSettings.tsx, iOS's SentView.swift.
 
 /**
@@ -65,10 +62,13 @@ internal fun SentAsYouPage(sent: HubSent?, onBack: () -> Unit, onChat: ((machine
         onChoose = { scope.launch { model.choose(it) } },
         onMore = { scope.launch { model.loadMore() } },
         onOpen = { detail = it }, onChat = onChat)
-    detail?.let { item ->
+    // The open row as the list has it now: a recall or a refresh changes it under the sheet.
+    detail?.let { open -> state.items?.firstOrNull { it.id == open.id } ?: open }?.let { item ->
         JSheet(onDismiss = { detail = null }, title = SentText.connectorName(LocalResources.current, item.connector).ifBlank { null }, scrollable = true) {
             // A chat opens under the sheet's page: the sheet goes first.
-            SentDetailBody(item, onChat = onChat?.let { go -> { machine, session -> detail = null; go(machine, session) } }, onDone = { detail = null })
+            SentDetailBody(item, onChat = onChat?.let { go -> { machine, session -> detail = null; go(machine, session) } }, onDone = { detail = null },
+                recalling = state.recalling == item.id, recallError = state.recallError?.takeIf { it.id == item.id }?.text,
+                onRecall = { scope.launch { model.recall(item.id) } })
         }
     }
 }
@@ -168,7 +168,7 @@ private fun SentRow(item: SentItem, now: Instant, onOpen: () -> Unit, onChat: ((
     Column(Modifier.fillMaxWidth().padding(horizontal = rowPadding, vertical = Tokens.Space.m), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
         Column(Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onOpen), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
             Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                Text(name, Modifier.widthIn(max = Tokens.Space.xxxl * 6), style = PersonaTheme.type.bodyStrong, color = palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(name, Modifier.widthIn(max = Tokens.Space.xxl * 6), style = PersonaTheme.type.bodyStrong, color = palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(target, Modifier.weight(1f), style = PersonaTheme.type.callout, color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(SentText.ago(res, item.at, now), style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1)
             }
@@ -177,6 +177,7 @@ private fun SentRow(item: SentItem, now: Instant, onOpen: () -> Unit, onChat: ((
         }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
             JTag(allowed.label, allowed.tone.tone(), Modifier.align(Alignment.CenterVertically))
+            if (item.recalledAt.isNotEmpty()) JTag(stringResource(R.string.settings_sent_recalled), Modifier.align(Alignment.CenterVertically))
             if (origin.extensionId.isNotEmpty()) {
                 JTag(stringResource(R.string.settings_sent_origin_extension), Modifier.align(Alignment.CenterVertically))
                 Text(origin.extensionId, Modifier.align(Alignment.CenterVertically), style = PersonaTheme.type.codeSmall, color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -206,10 +207,14 @@ private fun SentFact(label: String, content: @Composable ColumnScope.() -> Unit)
 
 /**
  * One send in full: when, the action, every field of the target, how it was let through (the rule, the card), the chat, the
- * message id when there is one and the whole text, which can be copied; Done.
+ * message id when there is one, when it was recalled, and the whole text, which can be copied; Recall when the hub can take it
+ * back ([onRecall], after a dialog), then Done.
  */
 @Composable
-internal fun ColumnScope.SentDetailBody(item: SentItem, onChat: ((String, String) -> Unit)?, onDone: () -> Unit) {
+internal fun ColumnScope.SentDetailBody(
+    item: SentItem, onChat: ((String, String) -> Unit)?, onDone: () -> Unit,
+    recalling: Boolean = false, recallError: ResText? = null, onRecall: (() -> Unit)? = null,
+) {
     val res = LocalResources.current
     val palette = PersonaTheme.palette
     val fields = SentText.targetFields(item.target)
@@ -227,7 +232,7 @@ internal fun ColumnScope.SentDetailBody(item: SentItem, onChat: ((String, String
             else Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
                 fields.forEach { field ->
                     Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
-                        Text(field.key, Modifier.width(Tokens.Space.xxxl * 3), style = PersonaTheme.type.codeSmall, color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(field.key, Modifier.width(Tokens.Space.xxl * 3), style = PersonaTheme.type.codeSmall, color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         JSelectableText(field.value, value, palette.ink, Modifier.weight(1f))
                     }
                 }
@@ -257,24 +262,41 @@ internal fun ColumnScope.SentDetailBody(item: SentItem, onChat: ((String, String
         if (item.messageRef.isNotEmpty()) SentFact(stringResource(R.string.settings_sent_d_message)) {
             JSelectableText(item.messageRef, PersonaTheme.type.code, palette.ink)
         }
+        if (item.recalledAt.isNotEmpty()) SentFact(stringResource(R.string.settings_sent_recalled)) {
+            Text(SentText.full(res, item.recalledAt), style = value, color = palette.ink)
+        }
         SentTextSection(item.text)
+        if (onRecall != null && item.recalledAt.isEmpty()) SentRecall(item, recalling, recallError, onRecall)
         JButton(stringResource(R.string.settings_sent_done), onDone, Modifier.fillMaxWidth().padding(top = Tokens.Space.s))
     }
+}
+
+/** Recall, only when the hub says the message can be taken back (or a recall just failed, to keep its reason), asked once in a dialog. */
+@Composable
+private fun SentRecall(item: SentItem, recalling: Boolean, error: ResText?, onRecall: () -> Unit) {
+    if (!item.canRecall && error == null) return
+    var asking by remember(item.id) { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+        if (item.canRecall) JButton(stringResource(R.string.settings_sent_recall), { asking = true }, Modifier.fillMaxWidth(),
+            kind = JButtonKind.Destructive, size = JButtonSize.Medium, icon = PhIcons.ArrowUUpLeft, loading = recalling)
+        error?.let { JInlineStatus(it.text(), tone = InlineTone.Failed) }
+    }
+    if (asking) JDialog(onDismiss = { asking = false }, title = stringResource(R.string.settings_sent_recall_title),
+        text = stringResource(R.string.settings_sent_recall_confirm, SentText.connectorName(LocalResources.current, item.connector)),
+        confirm = stringResource(R.string.settings_sent_recall_do) to { asking = false; onRecall() }, destructive = true)
 }
 
 /** The whole text with Copy text, and a note when the ledger cut it. */
 @Composable
 private fun SentTextSection(text: String) {
-    val context = LocalContext.current
     val res = LocalResources.current
-    val feedback = LocalAppFeedback.current
+    val copy = rememberCopy()
     val palette = PersonaTheme.palette
     Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(stringResource(R.string.settings_sent_d_text), Modifier.weight(1f), style = PersonaTheme.type.caption, color = palette.ink3)
             if (text.isNotEmpty()) JButton(stringResource(R.string.settings_sent_copy_text), {
-                context.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText(res.getString(R.string.settings_sent_d_text), text))
-                feedback?.notice(res.getString(R.string.settings_src_copied))
+                copy(text, null)
             }, kind = JButtonKind.Quiet, size = JButtonSize.Small, icon = PhIcons.Copy)
         }
         if (text.isEmpty()) Text(stringResource(R.string.settings_sent_no_text), style = PersonaTheme.type.callout, color = palette.ink3)

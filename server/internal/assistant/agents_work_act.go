@@ -26,21 +26,27 @@ func (s *Service) actOn(ctx context.Context, v *workView, machine string, c prot
 	if w.Phase != proto.WorkBlocked || c.ReadOnlyReason != "" {
 		return // nothing to do, or nothing Persona may send it
 	}
+	s.approveByTask(ctx, k, w, sw.Wake) // a step its task asked for: no card, the wake below (agents_work_authorized.go)
 	switch w.On {
 	case proto.WaitTransient:
-		if !sw.AutoContinue {
+		if !sw.transientOn() {
 			w.Line = clip(oneLine(workT(l, "model_error", i18n.Args{"error": w.Wait})), 60)
 			return
 		}
 		if e.Retries >= maxRetries(cfg) {
+			s.logf("work %s/%s: auto-continue: transient model error persists after %d automatic continues, left to the user: %s",
+				e.MachineID, short(e.SessionID), e.Retries, clip(w.Wait, 120))
 			*w = proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitUser, TurnAt: w.TurnAt, At: w.At, By: w.By,
 				Line: workT(l, "retries_line", i18n.Args{"n": e.Retries}),
 				Questions: []proto.Question{{Question: workT(l, "retries_ask", i18n.Args{"n": e.Retries, "error": clip(w.Wait, 300)}),
 					Header: workT(l, "header_model"), Options: []proto.QuestionOption{{Label: answerLabel(l, answerRetry)}, {Label: answerLabel(l, answerSkip)}}}}}
 			break
 		}
-		at := now.Add(retryBackoff[min(e.Retries, len(retryBackoff)-1)]).UTC()
+		after := retryBackoff(cfg, e.Retries, rateLimitError(c.TurnError))
+		at := now.Add(after).UTC()
 		e.WakeAt, w.WakeAt, w.Attempts, w.Max = &at, &at, e.Retries, maxRetries(cfg)
+		s.logf("work %s/%s: auto-continue: transient model error, attempt %d/%d in %s: %s", e.MachineID, short(e.SessionID),
+			e.Retries+1, maxRetries(cfg), after, clip(w.Wait, 120))
 		return
 	case proto.WaitExternal, proto.WaitAgent:
 		if w.ResetsAt != nil {
@@ -56,11 +62,7 @@ func (s *Service) actOn(ctx context.Context, v *workView, machine string, c prot
 		a, approved := s.work.approved[k]
 		s.work.mu.Unlock()
 		if risky(w.Then) && !(approved && a.covers(w)) {
-			*w = proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitUser, TurnAt: w.TurnAt, At: w.At, By: w.By, Wait: w.Wait, Then: w.Then,
-				Line: clip(oneLine(workT(l, "risky_line", i18n.Args{"wait": w.Wait, "then": w.Then})), 60),
-				Questions: []proto.Question{{Question: workT(l, "risky_ask", i18n.Args{"wait": w.Wait, "then": w.Then}), Header: workT(l, "header_risky"),
-					Options: []proto.QuestionOption{{Label: answerLabel(l, answerGo), Description: workT(l, "answer_go_about")}, {Label: answerLabel(l, answerHold)}}}}}
-			break
+			return // no automatic external action, and no card for a step the agent did not ask about
 		}
 		if !sw.Wake {
 			return
@@ -76,8 +78,13 @@ func (s *Service) actOn(ctx context.Context, v *workView, machine string, c prot
 		e.WakeAt, w.WakeAt, w.Attempts, w.Max = &at, &at, e.Wakes, maxWakes(cfg)
 		return
 	}
-	// On the user: a card.
-	if w.On != proto.WaitUser || !sw.Decide || v.isMuted(machine, c.SessionID) {
+	// Missing evidence is not a user decision. Authorization links have their own relay and manual card path.
+	if w.On == proto.WaitUser && w.By == "model" && len(w.Questions) == 0 && w.Link == nil {
+		*w = proto.WorkState{TurnAt: w.TurnAt, At: w.At, By: w.By, Artifacts: w.Artifacts}
+		return
+	}
+	// On the user: a card. Without the triage none: the session shows its error and the apps' Retry as before.
+	if w.On != proto.WaitUser || !sw.Enabled || !sw.Decide || v.isMuted(machine, c.SessionID) {
 		return
 	}
 	if len(w.Questions) == 0 {

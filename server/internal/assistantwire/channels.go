@@ -202,6 +202,9 @@ type ChannelNoted struct {
 // FeishuOwner is feishu.owner's params.
 type FeishuOwner struct {
 	Paired bool `json:"paired"`
+	// Greeted: the hub already greeted the owner in the private chat (an app created and paired in one
+	// authorization, #4347); the assistant starts the chat afresh without its own greeting.
+	Greeted bool `json:"greeted,omitempty"`
 }
 
 // FeishuRecalled is feishu.recalled's params: the message the owner recalled.
@@ -225,6 +228,9 @@ type FeishuFeatures struct {
 	// OnlyConclusions: a task's finished turn, waiting and interrupted states are not pushed on their own; the task list
 	// and the briefing carry them, and only its conclusion card goes out (#1226).
 	OnlyConclusions bool `json:"only_conclusions"`
+	// ReportSteps: the task report card also carries the execution steps (a finished turn with the stage bar and what the
+	// agent said, interrupted, closed), the card as it was before #3218. Off: only goal-level changes are pushed.
+	ReportSteps bool `json:"report_steps"`
 }
 
 // FeishuStatus is feishu.status's answer.

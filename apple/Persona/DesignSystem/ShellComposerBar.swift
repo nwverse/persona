@@ -32,8 +32,11 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     /// The main conversation cannot answer yet: send says what to do first and goes there, the draft stays.
     var gate: SendGate? = nil
     /// The iPhone's 「+」 opens the composer's panel (`AttachSheet`, Telegram's attachment menu) from where the button is,
-    /// in the window; nil: the menu of `attach`.
+    /// in the window, and touched and held, the menu of `attach` (#3225); nil: a tap opens the menu of `attach`.
     var openAttach: ((CGRect) -> Void)? = nil
+    /// Glow While Replying (`ComposerGlow`): the band around the bar while the assistant's reply is being written. Drawn
+    /// inside the bar's animations so it follows the surface when the line grows into the card.
+    var glows = false
     var send: () -> Void
     @ViewBuilder var attach: () -> Attach
     @ViewBuilder var modes: () -> Modes
@@ -61,7 +64,7 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     @State private var pageFocusRequest = 0
 
     private var offersEnlarge: Bool {
-        !text.isEmpty && ComposerGrowth.offersExpansion(textHeight: textHeight, lineHeight: lineHeight, maximumLines: maximumLines)
+        ComposerGrowth.showsExpandButton(text: text, focused: focused.wrappedValue, textHeight: textHeight, lineHeight: lineHeight, maximumLines: maximumLines)
     }
 
     /// Count a trailing newline as the empty line it starts.
@@ -125,6 +128,9 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     private var expanded: Bool { alwaysOpen || focused.wrappedValue || !text.isEmpty || hasAttachments }
 
     var body: some View {
+        #if DEBUG || PERF_SIGNPOST
+        let _ = PerfTrace.body("ShellComposerBar")
+        #endif
         VStack(alignment: .leading, spacing: 0) {
             VStack(spacing: 0) {
                 if expanded, let quotes, !quotes.wrappedValue.isEmpty {
@@ -192,6 +198,9 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
             if expanded {
                 HStack(spacing: Theme.Space.xs) {
                     plus
+                    #if os(iOS)
+                    if focused.wrappedValue { dismissKeyboardButton }
+                    #endif
                     Spacer(minLength: Theme.Space.s)
                     if let modesTitle {
                         Menu { modes() } label: { modesLabel(modesTitle) }
@@ -236,6 +245,7 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
         .overlay { ComposerHoldOverlay(hold: hold) }
         .coordinateSpace(.named(ComposerHold.space))
         #endif
+        .composerGlow(glows)
         .contentShape(.rect(cornerRadius: Theme.Shell.composerRadius))
         .onTapGesture { focused.wrappedValue = true }
         .shellScaled()
@@ -251,6 +261,9 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
         }
+        #if DEBUG
+        .background { if ScreenProbe.enabled { ComposerLinesProbe(maximumLines: maximumLines, viewport: viewportHeight, line: lineHeight) } }
+        #endif
         .animation(Theme.Motion.state, value: offersEnlarge)
         .onChange(of: focused.wrappedValue) { _, wants in
             // The box asked for while the page is up: the page takes it, the hidden box under the sheet does not.
@@ -325,12 +338,36 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
         enlarged = false
         send()
     }
+
+    private var dismissKeyboardButton: some View {
+        Button(action: dismissKeyboard) {
+            ThemedIcon(Theme.Icon.dismissKeyboard)
+                .font(Theme.Font.heading)
+                .fontWeight(.medium)
+                .foregroundStyle(ink)
+                .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
+                .contentShape(.circle)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Hide Keyboard")
+        .accessibilityIdentifier("shell-composer-dismiss-keyboard")
+        .transition(.opacity)
+    }
+
+    private func dismissKeyboard() {
+        Haptics.tap()
+        if focused.wrappedValue { TypedText.commitFocused(into: $text) }
+        focused.wrappedValue = false
+        Keyboard.dismiss()
+    }
     #endif
 
     @ViewBuilder private var plus: some View {
         #if os(iOS)
         if let openAttach {
-            Button { openAttach(plusFrame) } label: { plusFace }
+            // A tap opens the panel; touch and hold opens the menu (Safari's tabs button, Mail's compose button).
+            Menu { attach() } label: { plusFace } primaryAction: { openAttach(plusFrame) }
+                .menuStyle(.button)
                 .buttonStyle(.plain)
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { plusFrame = $0 }
                 .accessibilityLabel("Add photo or file")
@@ -556,7 +593,14 @@ private struct ComposerPageEditor: View {
             .themedPage()
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    if focused {
+                        Button(action: dismissPageKeyboard) {
+                            ThemedIcon(Theme.Icon.dismissKeyboard)
+                        }
+                        .accessibilityLabel("Hide Keyboard")
+                        .accessibilityIdentifier("composer-page-dismiss-keyboard")
+                    }
                     Button {
                         commitTyped()
                         collapse()
@@ -601,5 +645,88 @@ private struct ComposerPageEditor: View {
     private func commitTyped() {
         if focused { TypedText.commitFocused(into: $text) }
     }
+
+    private func dismissPageKeyboard() {
+        Haptics.tap()
+        commitTyped()
+        focused = false
+        Keyboard.dismiss()
+    }
 }
 #endif
+
+#if DEBUG && os(iOS)
+/// `probe.composer-lines` (`-probes YES`): whether the focused text view cuts a line at its top or its foot, for a test
+/// that the composer shows whole lines while typing (#3703). Read from the text's line fragments (TextKit 2 only:
+/// asking a TextKit 2 view for its layout manager would turn it into a TextKit 1 one).
+private struct ComposerLinesProbe: View {
+    var maximumLines: Int
+    var viewport: CGFloat
+    var line: CGFloat
+    @State private var lines = ComposerLines()
+
+    var body: some View {
+        Color.clear
+            .scaledFrame(width: Theme.Size.nonvisualProbe, height: Theme.Size.nonvisualProbe)
+            .task {
+                while !Task.isCancelled {
+                    if let view = FirstResponder.current as? UITextView, let read = ComposerLines(view) { lines = read }
+                    try? await Task.sleep(for: .milliseconds(300))
+                }
+            }
+            .screenProbe("composer-lines", lines.sized(maximumLines: maximumLines, viewport: viewport, line: line))
+    }
+}
+
+struct ComposerLines: Encodable, Equatable {
+    /// Lines of text, and whether one is cut by the text view's top or foot edge (part of it shows, part does not).
+    var count = 0
+    var cutTop = false
+    var cutFoot = false
+    var visible = 0.0
+    var offset = 0.0
+    /// What the box was sized by: its line limit, the height it measured above the keyboard, a line's height.
+    var maximumLines = 0
+    var viewport = 0.0
+    var line = 0.0
+
+    init() {}
+
+    func sized(maximumLines: Int, viewport: CGFloat, line: CGFloat) -> ComposerLines {
+        var sized = self
+        sized.maximumLines = maximumLines
+        sized.viewport = viewport.rounded()
+        sized.line = line.rounded()
+        return sized
+    }
+
+    @MainActor init?(_ view: UITextView) {
+        guard let layout = view.textLayoutManager, let range = layout.textContentManager?.documentRange else { return nil }
+        layout.ensureLayout(for: range)
+        var lines: [CGRect] = []
+        layout.enumerateTextLayoutFragments(from: range.location, options: [.ensuresLayout]) { fragment in
+            let origin = fragment.layoutFragmentFrame.origin
+            for line in fragment.textLineFragments {
+                lines.append(line.typographicBounds.offsetBy(dx: origin.x, dy: origin.y))
+            }
+            return true
+        }
+        // What the view's bounds show (it clips to them), in the text container's coordinates.
+        let container = view.textContainerInset
+        let top = view.contentOffset.y - container.top
+        let foot = view.contentOffset.y + view.bounds.height - container.top
+        count = lines.count
+        // Cut: more than a quarter of the line on each side of the edge. A sliver of a line's leading past the edge (a
+        // scroll to the caret leaves a few points) shows no glyph.
+        func cut(_ line: CGRect, at edge: CGFloat) -> Bool {
+            let quarter = line.height / 4
+            return edge - line.minY > quarter && line.maxY - edge > quarter
+        }
+        cutTop = lines.contains { cut($0, at: top) }
+        cutFoot = lines.contains { cut($0, at: foot) }
+        visible = (foot - top).rounded()
+        offset = top.rounded()
+    }
+}
+#endif
+

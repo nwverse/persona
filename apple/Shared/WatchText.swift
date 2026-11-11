@@ -13,6 +13,8 @@ nonisolated enum WatchText {
         let video = String(localized: "[Video] [Watch Text ec48e4]", comment: "Watch: stands in for a video in a message")
         let file = String(localized: "[File] [Watch Text f29940]", comment: "Watch: stands in for a file in a message")
         return [
+            // The node's view feedback before an assistant message is the model's, not the user's words (#4335).
+            (#"\s*<persona-view-errors\b[^>]*>[\s\S]*?</persona-view-errors>\s*"#, ""),
             (#"\s*<attached_images>[\s\S]*?</attached_images>\s*"#, "\n" + image + "\n"),
             // Videos sent as files (<persona-file kind="video" …/>, VideoAttach.swift).
             (#"\s*<"# + HubNaming.filePattern + #"\b[^>]*?kind="video"[^>]*>(?:\s*</"# + HubNaming.filePattern + #">)?\s*"#, "\n" + video + "\n"),

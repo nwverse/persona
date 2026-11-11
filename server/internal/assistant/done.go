@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -24,7 +26,8 @@ import (
 // it open. A todo the user reopened is not closed again by the same stretch of work. A supervised task (supervise.go)
 // is not closed at all: finished, it waits for its supervisor's review. While assistant.done_needs_delivery is on (off
 // by default), done also needs the work live and checked (or nothing to ship): one done but held at a PR, merged or off
-// by default stays open as undelivered, with where it is held (delivery.go).
+// by default stays open as undelivered, with where it is held (delivery.go). Every verdict is kept on the todo as its
+// check (task_check.go), so an open task can say why it is not done.
 
 const (
 	verdictDone      = "done"
@@ -38,6 +41,9 @@ const (
 
 // taskDoneTimeout bounds one judgment (reading the replies and the model).
 var taskDoneTimeout = 90 * time.Second
+
+// taskDoneRetryAfter is how long a failed judgment waits before it is asked once more.
+var taskDoneRetryAfter = 3 * time.Second
 
 // taskDoneSignals are cheap hints found in the replies, handed to the model (never enough on their own).
 type taskDoneSignals struct {
@@ -73,6 +79,12 @@ type taskDoneCheck struct {
 	Signals    taskDoneSignals `json:"signals"`
 	// Delivery: how far the work went out, when the delivery is judged (done_needs_delivery).
 	Delivery *TodoDelivery `json:"delivery,omitempty"`
+	// AutoCheck: the judge's own check of a supervised task's done_when, when asked (taskDoneInput.Checks,
+	// supervise_sample.go).
+	AutoCheck *taskAutoCheck `json:"auto_check,omitempty"`
+	// reasonKey: the i18n key of the hub's own reason, when it decided without the model (the todo's check says it in
+	// the user's language, task_check.go); "" for the judge's.
+	reasonKey string
 }
 
 // autoDoneSkip says why the hub would not judge t now: "" when it would. work is when one of its agents last started
@@ -102,7 +114,7 @@ func (s *Service) taskReplies(ctx context.Context, t Todo) (out []prompts.TaskDo
 		if !ok {
 			continue
 		}
-		items, read := s.lastTurnItems(ctx, m.ID, a.SessionID)
+		earlier, items, read := s.lastTwoTurns(ctx, m.ID, a.SessionID)
 		if read && taskTurnAwaitingAnswer(items) {
 			return nil, false // one unfinished agent invalidates the whole task's completion evidence
 		}
@@ -113,7 +125,7 @@ func (s *Service) taskReplies(ctx context.Context, t Todo) (out []prompts.TaskDo
 			s.tasks.mu.Lock()
 			since := s.tasks.working[t.ID]
 			s.tasks.mu.Unlock()
-			if report, evidence, valid := freshTaskDoneReport(current, items, since); ok && valid {
+			if report, evidence, valid := freshTaskDoneReport(current, items, since); ok && valid && source != "meeting" {
 				text = strings.Join(append([]string{text, report}, evidence...), "\n")
 			} else {
 				sideTurnBlocked = true
@@ -130,7 +142,15 @@ func (s *Service) taskReplies(ctx context.Context, t Todo) (out []prompts.TaskDo
 		if source == "" && sameRequest(ask, t.Notes) {
 			ask = "" // the turn that answers the task's own prompt: the prompt is already in the input
 		}
-		out = append(out, prompts.TaskDoneReply{Machine: m.Name, From: from, Source: source, Ask: clipMiddle(ask, 500), Text: clipMiddle(text, 1500)})
+		r := prompts.TaskDoneReply{Machine: m.Name, From: from, Source: source, Ask: clipMiddle(ask, 500), Text: clipMiddle(text, 1500)}
+		if ask != "" && source == "" {
+			// The user's own follow-up in the task's session (not a side conversation): a short "done?" gets a short "yes,
+			// all done"; the report of the work is in the turn before, which the judge reads with it (#3111).
+			if _, before := turnExchange(earlier); before != "" && before != text {
+				r.Earlier = clipMiddle(before, 1500)
+			}
+		}
+		out = append(out, r)
 	}
 	return out, sideTurnBlocked
 }
@@ -154,6 +174,32 @@ func (s *Service) lastTurnItems(ctx context.Context, machine, sid string) (items
 		return nil, false
 	}
 	return res.Items, true
+}
+
+// lastTwoTurns are the items of the agent's turn before its latest one (earlier; none when there is none) and of its
+// latest one (last), from one read of its last two turns; ok is false when the node could not be asked.
+func (s *Service) lastTwoTurns(ctx context.Context, machine, sid string) (earlier, last []proto.Item, ok bool) {
+	var res struct {
+		Items []proto.Item `json:"items"`
+	}
+	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	if err := s.call(cctx, machine, DeviceSessionItems, map[string]any{"session_id": sid, "turns": 2}, &res); err != nil {
+		return nil, nil, false
+	}
+	earlier, last = splitLastTurn(res.Items)
+	return earlier, last, true
+}
+
+// splitLastTurn splits items at the last turn's prompt (the last user message not queued, as the node counts turns):
+// all of them are the last turn when no prompt is among them.
+func splitLastTurn(items []proto.Item) (earlier, last []proto.Item) {
+	for i := len(items) - 1; i > 0; i-- {
+		if it := items[i]; it.Role == "user" && it.Kind == proto.KindText && !it.Queued && strings.TrimSpace(it.Text) != "" {
+			return items[:i], items[i:]
+		}
+	}
+	return nil, items
 }
 
 // turnExchange is what a turn's items say: the user's ask (its first user message; "" when none) and the agent's
@@ -234,15 +280,37 @@ func (s *Service) judgeTaskDone(ctx context.Context, t Todo) (taskDoneCheck, err
 		}
 		return c, nil
 	}
-	in := taskDoneInput{Owner: s.owner(ctx), Delivery: s.doneNeedsDelivery(ctx), Title: t.Title, Notes: t.Notes, Replies: replies}
+	in := taskDoneInput{Owner: s.owner(ctx), Language: answerLanguage(s.hello(ctx).Locale), Delivery: s.doneNeedsDelivery(ctx),
+		Title: t.Title, Notes: t.Notes, Replies: replies}
+	in.Deployed = func(d TodoDelivery) TodoDelivery {
+		pr := ""
+		for _, r := range replies {
+			if prs := prLink.FindAllString(r.Text, -1); len(prs) > 0 {
+				pr = prs[len(prs)-1]
+			}
+		}
+		return s.gateDelivery(ctx, t, d, pr)
+	}
+	// What it is judged against is its brief (#3822): the owner's words and the criteria as scope changes left them, not
+	// the latest hand-over prompt's.
+	if brief, ok := s.briefOfTodo(t.ID); ok {
+		in.Brief = &brief
+	}
+	if in.Brief != nil && len(in.Brief.Criteria) > 0 {
+		in.Criteria = in.Brief.Criteria
+	}
 	if t.Supervision != nil {
-		in.Criteria = t.Supervision.DoneWhen
+		if len(in.Criteria) == 0 {
+			in.Criteria = t.Supervision.DoneWhen
+		}
+		// Spot-checking on: the judge checks each criterion too, so a task that passes can close without task_review.
+		in.Checks = len(in.Criteria) > 0 && s.reviewSamplePercent(ctx) < 100
 	}
 	return judgeTaskDoneWith(ctx, s.purposeModel("inbox.judge"), in)
 }
 
-// jsonModel is the one call the done judge makes: a system and a user text in, a JSON answer decoded into out.
-// *ai.Client is the real one; tests and behaviour checks give their own.
+// jsonModel is the one call each single-call judge makes (done, delegation, triage): a system and a user text in, a
+// JSON answer decoded into out. *ai.Client is the real one; tests and behaviour checks give their own.
 type jsonModel interface {
 	JSON(ctx context.Context, system, user string, out any) error
 }
@@ -251,11 +319,16 @@ type jsonModel interface {
 // settings (judgeTaskDone) or written out by a test.
 type taskDoneInput struct {
 	Owner    string                  // how the prompt names the user
+	Language string                  // the user's language for the reason ("" Chinese, answerLanguage)
 	Delivery bool                    // assistant.done_needs_delivery
 	Title    string                  // the todo's title
 	Notes    string                  // what it was handed out with (clipped here)
 	Criteria []string                // a supervised task's done_when
 	Replies  []prompts.TaskDoneReply // its agents' last replies
+	Checks   bool                    // also check each criterion and the delivery (supervise_sample.go)
+	Brief    *TaskBrief              // what was asked when the work was handed out (task_brief.go); nil: none
+	// Deployed checks a delivery said live against the running hub (gateDelivery); nil: as judged.
+	Deployed func(TodoDelivery) TodoDelivery
 }
 
 // taskDoneWithoutModel is the verdict given before any model is asked: a reply from a side conversation with no
@@ -263,16 +336,16 @@ type taskDoneInput struct {
 func taskDoneWithoutModel(replies []prompts.TaskDoneReply, sideTurnBlocked bool) (c taskDoneCheck, ok bool) {
 	c = taskDoneCheck{Replies: len(replies), Signals: doneSignals(replies)}
 	if sideTurnBlocked {
-		c.Verdict, c.Reason = verdictNotDone, verdictWords[verdictNotDone]
+		c.Verdict, c.Reason, c.reasonKey = verdictNotDone, verdictWords[verdictNotDone], checkReasonSideTurn
 		return c, true
 	}
 	if len(replies) == 0 {
-		c.Verdict, c.Reason = verdictUnsure, "没读到 Agent 的回复"
+		c.Verdict, c.Reason, c.reasonKey = verdictUnsure, "没读到 Agent 的回复", checkReasonNoReply
 		return c, true
 	}
 	for _, r := range replies {
 		if cutOff(r.Text) { // its turn was cut off by the model service: not finished, whatever came before (#1516)
-			c.Verdict, c.Reason = verdictNotDone, interruptedSummary
+			c.Verdict, c.Reason, c.reasonKey = verdictNotDone, interruptedSummary, checkReasonInterrupted
 			return c, true
 		}
 	}
@@ -284,15 +357,25 @@ func taskDoneWithoutModel(replies []prompts.TaskDoneReply, sideTurnBlocked bool)
 // It reads nothing else, so a behaviour check can run it on written-out cases.
 func judgeTaskDoneWith(ctx context.Context, m jsonModel, in taskDoneInput) (taskDoneCheck, error) {
 	c := taskDoneCheck{Replies: len(in.Replies), Signals: doneSignals(in.Replies)}
-	system := prompts.RenderTaskDone(prompts.TaskDone{Owner: in.Owner, Delivery: in.Delivery})
-	input := prompts.RenderTaskDoneInput(prompts.TaskDoneInput{Title: in.Title, Prompt: clipMiddle(strings.TrimSpace(in.Notes), 1500),
-		Criteria: in.Criteria, Replies: in.Replies, MergedPR: c.Signals.MergedPR, Build: c.Signals.Build})
+	system := prompts.RenderTaskDone(prompts.TaskDone{Owner: in.Owner, Delivery: in.Delivery, Checks: in.Checks, Language: in.Language})
+	din := prompts.TaskDoneInput{Title: in.Title, Prompt: clipMiddle(strings.TrimSpace(in.Notes), 1500),
+		Criteria: in.Criteria, Replies: in.Replies, MergedPR: c.Signals.MergedPR, Build: c.Signals.Build}
+	if b := in.Brief; b != nil { // held to what was asked, not to the latest hand-over prompt (task_brief.go)
+		if b.Request != nil {
+			din.Asked, din.AskedAt = clipMiddle(b.Request.Text, 600), b.Request.At.UTC().Format("2006-01-02")
+		}
+		for _, d := range (&taskBrief{rec: b.briefRecord, st: briefState{Log: b.Log}}).dropped() {
+			din.Dropped = append(din.Dropped, d.Criterion)
+		}
+	}
+	input := prompts.RenderTaskDoneInput(din)
 	var out struct {
-		Verdict  string `json:"verdict"`
-		Reason   string `json:"reason"`
-		Delivery string `json:"delivery"`
-		Gate     string `json:"gate"`
-		Unblock  string `json:"unblock"`
+		Verdict  string          `json:"verdict"`
+		Reason   string          `json:"reason"`
+		Delivery string          `json:"delivery"`
+		Gate     string          `json:"gate"`
+		Unblock  string          `json:"unblock"`
+		Checks   []autoCheckItem `json:"checks"`
 	}
 	if err := m.JSON(ctx, system, input, &out); err != nil {
 		return c, err
@@ -305,8 +388,21 @@ func judgeTaskDoneWith(ctx context.Context, m jsonModel, in taskDoneInput) (task
 	}
 	c.Reason = clip(oneLine(out.Reason), 40)
 	c.WouldClose = c.Verdict == verdictDone
+	if in.Checks {
+		d := judgedDelivery(out.Delivery, out.Gate, out.Unblock, in.Replies)
+		if !strings.EqualFold(strings.TrimSpace(out.Delivery), deliveryLive) {
+			d.State = cmp.Or(strings.ToLower(strings.TrimSpace(out.Delivery)), deliveryNone) // live only on the judge's own word, never the agent's line alone
+		}
+		if in.Deployed != nil {
+			d = in.Deployed(d)
+		}
+		c.AutoCheck = autoCheckOf(in.Criteria, out.Checks, d.State)
+	}
 	if in.Delivery {
 		d := judgedDelivery(out.Delivery, out.Gate, out.Unblock, in.Replies)
+		if in.Deployed != nil {
+			d = in.Deployed(d) // live only when the running hub has the work (deploy_check.go)
+		}
 		d.At = time.Now()
 		c.Delivery = &d
 		if c.Verdict == verdictDone && !deliveryClosable(d.State) {
@@ -334,9 +430,22 @@ func (s *Service) autoFinishTask(t Todo, work time.Time, worked bool) {
 		return
 	}
 	c, err := s.judgeTaskDone(ctx, t)
+	if err != nil && !ai.IsPaused(err) && !ai.IsNotConfigured(err) && ctx.Err() == nil {
+		// One failed call (a model service hiccup, a reply that was no verdict) is asked once more before the task is
+		// left unjudged (#3111); no model at all is not asked again.
+		s.logf("task %s: done judge: %v (asked again)", t.ID, err)
+		select {
+		case <-time.After(taskDoneRetryAfter):
+			c, err = s.judgeTaskDone(ctx, t)
+		case <-ctx.Done():
+		}
+	}
 	if !s.taskCompletionCurrent(ctx, t, work) {
 		s.logf("task %s: work changed while judged: left open", t.ID)
 		return
+	}
+	if err == nil {
+		s.keepTaskCheck(ctx, t, work, c) // why it is (not) done, on the todo (task_check.go)
 	}
 	if err == nil && c.Delivery != nil && c.Verdict != verdictNotDone {
 		s.setTaskDelivery(ctx, t.ID, *c.Delivery) // where it is held, on its card (delivery.go)
@@ -365,7 +474,7 @@ func (s *Service) autoFinishTask(t Todo, work time.Time, worked bool) {
 	}
 	reason := c.Reason
 	if reason == "" {
-		reason = "做完了"
+		reason = i18n.T(s.lang(ctx), doneReasonFallback)
 	}
 	if !worked {
 		work = t.CreatedAt

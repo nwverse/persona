@@ -6,12 +6,22 @@ nonisolated struct ToolCall: Identifiable, Hashable, Sendable {
     var use: Item
     var result: Item?
     var images: [ImagePayload] = []
+    var results: [Item] = []
+    var agentStatus: String?
 
     var id: String { use.id }
     var name: String { use.toolName ?? "tool" }
     var input: JSONValue { use.toolInput ?? .object([:]) }
-    var isRunning: Bool { result == nil }
-    var isError: Bool { result?.isError ?? false }
+    var isRunning: Bool {
+        if let agentStatus { return !SubagentDelivery.isTerminal(agentStatus) }
+        return result == nil
+    }
+    var isError: Bool { agentStatus == "failed" || agentStatus == "error" || (result?.isError ?? false) }
+    /// What it came to, when the node said (`ToolOutcome`).
+    var outcome: ToolOutcome? { result?.outcome }
+    /// An error that is not the call being denied, refused or interrupted: what it ran failed. The red a row and its
+    /// chip turn; `isError` still says the model got an error back.
+    var failed: Bool { isError && !(outcome?.stopped ?? false) }
 }
 
 nonisolated extension ChatRow {
@@ -168,12 +178,36 @@ nonisolated struct Turn: Identifiable, Hashable, Sendable {
     }
 }
 
+nonisolated enum SubagentDelivery {
+    static func isTerminal(_ status: String?) -> Bool {
+        switch status {
+        case "completed", "failed", "error", "killed", "stopped": true
+        default: false
+        }
+    }
+
+    static func isReceipt(_ item: Item) -> Bool {
+        if let task = item.task, task.kind == "agent" {
+            guard task.status == "running" || task.status == "waiting", task.detail == nil else { return false }
+        }
+        let text = item.text ?? ""
+        return text.hasPrefix("Async agent launched successfully") || text.contains("moved to the background (ID:")
+    }
+
+    static func isWake(_ row: ChatRow) -> Bool {
+        guard case .notice(let item) = row else { return false }
+        return item.kind == .toolResult && item.task?.kind == "agent" && item.wake == true
+    }
+}
+
 /// Background tasks and the calls that started them: a notice names its call by tool_use_id, or only by the task id
 /// the call's result announced ("running in background with ID: …", "Monitor started (task …"). Built with the
 /// rows; a call outside the loaded items is simply not found.
 nonisolated struct TaskIndex: Equatable, Sendable {
     /// A call's notices, oldest first, by the call's tool_use_id.
     var notes: [String: [TaskNote]] = [:]
+    var reports: [String: [Item]] = [:]
+    var agentStatuses: [String: String] = [:]
     /// The call a notice came from (notice item id → tool_use_id).
     var calls: [String: String] = [:]
     /// Calls whose result says they went to the background (they may not have reported back yet).
@@ -199,6 +233,16 @@ nonisolated struct TaskIndex: Equatable, Sendable {
                 if let id = it.toolUseID { uses[id] = it; x.asked.insert(id) }
             case .toolResult:
                 if let id = it.toolUseID { x.answered.insert(id) }
+                if let id = it.toolUseID, let note = it.task, note.kind == "agent" {
+                    x.agentStatuses[id] = note.status ?? ""
+                    x.notes[id, default: []].append(note)
+                    x.calls[it.id] = id
+                    if !SubagentDelivery.isReceipt(it), !(it.text ?? "").isEmpty {
+                        x.reports[id, default: []].append(it)
+                    }
+                    if let task = note.taskID { byTask[task] = id }
+                }
+                if it.task?.kind == "agent", !SubagentDelivery.isReceipt(it) { continue }
                 guard let id = it.toolUseID, let text = it.text, text.contains("background") || text.contains("Monitor started") || text.contains("agentId"),
                       let m = text.firstMatch(of: launched) else { continue }
                 // A subagent that ran to its end says its agentId under its report too (to go on with SendMessage):
@@ -217,6 +261,19 @@ nonisolated struct TaskIndex: Equatable, Sendable {
                 guard let n = it.task, let call = n.toolUseID ?? n.taskID.flatMap({ byTask[$0] }) else { continue }
                 x.notes[call, default: []].append(n)
                 x.calls[it.id] = call
+                if n.kind == "agent", n.status != "event", x.agentStatuses[call] != nil {
+                    x.agentStatuses[call] = n.status ?? ""
+                }
+                if n.kind == "agent", n.status != "event", n.detail?.isEmpty == false {
+                    var report = it
+                    report.kind = .toolResult
+                    report.role = "user"
+                    report.toolUseID = call
+                    report.text = n.detail
+                    report.fullSize = nil
+                    report.isError = n.failed || n.status == "error"
+                    x.reports[call, default: []].append(report)
+                }
                 if x.descriptions[call] == nil, let use = uses[call] {
                     x.descriptions[call] = use.toolInput?["description"]?.string
                     x.startedAt[call] = use.ts
@@ -467,7 +524,7 @@ final class ChatStore {
             // Refs again: a cache written before they named a chat's group of hubs (#1555) sent its pictures to the
             // current group's hub.
             items = Self.withImageRefs(cached.items, key)
-            ids = Set(cached.items.map(\.id))
+            ids = Set(items.map(\.id))
             hasMore = cached.hasMore
             history = cached.history
             covered = cached.covered ?? (cached.items.last?.seq ?? 0)
@@ -548,8 +605,16 @@ final class ChatStore {
 
     func merge(_ new: [Item], backlog: Bool = false, hasMore: Bool? = nil) {
         if backlog || !new.isEmpty { error = nil } // data arrived: a stale "machine is offline" no longer applies
-        // Promotion is monotone, including when overlapping real work takes a promoted fold's place. Retain it on
-        // the replacement items before either kind of overlap removes evidence. Opened folds count too: a repeated
+        // A replayed disk cache can hold an id twice. Keep the newest copy before indexing, but only after collecting
+        // promotion evidence; ids is already a Set, so a count mismatch finds this without scanning every ordinary merge.
+        func newestCopies(_ list: [Item]) -> [Item] {
+            guard list.count > 1 else { return list }
+            var seen = Set<String>()
+            return Array(list.reversed().filter { seen.insert($0.id).inserted }.reversed())
+        }
+        let deduplicated = items.count != ids.count
+        // Promotion is monotone, including when deduplication or overlapping real work takes a promoted fold's place.
+        // Retain it on the replacement items before either kind of overlap removes evidence. Opened folds count too: a repeated
         // folded page can bring authoritative promotion while the UI keeps that work expanded.
         let evidence = (items + Array(opened.values) + new).filter { $0.supervisionUser == true || $0.fold?.supervisionUser == true }
         let promotedIDs = Set(evidence.filter { $0.supervisionUser == true }.map(\.id))
@@ -567,10 +632,14 @@ final class ChatStore {
                 return it
             }
         }
+        if deduplicated {
+            items = newestCopies(items)
+            ids = Set(items.map(\.id))
+        }
         let retained = retainingPromotion(items)
-        var changed = retained != items
+        var changed = deduplicated || retained != items
         if changed { items = retained; settled = nil }
-        let promoted = retainingPromotion(new)
+        let promoted = newestCopies(retainingPromotion(new))
         let batchWork = promoted.filter { $0.isWork && $0.kind != .fold }
         let fresh = promoted.filter { it in
             !stillOpen(it) && !(it.kind == .fold && batchWork.contains { it.folds($0) })
@@ -580,7 +649,7 @@ final class ChatStore {
         // Pages can repeat an id with new metadata or a completed receipt. The new copy wins, but never erases the
         // evidence above. Append-only pushes keep the fast path without building an index.
         let indices = fresh.contains { ids.contains($0.id) } ? Dictionary(uniqueKeysWithValues: items.enumerated().map { ($0.element.id, $0.offset) }) : [:]
-        var inOrder = true
+        var inOrder = !deduplicated // Keeping the last cached copies can move an older line behind a newer one.
         var added: [Item] = []
         for it in Self.withImageRefs(fresh, key) {
             if let i = indices[it.id] {
@@ -936,8 +1005,10 @@ final class ChatStore {
         }
     }
 
-    /// Lazy images learn where to fetch their bytes from, and so do those a fold says its work looked at.
+    /// Lazy images learn where to fetch their bytes from, and so do those a fold says its work looked at. Every way
+    /// items come in (a page, a push, the disk cache, the background sync) passes here, so the view feedback goes too.
     nonisolated static func withImageRefs(_ items: [Item], _ key: SessionKey) -> [Item] {
+        let items = withoutViewFeedback(items)
         guard items.contains(where: { $0.image?.lazy == true || $0.fold?.images?.isEmpty == false }) else { return items }
         return items.map { it in
             var it = it
@@ -971,6 +1042,23 @@ final class ChatStore {
         merge(keep)
         covered = span.to ?? lastSeq
         scheduleRebuild() // also when the page is empty
+    }
+
+    /// The node's `<persona-view-errors>` feedback after the assistant's snapshot (its last rich views failed their
+    /// check) is for the model, not the user's words: an older hub (#4315) gave it as a user item of its own, the line's
+    /// block before the message, or at the start of the message, and the bubble showed its raw tags. Taken out of user
+    /// text; an item left with nothing goes.
+    nonisolated static func withoutViewFeedback(_ items: [Item]) -> [Item] {
+        guard items.contains(where: { $0.role == "user" && $0.kind == .text && ($0.text ?? "").contains("<persona-view-errors") }) else { return items }
+        return items.compactMap { it in
+            guard it.role == "user", it.kind == .text, let text = it.text, text.contains("<persona-view-errors") else { return it }
+            let left = text.replacingOccurrences(of: #"<persona-view-errors\b[^>]*>[\s\S]*?</persona-view-errors>\s*"#,
+                                                 with: "", options: .regularExpression)
+            guard !left.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            var it = it
+            it.text = left
+            return it
+        }
     }
 
     /// Items in transcript order: by line, then by block within the line (ids end in "#<block>"; "#10" after "#2").
@@ -1063,11 +1151,11 @@ final class ChatStore {
 
     nonisolated static func buildRows(_ items: [Item]) -> [ChatRow] {
         let items = compactions(picturesAfterTheirText(items))
-        var results: [String: Item] = [:]
+        var results: [String: [Item]] = [:]
         var images: [String: [ImagePayload]] = [:]
         for it in items {
             guard let tid = it.toolUseID else { continue }
-            if it.kind == .toolResult { results[tid] = it }
+            if it.kind == .toolResult { results[tid, default: []].append(it) }
             if it.kind == .image, let img = it.image { images[tid, default: []].append(img) }
         }
         var rows: [ChatRow] = []
@@ -1087,7 +1175,10 @@ final class ChatStore {
             switch it.kind {
             case .toolUse:
                 flushThoughts(asRows: run.isEmpty)
-                var call = ToolCall(use: it, result: it.toolUseID.flatMap { results[$0] })
+                let deliveries = it.toolUseID.flatMap { results[$0] } ?? []
+                let agent = it.toolName == "Agent" || it.toolName == "Task"
+                var call = ToolCall(use: it, result: deliveries.last, results: agent ? deliveries : [],
+                                    agentStatus: deliveries.last(where: { $0.task?.kind == "agent" }).map { $0.task?.status ?? "" })
                 call.images = it.toolUseID.flatMap { images[$0] } ?? []
                 run.append(.call(call))
             case .thinking:
@@ -1096,6 +1187,11 @@ final class ChatStore {
                 flushThoughts(asRows: run.isEmpty)
                 run.append(.folded(it))
             case .toolResult:
+                if it.task?.kind == "agent", it.wake == true {
+                    flushThoughts(asRows: run.isEmpty)
+                    flushRun()
+                    rows.append(.notice(it))
+                }
                 continue
             case .image where it.toolUseID != nil:
                 continue
@@ -1380,10 +1476,12 @@ nonisolated enum ChatCache {
     /// v12: relayed and automated assistant input retains additive source metadata.
     /// v13: cached tails count user questions, not automatic supervision; discard the old shallow tails.
     /// v14: injected supervision levels and folded promotion are retained, including client evidence on replaced folds.
+    /// v16: tool results carry `outcome` (docs/protocol/protocol.md "Tool outcomes", #4303); older copies have none, and
+    /// their denied or interrupted calls would stay red.
     /// Bump it whenever the item structure or the text the hub gives an item changes.
-    static let folder = "chats-v14"
+    static let folder = "chats-v16"
     /// The folder before, removed on the first launch with this one.
-    private static let previous = "chats-v13"
+    private static let previous = "chats-v15"
 
     /// Once per launch, before the first copy is read or written (a static let runs once, on whichever thread asks first).
     private static let dropOlder: Void = {
@@ -1460,16 +1558,32 @@ nonisolated enum ChatCache {
     /// its first seq would bring back leaves out the rest of that line).
     static func tail(_ items: [Item], turns: Int) -> [Item] {
         var seen = 0
+        var start = 0
         for i in items.indices.reversed() where items[i].role == "user" && items[i].kind == .text
             && items[i].queued != true && items[i].wake != true && Injected.of(items[i]) == nil {
             seen += 1
-            if seen == turns {
-                var start = i
-                while start > 0 && items[start - 1].seq == items[start].seq { start -= 1 }
-                return Array(items[start...])
+            if seen == turns { start = i; break }
+        }
+        guard start > 0 else { return items }
+        var launches: [String: Int] = [:]
+        var question = 0
+        for i in items.indices {
+            let item = items[i]
+            if item.isUserInput, item.queued != true, Injected.of(item) == nil { question = i }
+            if item.kind == .toolUse, item.toolName == "Agent" || item.toolName == "Task", let id = item.toolUseID {
+                launches[id] = question
             }
         }
-        return items
+        var i = items.count - 1
+        while i >= start {
+            let item = items[i]
+            if item.task?.kind == "agent", let call = item.toolUseID ?? item.task?.toolUseID, let launch = launches[call] {
+                start = min(start, launch)
+            }
+            i -= 1
+        }
+        while start > 0 && items[start - 1].seq == items[start].seq { start -= 1 }
+        return Array(items[start...])
     }
 }
 

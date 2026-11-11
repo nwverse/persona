@@ -2,7 +2,7 @@ import SwiftUI
 
 #if os(iOS)
 /// Settings › Appearance › Layout (#2530): how the Agents list draws its agents, each choice showing two agents as the
-/// list would draw them.
+/// list would draw them. Every grouping draws them so, By Repository too (#3753).
 struct LayoutSettingsPage: View {
     private let choice = AgentListDisplayChoice()
 
@@ -22,8 +22,6 @@ struct LayoutSettingsPage: View {
             } footer: {
                 if AppStyle.current.usesBeautifulUI {
                     Text("The BeautifulUI style draws its agents as its own capsules; this choice shows in the other styles and in Compact List.")
-                } else {
-                    Text("By Repository keeps its own tree of worktrees and agents.")
                 }
             }
         }

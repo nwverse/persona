@@ -41,6 +41,7 @@ type Client struct {
 
 	mu      sync.Mutex
 	token   string
+	console string // the developer console this client links out to, when not what the domain says (tests)
 	expires time.Time
 }
 
@@ -223,12 +224,24 @@ func (c *Client) callRetry(ctx context.Context, op, method, path string, in, out
 				}
 			}
 		}
+		if updatesMessage(method) {
+			after = 0 // the short backoff only: a longer wait the server names is the caller's (updatesMessage)
+		}
 		if !idempotent || !retry || !c.waitRetry(ctx, attempt, waits, after) {
 			return giveUp()
 		}
 		waits++
 	}
 	return lastErr
+}
+
+// updatesMessage: a card update (PATCH) or an agent message's append (PUT). Such a call is retried on the short backoff
+// only and does not sit out a longer wait the server names (x-ogw-ratelimit-reset, Retry-After): once the tries are
+// used up, its caller gets the rate-limit error, backs off on RateLimited and sends what is newest by then. The
+// progress tick makes these calls while it holds the run's progress lock, so waiting out a throttle window here would
+// hold back the run's answer.
+func updatesMessage(method string) bool {
+	return method == http.MethodPatch || method == http.MethodPut
 }
 
 // waitRetry applies +/-25% jittered backoff (or a longer wait the server asked for) and reports whether to try once more.
@@ -300,6 +313,7 @@ const (
 
 type sent struct {
 	MessageID string `json:"message_id"`
+	ChatID    string `json:"chat_id"`
 }
 
 // Send posts a message to a user (idType "open_id") or into a chat ("chat_id"); uuid (≤ 50 chars, may be "") makes
@@ -313,6 +327,18 @@ func (c *Client) Send(ctx context.Context, idType, id, msgType, content, uuid st
 	// uuid makes a retried send land once: with it, transient failures are retried; without it, a POST is not.
 	err := c.callRetry(ctx, "send", http.MethodPost, "/open-apis/im/v1/messages?receive_id_type="+url.QueryEscape(idType), in, &out, uuid != "")
 	return out.MessageID, err
+}
+
+// SendUser posts a message to a user by open id, and gives the chat it landed in: the bot's private chat with them,
+// which the platform makes on the first message.
+func (c *Client) SendUser(ctx context.Context, openID, msgType, content, uuid string) (messageID, chatID string, err error) {
+	var out sent
+	in := map[string]any{"receive_id": openID, "msg_type": msgType, "content": content}
+	if uuid != "" {
+		in["uuid"] = uuid
+	}
+	err = c.callRetry(ctx, "send", http.MethodPost, "/open-apis/im/v1/messages?receive_id_type=open_id", in, &out, uuid != "")
+	return out.MessageID, out.ChatID, err
 }
 
 // Reply answers a message (quoting it); inThread puts the answer in the message's thread.

@@ -7,8 +7,40 @@ nonisolated struct RecordingSegment: Codable, Hashable, Sendable {
     var duration: Double
     var sentences: [RecordingSentence]? = nil
     var delivered = false
+    /// Wall-clock start of the segment (rolling recordings); nil for old clips.
+    var startedAt: Date? = nil
+    var kept: RecordingKeep? = nil
 
     static func fileName(_ index: Int) -> String { String(format: "seg-%03d.m4a", index) }
+    var endedAt: Date? { startedAt?.addingTimeInterval(duration) }
+    /// Wall-clock time of a point on the recording timeline that falls in this segment.
+    func wallTime(_ timeline: Double) -> Date? { startedAt?.addingTimeInterval(timeline - start) }
+    func overlaps(_ from: Date, _ to: Date) -> Bool {
+        guard let startedAt, let endedAt else { return false }
+        return startedAt <= to && from <= endedAt
+    }
+}
+
+/// Why a rolling segment is kept past the 6 hour window.
+nonisolated struct RecordingKeep: Codable, Hashable, Sendable {
+    nonisolated enum Reason: String, Codable, Sendable { case heartRate, hrv, mark, mood }
+    var reason: Reason
+    var at: Date
+    var title: String {
+        switch reason {
+        case .heartRate: String(localized: "Elevated heart rate")
+        case .hrv: String(localized: "Low HRV")
+        case .mark: String(localized: "Bookmark")
+        case .mood: String(localized: "Logged mood")
+        }
+    }
+}
+
+/// A wall-clock range the user erased; segments overlapping it never come back.
+nonisolated struct RecordingErase: Codable, Hashable, Sendable {
+    var from: Date
+    var to: Date
+    var valid: Bool { from.timeIntervalSince1970.isFinite && to.timeIntervalSince1970.isFinite && from <= to }
 }
 
 nonisolated struct RecordingSentence: Codable, Hashable, Sendable {
@@ -59,19 +91,56 @@ nonisolated struct RecordingEntry: Codable, Identifiable, Hashable, Sendable {
     var segments: [RecordingSegment] = []
     var marks: [Double] = []
     var endDelivered = false
+    nonisolated enum Kind: String, Codable, Sendable { case clip, rolling }
+    /// nil means a clip.
+    var kind: Kind? = nil
+    /// Tombstone: every segment below this index was pruned and must not come back.
+    var prunedBelow: Int? = nil
+    /// Pruned indexes above a gap (a segment that never arrived), so the gap itself is not tombstoned.
+    var prunedAbove: [Int]? = nil
+    var erased: [RecordingErase]? = nil
+    /// When this device learned the recording stopped (rolling); an empty entry is removed a while after it.
+    var endedAt: Date? = nil
     /// Last local change: the knowledge-base revision (ms) the phone uploads it as (docs/apple/recording.md「Synchronization」).
     var updatedAt: Date? = nil
     /// Set when it was started as a meeting recording (or a watch recording arrived during a calendar event); nil for a note.
     var meeting: RecordingMeeting? = nil
+    /// Persona's part in the meeting and the session that attends (#2981); nil for a note, a watch recording, and a
+    /// meeting recording Persona was never asked to attend (its upload is then exactly as before).
+    var attendance: RecordingAttendance? = nil
 
     /// Monotonic per recording: every save moves `updatedAt` forward, so a later upload always carries a larger one.
     var revision: Int64 { Int64(((updatedAt ?? createdAt).timeIntervalSince1970 * 1000).rounded()) }
 
+    var isRolling: Bool { kind == .rolling }
+    /// Index the next segment would get; also the segment count to report when a rolling recording ends.
+    var nextIndex: Int { max((segments.map(\.index).max() ?? -1) + 1, prunedBelow ?? 0, (prunedAbove?.max() ?? -1) + 1) }
+    func isPruned(_ index: Int) -> Bool { index < (prunedBelow ?? 0) || (prunedAbove?.contains(index) ?? false) }
+    var prunedCount: Int { (prunedBelow ?? 0) + (prunedAbove?.count ?? 0) }
+    func isErased(_ segment: RecordingSegment) -> Bool {
+        (erased ?? []).contains { segment.overlaps($0.from, $0.to) }
+    }
+    /// Segments with a wall-clock time that overlap from...to, sorted by index.
+    func segments(from: Date, to: Date) -> [RecordingSegment] {
+        self.segments.filter { $0.overlaps(from, to) }.sorted { $0.index < $1.index }
+    }
+    /// Bookmarks as wall-clock times; marks outside every segment are skipped.
+    var markTimes: [Date] {
+        marks.compactMap { mark in
+            segments.first { mark >= $0.start && mark < $0.start + $0.duration }?.wallTime(mark)
+        }
+    }
+
     var duration: Double { segments.map { $0.start + $0.duration }.max() ?? 0 }
     var isMeeting: Bool { meeting != nil }
+    /// A meeting being recorded on this phone that Persona attends: asking is open, live lines go to the hub.
+    var attended: Bool {
+        active && isMeeting && source == .phone && attendance?.role.attends == true && attendance?.stopped != .unsupported
+    }
     var displayTitle: String {
         guard title.isEmpty else { return title }
         let when = createdAt.formatted(date: .abbreviated, time: .shortened)
+        if isRolling { return String(localized: "Rolling · \(when)") }
         return isMeeting ? String(localized: "Meeting · \(when)") : String(localized: "Recording · \(when)")
     }
     var sourceTitle: String { source == .watch ? "Apple Watch" : String(localized: "iPhone") }
@@ -80,8 +149,12 @@ nonisolated struct RecordingEntry: Codable, Identifiable, Hashable, Sendable {
         return Set(segments.map(\.index)) == Set(0..<count)
     }
     var transcribedAll: Bool { receivedAll && segments.allSatisfy { $0.sentences != nil } }
+    /// The transcript, in order. Lines the microphone took from Persona's own answers out loud (#2981) are not the
+    /// meeting's and are left out (`RecordingAttendance.spoken`).
     var sentences: [RecordingSentence] {
-        segments.sorted { $0.index < $1.index }.flatMap { $0.sentences ?? [] }
+        let all = segments.sorted { $0.index < $1.index }.flatMap { $0.sentences ?? [] }
+        guard let attendance, !attendance.spoken.isEmpty else { return all }
+        return all.filter { !attendance.spokenBy($0) }
     }
     var transcript: String { sentences.map { "[\(RecordingFormat.clock($0.start))] \($0.text)" }.joined(separator: "\n") }
 }
@@ -93,6 +166,11 @@ nonisolated struct RecordingTransfer: Codable, Sendable {
     var segment: RecordingSegment?
     var total: Int?
     var marks: [Double]
+    /// Started as a meeting recording on the watch (docs/apple/recording.md「Apple Watch」); nil from a note, and from a watch
+    /// with an older app.
+    var meeting: Bool?
+    var kind: RecordingEntry.Kind? = nil
+    var erased: [RecordingErase]? = nil
 
     static let key = "personaRecording"
     var dictionary: [String: Any] {
@@ -102,6 +180,8 @@ nonisolated struct RecordingTransfer: Codable, Sendable {
     init(entry: RecordingEntry, segment: RecordingSegment? = nil) {
         id = entry.id; createdAt = entry.createdAt; locale = entry.locale
         self.segment = segment; total = segment == nil ? entry.expectedSegments : nil; marks = entry.marks
+        meeting = entry.isMeeting ? true : nil
+        kind = entry.kind; erased = entry.erased
     }
     init?(dictionary: [String: Any]?) {
         guard let data = (dictionary?[Self.key] ?? dictionary?[LegacyNames.recordingKey]) as? Data,
@@ -111,9 +191,11 @@ nonisolated struct RecordingTransfer: Codable, Sendable {
     var valid: Bool {
         guard marks.allSatisfy({ $0.isFinite && $0 >= 0 }), marks.count <= 10_000,
               locale.count <= 100, createdAt.timeIntervalSince1970.isFinite else { return false }
+        guard (erased?.count ?? 0) <= 1000, erased?.allSatisfy(\.valid) ?? true else { return false }
         if let segment {
             return segment.index >= 0 && segment.index < 100_000 && segment.start.isFinite && segment.start >= 0
                 && segment.duration.isFinite && segment.duration > 0 && segment.duration <= 600 && total == nil
+                && (segment.startedAt?.timeIntervalSince1970.isFinite ?? true)
         }
         return total.map { $0 >= 0 && $0 <= 100_000 } ?? false
     }

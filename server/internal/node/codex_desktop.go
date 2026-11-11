@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -196,6 +197,10 @@ type codexAppState struct {
 	projectless map[string]bool
 	assigned    map[string]string // thread → project id
 	projects    map[string]codexAppProject
+	sidebar     []string // the threads of both lists that are valid ids, sorted: what codexAppThreads looks up
+
+	namesOnce sync.Once
+	names     map[string]string // a project's folder (real path) → the App's name for it; see folderName
 }
 
 type codexAppProject struct {
@@ -257,6 +262,19 @@ func loadCodexAppState(home string) *codexAppState {
 	for id, a := range raw.Assignments {
 		s.assigned[id] = a.ProjectID
 	}
+	add := func(id string) {
+		if validID(id) && len(s.sidebar) < codexAppSidebarMax {
+			s.sidebar = append(s.sidebar, id)
+		}
+	}
+	for id := range s.projectless {
+		add(id)
+	}
+	for id := range s.assigned {
+		add(id)
+	}
+	slices.Sort(s.sidebar)
+	s.sidebar = slices.Compact(s.sidebar)
 	codexAppStates.Store(home, codexAppStateCache{mtime: st.ModTime(), size: st.Size(), state: s})
 	return s
 }
@@ -291,6 +309,47 @@ func pathWithin(dir, root string) bool {
 	}
 	return dir == root || strings.HasPrefix(dir, root+string(filepath.Separator))
 }
+
+// folderName: the App's name for the project whose folder is root (a real path, as codexProjectRoot gives a
+// repository's root); "" when no project of the App has that folder. The App's sidebar shows a project by the name it
+// keeps, which need not be the folder's: a project the user renamed, a ChatGPT project the App keeps in
+// <CODEX_HOME>/.chatgpt-projects/g-p-<id>. A folder has one name whichever chat asks: of two projects with the same
+// folder, the name that sorts first.
+func (a *codexAppState) folderName(root string) string {
+	if a == nil || root == "" {
+		return ""
+	}
+	a.namesOnce.Do(func() {
+		a.names = map[string]string{}
+		for _, p := range a.projects {
+			name := strings.TrimSpace(p.Name)
+			if name == "" {
+				continue
+			}
+			for _, r := range p.RootPaths {
+				if !filepath.IsAbs(r) {
+					continue
+				}
+				k := folderKey(realPath(filepath.Clean(r)))
+				if old, ok := a.names[k]; !ok || name < old {
+					a.names[k] = name
+				}
+			}
+		}
+	})
+	return a.names[folderKey(root)]
+}
+
+// folderKey: Windows paths do not tell case apart (see pathWithin).
+func folderKey(p string) string {
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(p)
+	}
+	return p
+}
+
+// inNoProject: the App keeps chat thread in no project (its sidebar's chats outside every project).
+func (a *codexAppState) inNoProject(thread string) bool { return a != nil && a.projectless[thread] }
 
 // listed: the thread is one of the App's sidebar chats (put in a project, or a chat without one). Other tools that
 // run the App's own codex binary write "Codex Desktop" rollouts too; the App does not list those.
@@ -379,7 +438,7 @@ func (n *Node) codexDesktopTurn(path string) string {
 var codexTurnMarks sync.Map
 
 // codexOrigin is where a rollout's thread came from, from its first line (session_meta): the Codex App writes
-// originator "Codex Desktop" (source "vscode" for its chats, "exec" for its background runs, a thread_spawn object for
+// originator "Codex Desktop" or "codex_work_desktop" (source "vscode" for its chats, "exec" for its background runs, a thread_spawn object for
 // subagents), the Codex CLI "codex-tui" / "cli", `codex exec` and the SDKs over it "codex_exec" / "codex_sdk_*" with
 // source "exec" (their subagents keep the originator). Only the App's threads go through its IPC bus.
 type codexOrigin struct {
@@ -421,7 +480,7 @@ func readCodexOrigin(path string) codexOrigin {
 	if json.Unmarshal(line, &m) != nil || m.Type != "session_meta" {
 		return codexOrigin{} // not written yet: read again next time
 	}
-	o := codexOrigin{desktop: m.Payload.Originator == "Codex Desktop", cli: m.Payload.Originator == "codex-tui" || m.Payload.Originator == "codex_cli_rs"}
+	o := codexOrigin{desktop: m.Payload.Originator == "Codex Desktop" || m.Payload.Originator == "codex_work_desktop", cli: m.Payload.Originator == "codex-tui" || m.Payload.Originator == "codex_cli_rs"}
 	var source string
 	if json.Unmarshal(m.Payload.Source, &source) != nil {
 		source = "" // an object: a subagent
@@ -455,8 +514,12 @@ func codexDesktopChat(src codexSource) bool { return codexDesktopChatIn(src, nil
 
 // codexDesktopChatIn is codexDesktopChat with the App's presence looked up once per home in a list pass (codexListPass).
 func codexDesktopChatIn(src codexSource, pass *codexListPass) bool {
-	if src.path == "" || !pass.desktopAvailable(src.home) {
+	if !pass.desktopAvailable(src.home) {
 		return false
+	}
+	if src.path == "" { // its rollout is gone: one the App's sidebar lists and its database has (codex_appdb.go)
+		_, ok := codexAppThreadOf(src)
+		return ok
 	}
 	o := readCodexOrigin(src.path)
 	return o.desktop && o.parent == "" && loadCodexAppState(src.home).listed(src.thread)

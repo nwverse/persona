@@ -5,16 +5,62 @@ import (
 	"strings"
 )
 
+// updatePerson is a person's read-modify-write: under personMu it reads people/<id>/meta.json again, lets f change the
+// fields its caller owns and writes it back (putEntity, manual as the caller's), so concurrent writers (an archive run
+// and a history import noting senders, compression linking projects, an edit) each keep what the others wrote. A
+// person not on disk is create's (nil: left alone, nothing is written). f returns whether to write. It returns the
+// person as changed (as written when it wrote), nil when there was none, and whether it was written.
+func (s *Store) updatePerson(id string, manual bool, create func() *Person, f func(p *Person) bool) (*Person, bool, error) {
+	s.personMu.Lock()
+	defer s.personMu.Unlock()
+	p, ok := s.Person(id)
+	if !ok {
+		if create == nil {
+			return nil, false, nil
+		}
+		p = create()
+	}
+	if !f(p) {
+		return p, false, nil
+	}
+	if err := s.putEntity(KindPerson, id, p, &p.Tagging, manual); err != nil {
+		return p, false, err
+	}
+	return p, true, nil
+}
+
+// externalPeople is a roster view; it never removes historical associations from metadata.
+func (e *Engine) externalPeople(ids []string) []string {
+	var out []string
+	for _, id := range ids {
+		p, ok := e.Store.Person(id)
+		if !ok || (p.Status != "ignored" && p.Status != "self") {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 func (e *Engine) notePersonNote(c *Chat, name, note string) {
 	name, note = strings.TrimSpace(name), strings.TrimSpace(note)
 	if name == "" || note == "" {
 		return
 	}
 	for _, pid := range c.People {
-		if p, ok := e.Store.Person(pid); ok && p.Name == name {
-			p.Note = oneLine(note)
-			_ = e.Store.PutPerson(p)
-			e.index(KindPerson, p.ID, p.Name, p.Tagging, p.Note, p.LastSeen)
+		named := false
+		p, written, _ := e.Store.updatePerson(pid, false, nil, func(p *Person) bool {
+			if p.Status == "ignored" {
+				return false
+			}
+			if named = p.Name == name; named {
+				p.Note = oneLine(note)
+			}
+			return named
+		})
+		if named {
+			if written {
+				e.index(KindPerson, p.ID, p.Name, p.Tagging, p.Note, p.LastSeen)
+			}
 			return
 		}
 	}
@@ -24,7 +70,7 @@ func (e *Engine) notePersonNote(c *Chat, name, note string) {
 // and the DM's context.
 func (e *Engine) WritePersonSummary(pid string) {
 	p, ok := e.Store.Person(pid)
-	if !ok {
+	if !ok || p.Status == "ignored" {
 		return
 	}
 	var b strings.Builder

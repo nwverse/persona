@@ -87,14 +87,21 @@ class ChatComposerState(initial: ChatComposerDraft = ChatComposerDraft()) {
         if (draft == sent) { value = TextFieldValue(); attachments = emptyList(); sessionVersion = currentSessionVersion }
     }
 
+    /** Fills an empty composer with a stored draft: the composer is drawn before the draft is read (#4045). */
+    internal fun load(draft: ChatComposerDraft) {
+        value = TextFieldValue(draft.text, TextRange(draft.text.length))
+        attachments = draft.attachments
+        sessionVersion = draft.sessionVersion
+    }
+
     fun editMessage(text: String) {
         beginEdit()
-        val paths = composerImageTags.findAll(text).flatMap { it.groupValues[1].lineSequence() }
-            .map { it.trim() }.filter { it.startsWith('/') }.toList()
-        val plain = text.replace(composerImageTags, "").trimEnd()
+        val paths = composerImagePaths(text)
+        val plain = text.replace(composerImagePlaceholders, "").replace(composerImageTags, "").trimEnd()
         value = TextFieldValue(plain, TextRange(plain.length))
         attachments = paths.mapIndexed { index, path ->
-            ComposerAttachment("restored-$index-$path", path.substringAfterLast('/'), "", true, path)
+            ComposerAttachment("restored-$index-$path", path.substringAfterLast('/'), "", true, path,
+                uploadState = DraftUploadState.Uploaded)
         }
     }
 
@@ -113,7 +120,9 @@ class ChatComposerState(initial: ChatComposerDraft = ChatComposerDraft()) {
     internal fun restoreQueued(text: String) {
         beginEdit()
         val restored = ChatComposerState().apply { editMessage(text) }
-        val words = restored.value.text
+        val words = restored.value.text.let {
+            if (restored.attachments.isNotEmpty() && (it.trim() in composerPhotoStandIns || it.trim() == photosOnlyText)) "" else it
+        }
         val combined = when {
             value.text.isEmpty() -> words
             words.isEmpty() -> value.text
@@ -147,9 +156,26 @@ internal fun quoteComposerPath(path: String): String =
     if (path.any { it.isWhitespace() || it in "'\"\\\$`;&|<>()[]{}*?!" }) "'${path.replace("'", "'\\''")}'" else path
 
 private val composerImageTags = Regex("<attached_images>([\\s\\S]*?)</attached_images>")
+private val composerImagePlaceholders = Regex("\\A(?:\\[Image #\\d+]\\s*)+")
+// Photo-only words sent by current and older clients: wire data, not interface copy.
+private val composerPhotoStandIns = setOf(
+    "Please look at the image", "Please look at the images", "Please look at the photos", "See the images",
+    "请看图片", // i18n-ignore
+    "画像を見てください", // i18n-ignore
+)
+
+private fun composerImagePaths(text: String): List<String> =
+    composerImageTags.findAll(text).flatMap { it.groupValues[1].lineSequence() }
+        .map { it.trim().removePrefix("path:").trim() }
+        .filter { it.startsWith('/') || it.startsWith("~/") }.distinct().toList()
 
 /** [text] with its photos as one [photo] mark ("[Image]"). */
-internal fun composerMessagePreview(text: String, photo: String): String = text.replace(composerImageTags, photo).trim()
+internal fun composerMessagePreview(text: String, photo: String): String {
+    val clean = text.replace(composerImagePlaceholders, "")
+    val plain = clean.replace(composerImageTags, "").trim()
+    return if (composerImagePaths(clean).isNotEmpty() && plain in composerPhotoStandIns) photo
+        else clean.replace(composerImageTags, photo).trim()
+}
 
 @Composable
 internal fun composerMessagePreview(text: String): String =

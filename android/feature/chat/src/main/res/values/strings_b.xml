@@ -5,6 +5,7 @@
     <string name="chat_api_error_retry">Retry</string>
     <string name="chat_api_error_request_id">Request ID</string>
     <string name="chat_api_error_copy_request_id">Copy request ID</string>
+    <string name="chat_api_error_session">Session</string>
     <string name="chat_api_error_copy_session">Copy session</string>
     <string name="chat_api_error_time">Time</string>
     <string name="chat_api_error_copy_raw">Copy original text</string>
@@ -41,6 +42,8 @@
     <string name="chat_chrome_status_unconfirmed">Needs checking</string>
     <string name="chat_chrome_status_needs_you">Waiting for you</string>
     <string name="chat_chrome_status_stopping">Interrupting</string>
+    <string name="chat_chrome_worked_minutes">%1$d min</string>
+    <string name="chat_chrome_worked_hours">%1$d hr %2$d min</string>
     <string name="chat_chrome_more">More actions</string>
     <string name="chat_chrome_actions_title">Session actions</string>
     <string name="chat_chrome_todo">To-do · %1$s</string>
@@ -66,8 +69,10 @@
     <string name="chat_chrome_notice_verify">Check</string>
     <string name="chat_chrome_notice_dismiss">Dismiss</string>
     <string name="chat_chrome_rename_text">The tab name syncs to herdr. The session name uses Claude\'s /rename, so claude --resume on the Mac shows it too.</string>
+    <string name="chat_chrome_rename_text_tern">The tab name syncs to Tern. The session name uses Claude\'s /rename, so claude --resume on the Mac shows it too.</string>
     <string name="chat_chrome_save">Save</string>
     <string name="chat_chrome_tab_name">Tab name (herdr tab)</string>
+    <string name="chat_chrome_tab_name_tern">Tab name (Tern tab)</string>
     <string name="chat_chrome_session_name">Session name</string>
     <string name="chat_chrome_delete">Delete</string>
     <string name="chat_chrome_peers_title">Agents in this space</string>
@@ -268,6 +273,13 @@
     <string name="chat_modes_auto_detail">Judges the risk itself and just does the safe things</string>
     <string name="chat_modes_bypass">Allow everything</string>
     <string name="chat_modes_bypass_detail">Never asks; only when starting a new one</string>
+    <string name="chat_modes_header">Permission mode: %1$s</string>
+    <string name="chat_modes_unknown">Unknown</string>
+    <string name="chat_modes_bypass_detail_running">Edits files and runs commands without asking</string>
+    <string name="chat_modes_confirm_bypass_title">Allow everything?</string>
+    <string name="chat_modes_confirm_leave_title">Leave Allow everything?</string>
+    <string name="chat_modes_confirm_leave_action">Switch to %1$s</string>
+    <string name="chat_modes_confirm_leave_text">This agent wasn\'t started with Allow everything, so it can\'t be switched back to it from here.</string>
     <string name="chat_modes_effort_minimal">Minimal</string>
     <string name="chat_modes_effort_low">Low</string>
     <string name="chat_modes_effort_medium">Medium</string>
@@ -302,6 +314,9 @@
     <string name="chat_modes_section_effort">Thinking effort</string>
     <string name="chat_modes_section_model">Model</string>
     <string name="chat_modes_model_note">After /model goes out, Claude on the computer switches. If the chat has a cache it may ask first, and that shows here for you to confirm.</string>
+    <string name="chat_ultracode_subtitle">Runs every task as a multi-agent workflow · uses a lot of quota · this session only</string>
+    <string name="chat_ultracode_pending">Applies next turn</string>
+    <string name="chat_ultracode_pending_other">A change is queued for the next turn</string>
     <string name="chat_port_desc">Port %1$d</string>
     <string name="chat_port_desc_titled">Port %1$d, %2$s</string>
     <string name="chat_port_desc_gone">Port %1$d, no longer listening</string>
@@ -441,4 +456,11 @@
     <string name="chat_doc_rtf">RTF document</string>
     <string name="chat_doc_pdf">PDF document</string>
     <string name="chat_doc_other">Document</string>
+    <string name="chat_turn_fix_not_logged_in">Model not connected: Claude Code isn\'t signed in</string>
+    <string name="chat_turn_fix_not_logged_in_detail">Sign in once on that computer, or use an API key instead.</string>
+    <string name="chat_turn_fix_auth_failed">Model not connected: the key is wrong</string>
+    <string name="chat_turn_fix_auth_failed_detail">The key is wrong or has expired; use one that works.</string>
+    <string name="chat_turn_fix_model_route">Model not connected: this model can\'t be used</string>
+    <string name="chat_turn_fix_model_route_detail">The model name is wrong, or the model isn\'t available right now; try another one.</string>
+    <string name="chat_turn_fix_action">Fix it</string>
 </resources>

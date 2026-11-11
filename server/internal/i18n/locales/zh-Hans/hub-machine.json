@@ -3,9 +3,11 @@
   "deploy_upgrade_first": "请先在这台电脑上升级一次 node 服务，之后即可在这里远程更新",
   "deploy_offline": "这台电脑不在线，连上以后再更新",
   "node_no_model_config": "这台电脑的 node 还不支持统一模型配置，请更新 node",
-  "node_protocol_old": "这台电脑上的 node 协议比管理者旧。请更新 node",
-  "node_protocol_new": "这台电脑上的 node 需要更新的管理者。请更新 hub",
+  "node_protocol_old": "这台电脑上的 node 协议比助手旧。请更新 node",
+  "node_protocol_new": "这台电脑上的 node 需要更新的助手。请更新 hub",
   "done": "完成了",
   "node_no_engine_hosts": "这台电脑的 node 还不支持选择引擎新建会话，请更新 node",
-  "node_no_secret_run": "这台电脑的 node 还不支持密码卡片执行命令，请更新 node"
+  "node_no_secret_run": "这台电脑的 node 还不支持密码卡片执行命令，请更新 node",
+  "node_no_assistant_config_dir": "这台电脑的 node 还不支持选择助手配置目录，请更新 node",
+  "node_no_secret_env": "这台电脑的 node 还不能把密钥交给 Agent 启动：请更新 node，并以常驻方式运行（Persona Link，或 personad node --attach）"
 }

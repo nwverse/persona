@@ -1,11 +1,47 @@
 import { describe, expect, it } from "vitest";
-import { checkCount, checklist, latestReview, progressLine, reportLine, reviewBadge, reviewState, type Supervision } from "./supervision";
+import { checkCount, checklist, latestReview, parkedLine, progressLine, reportLine, reportText, reviewBadge, reviewState, reviewVerdictLabel, type Supervision } from "./supervision";
 import { todoStatusLabel, type Todo } from "./todos";
 
 const base: Todo = { id: "todo_1", title: "部署 hub", created_at: "2026-11-05T08:00:00Z", updated_at: "2026-11-05T08:00:00Z" };
 const sup = (s: Partial<Supervision>): Supervision => ({ supervisor: "main", done_when: ["PR 合并到 master", "截图贴进 PR"], ...s });
 
 describe("supervision", () => {
+  it("uses live per-criterion state ahead of stale reviews, in done_when order", () => {
+    const s = sup({
+      criteria: [
+        { criterion: "截图贴进 PR", state: "not_met", evidence: "dark screenshot missing", at: "2026-11-10T10:00:00Z", by: "supervisor:main" },
+        { criterion: "PR 合并到 master", state: "met", evidence: "pull/7 merged", at: "2026-11-10T09:00:00Z", by: "agent:box/s1" },
+      ],
+      reviews: [{ at: "old", verdict: "rework", checks: [{ criterion: "PR 合并到 master", met: false }] }],
+    });
+    expect(checklist(s).map((c) => [c.criterion, c.mark])).toEqual([["PR 合并到 master", "met"], ["截图贴进 PR", "missing"]]);
+    expect(checklist(s)[0]).toMatchObject({ evidence: "pull/7 merged", at: "2026-11-10T09:00:00Z", by: "agent:box/s1" });
+    expect(checkCount(s)).toBe("1/2");
+    s.criteria![1].state = "pending";
+    expect(checkCount(s)).toBe("0/2");
+    expect(checklist(sup({ criteria: [] })).map((c) => c.mark)).toEqual(["open", "open"]);
+    // Reviews may describe what a task was for when no done_when was defined.
+    expect(checkCount(sup({ done_when: [], criteria: [], reviews: [
+      { at: "old", verdict: "accepted", checks: [{ criterion: "answer delivered", met: true, evidence: "posted" }] },
+    ] }))).toBe("1/1");
+  });
+  it("says a parked task is parked, until when and why (#3804)", () => {
+    const parked = { reason: "设计组要先定图标", until: "2026-11-14T09:00:00Z", waiting_on: "someone_else" as const, count: 1 };
+    const todo = { ...base, supervision: sup({ state: "parked", parked }) };
+    expect(reviewState(todo)).toBe("parked");
+    expect(reviewBadge(todo)).toEqual({ label: "已搁置", tone: "muted" });
+    expect(parkedLine(todo)).toMatch(/^搁置到 .*2026.* · 设计组要先定图标$/);
+    expect(reviewVerdictLabel("parked")).toBe("已搁置");
+    // closed, or without what it waits for (its agent works again): not parked
+    expect(reviewState({ ...todo, done_at: "2026-11-12T09:00:00Z" })).toBe("");
+    expect(parkedLine({ ...todo, done_at: "2026-11-12T09:00:00Z" })).toBeUndefined();
+    expect(reviewState({ ...base, supervision: sup({ state: "parked" }) })).toBe("");
+    expect(parkedLine({ ...base, supervision: sup({}) })).toBeUndefined();
+    expect(parkedLine(undefined)).toBeUndefined();
+    // a time that cannot be read: the reason alone
+    expect(parkedLine({ ...base, supervision: sup({ state: "parked", parked: { ...parked, until: "" } }) })).toBe("已搁置 · 设计组要先定图标");
+  });
+
   it("says the agent's latest report in a line", () => {
     expect(progressLine(undefined)).toBeUndefined();
     expect(progressLine(sup({}))).toBeUndefined();
@@ -15,6 +51,19 @@ describe("supervision", () => {
     expect(progressLine(sup({ progress: { kind: "question", step: 2, steps: 5, text: "要不要停写？" } }))).toBe("问 Persona：要不要停写？");
     expect(reportLine("blocked", "等 CI")).toBe("卡住了：等 CI");
     expect(reportLine("done", "PR 已合并")).toBe("说做完了：PR 已合并");
+  });
+
+  it("words the report in the hub's paraphrase when it has one, and keeps the original for the details (#3181)", () => {
+    const progress = { kind: "progress" as const, step: 3, steps: 5, text: "Ran the **migration** on staging: 41 tables moved", line: "迁移跑完，41 张表已搬" };
+    expect(progressLine(sup({ progress }))).toBe("第 3/5 步 · 迁移跑完，41 张表已搬");
+    expect(progressLine(sup({ progress: { ...progress, kind: "question", line: "先灰度还是直接全量" } }))).toBe("问 Persona：先灰度还是直接全量");
+    // no line yet, no model, or an older hub: the agent's words, as before
+    expect(progressLine(sup({ progress: { ...progress, line: undefined } }))).toBe("第 3/5 步 · Ran the **migration** on staging: 41 tables moved");
+    expect(progressLine(sup({ progress: { ...progress, line: "  " } }))).toBe("第 3/5 步 · Ran the **migration** on staging: 41 tables moved");
+    // the details: the whole report when the hub kept it apart, else the text
+    expect(reportText(sup({ progress: { ...progress, detail: "Ran the **migration**:\n\n- 41 tables moved" } }))).toBe("Ran the **migration**:\n\n- 41 tables moved");
+    expect(reportText(sup({ progress }))).toBe("Ran the **migration** on staging: 41 tables moved");
+    expect(reportText(sup({}))).toBeUndefined();
   });
 
   it("has no badge for a task that is not supervised (an older hub)", () => {

@@ -28,7 +28,11 @@ import UserNotifications
         guard !started else { return }
         started = true
         RecordingActivity.shared.start()
+        MinutesRelay.shared.start()
         capture.onInterruptionNotResumed = { MeetingRecorder.notifyPaused() }
+        // However a meeting stops: nothing more is said in it, and its questions go (#2981).
+        capture.onStopping = { MeetingAsk.shared.ended($0) }
+        MeetingLive.shared.start()
         // A call that ended while the app was away (or never said so): coming back carries on, unless another app's audio
         // (a VoIP call without CallKit, still going) holds the route: taking the session would cut into that call.
         NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { @Sendable _ in
@@ -49,14 +53,26 @@ import UserNotifications
     /// Starts a meeting recording named after the calendar event happening now (a dated "Meeting" without one). In front
     /// (`inForeground`), the Recordings page opens (unless the caller opened it: `openPage`), and the calendar is asked
     /// for once if it never was, after the recording has begun, so the prompt costs no seconds of the meeting.
+    /// `attendance`: Persona's part (#2981), as picked on the Recordings page; nil (the drawer, Siri, the Control, the Action
+    /// button) starts with the hub's default role and the session picked last (`MeetingAttendees.defaultAttendance`).
     @discardableResult
-    func startMeeting(inForeground: Bool, openPage: Bool? = nil) async -> Outcome {
+    func startMeeting(inForeground: Bool, openPage: Bool? = nil, attendance: RecordingAttendance? = nil) async -> Outcome {
         if openPage ?? inForeground { Self.openRecordings() }
         guard capture.state == .idle else { return .alreadyRecording }
         let meeting = await MeetingCalendar.meetingOffMain() ?? RecordingMeeting()
-        await capture.start(locale: Self.locale, input: RecordingInput.chosen, title: meeting.title ?? "", meeting: meeting)
+        let picked = attendance != nil
+        let attendance = attendance ?? MeetingAttendees.defaultAttendance(AppModel.shared)
+        await capture.start(locale: Self.locale, input: RecordingInput.chosen, title: meeting.title ?? "", meeting: meeting,
+                            playsAloud: attendance.role.speaks)
         guard capture.state == .recording, let id = capture.recordingID else {
             return .failed(capture.error ?? String(localized: "Can't open the microphone. Try again later."))
+        }
+        // Off leaves the recording exactly as it was before attendance existed. Attending, the hub hears of it at once.
+        if attendance.role.attends {
+            RecordingLibrary.shared.change(id) { $0.attendance = attendance }
+            // Only a pick is remembered: a start with the default keeps the one picked last.
+            if picked { MeetingAttendees.remember(attendance.key, title: attendance.sessionTitle) }
+            RecordingSync.shared.attendanceChanged(id)
         }
         RecordingActivity.shared.refresh()
         Haptics.success()
@@ -78,6 +94,46 @@ import UserNotifications
         guard let id = capture.recordingID, recordingID == nil || recordingID == id.uuidString else { return }
         _ = capture.stop()
         finishInBackground(id)
+    }
+
+    /// The activity's Ask Persona: asks about what was just said.
+    func ask(recordingID: String?) {
+        guard let id = capture.recordingID, recordingID == nil || recordingID == id.uuidString,
+              let entry = RecordingLibrary.shared.entry(id) else { return }
+        MeetingAsk.shared.ask(entry)
+        Haptics.tap()
+    }
+
+    /// Persona's part in the meeting being recorded changes (the page's picker; the activity's Turn Off): from now on the
+    /// role applies, and the hub hears of it before any more lines or questions go.
+    func setRole(_ role: MeetingAttendance, recordingID: String?) {
+        guard let id = capture.recordingID, recordingID == nil || recordingID == id.uuidString,
+              let entry = RecordingLibrary.shared.entry(id), entry.isMeeting, entry.source == .phone else { return }
+        guard (entry.attendance?.role ?? .off) != role else { return }
+        let at = capture.timeline
+        // Turned on for the first time mid-meeting: the preferred session, attending from now (what came before is not sent).
+        let fresh = MeetingAttendees.defaultAttendance(AppModel.shared, role: role)
+        RecordingLibrary.shared.change(id) { e in
+            var a = e.attendance ?? RecordingAttendance(role: .off, session: fresh.session, sessionTitle: fresh.sessionTitle)
+            a.set(role, at: at)
+            e.attendance = a
+        }
+        capture.setPlaysAloud(role.speaks)
+        if !role.speaks { MeetingSpeaker.shared.stop() }
+        RecordingSync.shared.attendanceChanged(id)
+    }
+
+    /// Another session attends the meeting being recorded.
+    func setSession(_ candidate: MeetingAttendees.Candidate, recordingID: UUID) {
+        guard capture.recordingID == recordingID else { return }
+        RecordingLibrary.shared.change(recordingID) { e in
+            guard var a = e.attendance else { return }
+            a.session = candidate.main ? nil : candidate.key.path
+            a.sessionTitle = candidate.title
+            e.attendance = a
+        }
+        MeetingAttendees.remember(candidate.main ? nil : candidate.key, title: candidate.title)
+        RecordingSync.shared.attendanceChanged(recordingID)
     }
 
     func addMark(recordingID: String?) {
@@ -107,6 +163,7 @@ import UserNotifications
     /// have no route there; the recording runs anyway). Launched by the home screen's menu or a Control, the app has no
     /// shell yet: it tries again for a few seconds.
     static func openRecordings() {
+        RecordingLivePresenter.shared.open() // a sheet swiped away on the page already in front comes back (`recordingLiveSheet`)
         let model = AppModel.shared
         model.shellSettings = false
         model.selectedTab = .assistant
@@ -144,11 +201,12 @@ import UserNotifications
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "recording-paused", content: content, trigger: nil))
     }
 
-    /// A watch recording's first segment or end arrived: one made during a calendar event is that meeting's (the watch
-    /// has no calendar). Recordings already named or tagged stay as they are.
+    /// A watch recording's first segment or end arrived: one made during a calendar event is that meeting's, named after
+    /// it (the watch has no calendar); a meeting started on the watch keeps being one without an event. Recordings
+    /// already named or matched stay as they are.
     static func tagWatchRecording(_ id: UUID, at date: Date) {
-        guard let entry = RecordingLibrary.shared.entry(id), entry.meeting == nil, entry.title.isEmpty,
-              let meeting = MeetingCalendar.meeting(at: date) else { return }
+        guard let entry = RecordingLibrary.shared.entry(id), entry.meeting?.eventID == nil, entry.meeting?.title == nil,
+              entry.title.isEmpty, let meeting = MeetingCalendar.meeting(at: date) else { return }
         RecordingLibrary.shared.change(id) { entry in
             entry.title = meeting.title ?? ""
             entry.meeting = meeting

@@ -6,7 +6,8 @@
 // The pure parts (filters, sections, labels, the "Hand to AI" message, Feishu message parts) are plain functions so the
 // tests can run them without a DOM.
 
-import { itemHeaders, otherManager, sameManager, stampedHeaders } from "./manager-choice";
+import { chosenManager, itemHeaders, otherManager, sameManager, stampedHeaders } from "./manager-choice";
+import { scoped, useScope } from "./current-assistant";
 import { formatDate, t } from "../i18n";
 import { useEffect, useRef, useSyncExternalStore } from "react";
 import { api, ApiError, enc, errorText, getToken } from "./api";
@@ -16,6 +17,7 @@ import { connectorOpenTitle } from "./connectors";
 import { contextBody } from "./context-body";
 import { larkPath } from "./lark-accounts";
 import { baseName } from "./format";
+import { conversationPage } from "./conversation-page";
 import type { Route } from "./router";
 import { isResumed } from "./reconnect";
 import { sameValue } from "./stable-lines";
@@ -269,6 +271,12 @@ export function isLark(it: InboxItem): boolean {
   return it.source === "lark";
 }
 
+/** Lark in the filter chips and source groups: the Lark gateway's items and lark-cli's ("Lark · my messages") are one
+ *  "Lark", so the list never shows two Lark sources side by side. */
+export function isLarkSource(it: InboxItem): boolean {
+  return isLark(it) || it.source === "larkcli";
+}
+
 /** The thread as people write it (example-org/example-repo#12), undefined when it is only an id. */
 export function connectorReference(it: InboxItem): string | undefined {
   const t = it.connector?.thread;
@@ -460,6 +468,8 @@ export const KIND_FILTERS: { key: string; label: string }[] = [
   { key: "mention", label: AT_ME },
   { key: "dm", label: t("lib-inbox.kind_dm") },
   { key: "group", label: t("lib-inbox.kind_group") },
+  { key: "bot", label: t("lib-inbox.kind_bot") },
+  { key: "doc", label: t("lib-inbox.filter_doc") },
   { key: "mail", label: t("lib-inbox.kind_mail") },
   { key: "agent", label: "Agent" },
 ];
@@ -470,12 +480,12 @@ function hasText(fields: (string | undefined)[], query: string): boolean {
 }
 
 export function matches(it: InboxItem, f: InboxFilter): boolean {
-  if (f.source === "feishu" && !isLark(it)) return false;
+  if (f.source === "feishu" && !isLarkSource(it)) return false;
   if (f.source && f.source !== "feishu" && it.account !== f.source && it.mail?.account_id !== f.source) return false;
   if (f.kind === "agent") return false; // only the waiting agents
   if (f.folder && !inFolderFilter(it, f.folder)) return false;
   if (f.kind) {
-    const ok = it.kind === f.kind || (f.kind === "group" && it.kind === "bot") || (f.kind === "mention" && (it.kind === "doc" || (it.kind === "moment" && kindLabel(it) === AT_ME)));
+    const ok = it.kind === f.kind || (f.kind === "mention" && (it.kind === "doc" || (it.kind === "moment" && kindLabel(it) === AT_ME)));
     if (!ok) return false;
   }
   return hasText([it.title, it.sender, it.preview, it.summary], f.query);
@@ -503,15 +513,15 @@ export function sections(items: InboxItem[], f: InboxFilter): InboxSections {
   return out;
 }
 
-/** The sidebar badge: open items that need the user. */
+/** The sidebar badge: unread open items in Needs you; reading never completes them. */
 export function badgeCount(items: InboxItem[]): number {
-  return items.filter((it) => !isDone(it) && statusOf(it) === "action").length;
+  return items.filter((it) => !isDone(it) && !it.read && statusOf(it) === "action").length;
 }
 
 /** The connectors with items in the list (GitHub…), one filter chip each, in the order they first come. */
 export function connectorSources(items: InboxItem[]): { id: string; name: string }[] {
   const seen = new Map<string, string>();
-  for (const it of items) if (it.connector && !seen.has(it.account)) seen.set(it.account, it.account_name || it.source);
+  for (const it of items) if (it.connector && !isLarkSource(it) && !seen.has(it.account)) seen.set(it.account, it.account_name || it.source);
   return [...seen].map(([id, name]) => ({ id, name }));
 }
 
@@ -552,7 +562,7 @@ export function interactionAsk(ix: Interaction): string {
     case "question":
       return ix.questions?.[0]?.question || ix.summary || "";
     case "permission":
-      return ix.summary || str(input?.description) || str(input?.command) || ix.tool_name || "";
+      return ix.summary || str(input?.description) || str(input?.command) || ix.tool_title || ix.tool_name || "";
     case "screen":
       return ix.dialog?.question || ix.summary || "";
     case "elicitation":
@@ -573,11 +583,14 @@ export function waitingAgents(interactions: Interaction[], sessions: Record<stri
     .sort((a, b) => byTime(a.created_at, b.created_at) || a.id.localeCompare(b.id));
 }
 
-/** A conversation's page: the assistant's are in Persona (/persona/<sid>), an agent's is /s/<machine>/<sid>. */
-export function conversationRoute(mid: string, sid: string, sessions: Record<string, Session[]>, assistant: AssistantInfo | null): Route {
+/** A conversation's page: the assistant's are in Persona (/persona/<sid>, naming its computer and manager with several
+ *  assistants: lib/conversation-page.ts), an agent's is /s/<machine>/<sid>. `manager`: whose it is when the row doesn't
+ *  say (an inbox item's). */
+export function conversationRoute(mid: string, sid: string, sessions: Record<string, Session[]>, assistant: AssistantInfo | null, manager?: string): Route {
   const s = (sessions[mid] ?? []).find((x) => x.session_id === sid);
-  const isAssistant = s?.assistant || (assistant?.machine_id === mid && assistant.conversations.some((c) => c.session_id === sid));
-  return isAssistant ? { name: "persona", sid } : { name: "session", mid, sid };
+  const own = assistant?.machine_id === mid && assistant.conversations.some((c) => c.session_id === sid);
+  // the current assistant's own list has it: the current one's
+  return s?.assistant || own ? conversationPage(sid, mid, s?.manager ?? manager ?? (own ? chosenManager() ?? undefined : undefined)) : { name: "session", mid, sid };
 }
 
 // ── Hand to AI ───────────────────────────────────────────
@@ -650,7 +663,7 @@ export interface LarkMessage {
   is_read?: boolean;
   badge_count?: number;
   parts?: LarkPart[];
-  reply_to?: { id?: string; sender_name?: string; text?: string; recalled?: boolean; retained?: boolean };
+  reply_to?: { id?: string; sender_name?: string; text?: string; parts?: LarkPart[]; recalled?: boolean; retained?: boolean };
   sending?: boolean;
   failed?: boolean;
   client_id?: string;
@@ -1725,9 +1738,11 @@ export function useInbox<T>(select: (s: InboxState) => T): T {
   return useSyncExternalStore(subscribe, read, read);
 }
 
-/** How many unhandled "Needs you" items the inbox has (the sidebar's badge). */
+/** How many unread open items the inbox has (the sidebar's badge). */
 export function useInboxBadge(): number {
-  return useInbox((s) => badgeCount(s.items));
+  // the current assistant's, with several (docs/assistant/managers.md "Clients")
+  const scope = useScope();
+  return useInbox((s) => badgeCount(scoped(s.items, scope)));
 }
 
 /** Tests only: back to an empty, unstarted list. */

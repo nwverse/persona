@@ -9,7 +9,11 @@ struct MacTodosPage: View {
     @State private var showCreate = false
     @State private var creatingTitle = ""
     @State private var creatingNotes = ""
-    @State private var expandedDone = false
+    /// Folded sections the user opened (#3206: Other open, Shelved, Done start folded).
+    @State private var unfolded: Set<TodoSection> = []
+    /// Restores from Shelved kept on this device (`TodoRestores`), and the moment the sections are read at.
+    @State private var restored = TodoRestores.load()
+    @State private var clock = Date.now
 
     @AppStorage("mac.todos.listWidth") private var listWidth: Double = Theme.Size.macTodosListIdeal
     /// List or calendar, and the calendar's day / week / month (#2029): the Mac starts on the week.
@@ -23,7 +27,7 @@ struct MacTodosPage: View {
     @Environment(\.tabIsActive) private var inFront
 
     private var allTodos: [TodoItem] {
-        let lookup = TodosLogic.makeSessionLookup(AppModel.shared.allSessions(inFront: inFront))
+        let lookup = TodosLogic.makeSessionLookup(AppModel.shared.sessionsNow)
         return TodosLogic.sortTodos(store.todos, lookup: lookup)
     }
 
@@ -33,6 +37,19 @@ struct MacTodosPage: View {
 
     private var doneList: [TodoItem] {
         allTodos.filter { $0.isDone && matchesQuery($0) }
+    }
+
+    /// The list by status section (docs/assistant/todo-status-sop.md), related to-dos merged into one row.
+    private var triaged: TodoTriageResult {
+        let lookup = TodosLogic.makeSessionLookup(AppModel.shared.allSessions(inFront: inFront))
+        return TodoTriageLogic.triageTodos(store.todos.filter(matchesQuery), lookup: lookup, now: clock, restored: restored)
+    }
+
+    /// A folded section is open when the user opened it, while searching, or (Other open) when nothing above it shows.
+    private func isFolded(_ section: TodoSection, _ result: TodoTriageResult) -> Bool {
+        guard section.startsFolded, !unfolded.contains(section), !isSearching else { return false }
+        let openEmpty = [TodoSection.waiting, .working, .justDone, .pr].allSatisfy { result.groups($0).isEmpty }
+        return !(section == .other && openEmpty)
     }
 
     /// Whether the query narrows the list. The field keeps the raw text verbatim; a whitespace-only
@@ -167,26 +184,55 @@ struct MacTodosPage: View {
         VStack(spacing: 0) {
             TodosModeBar(view: $viewMode, mode: $calendarMode)
             searchField
+            let result = triaged
             List(selection: $selectedTodoID) {
-                if !(openList.isEmpty && doneList.isEmpty) {
-                    if !openList.isEmpty {
-                        Section("Open · \(openList.count)") {
-                            ForEach(openList) { todo in
-                                row(todo)
-                            }
-                        }
-                    }
-
-                    if !doneList.isEmpty {
-                        Section {
-                            DisclosureGroup(isExpanded: $expandedDone) {
-                                ForEach(doneList) { todo in
-                                    row(todo)
+                if !result.isEmpty {
+                    Text("\(result.open) open · \(result.shelved) shelved · \(result.finished) done")
+                        .font(Theme.Font.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    ForEach(TodoSection.allCases, id: \.self) { section in
+                        let groups = result.groups(section)
+                        if !groups.isEmpty {
+                            let folded = isFolded(section, result)
+                            Section {
+                                if !folded {
+                                    ForEach(groups) { group in
+                                        if group.related.isEmpty {
+                                            row(group.lead, section: group.section)
+                                        } else {
+                                            DisclosureGroup {
+                                                ForEach(group.related) { row($0, section: group.triage[$0.id]?.section) }
+                                            } label: {
+                                                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                                                    row(group.lead, section: group.section)
+                                                    Text("\(group.related.count) related")
+                                                        .font(Theme.Font.caption)
+                                                        .foregroundStyle(.secondary)
+                                                        .lineLimit(1)
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
-                            } label: {
-                                Text("Done · \(doneList.count)")
-                                    .font(Theme.Font.sectionHeader)
-                                    .foregroundStyle(.secondary)
+                            } header: {
+                                Button {
+                                    guard section.startsFolded else { return }
+                                    if unfolded.contains(section) { unfolded.remove(section) } else { unfolded.insert(section) }
+                                } label: {
+                                    HStack(spacing: Theme.Space.xs) {
+                                        Text("\(section.title) · \(result.todoCounts[section] ?? groups.count)")
+                                            .font(Theme.Font.sectionHeader)
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                        if section.startsFolded {
+                                            Image(systemName: folded ? Theme.Icon.disclosure : Theme.Icon.expand)
+                                                .font(Theme.Font.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                }
+                                .buttonStyle(.plain)
                             }
                         }
                     }
@@ -205,9 +251,12 @@ struct MacTodosPage: View {
                     )
                 }
             }
-            // A done-only search must not leave the matching group hidden behind the collapsed disclosure (#3474).
-            .onChange(of: query) { _, _ in
-                expandedDone = SearchExpansion.doneExpanded(query: query, hasDoneMatches: !doneList.isEmpty, current: expandedDone)
+            // a minute's tick moves to-dos across the 24 h / 48 h lines (a search opens folded sections, #3474)
+            .task(id: inFront) {
+                while inFront, !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(60))
+                    clock = .now
+                }
             }
         }
         // In the list column's own title row, at its trailing edge, as the Agents list's buttons (#1223, #2318): as a
@@ -224,7 +273,7 @@ struct MacTodosPage: View {
         }
     }
 
-    private func row(_ todo: TodoItem) -> some View {
+    private func row(_ todo: TodoItem, section: TodoSection? = nil) -> some View {
         let lookup = TodosLogic.makeSessionLookup(AppModel.shared.allSessions(inFront: inFront))
         let status = TodosLogic.todoStatus(todo, lookup: lookup)
         let urgent = TodosLogic.mostUrgentAgent(todo, lookup: lookup)
@@ -265,7 +314,7 @@ struct MacTodosPage: View {
                         StatusDot(state: urgent?.status ?? (status == .done ? .idle : .unknown), size: Theme.Size.dotS)
                         Text(todo.statusLabel(status))
                             .font(Theme.Font.labelStrong)
-                            .foregroundStyle(status.todoTone.text)
+                            .foregroundStyle(todo.shownState(status).todoTone.text)
                         if !activeAgents.isEmpty {
                             Text("· \(activeAgents.count) agents")
                                 .font(Theme.Font.caption)
@@ -296,6 +345,12 @@ struct MacTodosPage: View {
         .buttonStyle(.plain)
         .tag(todo.id)
         .contextMenu {
+            if section == .shelved {
+                Button(String(localized: "Restore")) {
+                    clock = .now
+                    restored = TodoRestores.restore([todo.id], now: clock)
+                }
+            }
             Button(todo.isDone ? String(localized: "Reopen") : String(localized: "Done [Extension System Presentation c0b3fb]")) {
                 store.toggleDone(todo)
             }
