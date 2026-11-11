@@ -70,7 +70,9 @@ func (e *Engine) RefreshTopics(ctx context.Context, max int) int {
 		e.retries().topics.clear(key)
 		tried.Add(1)
 		return true
-	}, func(i int, p any) { e.topicRetryLater(KindTopic+"/"+dirty[i].Slug, fmt.Errorf("panic: %v", p), "merge") })
+	}, func(i int, p any) {
+		e.topicRetryLater(KindTopic+"/"+dirty[i].Slug, fmt.Errorf("panic: %v", p), "merge")
+	})
 	return int(tried.Load())
 }
 

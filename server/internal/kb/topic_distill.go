@@ -199,7 +199,9 @@ func (e *Engine) DistillTopics(ctx context.Context, max int) int {
 		e.retries().topics.clear(key)
 		calls.Add(1)
 		return true
-	}, func(i int, p any) { e.topicRetryLater(todo[i].kind+"/"+todo[i].id, fmt.Errorf("panic: %v", p), "distill") })
+	}, func(i int, p any) {
+		e.topicRetryLater(todo[i].kind+"/"+todo[i].id, fmt.Errorf("panic: %v", p), "distill")
+	})
 	return int(calls.Load())
 }
 
