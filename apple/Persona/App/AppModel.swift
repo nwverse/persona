@@ -1582,6 +1582,8 @@ final class AppModel {
         registerPhone(link)
         // Phone tool results answered while the socket was down: the hub matches them to their calls by call_id (#4456).
         toolResults.flush(group: group, on: link.live)
+        // Items the Handle Notification shortcut kept while this hub could not be reached (#3848).
+        if let api = api(group) { Task { await ShortcutItemFlow.flush(api) } }
         // The hub resumed its broadcasts (docs/operations/hub-restart.md): what this app missed follows the hello, and the
         // connection's snapshot (machines, sessions, pending interactions) is whole: nothing to fetch again, no Updating….
         let plan = ReconnectPlan(resumed: link.live.resumed)
