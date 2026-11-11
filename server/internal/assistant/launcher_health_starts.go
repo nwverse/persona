@@ -68,6 +68,10 @@ func (s *Service) followStarts(ctx context.Context, d DeviceSessions) {
 	for _, sess := range d.Sessions {
 		key := [2]string{d.MachineID, sess.SessionID}
 		switch {
+		case sess.Starting && sess.PendingSwitch != nil:
+			// A running Agent moving to another launcher (node/launcher_switch.go), listed as starting meanwhile: not a
+			// start of that launcher's to judge it by. One that fails goes back to its own launcher, listed clean all
+			// the same, and the message that carried it out is told why.
 		case sess.Starting:
 			if _, ok := b.starting[key]; !ok {
 				b.starting[key] = startWatch{launcher: cmp.Or(sess.Launcher, "claude"), seen: now}
