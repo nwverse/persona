@@ -353,7 +353,8 @@ export function formProblems(f: ProviderForm, isNew: boolean, hadKey = false, au
 export function fallbackTitle(f: ProviderForm, autoName: boolean): string {
   const id = f.name.trim();
   if (id || !autoName || gatewayProblem(f.base_url)) return id;
-  return urlHost(f.base_url.trim());
+  // as the hub's gatewayHost reads it: no port, no IPv6 brackets, lower case
+  return new URL(f.base_url.trim()).hostname.replace(/^\[|\]$/g, "").toLowerCase();
 }
 
 /** Whether the Connect step checks the connection by itself (fetches the models, then tests one): a valid address and a

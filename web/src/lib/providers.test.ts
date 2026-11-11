@@ -198,6 +198,9 @@ describe("formFromView", () => {
 describe("fallbackTitle", () => {
   it("is what an empty display name ends up as: the startup ID, else the host the hub names it after (#5029)", () => {
     expect(fallbackTitle(ready({ name: "", base_url: "https://relay.example.com/v1" }), true)).toBe("relay.example.com");
+    // the hub names it after the host without its port or IPv6 brackets
+    expect(fallbackTitle(ready({ name: "", base_url: "https://GW.example.com:8443/v1" }), true)).toBe("gw.example.com");
+    expect(fallbackTitle(ready({ name: "", base_url: "http://[::1]:8080" }), true)).toBe("::1");
     expect(fallbackTitle(ready({ name: " my_gw " }), true)).toBe("my_gw");
     expect(fallbackTitle(formFromView(stored), true)).toBe("gw");
     // an older hub names nothing; an address that does not parse names nothing yet

@@ -5,7 +5,7 @@
 // A place that holds only a launcher's ID (a task, a schedule, a recent setup) looks the title up in useProviderNames:
 // the model configuration's providers (GET /model-config, whose `name` the hub sets to the display name), read once a
 // minute at most and shared by every place on the page.
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { modelConfiguration } from "./model-config";
 
 /** Anything with a startup ID and maybe a display name: a `Launcher` (GET /machines/{mid}/launchers), a `ProviderView`
@@ -76,20 +76,32 @@ export function loadProviderNames(manager = ""): Promise<Named[]> {
   return list;
 }
 
-/** Forget the names read so far (a provider added, renamed or removed): the next reader asks the hub again. */
+// Bumped by forgetProviderNames: every mounted reader reads the names again.
+let namesVersion = 0;
+const namesListeners = new Set<() => void>();
+const onNamesForgotten = (l: () => void) => {
+  namesListeners.add(l);
+  return () => void namesListeners.delete(l);
+};
+const currentNamesVersion = () => namesVersion;
+
+/** Forget the names read so far (a provider added, renamed or removed): the places showing them ask the hub again. */
 export function forgetProviderNames(): void {
   namesCache.clear();
+  namesVersion++;
+  for (const l of namesListeners) l();
 }
 
 /** The providers' names for a place that holds only launcher IDs; [] until they are in. */
 export function useProviderNames(manager = ""): Named[] {
   const [list, setList] = useState<Named[]>([]);
+  const version = useSyncExternalStore(onNamesForgotten, currentNamesVersion, currentNamesVersion);
   useEffect(() => {
     let live = true;
     void loadProviderNames(manager).then((l) => live && setList(l));
     return () => {
       live = false;
     };
-  }, [manager]);
+  }, [manager, version]);
   return list;
 }

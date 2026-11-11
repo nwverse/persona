@@ -3,6 +3,7 @@ package assistant
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/proto"
@@ -46,6 +47,9 @@ func addCustom(t *testing.T, s *Service, fields string) (int, LauncherView) {
 	return code, v
 }
 
+// longHost is a gateway host longer than a display name may be (72 characters).
+var longHost = strings.Repeat("a", 60) + ".example.com"
+
 func TestAddWithoutAPresetGetsAName(t *testing.T) {
 	s, f, _ := modelService(t)
 	f.launcherList = []proto.Launcher{{Name: "rc-relay", Source: "zshrc"}}
@@ -65,6 +69,9 @@ func TestAddWithoutAPresetGetsAName(t *testing.T) {
 		{`"display_name":"1min relay","base_url":"https://gw.example.com"`, "p-1min-relay", "1min relay"},
 		{`"display_name":"A very long name for the gateway our whole team shares","base_url":"https://gw.example.com"`,
 			"a-very-long-name-for-the-gateway-our-who", "A very long name for the gateway our whole team shares"},
+		// A host longer than a display name may be: cut to fit, the number kept.
+		{`"base_url":"https://` + longHost + `"`, strings.Repeat("a", 40), strings.Repeat("a", 60) + ".exa"},
+		{`"base_url":"https://` + longHost + `/v1"`, strings.Repeat("a", 40) + "-2", strings.Repeat("a", 60) + ".e 2"},
 	} {
 		code, v := addCustom(t, s, c.fields)
 		if code != 200 || v.Name != c.name || v.DisplayName != c.display || v.Source != "persona" {

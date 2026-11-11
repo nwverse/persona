@@ -696,6 +696,7 @@ function KeyStep({ preset, pf, setPf, keyTest, onRetest, onOther, assign, setAss
   const signup = signupHref(preset);
   const choices = presetChoices(preset);
   const nameProblem = launcherNameProblem(pf.name);
+  const hiddenProblem = displayNameProblem(pf.display_name) || (assign !== null ? nameProblem : "");
   const builtin = preset.plugin === BUILTIN_PLUGIN;
   const nameField = (
     <TextField label={t("settings-providerwizard.startup_id")} value={pf.name} onChange={(v) => setPf((x) => ({ ...x, name: v }))} mono
@@ -762,6 +763,8 @@ function KeyStep({ preset, pf, setPf, keyTest, onRetest, onOther, assign, setAss
           )}
         </Labelled>
       </Disclosure>
+      {/* folded with a mistake in it: Save is off, so say why here (#5029) */}
+      {!more && hiddenProblem && <p role="alert" className="text-[12px] text-red">{hiddenProblem}</p>}
       {devices}
     </div>
   );

@@ -781,6 +781,20 @@ describe("ProviderWizard names", () => {
     expect(post?.body).toEqual({ display_name: "团队的 GLM", api_key: "sk-test-123456", preset: "builtin/glm", assign: ["assistant", "agent.new"] });
   });
 
+  it("says why Save is off when More options folds a mistake away", async () => {
+    await open();
+    act(() => button("智谱 GLM")!.click());
+    act(() => button("更多选项")!.click());
+    type(field("显示名")!, "长".repeat(65));
+    type(keyInput(), "sk-test-123456");
+    await waitAutoTest();
+    const alert = () => [...document.body.querySelectorAll('[role="alert"]')].map((a) => a.textContent).join("");
+    expect(alert()).toBe("");
+    act(() => button("更多选项")!.click());
+    expect(alert()).toBe("显示名最多 64 个字，不能换行");
+    expect(button("保存")!.disabled).toBe(true);
+  });
+
   it("says a Messages address's trailing /v1 goes by itself, and that other bases are used as typed", async () => {
     await custom();
     const hint = () => note(urlInput());

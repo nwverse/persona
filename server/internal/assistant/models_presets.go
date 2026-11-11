@@ -164,12 +164,16 @@ func (s *Service) presetDisplayName(ctx context.Context, preset string, n int) s
 }
 
 // numberedName is a display name the hub gives a provider it named with n (1 for the bare slug): with the same number
-// after it when n > 1 ("Zhipu GLM 2").
+// after it when n > 1 ("Zhipu GLM 2"), name cut so the whole fits maxDisplayName (a long gateway host).
 func numberedName(name string, n int) string {
+	suffix := ""
 	if n > 1 {
-		name += " " + strconv.Itoa(n)
+		suffix = " " + strconv.Itoa(n)
 	}
-	return name
+	if r := []rune(name); len(r)+len(suffix) > maxDisplayName {
+		name = strings.TrimRight(string(r[:maxDisplayName-len(suffix)]), ".- ")
+	}
+	return name + suffix
 }
 
 // launcherNameFor is the name a provider added from preset gets when none is given: the vendor's slug, -2, -3… after
