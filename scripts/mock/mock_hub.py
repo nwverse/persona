@@ -10565,7 +10565,7 @@ PROVIDER_IMPORT = [
      "models": [{"id": "example-opus", "context_window": 1000000}, {"id": "example-haiku", "context_window": 200000}],
      "aliases": ["cc_full", "cc_full_haiku"],
      "sources": [{"alias": "cc_full", "file": "~/.zshrc", "hide": "ok"},
-                 {"alias": "cc_full_haiku", "file": "~/.zshrc", "hide": "in_use", "uses": ["「性能」方案里的 Agent 预设「strong」"]}]},
+                 {"alias": "cc_full_haiku", "file": "~/.zshrc", "hide": "in_use", "uses": ["模型档位「性能」的 Agent 预设「strong」"]}]},
     {"name": "cc_glm", "base_url": "https://open.bigmodel.example.com/api/anthropic", "auth": "bearer", "has_key": True, "own_service": "use",
      "model": "glm-5.3", "models": [{"id": "glm-5.3", "context_window": 200000}], "aliases": ["cc_glm"],
      "sources": [{"alias": "cc_glm", "file": "~/.zshrc", "hide": "ok"}]},

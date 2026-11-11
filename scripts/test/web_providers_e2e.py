@@ -237,7 +237,7 @@ def zshrc_import(r):
     expect(hide).to_have_attribute("aria-checked", "true")
     stays = d.locator("[data-import-stays]")
     expect(stays).to_contain_text("会隐藏 cc_full、cc_glm和cc_kimi。")
-    expect(stays).to_contain_text("cc_full_haiku 保留：「性能」方案里的 Agent 预设「strong」在用它。")
+    expect(stays).to_contain_text("cc_full_haiku 保留：模型档位「性能」的 Agent 预设「strong」在用它。")
     expect(stays).to_contain_text("cc_kimi_fast 保留：主对话在用它。")
     expect(stays).to_contain_text("cc_relay 保留：新的供应商无法在服务器上替代它。")
     r.shot("import-preview")
