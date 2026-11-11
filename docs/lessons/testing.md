@@ -7,6 +7,13 @@
   that the complete package is unaffected. The controlled reproducer shows the mechanism, not which background
   statistics event happened in a particular failed run.
 
+- An index-choice assertion needs a table of its own, shaped like production (#4191). On the few rows earlier tests
+  leave behind, with `enable_seqscan = off`, two indexes cost about the same, and the leftovers decide which one wins:
+  `TestMarkFeedSentUsesUnsentIndex` passed alone and failed from the third `-count=10` iteration on, before and after
+  #3787. Check the plan in a migrated clone, on a few thousand synthetic rows, after `ANALYZE` and at default costs.
+  Check the generic plan too (`PREPARE` + `EXPLAIN EXECUTE` under `plan_cache_mode`), since cached statements can
+  switch to it. Then prove the test by mutation: drop the index, or the query's matching predicate, and it must fail.
+
 - Bound cold simulator compilation separately from test execution (#2671). A combined `xcodebuild test` can spend
   most of its deadline compiling before the first test starts. Build for testing, then test without building against
   the same derived data and suite selection; preserve failure propagation, integration exclusions and result-bundle
