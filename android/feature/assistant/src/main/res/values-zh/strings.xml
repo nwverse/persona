@@ -152,4 +152,11 @@
     <string name="assistant_settings_permission_full">完全允许</string>
     <string name="assistant_settings_permission_failed">未能保存默认权限</string>
     <string name="assistant_settings_permission_unavailable">此助手尚未确认支持默认权限设置，暂不可修改。其他设置仍可使用。</string>
+    <string name="assistant_health">健康</string>
+    <string name="assistant_health_title">问问你的健康</string>
+    <string name="assistant_health_lead">睡眠、步数、心率、体重、饮食，基于你手机里的健康数据回答。这里的对话和记忆与其他对话分开。</string>
+    <string name="assistant_health_placeholder">问健康相关的问题…</string>
+    <string name="assistant_health_history">健康对话</string>
+    <string name="assistant_health_new">新的健康对话</string>
+    <string name="assistant_health_load_failed">没读到健康对话</string>
 </resources>

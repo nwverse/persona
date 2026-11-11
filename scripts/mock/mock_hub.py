@@ -1581,7 +1581,8 @@ def health_sess(sid, title, minutes, last):
     return {**assistant_sess(sid, title, minutes, last), "cwd": "/home/me/.persona/health", "space": "health"}
 
 
-ASSISTANT += [
+# MOCK_HEALTH_EMPTY=1: the health space has no conversations yet (entering Health opens its new conversation page, #4329).
+ASSISTANT += [] if os.environ.get("MOCK_HEALTH_EMPTY") else [
     health_sess("hlth0001-0000-4000-8000-000000000001", "这周的睡眠", 40, "这周平均每晚睡 6 小时 42 分，比上周少 18 分钟。"),
     health_sess("hlth0002-0000-4000-8000-000000000002", "体检报告：血脂", 60 * 26, "LDL 3.6 mmol/L，略高于参考范围，建议三个月后复查。"),
     health_sess("hlth0003-0000-4000-8000-000000000003", "步数目标", 60 * 70, "最近 7 天平均 7,860 步，离每天 8,000 步差一点。"),
@@ -1854,9 +1855,10 @@ SCHEDULE_RAN = []  # what "Run now" started (UI tests read it back at /mock/sche
 ASSISTANT_HUB_NOTES = "代码都在 ~/code 下，平时用 MacBook 开发。\n周报每周五下班前先给我草稿，不要直接发。\n服务器上的 /srv 目录不要动。"
 ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "Asia/Shanghai", "notes": None, "main": ASK1,
                     "main_tasks_quiet": True,  # Notify tasks dispatched from the main chat only in that chat (#1731), on by default
-                    # Every agent Persona starts is a supervised task (#3617), off by default; closed sessions archive
-                    # themselves after this many idle days (#3618), 0 is never. Left out with MOCK_LEGACY_HUB.
-                    "agent_tasks": False, "archive_closed_days": 3,
+                    # Every agent Persona starts is a supervised task (#3617), off by default; new Inbox messages on a
+                    # supervised task reach its supervisor (#4293), off by default; closed sessions archive themselves
+                    # after this many idle days (#3618), 0 is never. Left out with MOCK_LEGACY_HUB.
+                    "agent_tasks": False, "inbox_signals": False, "archive_closed_days": 3,
                     # The role a meeting recording pre-selects (#2981; MOCK_MEETING_ATTENDANCE_DEFAULT=listener starts there)
                     "meeting_attendance_default": os.environ.get("MOCK_MEETING_ATTENDANCE_DEFAULT", "off"),
                     # How long recordings stay (#3235, MOCK_RECORDING_DAYS) and a meeting's minutes after its transcript
@@ -1882,7 +1884,8 @@ def assistant_state(space="", archived=False):
            "conversations": [s for s in ASSISTANT if s["machine_id"] == cfg["machine_id"] and s.get("space", "") == space
                              and (archived or not s.get("archived"))]}
     if not os.environ.get("MOCK_LEGACY_HUB"):
-        out.update(agent_tasks=cfg["agent_tasks"], archive_closed_days=cfg["archive_closed_days"], kb_topics=cfg["kb_topics"])
+        out.update(agent_tasks=cfg["agent_tasks"], inbox_signals=cfg["inbox_signals"], archive_closed_days=cfg["archive_closed_days"],
+                   kb_topics=cfg["kb_topics"])
     if cfg["notes"] is not None:
         out["notes"] = cfg["notes"]
     if cfg["main"]:
@@ -17962,6 +17965,8 @@ class H(BaseHTTPRequestHandler):
                 ASSISTANT_CONFIG["archive_closed_days"] = days
             if isinstance(body.get("agent_tasks"), bool):
                 ASSISTANT_CONFIG["agent_tasks"] = body["agent_tasks"]
+            if isinstance(body.get("inbox_signals"), bool):
+                ASSISTANT_CONFIG["inbox_signals"] = body["inbox_signals"]
             if isinstance(body.get("kb_topics"), bool):
                 ASSISTANT_CONFIG["kb_topics"] = body["kb_topics"]
             if body.get("machine_id"):
