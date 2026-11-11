@@ -48898,6 +48898,29 @@
       },
       "extractionState": "manual"
     },
+    "End of output": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "End of output"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "出力の末尾"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "输出末尾"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "End-of-Day Review": {
       "localizations": {
         "en": {

@@ -287,6 +287,9 @@ device, and the phone's own data tools (`phone_*`) keep their icon.
 `Theme.Icon.monitor` (`waveform.path.ecg`) is a command watched in the background, each line it prints an event (Claude
 Code's `Monitor`). A command run once keeps `Theme.Icon.terminal`.
 
+`Theme.Icon.denied` (`hand.raised.slash`) is a tool call the user, a permission rule or a hook turned down (#4303). It is
+drawn in gray at the end of the call's row: the call did not run, so it is not an error and never takes the triangle.
+
 ### 2.9 Styles and theme colors
 
 | Style | Surface | Buttons | Canvas | Icons |
@@ -556,6 +559,13 @@ A tool row names its tool in words on iOS and the web (#2986): Claude Code's too
 server's MCP tool reads "<Server> · <Tool>" ("GitHub · Create issue"), and any other name is humanized. Opened, a tool
 no table knows shows its arguments as `key: value` lines, with the JSON one tap away under Raw Input (`RawInputToggle`,
 shared with computer tools). Details in `docs/lessons/ios.md`.
+
+A tool row says what its call came to when the node sends `outcome` (#4303, `docs/protocol/protocol.md` "Tool
+outcomes"). Only a call that ran and failed turns the row and its chip red, and its result says "Exit code N". A call
+that was denied, refused before it ran or interrupted gets a gray mark with its word (Denied, Did not run, Interrupted)
+for VoiceOver, as section 4.8.1 keeps red for what is still wrong; one that timed out says Timed out. Under an output the
+page cut, the result shows the output's end (End of output), where a build or test run says why it failed, before View
+full text. Without an outcome (an older node) a row draws as before.
 
 ### 4.8 Pending requests
 
