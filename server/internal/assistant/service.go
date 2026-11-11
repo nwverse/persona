@@ -57,6 +57,8 @@ type Service struct {
 	ext ExtensionTools
 	// refs is the provider extensions' values for launcher keys that are references (launcher_secrets.go); nil: none.
 	refs launcherSecrets
+	// humanSent: the messages a person's own app sent, as the hub vouched (secret_handoff.go).
+	humanSent humanSends
 
 	hub   Hub
 	store func() Store

@@ -139,11 +139,18 @@ covers nothing, and a provider whose id changes takes them along. A provider's d
 
 A rule spares the card only when the user asked for the start themselves (the decision on #3962; `handoffUserTurn`): the
 conversation calling `agent_start` is one the user opened (its origin, noted when it was started, is `user`, and no extension's
-token opened it), and every message of the turn is one the user sent from an app (the node ties it to the app's
-`client_msg_id`), with no other author on it. Conversations an inbox item, a channel (Feishu and others, `/new` included), a
-scheduled task, another conversation or an extension opened, and turns another conversation's, a task's or a channel's message
-started, always get the card; so does whatever cannot be told (an origin the backfill guessed or none, a transcript that cannot
-be read, an older node that ties no message to the app). A start a rule spared the card is recorded with `approved_by: "rule"`.
+token opened it), and every message of the turn is one a person's own app sent, as the hub vouched: the hub marks a message
+for an assistant chat `human` only when a full device's credential sent it (`assistant.send_params`), and the manager keeps
+those messages' `client_msg_id`s for a day, in memory. A `client_msg_id` alone proves nothing (channels, the inbox, extensions
+and Persona's own sends carry one too). Conversations an inbox item, a channel (Feishu and others, `/new` included), a scheduled
+task, another conversation or an extension opened, and turns another author's message started, always get the card; so does
+whatever cannot be told (an origin the backfill guessed or none, a transcript that cannot be read or that the node cut, a
+message the hub did not vouch for, an older hub, a manager restarted since). A start a rule spared the card is recorded with
+`approved_by: "rule"`.
+
+What the rule still trusts in such a turn is everything that is not a message: the tools' results (a mail or a page the model
+read at the user's request), the context and earlier turns can still steer what the Agent is told. A main chat an inbox item
+started (when there was none) is the user's own: its first turn, the inbox's message, gets the card, the user's later turns do not.
 
 ## Who may approve a hand-off
 

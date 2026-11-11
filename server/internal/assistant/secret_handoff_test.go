@@ -144,8 +144,12 @@ func newHandoffRig(t *testing.T) *handoffRig {
 	mem := newFleetMem()
 	r.s = withSettings(t, r.f, New(Options{Hub: r.f, Store: func() Store { return mem }, Logf: r.logf, Devices: r.devs}))
 	r.s.refs = r.secrets
-	// The main conversation the user opened, asking from the app.
+	// The main conversation the user opened, asking from the app: the hub vouched for the send (SendParams.Human).
 	r.s.originSet(context.Background(), "server", "s1", OriginUser, "", "")
+	if _, err := r.s.SendParams(context.Background(), SendParams{MachineID: "server", SessionID: "s1", Human: true,
+		Params: map[string]any{"client_msg_id": "c1", "text": "fix CI with my token"}}); err != nil {
+		t.Fatal(err)
+	}
 	r.f.items = []proto.Item{{ID: "u1", Role: "user", Kind: proto.KindText, Text: "fix CI with my token", ClientMsgID: "c1"}}
 	return r
 }
@@ -504,7 +508,16 @@ func TestHandoffRulesOnlyForTheUsersOwnTurn(t *testing.T) {
 			it.Source = &proto.MessageSource{Kind: proto.SourceConversation, ConversationID: "s9"}
 		}), true},
 		{"a task's input", nil, with(func(it *proto.Item) { it.Source = &proto.MessageSource{Kind: proto.SourceFollowup} }), true},
-		{"a message with no app behind it (a channel's)", nil, with(func(it *proto.Item) { it.ClientMsgID = "" }), true},
+		{"a message with no id", nil, with(func(it *proto.Item) { it.ClientMsgID = "" }), true},
+		// Channels, the inbox, extensions and Persona's own sends carry a client_msg_id too: only the hub's word counts.
+		{"a channel's message with an id", nil, with(func(it *proto.Item) { it.ClientMsgID = "feishu-om_1" }), true},
+		{"an extension's send with an id", nil, with(func(it *proto.Item) { it.ClientMsgID = "c-from-extension" }), true},
+		{"the app's id, sent by someone else", func(r *handoffRig) {
+			r.s.humanSent.mu.Lock()
+			r.s.humanSent.m = nil // a send the hub did not vouch for, or a manager restarted since
+			r.s.humanSent.mu.Unlock()
+		}, nil, true},
+		{"a turn the node cut", nil, append(make([]proto.Item, handoffTurnMost-1), app), true},
 		{"a background notice", nil, with(func(it *proto.Item) { it.Task = &proto.TaskNote{} }), true},
 		{"a wake-up", nil, with(func(it *proto.Item) { it.Wake = true }), true},
 		{"another session's message", nil, with(func(it *proto.Item) { it.From = "other" }), true},
@@ -569,7 +582,10 @@ func TestHandoffCardWordsAndTheProviderApproved(t *testing.T) {
 	done := r.start(`{"machine":"box","cwd":"/code/app","prompt":"fix the release CI","secret_env":{"GITHUB_TOKEN":"op://Dev/notitle/credential1"}}`)
 	ix := r.card()
 	card, _ := json.Marshal(ix)
-	if strings.Contains(string(card), "op://") || !strings.Contains(ix.Summary, "/code/app") || !strings.Contains(ix.Summary, "fix the release CI") {
+	var in proto.SecretHandoffInput
+	_ = json.Unmarshal(ix.ToolInput, &in)
+	if strings.Contains(string(card), "op://") || in.Cwd != "/code/app" || in.Prompt != "fix the release CI" ||
+		strings.Contains(ix.Summary, "fix the release CI") { // the summary is also the push's text
 		t.Fatalf("card %s", card)
 	}
 	r.secrets.mu.Lock()

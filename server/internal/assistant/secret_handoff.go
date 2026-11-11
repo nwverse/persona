@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -196,14 +197,15 @@ func (s *Service) handoffApprove(ctx context.Context, convMachine, self string, 
 		items = append(items, i18n.T(l, "assistant-secret_handoff.item", i18n.Args{"item": item, "name": v.Name}))
 		names = append(names, v.Name)
 	}
+	// Where it runs and what it is asked, for the card itself: never in the summary, which is also the push's text.
+	input.Cwd, input.Prompt = cwd, clip(oneLine(prompt), 200)
 	raw, _ := json.Marshal(input)
 	now := time.Now().UTC()
 	expires := now.Add(handoffCardWait)
 	ix := proto.Interaction{ID: "ix_" + randomHex(6), MachineID: convMachine, SessionID: self, SessionTitle: "Persona",
 		Kind: proto.IxPermission, ToolName: proto.SecretHandoffTool, ToolInput: raw, ToolTitle: i18n.T(l, "assistant-secret_handoff.title"),
 		Summary: i18n.T(l, "assistant-secret_handoff.summary", i18n.Args{"items": strings.Join(items, "; "), "agent": agent,
-			"machine": h.machineName}) + "\n" + i18n.T(l, "assistant-secret_handoff.where", i18n.Args{"cwd": cwd,
-			"prompt": clip(oneLine(prompt), 200)}),
+			"machine": h.machineName}),
 		AlwaysLabel: i18n.T(l, "assistant-secret_handoff.always", i18n.Args{"launcher": h.launcher, "machine": h.machineName}),
 		CreatedAt:   now, ExpiresAt: expires}
 	r, err := s.ask(ctx, ix)
@@ -245,10 +247,14 @@ func (s *Service) handoffApprove(ctx context.Context, convMachine, self string, 
 
 // handoffUserTurn reports whether the user asked for this start themselves, the only case an Always rule may spare the
 // card (the decision on #3962): conversation self on machine is one the user opened (its origin, noted when it was
-// started, is "user", and no extension's token opened it), and every message of the turn calling the tool is one the
-// user sent from an app (the node ties it to the app's client_msg_id) with no other author on it (an inbox item's,
-// a task's or another conversation's input, a channel's message, a background notice). Whatever it cannot tell (an
-// origin the backfill guessed or none, the transcript unreadable, an older node that ties no message) is no: the card.
+// started, is "user", and no extension's token opened it), and every message of the turn calling the tool is one a
+// person's own app sent, as the hub vouched (assistantwire.SendParams.Human, kept by its client_msg_id in humanSent),
+// with no other author on it. A message's client_msg_id alone proves nothing: channels, the inbox, extensions and
+// Persona's own sends carry one too. Whatever it cannot tell (an origin the backfill guessed or none, the transcript
+// unreadable or cut, a message the hub did not vouch for, a manager restarted since) is no: the card.
+//
+// It trusts what is not a message in that turn (the tools' results, earlier turns, the context): a page of mail the
+// model read on the user's request can still steer it.
 func (s *Service) handoffUserTurn(ctx context.Context, machine, self string) bool {
 	if !s.userOpened(ctx, self) {
 		return false
@@ -256,7 +262,10 @@ func (s *Service) handoffUserTurn(ctx context.Context, machine, self string) boo
 	var res struct {
 		Items []proto.Item `json:"items"`
 	}
-	if err := s.call(ctx, machine, DeviceSessionItems, map[string]any{"session_id": self, "turns": 1}, &res); err != nil {
+	if err := s.call(ctx, machine, DeviceSessionItems, map[string]any{"session_id": self, "turns": 1, "lazy_images": true}, &res); err != nil {
+		return false
+	}
+	if len(res.Items) >= handoffTurnMost { // a page the node cut may have left the turn's first messages out
 		return false
 	}
 	asked := false
@@ -264,12 +273,70 @@ func (s *Service) handoffUserTurn(ctx context.Context, machine, self string) boo
 		if it.Role != "user" || it.Kind == proto.KindToolResult {
 			continue
 		}
-		if it.ClientMsgID == "" || it.Source != nil || it.Injected != nil || it.From != "" || it.Task != nil || it.Wake {
+		if !s.humanSent.has(self, it.ClientMsgID) || it.Source != nil || it.Injected != nil || it.From != "" || it.Task != nil || it.Wake {
 			return false
 		}
 		asked = true
 	}
 	return asked
+}
+
+// handoffTurnMost is the most items the node gives for one turn (node.go's page cap): a turn that long is not read.
+const handoffTurnMost = 2000
+
+// humanSends are the messages a person's own app sent into each conversation, by client_msg_id, as the hub vouched
+// (SendParams.Human): kept a day, at most humanSendsMost per conversation, in memory only (a restart forgets them,
+// and the card is shown).
+type humanSends struct {
+	mu sync.Mutex
+	m  map[string]map[string]time.Time // session → client_msg_id → when
+}
+
+const (
+	humanSendsMost = 64
+	humanSendsKeep = 24 * time.Hour
+)
+
+func (h *humanSends) note(session, id string) {
+	if session == "" || id == "" {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	now := time.Now()
+	if h.m == nil {
+		h.m = map[string]map[string]time.Time{}
+	}
+	ids := h.m[session]
+	if ids == nil {
+		ids = map[string]time.Time{}
+		h.m[session] = ids
+	}
+	for k, at := range ids {
+		if now.Sub(at) > humanSendsKeep {
+			delete(ids, k)
+		}
+	}
+	if len(ids) >= humanSendsMost {
+		oldest, oldestAt := "", now
+		for k, at := range ids {
+			if !at.After(oldestAt) {
+				oldest, oldestAt = k, at
+			}
+		}
+		delete(ids, oldest)
+	}
+	ids[id] = now
+}
+
+func (h *humanSends) has(session, id string) bool {
+	if session == "" || id == "" {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	at, ok := h.m[session][id]
+	return ok && time.Since(at) <= humanSendsKeep
 }
 
 // userOpened: conversation id is one the user opened, as noted when it was started (never a backfill's guess), and no

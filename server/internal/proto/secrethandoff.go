@@ -21,6 +21,10 @@ const CodeSecretHandoffElsewhere = "secret_handoff_elsewhere"
 // record a refused approval on each.
 type SecretHandoffInput struct {
 	Variables []SecretHandoffVariable `json:"variables"`
+	// Cwd and Prompt are where the Agent runs and the start of what it is asked, for the card to show (not its
+	// summary, which is also the push's text).
+	Cwd    string `json:"cwd,omitempty"`
+	Prompt string `json:"prompt,omitempty"`
 }
 
 // SecretHandoffVariable is one environment variable a hand-off card hands over.
