@@ -47,16 +47,6 @@ final class AutoConversationsTests: XCTestCase {
         }
     }
 
-    /// A row below the fold: the sidebar draws only the rows on screen, and the pages above Auto Chats push its last
-    /// rows off a phone's screen. Scrolls the sidebar up until it is there.
-    @MainActor private func reveal(_ e: XCUIElement) -> Bool {
-        for _ in 0..<4 {
-            if e.exists && e.isHittable { return true }
-            app.swipeUp(velocity: .slow)
-        }
-        return e.exists
-    }
-
     @MainActor private func conversation(_ prefix: String) -> XCUIElement {
         app.buttons.matching(identifier: "sidebar-conversation").matching(NSPredicate(format: "label BEGINSWITH %@", prefix)).firstMatch
     }
@@ -86,7 +76,7 @@ final class AutoConversationsTests: XCTestCase {
         XCTAssertTrue(inbox.waitForExistence(timeout: 3), "no 收件箱 row")
         XCTAssertTrue(inbox.label.hasPrefix("收件箱 6 个，1 个需要你"), inbox.label)
         for id in ["task", "lark_agent", "spawned", "all"] {
-            XCTAssertTrue(reveal(app.buttons["sidebar-auto-" + id]), "no \(id) row")
+            XCTAssertTrue(app.buttons["sidebar-auto-" + id].exists, "no \(id) row")
         }
         sleep(1)
         shot("open")

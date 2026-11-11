@@ -22,7 +22,6 @@ import { Rolling } from "../ui/Rolling";
 import { AppMark } from "../ui/AppMark";
 import { BrandMark } from "../ui/BrandMark";
 import { OriginMark } from "../ui/ChannelMark";
-import type { BrandId } from "../lib/connectors";
 import { externalFrom, externalOrigin } from "../lib/conversation-origins";
 import { Icon, type IconName } from "../ui/icons";
 import { UltraMark } from "./chat/Ultracode";
@@ -103,14 +102,7 @@ export const PersonaRow = memo(function PersonaRow({ reg, hover, active, go, mai
   );
 });
 
-// The "Pinned" heading above the pinned conversations (iOS's pinned heading, Android's pinned section): its ⋯ and a right
-// click on it give "Unpin all", which a touch screen reaches through the ⋯.
-/** `onMenu` absent: nothing here is this browser's to unpin (only leader conversations), so no ⋯. */
-export function PinnedHeading({ onMenu }: { onMenu?: (at: MenuAt) => void }) {
-  return <SubHeading icon="pin" label={t("sidebar.pinned_section")} onMenu={onMenu} menuLabel={t("conversation-menu.unpin_all")} />;
-}
-
-/** A group's small title inside a sidebar section (Persona chats' "Directions", "Pinned", "Other chats"): the same type
+/** A group's small title inside a sidebar section (Persona chats' 常驻): the same type
  *  as the section's own title, optionally with an icon before it and a ⋯ for the group's actions. */
 export function SubHeading({ label, icon, onMenu, menuLabel }: { label: string; icon?: IconName; onMenu?: (at: MenuAt) => void; menuLabel?: string }) {
   return (
@@ -133,11 +125,11 @@ export function SubHeading({ label, icon, onMenu, menuLabel }: { label: string; 
   );
 }
 
-type NavRowProps = { onMenu?: (at: MenuAt, el: HTMLElement, button: boolean) => void; menuLabel?: string; k: string; reg: RegFn; hover: (k: string | null) => void; active: boolean; to: Route; go: GoFn; icon: IconName; /** A brand's own mark in place of the icon ("Automatic"'s Lark /agent row, #3758). */ brand?: BrandId; label: string; badge?: number | string; badgeTone?: keyof typeof BADGE_CLASS; hint?: string; title?: string; /** A state shown as a dot before the hint ("Automatic"'s rows: some run). */ dot?: AgentState };
+type NavRowProps = { onMenu?: (at: MenuAt, el: HTMLElement, button: boolean) => void; menuLabel?: string; k: string; reg: RegFn; hover: (k: string | null) => void; active: boolean; to: Route; go: GoFn; icon: IconName; label: string; badge?: number | string; badgeTone?: keyof typeof BADGE_CLASS; hint?: string; title?: string; /** A state shown as a dot before the hint ("Automatic"'s rows: some run). */ dot?: AgentState };
 
 // The pages take nothing from the sessions, yet every sessions push re-renders the sidebar: memoized like SessionRow
 // (sameProps), a page row renders again only when its own props change (a badge, the highlight).
-export const NavRow = memo(function NavRow({ k, reg, hover, active, to, go, icon, brand, label, badge, badgeTone, hint, title, onMenu, menuLabel, dot }: NavRowProps) {
+export const NavRow = memo(function NavRow({ k, reg, hover, active, to, go, icon, label, badge, badgeTone, hint, title, onMenu, menuLabel, dot }: NavRowProps) {
   // one ref for the row's life, so a re-render does not let go of it and register it again (useGlide's reg)
   const ref = useMemo(() => reg(k), [reg, k]);
   const link = (
@@ -153,14 +145,9 @@ export const NavRow = memo(function NavRow({ k, reg, hover, active, to, go, icon
       aria-current={active ? "page" : undefined}
       className={cx("relative z-10 flex w-full items-center gap-2 rounded-[7px] px-2 sidebar-row transition-transform duration-150 active:scale-[0.98] [@media(pointer:coarse)]:min-h-11", active && CURRENT_ROW)}
     >
-      {brand ? (
-        // in the icon's column, at the size SourceTag draws Lark's mark on an agent's row; its label names it
-        <span className="flex size-3.5 shrink-0 items-center justify-center"><BrandMark brand={brand} size={16} fit="badge" /></span>
-      ) : (
-        <span className={active ? "text-ink" : "text-ink-3"}>
-          <Icon name={icon} size={14} stroke={1.8} />
-        </span>
-      )}
+      <span className={active ? "text-ink" : "text-ink-3"}>
+        <Icon name={icon} size={14} stroke={1.8} />
+      </span>
       <span className={cx("min-w-0 flex-1 truncate text-[13px]", active ? "font-medium text-ink" : "text-ink-2")}>{label}</span>
       {dot && <StatusMark state={dot} size="sm" />}
       {hint && <span className="text-[11px] text-ink-3 tabular-nums">{hint}</span>}
@@ -234,7 +221,7 @@ function SecondLine({ line, draft }: { line: { lead?: string; text: string; tone
 }
 
 // `prefix`: a word before the title (a tab's name, a pane's agent), in `prefixClass`
-type SessionRowProps = { menuLabel?: string; /** The mark at the start when the state is not shown (a Persona conversation's; pinned: the pin). */ icon?: IconName; s: Session; k: string; reg: RegFn; hover: (k: string | null) => void; active: boolean; to: Route; go: GoFn; tab?: boolean; label?: string; prefix?: string; prefixClass?: string; hint?: string; host?: string; showState?: boolean; showTodoTag?: boolean; onMenu?: RowMenuFn; endRoom?: boolean };
+type SessionRowProps = { menuLabel?: string; /** The mark at the start when the state is not shown (a Persona conversation's; pinned: the pin). */ icon?: IconName; s: Session; k: string; reg: RegFn; hover: (k: string | null) => void; active: boolean; to: Route; go: GoFn; tab?: boolean; label?: string; prefix?: string; prefixClass?: string; hint?: string; /** The hint is whole, never cut (a lead's counts). */ hintFull?: boolean; host?: string; showState?: boolean; showTodoTag?: boolean; onMenu?: RowMenuFn; endRoom?: boolean };
 
 // Every sessions push re-renders the sidebar and the Agents list, while lib/sessions-delta.ts keeps the object of each
 // session that did not change: a row renders again only when one of its props did. The props compare by identity
@@ -245,7 +232,7 @@ function sameProps<P extends { to: Route }>(a: P, b: P): boolean {
   return keys.every((key) => (key === "to" ? routePath(a.to) === routePath(b.to) : Object.is(a[key], b[key])));
 }
 
-export const SessionRow = memo(function SessionRow({ s: given, k, reg, hover, active, to, go, tab, label, prefix, prefixClass, hint, host, showState = true, showTodoTag, onMenu, menuLabel = t("sidebar.agent_actions"), endRoom, icon = "chat" }: SessionRowProps) {
+export const SessionRow = memo(function SessionRow({ s: given, k, reg, hover, active, to, go, tab, label, prefix, prefixClass, hint, hintFull, host, showState = true, showTodoTag, onMenu, menuLabel = t("sidebar.agent_actions"), endRoom, icon = "chat" }: SessionRowProps) {
   // what it asks you, or what it did, under its title (#3195): no hover or click needed to see why it is red or green
   const ix = useStore((st) => st.interactions.find((i) => i.machine_id === given.machine_id && i.session_id === given.session_id));
   // a card answered here takes its red dot and "Has a question" line away at once, not at the hub's next push (#4286)
@@ -384,7 +371,7 @@ export const SessionRow = memo(function SessionRow({ s: given, k, reg, hover, ac
       {source && <SourceTag s={s} className={aside} />}
       {origin && <OriginMark origin={origin} size={16} className={aside} />}
       {/* the row's ⋯ takes the end on hover: what is there steps aside instead of showing half under it */}
-      {tailShown && <span className={cx("max-w-[72px] min-w-6 shrink-[20] truncate text-[11px] text-ink-3", aside)}>{tail}</span>}
+      {tailShown && <span className={cx(hintFull ? "shrink-0 whitespace-nowrap tabular-nums" : "max-w-[72px] min-w-6 shrink-[20] truncate", "text-[11px] text-ink-3", aside)}>{tail}</span>}
       {ageAtEnd && <span data-row-age className={cx("shrink-0 text-[11px] text-ink-3", aside)}>{ago(s.updated_at, Date.now(), "narrow")}</span>}
       {(s.pending_interactions ?? 0) > 0 && <span className={cx("flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-field px-1 text-[10px] font-semibold text-attention tabular-nums", aside)}>{s.pending_interactions}</span>}
     </a>

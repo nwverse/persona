@@ -52,7 +52,6 @@ func (h *Hub) routes() http.Handler {
 	h.gitRoutes(api)
 	h.agentSettingsRoutes(api)
 	h.sessionRoutes(api)
-	h.workSessionStartRoutes(api)
 	h.paneRoutes(api)
 	h.nodeDoctorRoutes(api)
 	h.nodeUpdateRelayRoutes(api)
@@ -657,7 +656,7 @@ func (h *Hub) listSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, lookup := r.URL.Query()["session_id"]
-	if lookup || sessionlist.RuntimeEnabled(r.URL.Query()) {
+	if lookup || sessionlist.Enabled(r.URL.Query()) {
 		h.pagedSessions(w, r, named)
 		return
 	}

@@ -1,14 +1,12 @@
 import XCTest
 
-/// Conversations an extension opened (#3758): Lark /agent's and another extension's fold into Auto Chats as before, the
-/// Lark /agent row there carries Lark's mark, All Chats' rows say where each came from, the open one keeps its row in
-/// Recent with its mark, and the message that opened each says so under it (「来自 飞书 /agent」, 「来自扩展」).
+/// Conversations an extension opened (#3758): All Chats filtered to Lark /agent lists Lark /agent's with its mark and
+/// says where it came from, and the message that opened each says so under it (「来自 飞书 /agent」, 「来自扩展」).
 /// Against scripts/mock/mock_hub.py with MOCK_AUTO_CONVERSATIONS=1 MOCK_EXTERNAL=1 (PERSONA_EXTERNAL_HUB). PERSONA_SHOTS
 /// keeps the screenshots, light and dark.
 final class ExternalConversationsTests: XCTestCase {
     private var hub: String!
     private var app: XCUIApplication!
-    private static let larkAgent = "b2e4d6f8-0000-4000-8000-000000000308"
     private static let otherExtension = "b2e4d6f8-0000-4000-8000-000000000310"
 
     override func setUpWithError() throws {
@@ -29,27 +27,18 @@ final class ExternalConversationsTests: XCTestCase {
         app.launchPinned()
     }
 
-    /// The drawer's button on the phone; the iPad's column is there already.
-    @MainActor private func openSidebar() {
+    /// The drawer's button on the phone; the iPad's column is there already. Returns the All Chats row.
+    @MainActor private func openSidebar() -> XCUIElement {
         let menu = app.buttons["assistant-sidebar-button"].firstMatch
-        let group = app.buttons["sidebar-auto"].firstMatch
+        let all = app.buttons["sidebar-all-chats"].firstMatch
         let end = Date().addingTimeInterval(20)
-        while Date() < end && !menu.exists && !group.exists { usleep(250_000) }
-        if group.exists && group.isHittable { return }
+        while Date() < end && !menu.exists && !all.exists { usleep(250_000) }
+        if all.exists && all.isHittable { return all }
         XCTAssertTrue(menu.exists, "no sidebar button:\n\(app.debugDescription)")
         sleep(1)
         menu.tapCenter()
-        XCTAssertTrue(group.waitForExistence(timeout: 10), "no 自动对话 row:\n\(app.debugDescription)")
-    }
-
-    /// A row below the fold: the sidebar draws only the rows on screen, and the pages above Auto Chats push its last
-    /// rows off a phone's screen. Scrolls the sidebar up until it is there.
-    @MainActor private func reveal(_ e: XCUIElement) -> Bool {
-        for _ in 0..<4 {
-            if e.exists && e.isHittable { return true }
-            app.swipeUp(velocity: .slow)
-        }
-        return e.exists
+        XCTAssertTrue(all.waitForExistence(timeout: 10), "no 全部对话 row:\n\(app.debugDescription)")
+        return all
     }
 
     @MainActor private func shot(_ name: String) {
@@ -65,44 +54,27 @@ final class ExternalConversationsTests: XCTestCase {
     @MainActor func testExternalConversationsSayWhereTheyCameFrom() {
         for scheme in ["light", "dark"] {
             launch(scheme)
-            openSidebar()
-            let group = app.buttons["sidebar-auto"].firstMatch
-            if !app.buttons["sidebar-auto-inbox"].exists { group.tap() }
-            let lark = app.buttons["sidebar-auto-lark_agent"].firstMatch
-            XCTAssertTrue(lark.waitForExistence(timeout: 3), "no 飞书 /agent row")
-            XCTAssertTrue(reveal(app.buttons["sidebar-auto-extension"]), "no 扩展 row")
-            XCTAssertFalse(app.buttons.matching(identifier: "sidebar-conversation")
-                .matching(NSPredicate(format: "label BEGINSWITH %@", "1105 | 研究 | 群里的需求")).firstMatch.exists,
-                           "an external conversation is in 最近")
-            sleep(1)
-            shot("sidebar-\(scheme)")
+            openSidebar().tap()
 
             // All Chats filtered to Lark /agent: its row says where it came from.
-            XCTAssertTrue(lark.waitForExistence(timeout: 2), "the 飞书 /agent row went away") // a tap scrolls it into view
+            let lark = app.buttons["auto-filter-lark_agent"].firstMatch
+            XCTAssertTrue(lark.waitForExistence(timeout: 5), "no 飞书 /agent filter:\n\(app.debugDescription)")
+            XCTAssertTrue(app.buttons["auto-filter-extension"].exists, "no 扩展 filter")
             lark.tap()
             let rows = app.buttons.matching(identifier: "auto-conversation")
-            XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 5), "the list did not open")
+            XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 5), "the list is empty")
             XCTAssertEqual(rows.count, 1, "飞书 /agent's list")
             XCTAssertTrue(rows.firstMatch.label.contains("来自 飞书 /agent"), rows.firstMatch.label)
             sleep(1)
             shot("list-\(scheme)")
 
-            // Open, it says so under the message it was opened with, and keeps its row in Recent with its mark.
+            // Open, it says so under the message it was opened with.
             rows.firstMatch.tap()
             let line = app.descendants(matching: .any)["message-external-source"].firstMatch
             XCTAssertTrue(line.waitForExistence(timeout: 10), "no 「来自 飞书 /agent」 under the first message:\n\(app.debugDescription)")
             XCTAssertTrue(line.label.contains("来自 飞书 /agent"), line.label)
             sleep(1)
             shot("chat-lark-\(scheme)")
-            openSidebar()
-            if app.buttons["sidebar-auto-inbox"].exists { group.tap() } // closed, Recent's rows come up under it
-            XCTAssertTrue(app.buttons["sidebar-auto-inbox"].waitForNonExistence(timeout: 3), "did not close")
-            let open = app.buttons.matching(identifier: "sidebar-conversation")
-                .matching(NSPredicate(format: "label BEGINSWITH %@", "1105 | 研究 | 群里的需求")).firstMatch
-            XCTAssertTrue(open.waitForExistence(timeout: 5), "the open one left 最近")
-            XCTAssertTrue(open.label.contains("来自 飞书 /agent"), open.label)
-            sleep(1)
-            shot("sidebar-open-\(scheme)")
             app.terminate()
 
             // Another extension's: 「来自扩展」.

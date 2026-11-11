@@ -226,13 +226,15 @@ enum ManagersText {
     }
     /// The codes this page put on screen, by manager: one still good is shown again (`showCode`).
     @ObservationIgnored private var issued: [String: ManagerInstallCode] = [:]
-    /// The clock the countdowns read; `tick()` moves it on.
-    private(set) var now: Date
+    /// The clock the countdowns read; `tick()`, `load()` and a new code move it on. Until one of them has, the deps'
+    /// clock as it reads now: the init only assigns, as a `@State` initial value's must (docs/apple/performance.md P3,
+    /// #4695), since the switcher's header makes one each time its struct is made.
+    var now: Date { readAt ?? deps.now() }
+    private var readAt: Date?
     @ObservationIgnored private let deps: Deps
 
     init(deps: Deps = .live) {
         self.deps = deps
-        now = deps.now()
     }
 
     func manager(_ id: String) -> HubManager? { managers?.first { $0.id == id } }
@@ -240,7 +242,7 @@ enum ManagersText {
     var secondsLeft: Int { shown.map { ConnectDeviceText.secondsLeft($0.code.expiresAt, now: now) } ?? 0 }
     var expired: Bool { shown != nil && secondsLeft == 0 }
 
-    func tick() { now = deps.now() }
+    func tick() { readAt = deps.now() }
 
     func load() async {
         guard let api = deps.api() else { return }
@@ -253,7 +255,7 @@ enum ManagersText {
             if ManagersText.unsupported(error) { unsupported = true }
             else if managers == nil { self.error = error.shown ?? String(localized: "Can't reach the hub") }
         }
-        now = deps.now()
+        readAt = deps.now()
     }
 
     /// A new manager: its install code goes on screen. False when the hub said no (`failure` says why).
@@ -265,7 +267,7 @@ enum ManagersText {
         }
         return await change { api in
             let made = try await api.createManager(name: name)
-            self.now = self.deps.now()
+            self.readAt = self.deps.now()
             self.shown = Shown(id: made.manager.id, name: made.manager.name, code: made.installCode, neverInstalled: true)
         }
     }
@@ -298,11 +300,11 @@ enum ManagersText {
     private func freshCode(api: APIClient, id: String, name: String, neverInstalled: Bool) async throws {
         do {
             let code = try await api.managerInstallCode(id)
-            now = deps.now()
+            readAt = deps.now()
             shown = Shown(id: id, name: name, code: code, neverInstalled: neverInstalled)
         } catch let e as APIError where neverInstalled && e.status == 404 && e.code == "no_manager" {
             let made = try await api.createManager(name: name)
-            now = deps.now()
+            readAt = deps.now()
             shown = Shown(id: made.manager.id, name: made.manager.name, code: made.installCode, neverInstalled: true)
         }
     }
