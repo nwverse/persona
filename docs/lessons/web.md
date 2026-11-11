@@ -1,5 +1,12 @@
 # Lessons: web UI and interactions
 
+## A Go toolchain's files are not always under GOROOT (#4559)
+
+Homebrew's Go sets `GOROOT` to the formula's `libexec` directory and keeps `LICENSE` one level up, so a build step that
+reads `$(go env GOROOT)/LICENSE` works with the official distribution and fails on a Homebrew machine. Look in every
+place a supported install keeps the file and, when none has it, fail naming each place tried
+(`web/scripts/go-license.mjs`). Check a build script that reads the toolchain's files on Homebrew's Go too.
+
 ## Remembered task rules need their exact owner and retry context (#4418)
 
 A remembered task rule's key is opaque: encode the returned value as a query parameter, not a reconstruction from its

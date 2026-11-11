@@ -1,10 +1,12 @@
 # Web app (`web/`)
 
-管理员在「管理端 › 设备」开启密码登录后，打开网页直接输入连接密码，无须再填 hub 地址。
-密码在浏览器 Worker 内通过 OPAQUE 验证，原文不上传，登录后保存本浏览器自己的设备 token。
-可切换到原来的配对 token 入口。密码登录要求可信 HTTPS，本机回环可用于开发；自签名部署仍可使用配对入口。
-`npm run dev` 和 `npm run build` 会先编译共用 Go OPAQUE 客户端为 WebAssembly，因此构建环境也需要 Go；
-生成的 `/pake/client.wasm`、Go 运行时和 `/pake/THIRD_PARTY_NOTICES.txt` 随静态站一同部署，无须额外的服务端进程。
+Once an administrator turns on password sign-in in Admin › Devices, the web app asks only for the connection password, with no
+hub address to fill in. A browser Worker checks the password over OPAQUE without uploading it, and after sign-in the browser keeps a
+device token of its own. The earlier pairing-token entry is still one switch away. Password sign-in needs trusted HTTPS (loopback works
+for development); self-signed deployments keep using the pairing entry. `npm run dev` and `npm run build` first compile the shared Go
+OPAQUE client to WebAssembly, so building the web app needs Go too (the official distribution or Homebrew's, whose `LICENSE` sits beside
+`GOROOT` rather than in it: `web/scripts/go-license.mjs`). The generated `/pake/client.wasm`, the Go runtime and
+`/pake/THIRD_PARTY_NOTICES.txt` are deployed with the static site; no extra server process is needed.
 
 Persona in the browser: Overview, Agents (Claude Code / Codex in herdr on each of your computers, plus terminal, files and Git), the Persona assistant (scheduled tasks, memory, knowledge base),
 Inbox, machine monitoring and Settings. Features roughly match the phone app (gaps are listed in "Gaps versus the phone app" at the end; #297 and #433 were the two rounds that closed most of them). Visuals and interaction follow
