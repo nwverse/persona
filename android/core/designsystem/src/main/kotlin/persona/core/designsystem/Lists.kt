@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -73,6 +74,10 @@ fun JSectionHeader(
     open: Boolean? = null,
     /** The [count] in a capsule of this state's tone (the To-dos list's sections, #3712, as iOS `CountBadge`); none: quiet digits. */
     countTone: Status? = null,
+    /** [trailing] is the fold's own action word ("Expand" / "Collapse"): while the header folds ([onClick] and [open]),
+     *  TalkBack hears it from the state and click label, so the visible word is not read a second time (#4120). */
+    trailingIsFoldAction: Boolean = false,
+    // Last, so a caller can pass it as a trailing lambda: `JSectionHeader(title) { … }`.
     action: (@Composable RowScope.() -> Unit)? = null,
 ) {
     val palette = PersonaTheme.palette
@@ -118,7 +123,10 @@ fun JSectionHeader(
             }
         }
         if (trailing != null || action != null) Spacer(Modifier.width(8.dp))
-        trailing?.let { Text(it, style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1) }
+        trailing?.let {
+            Text(it, style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1,
+                modifier = if (trailingIsFoldAction && fold != null) Modifier.clearAndSetSemantics {} else Modifier)
+        }
         action?.invoke(this)
     }
 }
@@ -228,6 +236,15 @@ fun JGroup(modifier: Modifier = Modifier, rows: List<@Composable () -> Unit>) {
  */
 val rowPadding: Dp @Composable get() = when (PersonaTheme.style) { AppStyle.Glass -> 16.dp; AppStyle.Brief -> 0.dp; AppStyle.Board -> 14.dp }
 
+/** The space between a [JRow]'s leading slot and its title. */
+private val RowLeadingGap = 14.dp
+
+/**
+ * Where a [JRow]'s title starts behind a leading icon of the default size. A line hung under such a row (a state and
+ * its time) starts here, so it sits under the title rather than under the icon in every style.
+ */
+val rowTitleStart: Dp @Composable get() = rowPadding + JIconDefaultSize + RowLeadingGap
+
 /** A settings-style row: optional icon, title and subtitle, a value or trailing control, and a chevron when it navigates. */
 @Composable
 fun JRow(
@@ -256,7 +273,7 @@ fun JRow(
 ) {
     val palette = PersonaTheme.palette
     RowFrame(modifier, onClick, onLongClick, null, enabled, selected, value, trailing, chevron, changingValue, role) {
-        if (leading != null) { leading(); Spacer(Modifier.width(14.dp)) }
+        if (leading != null) { leading(); Spacer(Modifier.width(RowLeadingGap)) }
         else if (leadingIcon != null) {
             JIcon(leadingIcon, null, size = 22.dp, tint = if (destructive) palette.danger.dot else leadingIconTint ?: palette.ink2, decorative = true)
             Spacer(Modifier.width(16.dp))

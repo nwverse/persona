@@ -751,6 +751,7 @@ targets:
       - path: PersonaTests/KnowledgeTests.swift
       - path: PersonaTests/MachineMetricsTests.swift
       - path: PersonaTests/MachineConcernTests.swift
+      - path: PersonaTests/PortForwarderTests.swift
       - path: PersonaTests/AddComputerModelTests.swift
       - path: PersonaTests/NotificationActionsTests.swift
       - path: PersonaTests/NotifyPrefsTests.swift
@@ -761,7 +762,6 @@ targets:
       - path: PersonaTests/PushCryptoTests.swift
       - path: PersonaTests/UsageWindowsTests.swift
       - path: PersonaTests/SessionListTests.swift
-      - path: PersonaTests/AssistantIdentityTests.swift
       - path: PersonaTests/AssistantTrayActivityTests.swift
       - path: PersonaTests/AssistantEntriesFixtureTests.swift
       - path: PersonaTests/AgentListFallbackTests.swift

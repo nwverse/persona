@@ -62,6 +62,7 @@ done
 
 // fakeCLI is a claude -p that keeps its args and finishes each turn at once.
 const fakeCLI = `printf '%s\n' "$*" >> "$SDK_FAKE_DIR/cli-argv"
+printf '%s\n' "$CLAUDE_CONFIG_DIR" > "$SDK_FAKE_DIR/cli-profile"
 echo '{"type":"system","subtype":"init"}'
 while IFS= read -r line; do
   case "$line" in *'"type":"user"'*) echo '{"type":"result","subtype":"success"}' ;; esac
@@ -276,23 +277,32 @@ func TestSDKStartMergesAFollowingProvidersBypassList(t *testing.T) {
 	b := sdkBridge{js: jsRuntime{Path: "/opt/bin/node"}, script: "/x/bridge.mjs", claude: "/opt/bin/claude"}
 	n := agentNode(t, false)
 	profile := filepath.Join(n.home, "profile")
+	other := t.TempDir()
+	writeFile(t, filepath.Join(other, "settings.json"), `{"env":{"NO_PROXY":"wrong.example"}}`)
 	t.Setenv("CLAUDE_CONFIG_DIR", profile)
 	n.setManaged([]proto.ManagedLauncher{
 		{Name: "f", Kind: "api", BaseURL: "https://gw.example.com", Model: "m1", NoProxy: "gw.example.com"},
 		{Name: "o", Kind: "api", BaseURL: "https://gw.example.com", Model: "m1", Proxy: "http://proxy.example:3128", NoProxy: "gw.example.com"},
+		{Name: "p", Kind: "api", BaseURL: "https://gw.example.com", Model: "m1", NoProxy: "gw.example.com", Env: "CLAUDE_CONFIG_DIR=" + other},
 	})
 	pinned := func(launcher string) (any, any) {
 		t.Helper()
-		s := sdkStart{id: "s1", cwd: filepath.Join(n.dir, "assistant"), mcp: map[string]any{}}
-		_, first, err := n.sdkCommand(b, launcher, s, []string{"PATH=/usr/bin", "no_proxy=localhost"})
+		s := sdkStart{id: "s1", cwd: filepath.Join(n.dir, "assistant"), configDir: profile, mcp: map[string]any{}}
+		cmd, first, err := n.sdkCommand(b, launcher, s, []string{"PATH=/usr/bin", "no_proxy=localhost"})
 		if err != nil {
 			t.Fatal(err)
+		}
+		if got := envValue(cmd.Environ(), "CLAUDE_CONFIG_DIR"); got != profile {
+			t.Fatalf("SDK process uses %q, want the recorded profile %q", got, profile)
 		}
 		var start struct {
 			Options struct{ Settings struct{ Env map[string]any } }
 		}
 		if err := json.Unmarshal(first, &start); err != nil {
 			t.Fatal(err)
+		}
+		if got := start.Options.Settings.Env["CLAUDE_CONFIG_DIR"]; got != profile {
+			t.Fatalf("SDK settings use %v, want the recorded profile %q", got, profile)
 		}
 		return start.Options.Settings.Env["NO_PROXY"], start.Options.Settings.Env["no_proxy"]
 	}
@@ -306,6 +316,22 @@ func TestSDKStartMergesAFollowingProvidersBypassList(t *testing.T) {
 	}
 	if up, low := pinned("o"); up != "gw.example.com" || low != up {
 		t.Errorf("its own proxy: %v %v", up, low)
+	}
+	if up, low := pinned("p"); up != "gw.example.com,.corp.example" || low != "gw.example.com,localhost" {
+		t.Errorf("a later provider edit moved the recorded profile: %v %v", up, low)
+	}
+	l, _ := n.managedLauncher("p")
+	path, err := n.mergeManagedSettings("p", l, "", profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, err := readLauncherSettings(path, n.home, n.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, _ := settings["env"].(map[string]any)
+	if _, pinned := env["CLAUDE_CONFIG_DIR"]; pinned || env["NO_PROXY"] != "gw.example.com,.corp.example" {
+		t.Fatalf("CLI settings moved the recorded profile: %v", env)
 	}
 }
 
@@ -558,5 +584,78 @@ func TestExtraArgsExpandsHome(t *testing.T) {
 	got := extraArgs([]string{"--settings", "~/.claude/s.json", "--add-dir=~/w", "--dangerously-skip-permissions"})
 	if got["settings"] != "/home/me/.claude/s.json" || got["add-dir"] != "/home/me/w" || got["dangerously-skip-permissions"] != nil {
 		t.Fatalf("%v", got)
+	}
+}
+
+// An npm-installed claude under nvm is discovered by sdkPrepare and prepended to the bridge PATH.
+func TestSDKPrepareAndCommandWithNVMClaude(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", t.TempDir()) // restricted service PATH missing nvm
+
+	nvmBin := filepath.Join(home, ".nvm", "versions", "node", "v22.5.0", "bin")
+	if err := os.MkdirAll(nvmBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fakeClaude := filepath.Join(nvmBin, "claude")
+	fakeNode := filepath.Join(nvmBin, "node")
+	if err := os.WriteFile(fakeClaude, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fakeNode, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	load, find, claude := sdkLoadPackage, sdkFindJS, sdkClaude
+	t.Cleanup(func() { sdkLoadPackage, sdkFindJS, sdkClaude = load, find, claude })
+	files := []runtimepkg.File{
+		{Path: "agent-sdk/package.json", Data: []byte(`{}`)},
+		{Path: "agent-sdk/dist/bridge.mjs", Data: []byte(fakeSDKBridge)},
+	}
+	sdkLoadPackage = func() (*runtimepkg.Package, error) {
+		return &runtimepkg.Package{Name: sdkPackage, Hash: runtimepkg.Hash(files), Files: files}, nil
+	}
+	sdkFindJS = func(context.Context, string) (jsRuntime, error) {
+		return jsRuntime{Path: fakeNode}, nil
+	}
+	sdkClaude = claudeExecutable // use real resolver
+
+	n := &Node{home: home, dir: t.TempDir(), bin: "personad"}
+	bridge, fallback := n.sdkPrepare(context.Background(), "claude")
+	if fallback != "" {
+		t.Fatalf("unexpected fallback: %s", fallback)
+	}
+	if bridge.claude != fakeClaude {
+		t.Fatalf("bridge claude = %q, want %q", bridge.claude, fakeClaude)
+	}
+
+	start := sdkStart{
+		id:           "s-nvm",
+		cwd:          t.TempDir(),
+		allowedTools: "bash",
+		mcp:          map[string]any{"mcpServers": map[string]any{}},
+	}
+	cmd, _, err := n.sdkCommand(bridge, "claude", start, []string{"PATH=/usr/bin:/bin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmdPATH := envValue(cmd.Env, "PATH")
+	if !strings.HasPrefix(cmdPATH, nvmBin+string(os.PathListSeparator)) {
+		t.Fatalf("bridge PATH %q does not start with nvm directory %q", cmdPATH, nvmBin)
+	}
+
+	// When claude is missing, fallback provides service environment notice and actionable remediation
+	if err := os.Remove(fakeClaude); err != nil {
+		t.Fatal(err)
+	}
+	_, missingFallback := n.sdkPrepare(context.Background(), "claude")
+	if !strings.Contains(missingFallback, proto.FallbackNoClaude) {
+		t.Fatalf("missingFallback does not contain FallbackNoClaude: %q", missingFallback)
+	}
+	if !strings.Contains(missingFallback, "node service environment") {
+		t.Fatalf("missingFallback does not mention service environment: %q", missingFallback)
+	}
+	if !strings.Contains(missingFallback, "symlink into ~/.local/bin") {
+		t.Fatalf("missingFallback does not suggest symlink: %q", missingFallback)
 	}
 }

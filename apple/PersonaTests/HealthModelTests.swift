@@ -63,6 +63,47 @@ struct HealthModelTests {
         #expect(list.first?.title == "new")
     }
 
+    // Entering Health (#4329): back in the latest health conversation, as Codex does; the Health page when there is none.
+    @Test func enteringHealthOpensTheLatestConversation() async {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/assistant") { req in
+            #expect(req.query["space"] == "health")
+            return Data(#"""
+                {"machine_id":"m","launcher":"ccc","cwd":"/home/me/.persona/health","conversations":[
+                 {"session_id":"old","title":"步数","status":"idle","state":"idle","assistant":true,"space":"health","updated_at":"2026-11-01T08:00:00Z"},
+                 {"session_id":"latest","title":"睡眠","status":"idle","state":"idle","assistant":true,"space":"health","updated_at":"2026-11-11T08:00:00Z"}]}
+                """#.utf8)
+        }
+        let entry = await HealthModel.entry(deps: deps(hub), live: [])
+        #expect(entry.opened == "latest")
+    }
+
+    @Test func aPushedConversationNewerThanTheListWinsAndArchivedOnesAreSkipped() {
+        let fetched = [Self.session("a", updated: 5)]
+        let live = [Self.session("b", updated: 9), Self.session("gone", archived: true, updated: 20), Self.session("main", space: nil, updated: 30)]
+        #expect(HealthModel.entry(fetched, live: live).opened == "b")
+    }
+
+    @Test func enteringHealthWithNoHistoryOpensTheNewConversationPage() async {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/assistant") { _ in Data(#"{"machine_id":"m","launcher":"ccc","cwd":"/home/me/.persona/health","conversations":[]}"#.utf8) }
+        #expect(await HealthModel.entry(deps: deps(hub), live: []) == .new)
+        #expect(HealthModel.entry([], live: [Self.session("gone", archived: true, updated: 3)]) == .new)
+    }
+
+    @Test func aListThatCantBeReadFallsBackToThePushedOnes() async {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/assistant") { _ in throw APIError(status: 500, message: "hub down") }
+        #expect((await HealthModel.entry(deps: deps(hub), live: [Self.session("p", updated: 1)])).opened == "p")
+        #expect(await HealthModel.entry(deps: deps(hub), live: []) == .new)
+    }
+
+    @Test func newInAHealthConversationOpensTheHealthPage() {
+        #expect(HealthModel.newOpensHealth(Self.session("h", updated: 1)))
+        #expect(!HealthModel.newOpensHealth(Self.session("main", space: nil, updated: 1)))
+        #expect(!HealthModel.newOpensHealth(nil))
+    }
+
     @Test func theSidebarNeverListsAHealthConversation() {
         let all = [Self.session("h", updated: 5), Self.session("main", space: nil, updated: 1),
                    Self.session("old", space: nil, archived: true, updated: 2), Self.session("hOld", archived: true, updated: 3)]
@@ -146,4 +187,9 @@ struct HealthModelTests {
         #expect(page.loaded)
         #expect(page.error == "太旧")
     }
+}
+
+private extension HealthModel.Entry {
+    /// The conversation it opens; nil for the new conversation page.
+    var opened: String? { if case .open(let key) = self { key.sessionID } else { nil } }
 }

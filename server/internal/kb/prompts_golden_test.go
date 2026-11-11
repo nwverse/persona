@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -39,12 +40,15 @@ func golden(t *testing.T, name, got string) {
 }
 
 type captureModel struct {
+	mu    sync.Mutex // the knowledge points steps call it topicWorkers at a time
 	reply string
 	calls [][2]string // system, user
 }
 
 func (m *captureModel) JSONMax(ctx context.Context, system, user string, maxTokens int, out any) error {
+	m.mu.Lock()
 	m.calls = append(m.calls, [2]string{system, user})
+	m.mu.Unlock()
 	return json.Unmarshal([]byte(m.reply), out)
 }
 
@@ -187,7 +191,7 @@ func TestGoldenItems(t *testing.T) {
 	} {
 		_ = e.Store.PutItem(it)
 	}
-	if err := e.TagItems(context.Background()); err != nil {
+	if _, err := e.TagItems(context.Background(), 10); err != nil {
 		t.Fatal(err)
 	}
 	m.golden(t, "items")
