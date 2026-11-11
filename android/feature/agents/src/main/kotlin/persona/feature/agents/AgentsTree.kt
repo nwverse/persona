@@ -61,6 +61,12 @@ internal data class TreeTabEntry(val tab: AgentTab, val depth: Int, val first: B
     override val key: String get() = "tab:${tab.key}"
 }
 
+/**
+ * Whether Collapse All is done: every section folded. It leaves the computer headings as they are (#4338 A11), so they
+ * say nothing about it.
+ */
+internal val AgentListResult.allCollapsed: Boolean get() = groups.isNotEmpty() && groups.all { it.folded }
+
 /** A section's run of rows past [AgentRowCap]: "Show All [count]", or "Collapse" once they all show ([expanded]). */
 internal data class TreeShowAllEntry(val group: AgentListGroup, val count: Int, val depth: Int, val expanded: Boolean) : AgentTreeEntry {
     override val key: String get() = "all:${group.id}"
@@ -203,8 +209,17 @@ internal fun MachineFilterRow(machines: List<MachineCount>, total: Int, selected
     }
 }
 
+/**
+ * A computer heading's counts, as iOS's `StateCounts` (#4338 A7): needing you, working, unread, then idle; the agents that
+ * only wait in the background are out of Working and drawn apart ([AgentMachineGroup.waitingInBackground], a clock).
+ */
 internal val AgentMachineGroup.headingCounts: List<Pair<Status, Int>>
-    get() = listOf(AgentState.NeedsYou, AgentState.Working, AgentState.Unread).map { it.designStatus to (stateCounts[it] ?: 0) }
+    get() = listOf(
+        Status.NeedsYou to (stateCounts[AgentState.NeedsYou] ?: 0),
+        Status.Working to ((stateCounts[AgentState.Working] ?: 0) - waitingInBackground).coerceAtLeast(0),
+        Status.Unread to (stateCounts[AgentState.Unread] ?: 0),
+        Status.Idle to (stateCounts[AgentState.Idle] ?: 0) + (stateCounts[AgentState.Unknown] ?: 0),
+    )
 
 /**
  * A By Status section's one count, in its state's color (iOS `SectionHeader` with the section's tone): Awaiting reply
