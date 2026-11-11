@@ -223,7 +223,8 @@ type Meta struct {
 	// codexLimitFull: when the full windows of a rollout's latest rate limits (Codex's own limit, at 100%) reset, the
 	// latest of them; zero when none is full. A usage-limit failure resets then (TurnErrorResetsAt).
 	codexLimitFull time.Time
-	// codexSeen: newer rollouts record an item both as event_msg/item_completed and in history_mutation.
+	// codexSeen: newer rollouts record an item both as event_msg/item_completed and in history_mutation, within
+	// one turn: the ids of the turn under way (task_started drops them, as a window starting there has none).
 	codexSeen   map[string]bool
 	codexTurnID string
 	codexUserID string
@@ -309,6 +310,11 @@ var pastedRe = lazyre.New(`<[\\/]*pasted_content(?:\s+id="[^"]*")?\s*>`) // also
 // context for the model, not something the user wrote. It is <persona-context>; history and older nodes have
 // <persona-context> (#3182).
 var ContextRe = lazyre.New(`(?s)<` + compat.ContextPattern() + `>.*?</` + compat.ContextPattern() + `>\s*`)
+
+// ViewErrorsRe matches the <persona-view-errors> feedback the node puts after the snapshot when the assistant's last
+// replies drew rich views that failed their check (node/assistant_context.go turnContext): for the model, like the
+// snapshot. Left in, it became a user item of its own before the message, its raw tags in the user's bubble.
+var ViewErrorsRe = lazyre.New(`(?s)<persona-view-errors\b[^>]*>.*?</persona-view-errors>\s*`)
 
 var tagRe = lazyre.New(`(?s)<(command-name|command-message|command-args|local-command-stdout|local-command-stderr|task-notification|system-reminder)>(.*?)</(command-name|command-message|command-args|local-command-stdout|local-command-stderr|task-notification|system-reminder)>`)
 

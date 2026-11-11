@@ -21,7 +21,7 @@ func (h *Manager) readInbox(ctx context.Context, round inboxRound) assistantwire
 		return r
 	}
 	for _, c := range h.connectors.All() {
-		r.Names[c.ID()] = c.Name()
+		r.Names[c.ID()] = connector.DisplayName(ctx, c)
 	}
 	if round == roundFull {
 		r.Mail = h.readMail(ctx)
@@ -142,12 +142,13 @@ func mailAddresses(list []mail.Address) []assistantwire.MailAddress {
 // of it waits); one whose Collect failed is left out (it keeps what it had).
 func (h *Manager) readConnectors(ctx context.Context) []assistantwire.InboxSource {
 	out := []assistantwire.InboxSource{}
+	h.reconcileIMessageAI(ctx)
 	for _, c := range h.connectors.All() {
 		in, ok := connector.As[connector.Inbox](c)
 		if !ok {
 			continue
 		}
-		src := assistantwire.InboxSource{ID: c.ID(), Name: c.Name(), Extension: fromExtension(c.ID()), Migrated: isMigrated(c.ID()),
+		src := assistantwire.InboxSource{ID: c.ID(), Name: connector.DisplayName(ctx, c), Extension: fromExtension(c.ID()), Migrated: isMigrated(c.ID()),
 			Things: []connector.InboxThing{}}
 		state := connector.StatusOf(ctx, c).State
 		if !h.connectors.Feeds(c.ID(), connector.FeedInbox) || state != connector.StateOK && state != connector.StateRateLimited ||

@@ -1,5 +1,76 @@
 # Lessons: web UI and interactions
 
+## Profile selections do not follow the catalog revision (#4528)
+
+The model-profile revision versions definitions, not the active selection or rollback. Retire earlier reads, errors,
+and authentication side effects when a newer read, action, manager generation, or credential generation takes over.
+An event received while a switch is pending needs a read after that write settles; its earlier snapshot cannot establish
+the final server state. Admit one profile write per manager across view and credential changes, because ignoring an old
+response cannot undo an already dispatched write. After it settles, refresh the current view and keep later selections
+and action errors intact. Exercise the mounted component and real API client with deferred synthetic responses, including
+old hubs without a revision and current versus retired authentication failures.
+
+## Lazy features can add shared startup bookkeeping (#4597)
+
+The file-mutation UI loads lazily, while its credential-owner generation is shared with authentication at startup.
+After the localization savings in #4595, main still exceeded the Japanese first-screen budget by 63 B. The 64 B
+allocation is documented beside `FIRST_SCREEN_BUDGET`; the production build continues to measure every locale.
+
+## A Go toolchain's files are not always under GOROOT (#4559)
+
+Homebrew's Go sets `GOROOT` to the formula's `libexec` directory and keeps `LICENSE` one level up, so a build step that
+reads `$(go env GOROOT)/LICENSE` works with the official distribution and fails on a Homebrew machine. Look in every
+place a supported install keeps the file and, when none has it, fail naming each place tried
+(`web/scripts/go-license.mjs`). Check a build script that reads the toolchain's files on Homebrew's Go too.
+
+## Remembered task rules need their exact owner and retry context (#4418)
+
+A remembered task rule's key is opaque: encode the returned value as a query parameter, not a reconstruction from its
+computer and directory. A manager may flag a key as ambiguous; show its raw identifier as unresolved rather than
+presenting a guessed directory. A failed or unconfirmed removal can be omitted by a later list read, so keep the rule
+and its retry context in session memory scoped to the assistant and credential generation, including across unmounts.
+When a lost reply is followed by a not-remembered response, let the user dismiss the local warning without calling
+the removal confirmed; a later list can show the rule again. Include access type in each row action's spoken name.
+Synchronous admission prevents a second delete after reopening while the first is pending. Fence reads, confirmation,
+refresh and callbacks on manager changes (including a round trip), credential replacement and unmount. A retired
+request's 401 must not sign out a later view, even when it uses the same credential; a current request keeps the normal
+401 policy. A proxy login page or redirect can also reload the whole app: apply the same context and credential fence
+before that side effect, while retaining unowned pairing probes and validated 304 responses. A successful removal does not rule out a matching plan remembering it
+again, and an older manager's empty response is not proof that storage was read successfully.
+
+## Dismiss a draft, not its source item (#3743)
+
+A task-progress reply card has its own feed id; its Inbox reference can be shared by later progress drafts. Persist
+Don't handle on the card, not by marking the Inbox item done or hiding every card with that reference. Send and
+Dismiss need one synchronous admission guard, and only a successful send may show a sent receipt. Undo sends the
+dismissal receipt back to the same manager and applies the full returned body so omitted dismissal fields really clear.
+A feed read started before the write must not roll it back, and a late write response must not erase newer sent/filed
+pushes. Capture a live card's manager on arrival and name even the default explicitly: API auto-routing otherwise
+substitutes a later assistant selection on card-id-only routes.
+Check a reload and a new same-reference draft in the actual tray, not only the historical card renderer.
+Keep the draft editor and its toast handlers behind a local lazy boundary; the collapsed startup tray does not need
+that UI. Pass existing task helpers into the editor instead of importing the whole Tasks module back into its lazy
+chunk. Static-render tests exercise the extracted editor directly; mounted tray tests wait for the lazy card and still
+exercise its actions. Leave Send/Dismiss admission, owner capture and revision fences in the synchronous feed layer.
+
+## Gate identity chrome by installed assistants, not by roster availability (#3967)
+
+A roster with one assistant does not need assistant identity or switching UI. Reuse the installed-assistant cardinality
+rule used by conversation titles and list grouping; offline installed assistants count and pending installs do not.
+Restore the earlier product header and its existing controls rather than hiding the whole header, which would also
+remove appearance, Settings and Disconnect. Keep product branding and the user's chosen Persona look separate from
+roster name/monogram attribution. Regress one → two → one on a mounted view, along with one installed plus a pending
+install, and assert the rendered labels, avatars and menu rows rather than only the count helper. A phone's menu and
+drawer own separate history entries: wait for each closing entry to pop before the next full-page navigation, or a
+late Back can replace the requested Inbox page with the previous main conversation. Prefer the built web preview for
+broad E2E runs on a busy machine; thousands of Vite development modules can exhaust Chromium's renderer resources.
+
+## Retention mode changes must not save an intermediate window (#3780, #3862)
+
+Switching from forever to finite retention only exposes a local draft: saving a default such as 365 days first can
+irreversibly delete older minutes before the user commits a longer window. Submit only the number committed on Enter
+or blur. Regress the absence of a PUT on mode change, cancellation, and restoring the saved mode after a refusal.
+
 ## Same-state list updates can change background progress (#3588)
 
 The task tray often has only list summaries, whereas the chat header has complete Session detail. A comparison of
@@ -300,6 +371,14 @@ A settings editor must wait for the loaded document, preserve history, optional 
 A panel can stay mounted when another tab replaces its credential. Capture the opaque generation and matching authorization when admitting files, including when opening the native chooser. Retire queued files, conflicts and retry controls on replacement or sign-out; fence dispatch, progress and completion independently of React cleanup. Settle cancellation before asking XHR to abort, since transports can ignore abort or deliver late callbacks. An already dispatched server write may still finish.
 
 Exercise the actual hook and upload helper together with a synthetic XHR transport and a real storage event, keeping the same panel mounted. Assert both file identity and Authorization headers: a helper mock can hide a queued file borrowing the next credential. Also cover same-document changes, sign-out followed by the same token, fresh selection recovery, normal progress/cancel/retry and both conflict choices.
+
+### Pending file changes belong to their admitted context (#4453)
+
+Capture the credential generation and panel context before opening a confirmation, editing a name or offering Undo. Retire the action, its retries and its success, error and cleanup callbacks when that context changes; check again immediately before each dispatch. A completed delete's Undo belongs to its workspace and absolute trash identity, so ordinary navigation to another folder does not discard it. Explicit-token requests must still opt into current-owner 401 recovery, while a retired context cannot sign out or reload its replacement. An already dispatched write can still finish on the server.
+
+Hand off the move picker to its conflict question as one sheet, retaining the chosen destination. If a fast replacement closes two stacked history entries together on a phone, their Back cleanup can close the underlying Files panel.
+
+A successful new sign-in is a new generation even when the token is identical. A nonsecret shared epoch lets another tab and its feed cache observe that change synchronously before the storage event. Token and epoch are separate storage writes: a tab that admits work between them retires it when the epoch arrives, and a write already dispatched may still finish remotely. Older web clients that do not read the epoch cannot observe a same-token generation change; if shared storage rejects the epoch, only the signing-in tab can retire that generation. Exercise mounted file controls, the real REST client and synthetic deferred responses, including same-token reauthentication, conflict retry, Undo and ordinary current-owner behavior.
 
 ## Popup menus
 
@@ -707,6 +786,7 @@ If the header grows, elements below it (App.tsx connection-status pill) cannot a
 - Pages scroll in their own `overflow-y-auto` box under `<main>`, not the window, so the browser's scroll restoration does nothing for them. Overview unmounts when a card opens a conversation, and Settings' phone list shares one scroller with every category (the category's shorter content clamps `scrollTop`), so Back landed at the top. The inbox never had the problem: its list stays mounted, hidden, under the opened item.
 - `useScrollMemory(ref, key)` (`lib/scroll-memory.ts`) remembers `scrollTop` per key and restores it only when the router saw Back / Forward land on the current address (`takeReturn`); a link or a tap starts at the top. Decide the target once per key: React's StrictMode runs the layout effect twice in development, and the second run would find the return already taken.
 - Checking it in a browser: an edit made while Vite is running can keep serving the old module (the "negative control" passed with the hook disabled). Restart Vite with `--force` and fetch the module to confirm before trusting a before/after comparison.
+- The key names the page the scroller shows, not everything in the address. Settings keyed it `settings/<tab>/<sub>`, and on Models `sub` is the purpose whose dialog is open: opening and closing the dialog each read as a fresh visit and put the page at the top, away from the row just saved (#4282). Include an item in the key only where it replaces the page (`itemIsPage`). A row opened from the page in view also passes no section to `pick`: naming one scrolls that section to the top of the page the row is already on. A link from another page still names it.
 
 ## Keep background task drawers open across turn status changes (2026-11-06)
 
@@ -775,6 +855,16 @@ A narrow shell can unmount its sidebar list and mount the same list in the Agent
 - Check each known page revision before appending; retain known revisions across unversioned pages, but remove the aggregate revision when any accepted page lacks metadata. Legacy compatibility cannot prove a snapshot.
 - A complete-read helper must reject page failures, caps and retired owners instead of resolving the loaded prefix. Share the actual pending page result with concurrent readers, and scope callbacks to machine, path, working directory and reload so an old reader cannot borrow the new file. Keep an ordinary failed page retryable at its original offset; a known revision change requires a fresh read from the beginning. Explicit bounded previews need a separate completion flag, preserving a deliberate CSV/TSV cap without permitting partial exports. Go omits an empty text field: complete zero-byte text metadata is a valid empty file, while arbitrary missing content is not.
 
+## Validate MCP scalar text before JavaScript normalizes it (#3332)
+
+`Date.parse` can normalize an impossible day, and `Number.isInteger(Number(text))` can accept a rounded fraction or underflowed value. Check the original date-time components and decimal/exponent wholeness before constructing an answer; also require a safe numeric integer. A safe-integer check alone misses fractions that round to a safe integer. Preserve exact integral forms such as `2.0`, `2e3` and zero with a negative exponent. Test both the public validation/resolution helpers and the card: invalid input must disable Submit and produce no resolve request, while correcting it submits the intended value once.
+
+## Explicit default ports disappear during URL normalization (#4233)
+
+`URL.port` is empty for both an implicit port and an explicitly written HTTP `:80` or HTTPS `:443`. When recognizing links to an Agent's dev server, retain explicit authority-port intent from the original text after validating its URL, protocol and host. Do not infer a scheme default for a URL with no port, or borrow a colon from credentials, a path, query or fragment. Regress the public helper, reply chips and click routing together; keep hub-owned pages and preview capability/session/folder checks ahead of opening a preview. Recognition alone does not establish HTTPS preview transport support.
+
+For reply tokenization (#4498), distinguish a bracketed IPv6 authority from surrounding Markdown brackets. A direct URL helper can accept the address while the prose tokenizer drops it, leaving no chip. Exercise scheme links, Markdown/autolinks and existing bare forms through the public chip renderer as well as the helper; keep URL/host admission and delimiter boundaries unchanged.
+
 ## Connection tests must use the form's credential choice (#1903)
 
 A saved credential and an empty input are different from explicitly removing that credential. Send the removal flag through the test API and give it the same precedence as saving, including when a new key was typed before removal was selected. Changing the credential choice invalidates both the displayed test result and any pending result for the old form. Test against a synthetic source and assert that the saved configuration stays unchanged.
@@ -806,3 +896,47 @@ supervised task spends most of its life stopped between rounds (`follow_up`: the
 is not done), so the owner saw one task out of four and asked what the others were doing. The #2920 Progress tray went the
 other way and listed every slot ever dispatched, closed ones included. "Open" is a property of the task (`done_at`,
 `start_error`, an open plan), not of its agent: filter on that, sort what needs the user first, and fold the closed ones.
+
+## Workspace identity outlives its Agents
+
+An Agent collection cannot serve as a workspace inventory: empty ancestors disappear, and pinning or filtering can remove the only row carrying a parent edge. Keep discovery independent of the board and count actual Agents separately from catalog containers. Bind actions to credential generation, manager, computer, host and runtime workspace ID; matching paths do not grant ownership. A combined browser fixture must stamp its sessions and discovery with the same manager, or it correctly exercises isolation instead of navigation.
+
+The current assistant and the roster's default are different scopes. Workspace discovery and management entry points follow `shownManager`, while an item without a manager still belongs to `defaultManager`. A choice change must cancel reads and invalidate deletion previews immediately, even if the user switches back before a response arrives; subscribing only to changes of the roster's default misses that transition.
+
+## Preserve referenced design section numbers during integration
+
+When parallel design additions occupy the same section number, keep the upstream
+section and its references together. Move the feature section to the next free
+number instead of replacing either contract (#3223). The pending-request rules
+remain section 4.8; workspace selection and management follow in section 4.10.
+
+## Keep workspace action resolution behind its lazy entry
+
+A lazy menu still adds to the first screen when its always-mounted opener imports
+its permission and catalog resolvers. Keep only request routing and immediate scope
+invalidation in that opener module; import resolution and child-request assembly
+from the lazy menu (#3223).
+Check the real production bundle against the fixed main baseline and retain the
+same owner, manager, host and workspace safety checks.
+
+## Preserve workspace controls when adopting shared fold motion
+
+A workspace row has separate disclosure, selection and action controls. When merging shared sidebar fold timing, keep that structure and apply `sidebarFoldMotion` to its disclosure chevron and `sidebarFold` to the matching `Collapse`. Choosing either side wholesale drops either workspace controls or the shared timing; child-workspace folds need the same motion contract.
+
+The first screen also counts startup translations. Keep generic request-owner and uncertain-creation errors in the existing worktree catalog; load the advanced composer catalog with the composer. A pair of eager error labels should not make every advanced-field description part of the first screen.
+
+## Archive refusals must roll back optimistic removal (#4277)
+
+A connected delta hub keeps its pushed session rows during REST refresh. Refresh cannot restore a row the page
+optimistically removed. Keep the pre-request session snapshot and restore it immediately on archive failure,
+before refreshing. Preserve a newer pushed row if one arrived meanwhile. Exercise mounted rows and the real
+store refresh with both delta and bounded list negotiation.
+
+## Recovering from an expired page cursor must not shrink the list
+The hub keeps a session list's frozen view for 5 minutes and at most 32 of them (`server/internal/sessionlist/index.go`).
+Reaching the end of an Agents list open longer than that asked for the next page with an expired cursor, and both
+clients recovered by starting over: the web emptied the list (`clearBaseline`) and the iPhone replaced its rows with the
+first page. A list 300 rows deep became 50, the scroller clamped its offset, and the reader was thrown back near the top
+every time they reached the bottom. Recover by reading a fresh view as deep as the reader has scrolled plus one page,
+keeping the old rows on screen until it arrives (web `SessionList.reread`, #4431; iOS `SessionListModel.rebaseline`); any
+recovery that publishes fewer rows than are on screen moves the reader.

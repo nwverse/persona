@@ -440,6 +440,8 @@ nonisolated enum Theme {
     /// inbox's Select, #2059; the web uses the same 45%).
     enum Fade {
         static let unavailable: Double = 0.45
+        /// An offline assistant's row in the switcher's list: the whole row, still pickable (the web and Android use 55%).
+        static let offline: Double = 0.55
     }
 
     /// How much of a rich card must intersect the scroll viewport before its isolated content runs.
@@ -476,6 +478,7 @@ nonisolated enum Theme {
     /// Small / Standard / Large and the system's text size (up to 1.6 ×, `Theme.sizeScale`); the lines stay as they are, in a
     /// plain `.frame`. Nothing on a page writes a size as a number (`TokenRatchetTests`).
     enum Size {
+        static let nonvisualProbe: CGFloat = 0
         // Lines, rules and bars: do not scale.
         static let hairline: CGFloat = 0.5
         /// The width of the small window's source layer (VNC's picture in picture, #1839): a normal size, behind the
@@ -489,6 +492,8 @@ nonisolated enum Theme {
         static let rule: CGFloat = 2
         static let ruleWide: CGFloat = 2.5
         static let bar: CGFloat = 3
+        /// How much of a long quote in a reply shows while it is folded (about four lines of body text, #2984).
+        static let quoteFold: CGFloat = 104
         static let barWide: CGFloat = 4
         /// A share bar's thickness (the assistant's stacked-bar card).
         static let meter: CGFloat = 12
@@ -543,8 +548,9 @@ nonisolated enum Theme {
         static let box72: CGFloat = 72
         static let box76: CGFloat = 76
         static let box80: CGFloat = 80
-        /// The height of a saved place's map in its editor: the reminder's circle and a street or two around it.
-        static let placeMap: CGFloat = 160
+        /// The height of the map in a saved place's editor: the reminder's circle with the streets around it, and room to
+        /// pan the map and tap where the place is (#4248).
+        static let placeMap: CGFloat = 220
         static let box110: CGFloat = 110
         static let box120: CGFloat = 120
         /// The longest a tab's name gets in the chat header's strip of the space's tabs: one long name cannot push the
@@ -641,6 +647,8 @@ nonisolated enum Theme {
         /// Opening and closing things (a work card, a menu, a section): a state change, 0.25 s (it was the system's
         /// default snappy, 0.5 s, which trailed behind the finger).
         static let standard = state
+        /// Task-draft dismissal uses the same six-second Undo window as the web.
+        static let draftUndo: Duration = .seconds(6)
         /// A block of content unfolding in place, its height growing (the Feishu pinned shelf's rows): slower than a
         /// state change so the eye can follow the rows coming in. `standard` read faster than Feishu's own (2026-11-04).
         static let expand = Animation.smooth(duration: 0.4)
@@ -910,6 +918,12 @@ nonisolated enum Theme {
 
     static let primaryText = Color(light: 0x1C1C1E, dark: 0xF2F2F7)
     static let codeBackground = Color(light: 0xF3F1EC, dark: 0x1C1D21)
+    /// Inline code in a reply (#2984): a light gray under the body's color (blue is for what opens).
+    static let inlineCodeBackground = Color(light: 0xEBEBEF, dark: 0x2C2C31)
+    /// A reply's code block's title bar (#2984): its language and Copy, a shade off `codeBackground`.
+    static let codeBar = Color(light: 0xE8E5DE, dark: 0x27282D)
+    /// A reply's quote (#2984): its card under the accent bar, the accent faint.
+    static var quoteBackground: Color { accent.opacity(0.08) }
 
     /// Syntax colors in the file viewer (docs/apple/ios.md「File viewer」), on `codeBackground` in every style (it does not
     /// change with the style, so neither do they): GitHub's palette, every one ≥ 4.5:1 on that background in light

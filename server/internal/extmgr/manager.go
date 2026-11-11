@@ -92,6 +92,8 @@ type Options struct {
 	AssistantMachine func() string
 	// AssistantTools are the assistant's tools now (a connector's tool may not shadow one).
 	AssistantTools func() []proto.Tool
+	// LauncherReferences are the model providers' keys that hold references, for their providers' details (nil: none).
+	LauncherReferences func(ctx context.Context) []LauncherReference
 	// Lang and Timezone are the user's language and zone ("" when not known).
 	Lang     func() i18n.Lang
 	Timezone func() string
@@ -117,9 +119,12 @@ type Manager struct {
 
 	ctx context.Context
 
-	mail       Mail
-	connectors *connector.Registry
-	subs       *subscriptions.Service // source subscriptions (subscriptions.go); nil until Run
+	mail               Mail
+	connectors         *connector.Registry
+	imessageSettingsMu imessageContextLock
+	imessageArchive    imessageArchiveFence
+	imessageAIPending  atomic.Bool
+	subs               *subscriptions.Service // source subscriptions (subscriptions.go); nil until Run
 	// subDrafts are the model drafts the subscription pages started (#2040, subscriptions_ui.go), made on first use.
 	subDrafts     *subscriptionsui.Drafts
 	subDraftsOnce sync.Once

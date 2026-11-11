@@ -16,10 +16,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -32,6 +30,7 @@ import persona.core.contracts.*
 import persona.core.contracts.api.*
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.domain.sort.*
 import persona.core.domain.answer.firstBySession
 import persona.core.domain.answer.rowLine
@@ -381,6 +380,10 @@ internal fun AgentsScreen(
                 // Three cases, as iOS: a search with no result (no New session, which read as if the agents were gone), no
                 // sessions at all, and a quick filter with nothing left (Show all).
                 when {
+                    // An offline assistant with nothing the hub still keeps of it (no agent, no computer): out of reach, not a first run;
+                    // with a computer online it can start a session now.
+                    assistant.offline != null && page.allCount == 0 && page.settings.query.isEmpty() &&
+                        page.machines.isEmpty() && page.settings.machineFilter.isEmpty() -> JAssistantOffline(assistant)
                     page.allCount == 0 && page.settings.query.isNotEmpty() -> JEmptyState(
                         stringResource(R.string.agents_empty_search_title, page.settings.query),
                         stringResource(R.string.agents_empty_search_hint), icon = PhIcons.MagnifyingGlass)
@@ -491,7 +494,7 @@ internal fun AgentsScreen(
             }
             if (page.pagination.paged && !firstPageIncomplete) item("sessions-pagination", contentType = "pagination") {
                 Column(Modifier.fillMaxWidth().padding(vertical = Tokens.Space.m), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(stringResource(R.string.agents_page_loaded, page.sessions.size, page.pagination.total),
+                    Text(pluralStringResource(R.plurals.agents_page_loaded, page.pagination.total, page.sessions.size, page.pagination.total),
                         style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3)
                     if (page.pagination.loading) JSpinner()
                     else if (page.pagination.hasMore) JTextButton(stringResource(R.string.agents_page_more), model::loadMore)
@@ -569,10 +572,12 @@ internal fun AgentsScreen(
                 })
         }
     }
-    operationDialog?.let { AgentOperationDialog(it, model, names[it.session.machineId]) { operationDialog = null } }
+    operationDialog?.let { AgentOperationDialog(it, model, names[it.session.machineId], creationModel?.service,
+        page.machines.firstOrNull { m -> m.id == it.session.machineId }) { operationDialog = null } }
     pickingTodoForSession?.let { targetSession ->
         TodoPickerSheet(
-            todos = todos,
+            todos = assistant.todosFor(todos, targetSession.machineId,
+                targetSession.manager ?: page.machines.firstOrNull { it.id == targetSession.machineId }?.manager),
             title = stringResource(if (targetSession.todo != null) R.string.agents_todo_move_title else R.string.agents_todo_link_title),
             currentTodoId = targetSession.todo?.id,
             sessionLookup = { k -> page.sessions.firstOrNull { it.key == k } },
@@ -590,7 +595,7 @@ internal fun AgentsScreen(
     pickingTodoForSpace?.let { (machineId, space) ->
         val current = todos.forSpace(machineId, space)
         TodoPickerSheet(
-            todos = todos,
+            todos = assistant.todosFor(todos, machineId, page.machines.firstOrNull { it.id == machineId }?.manager),
             title = stringResource(if (current != null) R.string.agents_space_todo_move else R.string.agents_space_todo_link),
             currentTodoId = current?.id,
             sessionLookup = { k -> page.sessions.firstOrNull { it.key == k } },
@@ -615,7 +620,8 @@ internal fun AgentsScreen(
         MarkAllReadDialog(rows.size, onDismiss = { confirmRead = null }) { model.markRead(rows) }
     }
     if (newAgent) {
-        if (creationModel != null) NewAgentDialog(creationModel, page.machines, connection == ConnectionState.Online) { newAgent = false }
+        if (creationModel != null) NewAgentDialog(creationModel, page.machines, connection == ConnectionState.Online,
+            onAddProvider = { navigator.navigate(persona.core.navigation.SettingsPageRoute(persona.core.navigation.SettingsPage.Providers)) }) { newAgent = false }
         else JDialog(onDismiss = { newAgent = false }, title = stringResource(R.string.agents_action_new_session),
             text = stringResource(R.string.agents_new_session_unavailable), confirm = stringResource(R.string.agents_close) to { newAgent = false }, dismiss = null)
     }
@@ -665,6 +671,18 @@ internal fun cardContext(request: Interaction, pageSessions: List<Session>, page
  * The cards the page shows: the current assistant's, of the hub group shown. A card names its manager, else it is its
  * session's (one of a session the list no longer has: its own stamp alone; none: the default's).
  */
+/**
+ * The to-dos an agent (or a project) on computer [machineId] stamped [manager] can be put on: its own assistant's, the
+ * ones a new to-do from the same sheet is made under (AgentsViewModel.todoOwner); every one with one assistant, and for
+ * another group's computer.
+ */
+internal fun persona.core.contracts.api.CurrentAssistant.todosFor(todos: List<persona.core.contracts.Todo>, machineId: String, manager: String?): List<persona.core.contracts.Todo> {
+    val roster = roster?.takeIf { it.isMulti } ?: return todos
+    if (persona.core.contracts.GroupKeys.namespaceOf(machineId) != group) return todos
+    val owner = roster.shownUnder(manager)
+    return todos.filter { roster.shownUnder(it.manager) == owner }
+}
+
 internal fun shownRequests(requests: List<Interaction>, group: GroupFilter?, assistant: persona.core.contracts.api.CurrentAssistant,
     sessions: List<Session>): List<Interaction> {
     val managers = sessions.associate { it.key to it.manager }
@@ -727,6 +745,8 @@ internal fun SlotRow(
         agent = session.agentLabel.takeIf { !session.isClaude && source == null },
         statusText = row.rowStatusText(muted),
         facts = buildList {
+            // Where its closeout stands on merged and deployed (#3612), first: the facts' line is cut at its end.
+            session.closeoutFacts.forEach { add(RowFact(it.text.text(), caution = it.contradicted)) }
             // Where a Codex thread or a runtime's session comes from, and when the phone can only read it.
             source?.let { add(RowFact(listOfNotNull(it.label, it.agentName).joinToString(" / "))) }
             if (source?.readOnly == true) add(RowFact(stringResource(R.string.agents_row_view_only), caution = true))
@@ -752,14 +772,22 @@ internal fun SlotRow(
             }
         },
         flags = buildList {
+            // Claude Code's ultracode on (#582, iOS UltracodeMark): the workflow mark right after the title.
+            if (ultracodeMark(session)) add(RowFlag(stringResource(R.string.agents_row_ultracode), PersonaIcons.workflow, ai = true))
             if (pinned) add(RowFlag(stringResource(R.string.agents_row_pinned), PhIcons.PushPin))
             if (muted) add(RowFlag(stringResource(R.string.agents_row_muted), PhIcons.Prohibit))
+            // Its closeout (#3612): the hub found a claim untrue (the line says which), or the turn is not finished.
+            when (session.closeoutMark) {
+                CloseoutMark.Contradicted -> add(RowFlag(stringResource(R.string.agents_row_closeout_contradicted), PhIcons.Warning, caution = true))
+                CloseoutMark.NotFinished -> add(RowFlag(stringResource(R.string.agents_row_not_finished), PhIcons.CircleDashed))
+                null -> Unit
+            }
         },
         launcher = launcher, branch = branch, source = origin,
         // Which agent runs there and in which client (#6390): its mark before the state mark.
         agentMark = session.agentMark,
-        // Its running Workflows (#2935): "Background workflow "parity-audit" · Verify 2/2 · 169/185+ · 14 min", counting as it changes (#3435).
-        note = WorkflowSummary.line(session, now)?.let { RowNote(it.text(), WorkflowIcon) },
+        // Its running Workflows (#2935) stay structured until the row lays them out beside critical facts (#3435).
+        note = WorkflowSummary.lineFields(session, now)?.let { RowNote(it, WorkflowIcon) },
     )
     }
     if (menu) JActionSheet(menuItems(), { menu = false }, title = session.displayTitle)
@@ -810,7 +838,7 @@ internal fun AgentSessionMenuItems(
     onUnlinkTodo: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null,
 ): List<JAction> {
-    val clipboard = LocalClipboardManager.current
+    val copy = rememberCopy()
     val session = row.session
     return buildList {
         add(JAction(stringResource(if (pinned) R.string.agents_action_unpin else R.string.agents_action_pin), PhIcons.PushPin, enabled = !busy, onClick = onPin))
@@ -829,8 +857,8 @@ internal fun AgentSessionMenuItems(
         add(JAction(stringResource(R.string.agents_action_handoff), onClick = onHandoff))
         if (row.state == AgentState.Unread) add(JAction(stringResource(R.string.agents_action_mark_read), PhIcons.Check, onClick = onRead))
         // Only a session in a terminal resumes there; a Codex thread by its own thread id.
-        session.resumeCommand()?.let { command -> add(JAction(stringResource(R.string.agents_action_copy_resume), onClick = { clipboard.setText(AnnotatedString(command)) })) }
-        add(JAction(stringResource(R.string.agents_action_copy_directory), enabled = session.cwd.isNotBlank(), onClick = { clipboard.setText(AnnotatedString(session.cwd)) }))
+        session.resumeCommand()?.let { command -> add(JAction(stringResource(R.string.agents_action_copy_resume), onClick = { copy(command, null) })) }
+        add(JAction(stringResource(R.string.agents_action_copy_directory), enabled = session.cwd.isNotBlank(), onClick = { copy(session.cwd, null) }))
         add(JAction(stringResource(R.string.agents_action_open_session), onClick = onOpen))
         if (session.isLive && session.canTerminal) add(JAction(stringResource(R.string.agents_action_close_agent), destructive = true, enabled = !busy, onClick = onClose))
         if (session.canDelete && onDelete != null) add(JAction(stringResource(R.string.agents_action_delete_chat), destructive = true, enabled = !busy, onClick = onDelete))

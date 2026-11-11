@@ -334,7 +334,7 @@ struct ExtensionDetailView: View {
         }
         if d.readOnly {
             Section {
-                Text("This extension is set in its manager's manager.json; change its switch and settings there, then restart the manager.")
+                Text("This extension is set in its assistant's manager.json; change its switch and settings there, then restart the assistant.")
                     .font(Theme.Font.label).foregroundStyle(.secondary)
             }
         }

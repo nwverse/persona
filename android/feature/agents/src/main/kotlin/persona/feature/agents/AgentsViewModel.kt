@@ -10,6 +10,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.*
 import persona.core.designsystem.Haptic
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.util.UUID
 
@@ -479,12 +480,13 @@ internal class AgentsViewModel(
         if (trimmed.isEmpty() || trimmed == session.spaceName) return
         change(session.machineId, R.string.agents_notice_renamed) { it.renameSpace(session, trimmed) }
     }
-    fun close(session: Session) = change(session.machineId) {
+    /** [onDone]: after it went through (the worktree cleanup, #4532). */
+    fun close(session: Session, onDone: () -> Unit = {}) = change(session.machineId, onDone = onDone) {
         it.session(session, AgentSessionEdit(closed = true))
         bindings?.onSessionClosed?.invoke(session.key)
     }
     /** "Delete chat": out of every app's list (the transcript stays); a chat open on it goes. */
-    fun delete(session: Session) = change(session.machineId, R.string.agents_notice_deleted) {
+    fun delete(session: Session, onDone: () -> Unit = {}) = change(session.machineId, R.string.agents_notice_deleted, onDone) {
         it.session(session, AgentSessionEdit(deleted = true))
         bindings?.onSessionClosed?.invoke(session.key)
     }
@@ -535,7 +537,8 @@ internal class AgentsViewModel(
         }
     }
     /** [machineId] is the target's: it goes through its own hub group's connection, as answers do (stateFor). */
-    private fun change(machineId: String, @androidx.annotation.StringRes success: Int = R.string.agents_notice_saved, action: suspend (AgentOperationsState) -> Unit) {
+    private fun change(machineId: String, @androidx.annotation.StringRes success: Int = R.string.agents_notice_saved, onDone: () -> Unit = {},
+                       action: suspend (AgentOperationsState) -> Unit) {
         val operations = operations ?: run { _notice.value = AgentText(R.string.agents_notice_operations_missing); return }
         if (hubGroups.groups.value.stateFor(machineId, connection.state.value) != ConnectionState.Online) { _notice.value = AgentText(R.string.agents_notice_offline); return }
         if (changing) { _notice.value = AgentText(R.string.agents_notice_saving); return }
@@ -546,6 +549,7 @@ internal class AgentsViewModel(
                 action(operations)
                 succeeded = true
                 _notice.value = AgentText(success)
+                onDone()
             } catch (e: CancellationException) { throw e }
             catch (_: OperationsMissing) { _notice.value = AgentText(R.string.agents_notice_operations_missing) }
             catch (_: RenameUnconfirmed) { _notice.value = AgentText(R.string.agents_notice_rename_unconfirmed) }
@@ -614,11 +618,26 @@ internal class AgentsViewModel(
         }
     }
 
-    /** "Create and link" (iOS TodoLinkAgentSheet): a new to-do named [title], then this agent on it. */
+    /**
+     * The assistant a new to-do for a thing on computer [machineId] stamped [manager] is made under: the thing's own
+     * (docs/assistant/managers.md "Clients"), so it is never another assistant's to-do linked to this one's agent, whichever
+     * is current by the time it is made (`""`: the default's, naming none). Nothing with one assistant, without a roster,
+     * or for another group's computer: the request goes as before.
+     */
+    internal fun todoOwner(machineId: String, manager: String?): kotlin.coroutines.CoroutineContext {
+        val current = assistant.value ?: return kotlin.coroutines.EmptyCoroutineContext
+        val roster = current.roster?.takeIf { it.isMulti } ?: return kotlin.coroutines.EmptyCoroutineContext
+        if (persona.core.contracts.GroupKeys.namespaceOf(machineId) != current.group) return kotlin.coroutines.EmptyCoroutineContext
+        val owner = roster.shownUnder(manager)
+        return persona.core.contracts.api.RequestManager(if (owner == roster.defaultManagerId) "" else owner)
+    }
+
+    /** "Create and link" (iOS TodoLinkAgentSheet): a new to-do named [title] under the agent's assistant, then this agent on it. */
     fun createAndLinkTodo(title: String, session: Session) {
         viewModelScope.launch {
             val store = tasks ?: return@launch
-            val todo = try { store.createTodo(title.trim()) } catch (e: Exception) {
+            val owner = todoOwner(session.machineId, session.manager ?: repository.machines.value.firstOrNull { it.id == session.machineId }?.manager)
+            val todo = try { withContext(owner) { store.createTodo(title.trim()) } } catch (e: Exception) {
                 _notice.value = AgentText(R.string.agents_notice_todo_create_failed, e.message.orEmpty()); return@launch
             }
             try {
@@ -634,7 +653,8 @@ internal class AgentsViewModel(
     fun linkSpace(todoId: String?, machineId: String, space: String, newTitle: String? = null) {
         viewModelScope.launch {
             val store = tasks ?: return@launch
-            val id = todoId ?: try { store.createTodo(newTitle.orEmpty().trim()).id } catch (e: Exception) {
+            val owner = todoOwner(machineId, repository.machines.value.firstOrNull { it.id == machineId }?.manager)
+            val id = todoId ?: try { withContext(owner) { store.createTodo(newTitle.orEmpty().trim()) }.id } catch (e: Exception) {
                 _notice.value = AgentText(R.string.agents_notice_todo_create_failed, e.message.orEmpty()); return@launch
             }
             try {

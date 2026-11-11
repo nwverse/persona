@@ -96,10 +96,10 @@ nonisolated struct APIError: LocalizedError, Sendable {
     /// Business codes precede status and free-form server wording. Raw fields remain available for diagnostics.
     var businessMessage: String? {
         switch code {
-        case "kb_disabled": String(localized: "This manager has turned off the knowledge base. Enable it in the manager configuration to use it.")
+        case "kb_disabled": String(localized: "This assistant has turned off the knowledge base. Enable it in the assistant's configuration to use it.")
         case "kb_unavailable": String(localized: "The knowledge base isn't ready yet. Try again shortly.")
-        case "kb_read_only": String(localized: "The knowledge base is read-only. Change the manager configuration before editing or syncing recordings.")
-        case "assistant_offline": String(localized: "The manager is offline or restarting. Try again shortly.")
+        case "kb_read_only": String(localized: "The knowledge base is read-only. Change the assistant's configuration before editing or syncing recordings.")
+        case "assistant_offline": String(localized: "The assistant is offline or restarting. Try again shortly.")
         case "node_unreachable":
             fields["delivered"] == "none"
                 ? String(localized: "This computer is offline: Persona Link isn't running, or the computer is asleep.")
@@ -177,6 +177,8 @@ nonisolated struct APIClient: Sendable {
     var personaNaming = false
     /// The hub's hello has `sessions_lookup`: one session's complete row can be asked for by machine and id.
     var sessionLookup = false
+    /// The hub's hello has `sessions_list`: session lists come in pages with a revision that `since` follows.
+    var sessionList = false
     /// Execution surface is diagnostic only; authorization still uses the paired hub credential.
     var clientMetadata: RequestClientMetadata = .current
     /// Answers the demo config's requests (DemoHub registers it at launch); every endpoint goes through `request`.
@@ -1100,16 +1102,48 @@ nonisolated struct APIClient: Sendable {
         /// Notify Main-Chat Tasks Only in the Main Chat (#1731): tasks the main conversation starts are quiet (`TodoItem.quiet`). The
         /// value in effect (on by default); nil from a hub without the setting, which hides the switch.
         var mainTasksQuiet: Bool?
+        /// Fold Background Rounds (docs/apple/ios.md "Background rounds"): the main conversation folds rounds another
+        /// conversation, a scheduled task or a follow-up started into one line. The value in effect; nil from a hub
+        /// without the setting, which hides the switch and folds as if on (`backgroundFolded`).
+        var mainBackgroundFolded: Bool?
         /// The role a meeting recording starts with (#2981, docs/assistant/meeting-minutes.md「Attendance fields」): `off`,
         /// `listener` or `participant`; nil from a hub without attending.
         var meetingAttendanceDefault: String?
+        /// The side conversations that lead a direction of the owner's work (docs/assistant/unified-entry.md "Leader
+        /// conversations"), in the hub's order; nil when there are none or from an older hub. The sidebar shows them as
+        /// the Directions group, under the names `assistantLeaders()` gives.
+        var leaders: [String]?
         enum CodingKeys: String, CodingKey {
-            case launcher, cwd, conversations, timezone, main
+            case launcher, cwd, conversations, timezone, main, leaders
             case machineID = "machine_id", notes = "notes_effective", mainTasksQuiet = "main_tasks_quiet"
+            case mainBackgroundFolded = "main_background_folded"
             case meetingAttendanceDefault = "meeting_attendance_default"
         }
+
+        /// Whether the main conversation folds its background rounds: on unless the hub says off (an older hub omits it).
+        var backgroundFolded: Bool { mainBackgroundFolded ?? true }
     }
     func assistant() async throws -> AssistantState { owned(try await get("/api/v1/assistant")) }
+    /// A direction as `GET /api/v1/assistant/leaders` lists it (#3519, #3695): its leader conversation's id and the name
+    /// the hub gives the direction (the name set, else its project's, else the title without its "MMDD | kind | " prefix).
+    struct LeaderInfo: Codable, Sendable, Equatable {
+        var id: String
+        var name: String?
+        var ended: Bool?
+    }
+    /// The directions' names by leader conversation id: the current ones with a name (ended ones left out).
+    func directionNames() async throws -> [String: String] {
+        struct Body: Decodable { var leaders: [LeaderInfo]? }
+        let body = try await get("/api/v1/assistant/leaders", as: Body.self)
+        return Self.directionNames(body.leaders ?? [])
+    }
+    static func directionNames(_ list: [LeaderInfo]) -> [String: String] {
+        var out: [String: String] = [:]
+        for l in list where !(l.ended ?? false) && !l.id.isEmpty {
+            if let name = l.name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty { out[l.id] = name }
+        }
+        return out
+    }
     /// `st` with its conversations stamped with the manager this client named: the hub relays another manager's answer as
     /// it came, without the `manager` its own lists put on each session. Nothing named: the default's, left as they came.
     private func owned(_ st: AssistantState) -> AssistantState {
@@ -1140,17 +1174,20 @@ nonisolated struct APIClient: Sendable {
         var timezone: String?
         var notes: String?
         var mainTasksQuiet: Bool?
+        var mainBackgroundFolded: Bool?
         var meetingAttendanceDefault: String?
         enum CodingKeys: String, CodingKey {
             case launcher, timezone, notes
             case machineID = "machine_id", mainTasksQuiet = "main_tasks_quiet", meetingAttendanceDefault = "meeting_attendance_default"
+            case mainBackgroundFolded = "main_background_folded"
         }
     }
     func setAssistant(machine: String? = nil, launcher: String? = nil, timezone: String? = nil, notes: String? = nil,
-                      mainTasksQuiet: Bool? = nil, meetingAttendanceDefault: String? = nil) async throws -> AssistantState {
+                      mainTasksQuiet: Bool? = nil, mainBackgroundFolded: Bool? = nil,
+                      meetingAttendanceDefault: String? = nil) async throws -> AssistantState {
         owned(try JSON.decoder.decode(AssistantState.self, from: try await request("PUT", "/api/v1/assistant",
             body: AssistantConfigBody(machineID: machine, launcher: launcher, timezone: timezone, notes: notes, mainTasksQuiet: mainTasksQuiet,
-                                      meetingAttendanceDefault: meetingAttendanceDefault))))
+                                      mainBackgroundFolded: mainBackgroundFolded, meetingAttendanceDefault: meetingAttendanceDefault))))
     }
     /// The Chat tab is open: the hub gets a claude process ready so the first message starts at once. With no launcher
     /// chosen the field is omitted and the hub warms its own default (#4200: the client never sends a made-up name).
@@ -1180,11 +1217,11 @@ nonisolated struct APIClient: Sendable {
     // MARK: Assistant schedule, memory (docs/assistant/assistant.md)
 
     /// Something the assistant does on its own (docs/assistant/assistant.md「Scheduled tasks」): once (a follow-up it scheduled), every
-    /// day at a time (a morning briefing), or every N minutes (a patrol). Runs go into the conversation it came from, else into the
+    /// day at a time (a morning briefing), every N minutes (a patrol), or on a cron expression (hubs with task_cron). Runs go into the conversation it came from, else into the
     /// task's own one (the first run starts it, the next ones continue it), with its own launcher / permission mode /
     /// effort (nil = the assistant's defaults); pushed when done.
     struct ScheduledTask: Codable, Identifiable, Hashable, Sendable {
-        enum Repeat: String, Codable, Sendable, CaseIterable { case once, daily, interval }
+        enum Repeat: String, Codable, Sendable, CaseIterable { case once, daily, interval, cron }
         var id: String
         var title: String
         var prompt: String
@@ -1193,6 +1230,11 @@ nonisolated struct APIClient: Sendable {
         var time: String          // daily: "HH:MM" in the phone's time zone
         var weekdays: [Int]       // daily: 1 = Monday … 7 = Sunday; empty = every day
         var everyMinutes: Int     // interval
+        /// cron: "minute hour day-of-month month day-of-week" (or @daily…) in the user's time zone; sent back as it is, so the
+        /// hub keeps it (the app shows it, the web edits it).
+        var cron: String = ""
+        var cronText: String?     // read-only: the expression in words in the app's language, nil when the hub has none
+        var nextRuns: [Date] = [] // read-only: a cron task's next runs
         var enabled: Bool
         var machineID: String?
         var sessionID: String?    // the conversation it came from, runs go into it; nil = the task's own one
@@ -1219,6 +1261,7 @@ nonisolated struct APIClient: Sendable {
             case lastRun = "last_run", lastSessionID = "last_session_id", nextRun = "next_run"
             case lastStatus = "last_status", lastError = "last_error"
             case runMachineID = "run_machine_id", runSessionID = "run_session_id"
+            case cron, cronText = "cron_text", nextRuns = "next_runs"
         }
         /// Push When Done is Only Its Alerts: a run's answer is not pushed, only what it sends with notify_user.
         var pushesOnlyAsked: Bool { push == Self.pushAsked }
@@ -1247,6 +1290,9 @@ nonisolated struct APIClient: Sendable {
             time = text(.time) ?? "09:00"
             weekdays = try c.decodeIfPresent([Int].self, forKey: .weekdays) ?? []
             everyMinutes = try c.decodeIfPresent(Int.self, forKey: .everyMinutes) ?? 0
+            cron = text(.cron) ?? ""
+            cronText = text(.cronText)
+            nextRuns = ((try? c.decodeIfPresent([Date].self, forKey: .nextRuns)) ?? nil)?.compactMap(\.realDate) ?? []
             enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
             machineID = text(.machineID); sessionID = text(.sessionID)
             launcher = text(.launcher); permissionMode = text(.permissionMode); effort = text(.effort)
@@ -1261,6 +1307,7 @@ nonisolated struct APIClient: Sendable {
             try c.encode(id, forKey: .id); try c.encode(title, forKey: .title); try c.encode(prompt, forKey: .prompt)
             try c.encode(repeats, forKey: .repeats); try c.encodeIfPresent(at, forKey: .at)
             try c.encode(time, forKey: .time); try c.encode(weekdays, forKey: .weekdays); try c.encode(everyMinutes, forKey: .everyMinutes)
+            if !cron.isEmpty { try c.encode(cron, forKey: .cron) } // only a cron task has one: an older hub never gets it
             try c.encode(enabled, forKey: .enabled); try c.encode(sessionID ?? "", forKey: .sessionID)
             try c.encode(permissionMode ?? "", forKey: .permissionMode)
             try c.encodeIfPresent(push, forKey: .push)

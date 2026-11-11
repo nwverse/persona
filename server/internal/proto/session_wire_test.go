@@ -58,6 +58,10 @@ func wireSamples(t *testing.T, ty reflect.Type) []reflect.Value {
 		for _, n := range []int64{-7, 1 << 40, math.MaxInt64, math.MinInt64} {
 			add(n)
 		}
+	case ty.Kind() == reflect.Uint16:
+		for _, n := range []uint16{1, 7, math.MaxUint16} {
+			add(n)
+		}
 	case ty.Kind() == reflect.Pointer:
 		for _, v := range append([]reflect.Value{reflect.Zero(ty.Elem())}, wireSamples(t, ty.Elem())...) {
 			p := reflect.New(ty.Elem())
@@ -230,6 +234,23 @@ func TestSessionWireMatchesReflect(t *testing.T) {
 	}
 	for _, s := range p.Sessions {
 		checkWire(t, "the listed "+s.SessionID, s)
+	}
+}
+
+func TestSessionInventoryWireRoundTrip(t *testing.T) {
+	created := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	s := Session{MachineID: "machine", SessionID: "session", Inventory: &SessionInventory{
+		ProjectKind: "remote", ProjectRepo: strings.Repeat("a", 64), CreatedAt: &created,
+	}}
+	checkWire(t, "session inventory", s)
+	raw, ok := appendSession([]byte(`{"sessions":[`), &s)
+	if !ok {
+		t.Fatal("inventory must use the fast encoder")
+	}
+	var decoder SessionListDecoder
+	event, fast, err := decodeEvent(&decoder, append(raw, ']', '}'))
+	if err != nil || !fast || len(event.Sessions) != 1 || !reflect.DeepEqual(event.Sessions[0].Inventory, s.Inventory) {
+		t.Fatalf("inventory round trip: %+v, fast=%v, err=%v", event.Sessions, fast, err)
 	}
 }
 

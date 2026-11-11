@@ -3,6 +3,18 @@
 Persona in the "Persona" tab is Claude Code running **headlessly** in `~/.persona/assistant` on the hub machine (`claude -p` + stream-json; see
 `docs/integrations/claude-integration.md` ("Headless assistant")). A Codex launcher uses `codex app-server` instead ("Codex" below); a launcher for an assistant-capable Agent runtime (DSH) runs in that runtime ("Agent runtime (DSH)" below). This doc covers what it can do, how it works, and the trade-offs behind its design; what it lacked before the 2026-10-26 capability upgrade is in `docs/archive/assistant/assistant-records.md`.
 
+## Claude assistant profile compatibility (#3345)
+
+Claude CLI and Agent SDK assistant starts explicitly select a config directory per conversation, rather than inheriting the node service's `CLAUDE_CONFIG_DIR`. Terminal Agents, Codex and external runtimes retain their existing launch rules. A scoped node stays in its own profile.
+
+- **Existing conversations:** retain their recorded `config_dir` across process/node restarts and launcher or service-default changes. Without a record, the node uses the profile containing the session's actual transcript (the existing newest-transcript lookup across discovered directories), then saves that selection. Private profiles, the machine directory, `~/.claude`, remembered/discovered profiles and recorded directories participate in discovery. If no transcript is found, it uses the old resolution rules: the CLI's interactive-shell/service environment (the SDK's service environment), overridden by a launcher's own profile or plain Claude's machine `claude_start_dir`. It never guesses a new private directory for an old ID.
+- **New conversations:** default to `<PERSONA_HOME>/profiles/<launcher>`; an explicitly profile-selecting launcher retains its own profile. The service-level variable remains available as a **legacy default**, not a new-conversation default. No credentials or transcripts are copied. An empty fresh profile may require authentication; to retain an existing account/profile for a new conversation, explicitly select it or use `config_dir: "legacy"` when creating the conversation.
+- **Explicit selection:** `assistant.start` / `assistant.send` and `assistant.warm` accept `config_dir`: an absolute path, a `~/…` path on the target machine, `"legacy"` (resolve the old rules once and save the result), or `"default"` (Claude's unset-directory behavior). `session.send` honors a selection for a headless conversation, but cannot move an existing one. `"default"` preserves the distinction between `~/.claude/projects` with `~/.claude.json` and an explicit `~/.claude` profile with its own `.claude.json`. This is a per-request advanced API option, not a hidden persistent preference or a migration that runs automatically. A conflicting wrapper or a request to change an existing conversation's profile is refused before starting it. Warm-process reuse also requires the same profile.
+- **Rolling upgrades:** nodes advertise `assistant_config_dir`. A manager refuses a nonempty explicit selection on an older node before sending the request; omitted selection retains that node's old behavior. Session selection is an additive JSON field in the existing state metadata, not a database schema migration. An older manager may drop the field; a newer node can rediscover the unmodified transcript on its next start.
+- **Rollback:** old conversations and their files are never moved. Before downgrading a node, stop its assistant processes and preserve the selected directories. For conversations created in a new private or explicitly selected profile, configure the old version's service or a profile-specific launcher with `CLAUDE_CONFIG_DIR=<saved directory>` before resuming the same ID. Several profiles require matching launchers; one global variable cannot select them all at once. For `"default"`, leave the variable unset. Old binaries do not understand `config_dir`; merely downgrading without selecting the profile is **not** an automatic migration. The transcript remains in Claude's unchanged `projects/<project>/<id>.jsonl` format and opens through the old environment-based path. Do not delete profiles on downgrade.
+
+Coverage: `TestAssistantProfileCompatibility` runs CLI and SDK fixture processes for old service/home/machine/discovered/missing/recorded sessions, new defaults and explicit/legacy selections, including a changed service default after a process restart. `TestAssistantProfileSelectionBoundaries` covers wrappers, scoped nodes and warm spares; `TestAssistantProfileCannotMoveExistingConversation` refuses relocation; `TestAssistantProfileRollbackKeepsTheOriginalTranscript` exercises the old env-only lookup. `TestNodeConfigDirIsPersisted` verifies the real Postgres metadata round trip; `TestMachineCallGatesAssistantConfigDir` verifies old-node refusal. These fixtures do not claim credentialed live-model or deployed downgrade verification.
+
 ## Work computers and personal context
 
 Set `machines[].trust` to `"work"` in `hub.json` to keep personal assistant data off that computer (see [config.md](../operations/config.md)).
@@ -28,9 +40,9 @@ Changing trust does not erase context already delivered to a computer or termina
 | Run history | Every run (chat started successfully / failed to start / skipped because downtime missed it) is stored in settings `assistant.runs` (latest 200), `GET /api/v1/assistant/runs[?ref=]`; scheduled tasks include `last_status` |
 | Due time | Scheduling sets a timer for the next due time (sleeps at most 30 seconds, recalculates on list changes), not 20-second polling. Follow-ups missed during hub downtime run once on return, with lateness stated in the prompt |
 | Background tasks / Monitor | The assistant can use Bash `run_in_background` and Monitor to watch events, then end its turn; command completion / events make claude start another turn itself (node considers it working, with normal push on completion). node learns running tasks from stream-json `system/background_tasks_changed`: don't reclaim the process while tasks exist (up to 12 hours); task lists live in `node_sessions.tasks`. personad restart (deployment) kills tasks with the process; on startup node sends these chats an explanation so the assistant decides whether to restart them |
-| Tools without approval | The assistant process allows Persona's MCP tools (notify_user, schedule_followup, agents_list, kb_*…) without phone approval each time; the registered and allowed namespaces follow the hub capability and resume policy in "Built-in MCP namespaces" below. Actions representing the user (mail_send, phone writes) are confirmed by hub itself; Lark writes are confirmed by a Bash gate ("Lark: skill supplied by the Lark extension" below). Other Bash / Monitor calls still follow the session permission mode |
+| Tools without approval | The assistant process allows Persona's MCP tools (notify_user, schedule_followup, agents_list, kb_*…) without phone approval each time; the registered and allowed namespaces follow the hub capability and resume policy in "Built-in MCP namespaces" below. Actions representing the user (mail_send, phone writes) are confirmed by hub itself; Lark writes are confirmed by a Bash gate ("Lark: skill supplied by the Lark extension" below). Other Bash / Monitor calls follow the session permission mode; assistant conversations default to `bypassPermissions` when no manager or conversation mode is selected |
 | Agents | `agents_list` / `agent_read` / `agent_send` / `agent_start`: use hub session state (`decorated`) and node `session.items` / `session.send` / `session.start` directly, not ssh. With `worktree.branch`, `agent_start` first has the computer's engine make the worktree through node `worktree.prepare` / `worktree.create` (the workspace found by `cwd`; herdr's or Orca's own, so Orca and the app list it), then starts the Agent in it, instead of the Agent running `git worktree add` itself (#5325, `assistant/agent_worktree.go`) |
-| Answer questions on the user's behalf | `interaction_answer`: when the owner says "answer that question for me, choose A", the assistant answers other Agents' **question-type** interactions. Only `kind: question`, excluding the assistant's own chat; `permission` / `plan` / `screen` are always rejected with an explanation that only the owner can answer in the App (no proxy approvals is a hard boundary). Validate every question: all must be answered, keys must be exact question text, choices must be listed, single-select exactly one, multi-select joined as `A, B` like the App; reject free text (answer in the App or use `agent_send`). Expired, answered, dismissed, cancelled, and nonexistent interactions each return their own error (the latter four consult history). `Resolution.AnsweredBy = "assistant"` accompanies interaction history (`GET /api/v1/interactions/history`) and `interaction_resolved` broadcasts; the App marks "Answered by Persona". On Agent questions, the assistant first decides whether to answer, see "Assistant answers questions first" below. `agents_list`'s waiting rows include `interaction_id` and options for every question, avoiding another lookup (tools and rules all belong to the assistant: `toolInteractionAnswer` in `assistant/tools_apps.go`, tests `assistant/tools_apps_test.go`; the interaction queue also lives in the manager: `interactions.get` returns the interaction or its historical outcome if no longer waiting; `interactions.answer` records validated answers as assistant answers, directly in-process, `assistant/fleet_routes.go`) |
+| Answer questions on the user's behalf | `interaction_answer`: when the owner says "answer that question for me, choose A", the assistant answers other Agents' **question-type** interactions. Only `kind: question`, excluding the assistant's own chat; `permission` / `plan` / `screen` are always rejected with an explanation that only the owner can answer in the App (no proxy approvals is a hard boundary). Validate every question: all must be answered, keys must be exact question text, choices must be listed (an answer that writes out exactly one option, its label then its own description as `label：description`, with `:`, a dash or the description in brackets, quotes or spaces around it, counts as that label, #3929), single-select exactly one, multi-select joined as `A, B` like the App; reject free text (answer in the App or use `agent_send`). Expired, answered, dismissed, cancelled, and nonexistent interactions each return their own error (the latter four consult history). `Resolution.AnsweredBy = "assistant"` accompanies interaction history (`GET /api/v1/interactions/history`) and `interaction_resolved` broadcasts; the App marks "Answered by Persona". On Agent questions, the assistant first decides whether to answer, see "Assistant answers questions first" below. `agents_list`'s waiting rows include `interaction_id` and options for every question, avoiding another lookup (tools and rules all belong to the assistant: `toolInteractionAnswer` in `assistant/tools_apps.go`, tests `assistant/tools_apps_test.go`; the interaction queue also lives in the manager: `interactions.get` returns the interaction or its historical outcome if no longer waiting; `interactions.answer` records validated answers as assistant answers, directly in-process, `assistant/fleet_routes.go`) |
 | Interrupt, adopt, report | `agent_interrupt`: stop an Agent's current turn immediately, optionally followed by a new instruction (`agent_send` queues behind the turn); `agent_supervise`: bring an Agent not dispatched by main chat under its supervision (it becomes a main-chat task); the Agents' `report_to_supervisor`: an Agent on a supervised task reports a needed decision, blocker, completion with evidence, or progress into the supervision message. See `docs/assistant/unified-entry.md` ("Supervision", #5112) |
 | Archive Agent sessions | `agent_archive` / `agent_unarchive`: when the user asks, archive or restore a coding Agent's session with the same manager-owned, reversible archive the apps use (`setAgentArchive`, `docs/protocol/protocol.md` ("Agent session archives")); nothing is ever deleted. Archive and restore change nothing on the computer and need no confirmation (like `conversation_archive`). `agent_archive` with `close: true` is "Archive and close" (`archiveAndCloseAgentSession`): a busy Agent is refused before anything is asked, then the user confirms on a phone permission card every time (also outside the health space, as `persona_settings`), and a declined card changes nothing. The result states what happened for the assistant to repeat: archived or not, the native archive (`native: done / pending / unsupported`), and the close outcome (`closed`, `not_running`, or `refused` / `offline` / `failed` with the localized reason: the session stays archived and still open). Busy Agents are refused with nothing changed; an Agent awaiting the user's reply is not busy. `agents_list` leaves archived sessions out unless `state` is `archived` (only those) or `all` (marked `archived`). Persona conversations are refused (`conversation_archive`). `assistant/agent_archive_tools.go` |
 | Dispatch tasks | `task_plan`: hand Agent work to the user, one task per to-do (`origin` = this chat). Read-only and user-remembered tasks start directly; others become plan cards awaiting "Start" without blocking the turn. Progress appears in the live snapshot's "Tasks started from chat"; completion receipts, answered questions, and direct task messages enter chat activity ([unified-entry.md](unified-entry.md), `assistant/tasks.go`) |
@@ -66,6 +78,54 @@ Where the system does not tell the peer process (Windows), the request must name
 those ids cannot be guessed, but any process of the same user can read them from the assistant's command lines, so there the check stops only inherited environments. Any other request goes as an Agent's (`node/clicall.go` `mcpAssistantOf`).
 hub lists these tools only for assistant=true and forwards calls to the assistant (`assistant/tools.go`). Ordinary Agents in herdr can't see them, even with the assistant's environment;
 a program run under the assistant's own process (its Bash tool) counts as the assistant, as for `personad tool`, and so does an Agent in an engine whose server that shell started without detaching it.
+
+## Per-criterion acceptance progress (#3635)
+
+`todo_supervision.done_when` remains the ordered list of criterion text. The additive
+`criteria` JSON field stores the latest state of each entry: `criterion`,
+`state` (`pending`, `met`, `not_met`), `evidence`, `at` (UTC RFC 3339), and `by`
+(`agent:<machine>/<session>`, `supervisor:<conversation>`, or `judge`).
+An old row with only `done_when` reads as all pending, without invented timestamps
+or confirmers; reviews and other ledger fields are not rewritten. Reordering
+unchanged text keeps its evidence; adding or changing text starts pending.
+
+An Agent uses the existing `report_to_supervisor`, authenticated as the working
+Agent of that task, to report one or more entries by their **one-based** position:
+
+```json
+{
+  "kind": "progress",
+  "text": "The tests pass; the PR is still pending.",
+  "criteria": [
+    {"number": 2, "state": "met", "evidence": "go test ./internal/db: PASS"}
+  ]
+}
+```
+
+`met` and `not_met` require nonempty evidence (up to 600 characters); `pending`
+resets the entry. Out-of-range or duplicate numbers, invalid states, and missing
+evidence reject the whole batch. Omitted entries keep their state. The ledger is
+persisted before the tool succeeds and the normal to-do change event refreshes
+the web count immediately. A progress report still does not wake the assistant;
+the recorded states and evidence accompany the next supervision event. A
+question, blocker or completion report follows its existing delivery rules.
+
+The supervisor's `task_review.checks` writes each matching `done_when` entry back
+as `met` / `not_met`, with the review time and actual reviewing conversation.
+Unchecked entries are preserved; unmatched checks stay in the review history.
+Existing accepted reviews from the done judge also record their checks.
+These reports are evidence, not acceptance: no count closes a task, changes
+dispatch, runs tests, or substitutes for the supervisor's own review.
+
+To-do API responses include `supervision.criteria` for all clients. The web task
+cards and to-do list keep their existing N/M badge. The task detail's existing
+`review-checklist` renders persisted criteria through the same `checklist()` and
+`MARK` states and existing translations; older hubs fall back to review checks.
+Evidence, timestamp and the recorded reporter stay in that existing detail
+section. No new component, panel, disclosure or translation is added, and the
+existing checklist and marks live with the lazy to-do page rather than the
+first-screen card badges. The first-screen byte budget stays unchanged. Mobile UI changes,
+automatic CI observation, and criterion dependency gates are outside this change.
 
 ## Boundary with hub (2026-11-04, #1446)
 
@@ -111,7 +171,7 @@ Knowledge state is files in `~/.persona/data`, the manager's `handles.key` (`~/.
 This is hub's same Postgres, with unchanged keys / tables and no data migration; the assistant connects itself using the same `database_url`. Only it reads / writes these keys and tables; hub doesn't touch them.
 Scheduled-task and finished-task Agent-closing loops belong to the assistant (`Service.Run`, beginning only after first hub connection and handshake).
 
-**Assistant settings** (settings `assistant`, exclusively read / written by the assistant since 2026-11-04, `assistant/profile.go`): chat machine, launcher, user timezone (phone `PUT /api/v1/assistant`), About Me, main chat, replaced old main chats, `main_tasks_quiet`, `agent_tasks` (off by default, `docs/assistant/unified-entry.md` "Agent tasks").
+**Assistant settings** (settings `assistant`, exclusively read / written by the assistant since 2026-11-04, `assistant/profile.go`): chat machine, launcher, user timezone (phone `PUT /api/v1/assistant`), About Me, main chat, replaced old main chats, `main_tasks_quiet`, `agent_tasks` (off by default, `docs/assistant/unified-entry.md` "Agent tasks"), `inbox_signals` (off by default: new Inbox messages on a supervised task reach its supervisor, `docs/assistant/unified-entry.md` "Supervision (#3124)").
 `assistant.owner` / `notes` / `machine` / `launcher` in the manager's `manager.json` supply the defaults (laid over the hub's handshake answer); JSON matches the old hub-written form without migration. Reads are cached for 5 seconds (only it writes; `manager.updated` triggers immediate reread).
 `GET/PUT /api/v1/assistant` also reads and saves `default_permission_mode` in this manager’s settings. Reads identify the answering manager with `manager`. New non-guest conversations without an explicit `permission_mode` inherit it, including new main chats, scheduled new conversations and side chats. An explicit session mode, including `default`, wins. Existing conversations retain their own mode; changing the manager default never edits their settings or history. An unset preference preserves earlier behavior.
 
@@ -142,7 +202,7 @@ The bus adds these (`assistantwire` channel types):
 | | `feishu.view {}` → `{target, agents}` | "Send to now" and bound Agent in `GET /api/v1/bots/feishu` |
 | hub → assistant, event | `interaction.announced {interaction}`, `interaction.ended {interaction, resolution?}` | New cards (except quiet tasks), ended cards (answers included if answered): Lark cards and text questions |
 | | `session.items`, `session.delta` | New items and streaming text for followed chats (`session.follow`): progress cards |
-| | `feishu.owner {paired}`, `channels.noted {channel, machine_id, session_id}` | Bot paired / unpaired; channel-origin message entered a chat through App API (voice `voice-…`) |
+| | `feishu.owner {paired, greeted?}`, `channels.noted {channel, machine_id, session_id}` | Bot paired / unpaired; channel-origin message entered a chat through App API (voice `voice-…`) |
 | Assistant → hub, `device.call` | `session.follow` / `session.unfollow {session_id}`, `session.send_once {…session.send parameters}` | Follow a chat (hub releases all on disconnect, assistant re-follows on reconnect); send with App-shared send-once protection (`sent_messages`) |
 | Assistant → hub, `app.call` | `feishu.status`, `feishu.post`, `feishu.text`, `feishu.update_card`, `feishu.react`, `feishu.unreact`, `feishu.messages`, `feishu.resource`, `feishu.save`, `feishu.user_name`, `feishu.configure`, `feishu.test` | Lark transport: send / reply / edit cards and text (owner private chat only), reactions, read messages, download images, save files on the computer, switches and features |
 | | `channels.list`, `channels.send`, `channels.typing`, `channels.enable`, `channels.unbind`, `interactions.resolve {interaction_id, resolution, action, channel}` | Plugin transport and channel list (no targets or plugin feature switches); answer cards from channel replies with owner actions issued by hub in this channel (no proxy approvals); reject missing actions or actions from another channel. Credential-bearing binding is hub's route, bypassing assistant |
@@ -236,45 +296,56 @@ The current mechanisms are generic; specific commands, routes, and variables are
     For example, stop confirming sends: `{"connector":"lark","action":"POST /conversations/*/messages","decision":"allow"}`.
     Legacy `lark_gate` (`{method, path, body?, action}`) still works after `connector_gate` Lark rules; hub combines both for node (`connector.LarkRules`, 2026-11-03 migration M5).
 
-## Lark: lark-cli (2026-11-03, L1 of #273)
+## Lark: lark-cli (L2 of #273)
 
 A hub without a Lark gateway can still let the assistant read / write Lark through official developer-platform lark-cli (`@larksuite/cli`); plan and later steps: `docs/plans/plan-lark-cli.md`.
-This step covers only the assistant; Inbox, knowledge base, and `/agent` still require the Lark gateway.
+The assistant and the L2 read-only connector are available; Inbox, knowledge base, and `/agent` still require the Lark gateway.
 
-- **Enable**: `lark.cli` in the manager's manager.json (`docs/operations/config.md` ("manager.json")), lark-cli installed on the assistant machine; the user runs `lark-cli auth login --domain all` once.
+- **Enable**: `lark.cli` in the manager's manager.json (`docs/operations/config.md` ("manager.json")), lark-cli installed on the assistant machine; the user runs `lark-cli auth login --domain all` once, or `lark-cli --profile <profile> auth login --domain all` when a profile is configured.
   A gateway can coexist; `lark.prefer` sets prompt precedence.
 - **Delivery**: before process startup, node asks hub for configuration (RPC `assistant.lark` adds `cli`, `prefer`; CLI-only doesn't query the gateway; hub no longer supplies gateway tokens anyway),
   writes a one-line `lark-cli` wrapper in that assistant directory's command bin, invoking configured lark-cli (resolve nonabsolute paths in a login shell) with configured `--profile`,
   and adds its directory to PATH (npm lark-cli uses `env node`, so node must be findable). No wrapper if `lark.cli` absent or lark-cli not found.
   Credentials remain in its own `~/.lark-cli`; hub / node don't touch them.
 - **Instructions**: no skill copied into the assistant directory. CLAUDE.md (`prompts/assistant/claude_md.md`) adds a section directing `lark-cli skills read lark-<domain>` first for bundled,
-  version-matched domain instructions, with parameters from `--help` / `lark-cli schema`. CLI-only explains no unread / Moments and no `lark_*` MCP tools; find actionable messages with
+  version-matched domain instructions, with parameters from `--help` / `lark-cli schema`. CLI-only explains no unread / Moments; when the built-in connector is signed in, its read-only `larkcli_*` tools are also available. Find actionable messages with
   `im +messages-search --is-at-me / --chat-type p2p`. With both sources, divide according to `lark.prefer` (goldens `assistant_claude_md.lark_cli`, `.both`).
   Send / reply through the app bot (`--as bot`): user identity requires app permission `im:message.send_as_user`, absent in the default app (measured 2026-11-04); other reads / writes use user identity.
   In CLI-only setups, a leftover gateway skill (copied by old personad) doesn't count: no gateway is available, so CLAUDE.md must not mention its commands
   (encountered deploying to the hub machine 2026-11-03: instructions recommended gateway commands then said no gateway existed).
 - **Gate** (`node/larkcligate.go`, integrated with the `ol` gate in the same `larkCheck`, also used by Codex): lark-cli knows write commands; each `--help` prints
   `Risk: read / write / high-risk-write`. node asks once on first seeing a command (cached per command, about 50 ms):
-  - `read` allowed directly; `write`, `high-risk-write`, and unknown risk show a phone "Lark" card explaining actor (`--as bot`: "as the bot", otherwise "as you"), action (send, reply, react, recall…), and full command;
+  - `read` allowed directly; outside assistant bypass, `write`, `high-risk-write`, and unknown risk show a phone "Lark" card explaining actor (`--as bot`: "as the bot", otherwise "as you"), action (send, reply, react, recall…), and full command;
     high / unknown risk is separately marked. Denial returns user feedback; "Always allow in this session" remembers the command.
   - Output-only allowed directly: `--help`, `--version`, `--dry-run`, `schema`, `skills`, `whoami`, `doctor`, `auth status / check / scopes / list`, `event list / schema / status`;
-    `lark-cli api` uses HTTP methods: GET / HEAD allowed, others confirmed (method, path, `--data` on card).
+    `lark-cli api` uses HTTP methods: GET / HEAD allowed, other methods follow the permission mode and action classification (method, path, `--data` on a confirmation card).
   - Reject `auth login / logout` (user handles login), `config`, `profile`, `update`, custom `--profile`, or access to `~/.lark-cli/`.
-  - Unparseable commands containing lark-cli (loops, `$(…)`, python pipelines): if any call isn't a known read, confirm the whole command on the phone regardless of permission mode.
-  - Match manager.json rules first: `connector_gate` `{"connector":"lark","action":"CLI /im/+messages-send","decision":"allow"}` (legacy `lark_gate`
+  - The gate classifies individual calls in loops and literal shell scripts where it can. Presentation-only environment assignments such as `NO_COLOR=1` and `NO_PROGRESS=1`, output redirection into `/tmp` and read-only filters (`jq`, `grep`, `head`) preserve a classified read. When the command names the CLI, executable-loading environment variables such as `BASH_ENV`, `NODE_OPTIONS` and `PATH`, unresolved CLI arguments and command substitutions require whole-command confirmation. `docs +fetch` remains a known read even without configured CLI risk discovery.
+  - A trusted assistant in `bypassPermissions` runs classified reads and ordinary writes without a card. The gate protects Lark outbound sends as the user (messages, replies, comments and mail) and deletion, including inside compound commands. Ordinary non-Lark commands such as `rm`, `git push` and `tee` remain outside this gate. Unclassifiable execution requires confirmation when the command text names `lark-cli` (including an absolute path or interpreter, `sh -c` or `eval` code), or a variable, command substitution or other expansion supplies a command name. This also covers unresolved CLI arguments and redirections. Ordinary interpreter calls, `awk`, `sed`, `find`, wrappers, script files, argument substitutions such as `echo $(date)` and brace arguments such as `echo {a,b}` return no gate decision when they do not name the CLI; the conversation permission mode handles them. Script-file contents are not inspected: a script invoked without a CLI name in the command text can still call the CLI internally. This is an accepted residual risk of this gate's scope. Every redirection is checked after path cleaning; only targets inside `/tmp`, `/dev/null` and descriptor folding preserve read classification. The action and bot-exemption tables in `node/larkgate_rules.go` classify these boundaries; only the documented message send/reply shortcuts may use the bot exemption, with the last `--as` value taking effect. Raw API sends, mail, comments and deletion still require confirmation with `--as bot`. Explicit deny rules still refuse them. Proxy-authenticated writes inside compound commands are refused and must be sent as standalone calls. Other permission modes and health conversations retain their confirmation rules.
+  - Match manager.json rules first (deny remains final; allow does not waive the bypass boundary checks above): `connector_gate` `{"connector":"lark","action":"CLI /im/+messages-send","decision":"allow"}` (legacy `lark_gate`
     `{"method":"CLI","path":"/im/+messages-send","action":"allow"}` also works).
 - **Not done**: runtime assistant (DSH, pi) prompts and extension-gate tool declarations still only know the gateway; settings-page lark-cli status and missing permissions (L2).
 
 ## Built-in MCP namespaces
 
-For a new Claude, Agent SDK or guest assistant session, a hub announcing `persona_contracts_v1` selects only the
+For a new or resumed Claude, Codex app-server, Agent SDK or guest assistant session, a hub announcing `persona_contracts_v1` selects only the
 `persona` MCP namespace and matching automatic tool permissions. This avoids sending duplicate tool definitions and
-starting a second copy of the same built-in handler. Old or unknown hubs keep the compatibility alias. Resumed
-assistant sessions also keep both namespaces, including restarts after idle recycling, until removing historically
-used aliases has been verified with the model provider. Existing transcript readers continue recognizing both names.
+starting a second copy of the same built-in handler. Old or unknown hubs keep the compatibility alias. A real Claude Code
+2.1.322 resume verified that a transcript containing `mcp__jarvis__*` tool calls can continue with only `persona` offered;
+existing transcript readers, hooks and read-only-worker supervision continue recognizing both names. The generated
+assistant instructions map old names in stored routines to `mcp__persona__*`. Only `persona_settings` is advertised;
+the legacy `jarvis_settings` call is still normalized and runs. The shared `mcp.json` for ordinary Agent launches and
+automatic resumes remains dual-namespace.
 See [rolling-upgrade-compatibility.md](../protocol/rolling-upgrade-compatibility.md) ("MCP namespace / tools") for the
-negotiation and resume boundary. Extension permissions, guest tool restrictions and tool-specific confirmation gates
-remain in force; no setting is required to enable the new-session behavior.
+negotiation boundary. Extension permissions, guest tool restrictions and tool-specific confirmation gates remain in force.
+
+Ordinary Claude starts also pass a built-in allow-list (`--tools`; `tools` in the Agent SDK bridge): Bash, Read, Write,
+Edit, Monitor, Skill, Agent, ListAgents, SendMessage, TaskStop, WebFetch and WebSearch. MCP tools are unaffected. This removes the
+Claude-specific cron, worktree, notebook, LSP, design, workflow, code-review and resource-tool surfaces; Persona's own
+scheduling and question tools remain. The merged start settings disable bundled skills and the development-only
+feature-dev, frontend-design, mattpocock, gopls, context7 and HUD plugins, with overrides for the remaining development
+skills. User/project setting sources, auto-memory, Persona and connector skills are not disabled. Guest conversations keep
+their stricter `--tools ""` and `--strict-mcp-config` behavior. No setting is required.
 
 ## Extension MCP servers (Claude assistant only)
 
@@ -329,7 +400,7 @@ With over ten Agents running, most mid-task questions concern internal choices t
 - **Eligible questions**: `kind: question`, including hook AskUserQuestion, Codex questions, and triage "Your decision" cards (`persona_triage`, also `waitInteraction` → `announce`). Permissions, plan approvals, terminal dialogs, forms, assistant `ask_user`, and questions within assistant chats go directly to users; triage cards requiring authorization links or risky actions such as push / deployment aren't answered either. Don't wait if assistant disconnected.
 - **Answer only real questions, once per question** (2026-11-06): Agent requests (AskUserQuestion, Codex) already await input; triage cards are inferred from stopped-turn text. Delegate only if a question contains `?` / `？` or at least two Agent-authored options (not manager defaults like "Okay, do as you said" / "Leave it for now") (`asksForInput`). Declarative stops ("Waiting for runner recovery and 0.14.0 release") get only fallback choices; formerly the assistant selected "Okay", the Agent repeated itself, another card appeared, and delegation repeated—one board Agent answered three times in a minute. Remember delegated questions per session (compare after removing spaces / punctuation, or bigram similarity ≥ 0.8; `delegated` in `session_work_events`, reloaded on restart): the same Agent repeating within 24 hours goes to the user, recording `delegate_repeat`.
 - **Flow** (`assistant/fleet_delegate.go`; queue in manager since 2026-11-05, #3246): manager `announce` first reports the card to hub with `delegating: true` (visible / answerable in the App, no push or bot card), then evaluates in the background for up to `timeout_seconds` (default 3 minutes). Assistant answer → same `interaction_answer` path (`answerQuestion` → `resolve`, `answered_by: "assistant"` + `reason`), with reason / answers in history and `interaction_resolved`. User handoff, failure, or timeout → remove `delegating`, attach `delegate` context, and use the normal push / bot / channel / quiet-task path; hub appends "Assistant suggests: X" to push body (`hub/push_payload.go`). If the user answers during evaluation, first answer wins and the assistant result is discarded.
-- **Decision** (`assistant/delegate.go`, prompt `prompts/agents/delegate.md`, separate model-config category "Question delegation", `agent.delegate`: before selection uses the information-filtering provider and Opus 5.5; change on that Settings › Model Configuration page, `docs/assistant/model-config.md`): one model call reads user messages / final Agent text from the latest three turns, its to-do (title, notes, decisions), cwd project, question, and choices. Prompt rules: answer internal choices with a short reason; send irreversible actions (deploy, release, merge, delete data, force-push, external messages), socially visible actions (MR comments, reviewers, approvals / tickets, contacting people, creating groups, touching others' MRs), and goal changes to the user, supplying "what this is, why ask now, recommended answer, cost of not choosing, why you must decide". Default deadline 24 hours, or earlier card expiry. Two hard checks follow: every question answered using listed choices (same `interaction_answer`, no free text); selected labels / descriptions containing `riskyWords` (push, deploy, merge, send messages…) are handed to the user as recommendations, except short "don't do it" choices such as "Don't merge yet" / "Don't send". User `rules` can broaden internal choices but never red lines.
+- **Decision** (`assistant/delegate.go`, prompt `prompts/agents/delegate.md`, separate model-config category "Question delegation", `agent.delegate`: before selection uses the information-filtering provider and Opus 5.5; change on that Settings › Model Configuration page, `docs/assistant/model-config.md`): one model call reads user messages / final Agent text from the latest three turns, its to-do (title, notes, decisions), cwd project, question, and choices. Prompt rules: answer internal choices with a short reason; send irreversible actions (deploy, release, merge, delete data, force-push, external messages), socially visible actions (MR comments, reviewers, approvals / tickets, contacting people, creating groups, touching others' MRs), and goal changes to the user, supplying "what this is, why ask now, recommended answer, cost of not choosing, why you must decide". Default deadline 24 hours, or earlier card expiry. Two hard checks follow: every question answered using listed choices (same `interaction_answer`, no free text; the model sometimes copies an option's whole `label：description` line from the input, which counts as that label, while its own words after a label or text that reads as two options go to the user, #3929); selected labels / descriptions containing `riskyWords` (push, deploy, merge, send messages…) are handed to the user as recommendations, except short "don't do it" choices such as "Don't merge yet" / "Don't send". User `rules` can broaden internal choices but never red lines.
 - **Why one model call, not a persistent Claude chat**: handle questions from over ten Agents concurrently within 3 minutes; headless chat startup alone takes a minute or two and its tools create permission cards. Single-call input / output is easier to test and inspect in goldens. Insufficient context goes to the user (uncertainty handoff is a prompt rule).
 - **Why not an extension**: it attaches to hub `announce` and interaction `resolve`, both core flows. No "intercept new interaction" extension point exists; extraction first needs one (manifest validation, permission / consent to answer for users, process protocol, timeout fallback), not a smaller change.
 - **Audit and changing answers**: triage answers sent to Agents explain "The assistant answered for me under my rules (reason: …); I may change my answer later" (`prompts/agents/answer.md`); task chat activity says "Assistant answered: X, because Y". Don't record delegation as to-do decisions (those are the user's). To change: `POST /api/v1/interactions/{id}/reanswer {answers}` (hub forwards to manager; card-answer-only devices can't use it). The Agent has already acted, so send the new answer as a message (`prompts/agents/reanswer.md`, including original assistant answer), broadcast `interaction_reanswered`, and record the user answer in task history / decisions.
@@ -482,7 +553,8 @@ Current main chat's first message on 11-01 after 46 idle hours: 254k rewritten, 
 - hub snapshot: reuse data for 45 seconds; refresh stale data in the background, wait at most 1.5 seconds per message, then use the prior snapshot if within 30 minutes. Time is always current; ended items removed.
 - App versions (#3672): one line names the Persona app on each kind of device with the version it last reported to the hub (`iPhone App 1.4.0 (build 52)（iOS 26.1）`; iPad, Apple Watch, Mac, Vision Pro and Android too), from `devices.list`'s `apps` ([protocol.md](../protocol/protocol.md) "Client capabilities and heartbeat"), so it holds while the app is in the background. Per kind the most recent device is shown, a real one before a simulator (`assistant/client_apps.go`). The line carries no time, so a reconnect does not make it a changed section.
 - Size budget (#3203): a rendered snapshot carries at most 6000 characters (`snapshotBudget` in `assistant/context.go`). Measured on one install over 14 days before it, a full snapshot was a median 8.3k characters (12.5 KB) and the changed sections a message carried a median 6.6k; tasks, the Agents section and the knowledge digest were most of it, resent on almost every message because one of their items changed.
-  Free text is clipped where the snapshot is taken (an agent's line 160 characters, a plan step 60, a task's title 60 and current step 80, a report 160, an approval's title and gate 60, follow-ups the next eight). Past the budget, whole sections are left out, least needed first: muted, done and waiting agents, daily routines, follow-ups, other unread chats, the working list, the knowledge digest, unanswered questions, results waiting for verification, tasks, unread agents, approvals.
+  Done agents (24 hours) and muted agents always render only their counts and the exact `agents_list` filter (`state=done` / `state=muted`) that lists them on demand; their names, conclusions and session ids never occupy the snapshot. Needs-you and awaiting-reply agents, results waiting for acceptance, delivery approvals and today's meetings stay detailed.
+  Free text is clipped where the snapshot is taken (an agent's line 160 characters, a plan step 60, a task's title 60 and current step 80, a report 160, an approval's title and gate 60, follow-ups the next eight). Past the budget, whole sections are left out, least needed first: waiting agents, daily routines, follow-ups, other unread chats, the working list, the knowledge digest, unanswered questions, results waiting for verification, tasks, unread agents, approvals.
   A section left out keeps its heading and its count and names the tool that lists it (`assistant/snapshot_omitted.md`): never "none", never missing, since the node sends only changed sections and a missing one would read as unchanged. Never left out: agents waiting for the user or for a reply, running workflows, plan cards waiting for "Start", failed scheduled runs, the calendar and @me chats. If that is still too long, the block is cut and ends with `assistant/snapshot_cut.md`.
 
 ## Compaction
@@ -555,11 +627,21 @@ Previously two systems: routines (daily time) and follow-ups (one-shot wakeups f
 App "Scheduled tasks" listed only routine switches. For "check every 30 minutes", the assistant scheduled the next follow-up at each turn's end:
 removed from the list when the turn began, so an hour blocked on unanswered Bash approval left the page empty, impossible to inspect / edit / stop.
 
-Now one `Task` table (`assistant/schedule.go`, settings `assistant.tasks`), three `repeat` types. Model input retains its runtime role but carries persisted message-source metadata: `once` is `source.kind="followup"`, `daily` / `interval` are `source.kind="patrol"`. The same source accompanies an existing-chat run, reuse of a task's own chat, and a new-chat fallback. Clients retain the legacy `injected` detail but exclude these messages from user bubbles and user-only navigation ([protocol.md](../protocol/protocol.md), "Message source").
+Now one `Task` table (`assistant/schedule.go`, settings `assistant.tasks`), four `repeat` types. Model input retains its runtime role but carries persisted message-source metadata: `once` is `source.kind="followup"`, `daily` / `interval` / `cron` are `source.kind="patrol"`. The same source accompanies an existing-chat run, reuse of a task's own chat, and a new-chat fallback. Clients retain the legacy `injected` detail but exclude these messages from user bubbles and user-only navigation ([protocol.md](../protocol/protocol.md), "Message source").
 
 - `once`: one-shot follow-up, disabled after running and retained one day (hidden in App) to link "schedule the next one", then removed;
 - `daily`: daily / selected weekday time; over 30 minutes late skips with a record;
 - `interval`: every N minutes (5 minutes–7 days), `at` is next run, advanced on original cadence; missed during downtime runs once on return, then counts from now.
+- `cron`: a standard 5-field cron expression (`minute hour day-of-month month day-of-week`, or `@hourly` / `@daily` / `@midnight` / `@weekly` / `@monthly` / `@yearly` / `@annually`) in `cron`, read in the user's time zone (`assistant/schedule_cron.go`, #4399). Runs like `daily`: the times missed during downtime count once, as the latest of them, which runs when it is under 30 minutes late and is skipped with a record otherwise.
+
+**Cron expressions** are parsed by `github.com/robfig/cron/v3`; the hub adds the rest:
+
+- Matched on the wall clock of the user's time zone, so a clock change never runs one time twice: the hour a fall-back repeats runs once (its first pass), and a time the clock skips (spring forward) runs shifted by the gap (02:30 → 03:30), at most once even when that is also a time it runs anyway.
+- Day of month and day of week follow Vixie cron: when both are restricted (neither starts with `*`), a day matching either runs; otherwise both must match (`0 9 */2 * 1` is odd days that are Mondays). Day of week 0 and 7 are both Sunday.
+- Two runs are at least 5 minutes apart (as `interval`), checked from the minute and hour fields. `@every`, a seconds field, `TZ=` / `CRON_TZ=` and an expression that matches no date in five years are refused with the field and what it takes (`assistant-schedule.cron_*`; English for the tools).
+- The words for an expression (`cron_text`, the preview's `text`) come from `github.com/lnquy/cron` in en / zh-Hans / ja; none when a day field is a step from `*` and the other is restricted, since the words would read Vixie's "both" as "either". `next_runs` always shows what it does.
+- `schedule_routine` takes `cron` instead of `time` / `weekdays`, `schedule_followup` instead of `at` / `every` (a run of a one-off that reschedules itself with `cron` turns it into a cron task). Their replies give the expression, its words, the time zone and the next 5 runs, so the model can check them against what was asked.
+- Older apps: iOS reads an unknown `repeat` as `once`, and Android and the web send it back without `cron`; a `PUT` without `cron` keeps a cron task's rule and saves the rest (title, prompt, on / off, permission mode). The legacy `GET /api/v1/assistant/followups` lists cron tasks with the other non-daily ones. Clients show cron tasks when the hub has `task_cron`.
 
 `until` is optional on a repeating task. It is stored and compared in UTC and shown in the user's time zone. One-off tasks ignore it, and saving a one-off clears it. Omitting `until` on update keeps the stored time; `null` clears it. Once that time is reached the task is turned off and a skipped run is recorded instead of running.
 
@@ -590,9 +672,11 @@ main chat (`ownConversationIfQuiet`: selecting `asked` clears a `session_id` tha
 but still finish through `settle`. Channel forwarding (Lark, plugin sync and task pushes) skips under the same `quietTaskTurn` rule.
 
 **In the chat it came from** (`session_id` set, such as a leader conversation's patrol or daily round, #3673), the run writes `push: "asked"` into its persisted
-message source. A normal completion is quiet when the turn's input (its last user text that is neither queued nor a wake) has that source and nothing of the
-user's follows it (`quietTurnItems`):
+message source. A normal completion is quiet when the turn's input (its last user text that is neither queued nor a wake) has that source, the run answered
+after it, and nothing of the user's follows it (`quietTurnItems`):
 
+- The run answered when it wrote text after its input, or made tool calls after it and the transcript has that turn's end (`turn_duration`, #3934).
+  A patrol that only calls tools, `notify_user` among them, is therefore quiet. A turn with no output at all, or whose end is not written yet, pushes.
 - A user message absorbed mid-turn (a queued text or image item before the final answer) makes the answer the user's too, so it pushes and mirrors.
 - A user message held until the turn ends starts the next turn. That turn's input has no scheduled push mode, so its answer pushes and mirrors.
 - A background wake after the patrol input stays quiet only when the patrol's own turn launched that task (its call id, or its task id in a call's result).
@@ -660,6 +744,37 @@ and don't re-enable tasks disabled in the App. Copied leading "⏰ … (your sch
 Migration: first startup without `assistant.tasks` moves `assistant.routines` / `assistant.followups` (ids, times, prior statuses unchanged),
 then clears old follow-ups so an older hub can't rerun them; thereafter reads only the new table. Failed Postgres reads save nothing (formerly defaults overwrote).
 Legacy App `routines` / `followups` APIs still read / write this table (`docs/protocol/protocol.md`).
+
+## Background rounds
+
+Many main-chat rounds are not started by the user: another Persona conversation hands work over with `conversation_send` /
+`conversation_new` (a supervisor message), a scheduled task or follow-up runs, and the hub's supervision wakes the chat.
+They used to fill the main chat and push the user's own exchanges out of sight. Since #4314 the apps fold the first two
+the way quiet supervision rounds already were (#1988, `docs/assistant/unified-entry.md` "Supervision"):
+
+- **Which rounds**: in the main conversation, a round whose first input has the message source (`Item.source.kind`, else
+  the `persona-context kind="message-source"` metadata or the hub's `injected` mark, read by each client's `sourceOf`)
+  `conversation`, `followup` or `patrol`. A `followup` counts only as a scheduled follow-up (the hub gives those the
+  task's title): Persona continuing the user's own work after a usage limit reset (`injected.state: limit_continue`),
+  waking the chat for what it waits on (`wake`) or an untitled follow-up is not a background round, so the answer to
+  the user's question never folds away. Like a supervision round it lasts until the next genuine input; a queued user
+  message never joins it, and recaps or compactions inside it stay inside. Other conversations and Agent sessions are not
+  affected: a conversation another one opened shows its first message as before.
+- **Folded**: one muted line, `@<source> · Background round` (`· Running in the background` while it runs), that the
+  user can open and close at any time to see the full transcript, history included (super rule 2.4). A scheduled task's
+  prompt is never shown in the main chat while folding is on: its source block says only which task ran, closed or open.
+  A supervisor message shows its text when opened.
+- **Not folded** (the visibility rule supervision rounds use, `supervisionVisible` / `fold.supervision_user` from
+  `server/internal/transcript/fold_supervision.go`): a round that used `ask_user` or `notify_user` successfully, a pending
+  `ask_user` while it runs, a `task_review` with an `accepted` or `needs_user` verdict card, or a `supervision_finish`
+  with user visibility.
+- **Needs you** keeps its entry and its count. While folding is on and its rows come from more than one supervising
+  conversation (a task's `origin`), they are grouped under that conversation's title, this conversation's own first;
+  the rows and their order within a group are unchanged.
+- **Switch**: Settings › Assistant › **Fold background rounds** (`assistant.main_background_folded`, `PUT /api/v1/assistant`,
+  on unless turned off; Persona's settings tool changes it only after the user confirms the card). Off, the main chat and
+  Needs you look exactly as before. A hub that does not send the field is treated as on. Display only: what the rounds do,
+  notify or push is unchanged.
 
 ## Chat titles
 
@@ -744,6 +859,13 @@ Assistant MCP tools (`assistant/conversations.go`, descriptions `prompts/mcp/ass
     if a reply is needed, use `conversation_send`; do not reply merely to acknowledge receipt. `Item.source.kind="conversation"` retains the stable sender id and title, separately from the runtime role and native peer `from`. Clients show a source message rather than a user bubble; the relay's instructions remain inspectable as Context. Explicit source metadata is persisted in a separate `message-source` context, not a selectable Context card. Full canonical legacy relay contexts remain recognizable; user-pasted templates are protected at the entry point.
   - **Queue while running**: if target is running or already queued, persist in hub settings `assistant.relay` (survives restart), displayed above the input like typed queues
     (session `queued`). After its turn ends (no longer working), hub sends one at a time. Don't write into running processes: Codex merges through `turn/steer`, not queueing.
+    They come after the user's own queued messages, and `queued_relayed` counts them: the apps only show and copy them.
+- **The user's own queue** (#4342): a message the user sends while a chat works goes to its headless Claude at once and waits in Claude Code's
+  queue until the next step takes it in. The transcript notes that wait without the words, so the node gives each message an id and follows
+  Claude Code's `command_lifecycle` for it (`server/internal/node/assistant_queue.go`); the waiting ones are the session's `queued`. The queue
+  strip works as in an Agent chat: take back to edit, delete and move withdraw them (`cancel_async_message`, the moved ones written again in
+  the new order, never one that went in meanwhile), and Send now is Claude Code's own (`interrupt` with `send_now`). A Codex chat has no
+  queue (`turn/steer`), and the Agent SDK bridge forwards neither request.
   - **Loop prevention**: each chat tracks the current message's hops from the user's input (user 0, relay +1, expires after 1 hour); don't send beyond 3 hops.
     Per chat, at most 3 sends to the same target and 10 total within 10 minutes (memory only, reset on hub restart). User messages reset hops to 0.
   - Sending to archived chats restores them.
@@ -764,7 +886,7 @@ Code: `server/internal/node/assistant_codex.go`; `assistant_agent.go` chooses Cl
 including `command codex …`), retaining environment, `-c model_provider=…`, `-m`. One app-server per chat, one thread inside;
 thread id is session id (assigned by Codex, known only after new-chat `thread/start`), rollout is history (`docs/integrations/codex.md`), App displays normally.
 Handshake: `initialize` (experimentalApi) → `skills/extraRoots/set` → `thread/start` / `thread/resume`.
-With no permission mode selected for the conversation or its manager, thread start/resume and subsequent turns omit approval and sandbox overrides. Codex retains the launcher's effective configuration, including profiles and managed restrictions. An explicit mode, including Default, still uses the mapping below; transcript policy readback is not treated as a selection. Inherited workspace policies keep their own network and writable-root settings, so memory access outside those roots may require approval. Existing persisted choices remain explicit.
+Assistant conversations with no selected permission mode now default to Allow Everything. An explicitly selected mode continues to use the native mapping below, including managed restrictions. An explicit mode, including Default, still uses the mapping below; transcript policy readback is not treated as a selection. Inherited workspace policies keep their own network and writable-root settings, so memory access outside those roots may require approval. Existing persisted choices remain explicit.
 Snapshots accompany each message as Claude does (first `turn/start` / `turn/steer` input); `developerInstructions` holds only memory.
 
 | Capability | Claude (`claude -p`) | Codex (`codex app-server`) |
@@ -855,3 +977,28 @@ Unlike iOS, Android can switch the assistant machine. Warn "Memory and chat hist
 Running them is in `docs/operations/testing.md`; the scheduler's tests are in `server/internal/assistant/schedule_test.go`
 (`TestNextRun`, `TestParseWhen`, `TestScheduleAcrossHubRestart`), the app's in `AssistantScheduleTests`, `AssistantRoutinesModelTests`
 and the UI suite `AssistantProfileTests`, and the 2026-10-26 to 2026-10-30 measurements in `docs/archive/assistant/assistant-records.md`.
+
+A user can ask main chat to cancel and archive an Agent stuck at a terminal confirmation. `agent_archive` with
+`force: true` closes that blocked Agent and rejects or cancels its pending confirmations, without approving a tool
+or plan. It preserves the transcript and refuses other busy states. Normal archive behavior is unchanged.
+
+### Assistant permission defaults
+
+Non-guest assistant conversations start in `bypassPermissions` when the manager has no configured default. Main chats, leader conversations and the assistant's own scheduled-task chats use this default; ordinary Agents dispatched with `task_plan` keep their existing task permission selection. `default_permission_mode` in the manager settings still overrides it for new conversations. A conversation or task with an explicit mode keeps that choice; guest tool restrictions remain unchanged. Resumed turns with no persisted selection also use bypass, including `schedule_routine` and `schedule_followup` turns.
+
+The command gate honors bypass for classified reads and ordinary writes without creating a tool permission card or persisting an Always grant. It still confirms outbound sends as the user (messages, replies, comments and mail), deletion and writes it cannot classify. It extracts individual calls from compound commands when possible; all must be classified as reads or ordinary writes to bypass confirmation. Proxy-authenticated writes must be standalone, parseable calls so credentials remain isolated. The sent-as-user ledger records `let_through.kind: "permission_mode"` for a proxied call allowed by bypass. Credential guards, explicit deny rules and the health space's separate confirmation rules still apply. Ordinary Agent sessions retain their existing permission behavior.
+
+Bypass controls tool execution, not authorization for an action. The assistant must use `ask_user` before production writes, external sends, deletion or spending unless the user has already authorized that exact action. These questions remain pending until the user answers; bypass does not answer them or make an irreversible recommendation take effect at a deadline.
+
+
+### Main conversation execution on the web
+
+The welcome and main conversation headers read `GET /api/v1/assistant?view=main-runtime`, with the same manager
+selection and access as the ordinary assistant view. Its `machine_id` and the optional `main_machine_id` in the
+ordinary view are routing identities. The main route is kept separately from the default for new conversations.
+Execution location is reported separately: a native process uses its execution environment's hostname; a deployment
+can explicitly name its container via `PERSONA_EXECUTION_CONTAINER` on that node. The hostname alone does not prove
+the presence of a container. An external runtime can opt in with `caps.execution` and answer
+`session.execution {session_id}` with `{state, location?: {host?, container?}}` for that exact session. The connecting
+node is never substituted for the runtime's execution location. Older nodes and runtimes can leave the location
+unknown. A stopped or offline main can show its last observed location; a missing observation remains unknown.

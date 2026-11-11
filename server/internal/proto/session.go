@@ -52,6 +52,9 @@ type ToolLoop struct {
 	Since time.Time `json:"since"`
 }
 
+// Session is one row of a computer's list. Rows are copied one at a time all over the hub, the manager and the node,
+// so the size matters: its bools sit next to other bools, several to an 8-byte word, which keeps a row inside Go's
+// 1,536-byte size class (TestSessionFitsItsSizeClass). A bool between two wider fields takes a word to itself.
 type Session struct {
 	ToolLoop *ToolLoop `json:"tool_loop,omitempty"`
 	// Manager is the manager it belongs to (docs/assistant/managers.md, "Ownership"); the hub stamps it on what it sends the apps.
@@ -64,15 +67,29 @@ type Session struct {
 	ParentThreadID   string               `json:"parent_thread_id,omitempty"`
 	ParentSessionID  string               `json:"parent_session_id,omitempty"` // Public ID scoped to the Codex home on this machine.
 	RootSessionID    string               `json:"root_session_id,omitempty"`
-	IsSubagent       bool                 `json:"is_subagent,omitempty"`
 	ReadOnlyReason   string               `json:"read_only_reason,omitempty"`
 	Capabilities     *SessionCapabilities `json:"capabilities,omitempty"`
+	IsSubagent       bool                 `json:"is_subagent,omitempty"`
 	Attached         bool                 `json:"attached,omitempty"`
 	// CanFork: "Branch to new chat" works for it (a Claude Code conversation the node can copy, node/fork.go); older nodes
 	// never say so, and the clients hide it.
-	CanFork bool   `json:"can_fork,omitempty"`
-	Title   string `json:"title"`
-	Cwd     string `json:"cwd"`
+	CanFork          bool `json:"can_fork,omitempty"`
+	StartedByPersona bool `json:"started_by_persona"`
+	Assistant        bool `json:"assistant"` // runs in the assistant directory (the app's "Chat" tab)
+	// Archived: a retained conversation moved out of the normal list. Assistant
+	// conversations and Claude/Codex Agents are managed by their owning manager.
+	Archived bool `json:"archived,omitempty"`
+	// BypassAvailable: this Claude Code can be switched to bypassPermissions (Allow All) while it runs, since it was
+	// started with --dangerously-skip-permissions, --allow-dangerously-skip-permissions or --permission-mode
+	// bypassPermissions, which put that mode in its shift+tab cycle (#1379). The node reads it off the claude process its
+	// hooks run under; false while unknown (no hook yet, a node too old to say).
+	BypassAvailable bool `json:"bypass_available,omitempty"`
+	// Ultracode is Claude Code's independent session-only workflow switch: nil means unknown.
+	// Pending means a requested change waits for an idle input box; LostAt asks the client to offer reopening
+	// after a resumed process reset an enabled switch. Reopening or dismissing the notice clears LostAt.
+	UltracodePending bool   `json:"ultracode_pending,omitempty"`
+	Title            string `json:"title"`
+	Cwd              string `json:"cwd"`
 	// WorkspaceCwd is the node-verified physical directory for Cwd. Consumers
 	// matching workspace bindings prefer it and fall back to Cwd on older nodes.
 	WorkspaceCwd string `json:"workspace_cwd,omitempty"`
@@ -80,6 +97,8 @@ type Session struct {
 	// whose worktrees live under Paseo's own folder): "By repo" groups by it; without it the clients infer the repository
 	// from Cwd's path.
 	RepoRoot string `json:"repo_root,omitempty"`
+	// Inventory is optional, credential-free metadata for the bounded session list.
+	Inventory *SessionInventory `json:"inventory,omitempty"`
 	// Worktree is the top of the git working tree Cwd is in (RepoRoot itself for the main checkout, a linked worktree's
 	// own folder otherwise) and Branch the branch checked out there ("" when detached or unknown). The node reads both,
 	// and RepoRoot when no host names it, off the filesystem (node/gitplace.go): the apps list machine → project
@@ -111,20 +130,11 @@ type Session struct {
 	// PermissionMode and Effort are what Claude Code runs with now: default / acceptEdits / plan / auto /
 	// bypassPermissions, and low … max. Empty while unknown (before the first turn, Codex). A Codex thread the phone
 	// drives through its app-server has an Effort too (Codex's levels, see Efforts) but never a PermissionMode.
-	PermissionMode string `json:"permission_mode,omitempty"`
-	Effort         string `json:"effort,omitempty"`
-	// BypassAvailable: this Claude Code can be switched to bypassPermissions (Allow All) while it runs, since it was
-	// started with --dangerously-skip-permissions, --allow-dangerously-skip-permissions or --permission-mode
-	// bypassPermissions, which put that mode in its shift+tab cycle (#1379). The node reads it off the claude process its
-	// hooks run under; false while unknown (no hook yet, a node too old to say).
-	BypassAvailable bool `json:"bypass_available,omitempty"`
-	// Ultracode is Claude Code's independent session-only workflow switch: nil means unknown.
-	// Pending means a requested change waits for an idle input box; LostAt asks the client to offer reopening
-	// after a resumed process reset an enabled switch. Reopening or dismissing the notice clears LostAt.
-	Ultracode        *bool      `json:"ultracode,omitempty"`
-	UltracodeNote    string     `json:"ultracode_note,omitempty"`
-	UltracodePending bool       `json:"ultracode_pending,omitempty"`
-	UltracodeLostAt  *time.Time `json:"ultracode_lost_at,omitempty"`
+	PermissionMode  string     `json:"permission_mode,omitempty"`
+	Effort          string     `json:"effort,omitempty"`
+	Ultracode       *bool      `json:"ultracode,omitempty"`
+	UltracodeNote   string     `json:"ultracode_note,omitempty"`
+	UltracodeLostAt *time.Time `json:"ultracode_lost_at,omitempty"`
 	// ContextTokens is what the model saw in the agent's latest reply (Claude: input + cache read + cache creation;
 	// Codex: the last token_count's input) and ContextWindow the model's window, both read off the transcript tail the
 	// node already reads (#2430). ContextTokens is omitted while unknown (no reply yet); ContextWindow too, when the
@@ -137,13 +147,8 @@ type Session struct {
 	// list, the rest cannot change it from the phone.
 	Efforts []string `json:"efforts,omitempty"`
 	// ServiceTier is the acknowledged native speed, omitted while unknown.
-	ServiceTier      string        `json:"service_tier,omitempty"`
-	ServiceTiers     []ServiceTier `json:"service_tiers,omitempty"`
-	StartedByPersona bool          `json:"started_by_persona"`
-	Assistant        bool          `json:"assistant"` // runs in the assistant directory (the app's "Chat" tab)
-	// Archived: a retained conversation moved out of the normal list. Assistant
-	// conversations and Claude/Codex Agents are managed by their owning manager.
-	Archived bool `json:"archived,omitempty"`
+	ServiceTier  string        `json:"service_tier,omitempty"`
+	ServiceTiers []ServiceTier `json:"service_tiers,omitempty"`
 	// Space is the assistant's space it runs in: "health" for the health space's (docs/assistant/health.md), "" for the
 	// assistant's own. Set by the hub on the assistant's conversations.
 	Space string `json:"space,omitempty"`
@@ -195,8 +200,27 @@ type Session struct {
 	// sleep, loop on a check or watch something, using next to no CPU; no subagent or workflow runs. Clients show
 	// "Waiting in the background" apart from Working (lighter, not in the Working count); State stays working, so an
 	// older app shows Working. The node says whether its background commands wait; the manager keeps it only so.
-	BackgroundWaiting bool      `json:"background_waiting,omitempty"`
-	SeenAt            time.Time `json:"seen_at,omitempty"`
+	BackgroundWaiting bool `json:"background_waiting,omitempty"`
+	// The fields from BackgroundWorking to QueuedRelayed sit together, not beside the ones they go with: with Go's
+	// 8-byte allocation header a Session must stay at most 1,528 bytes to keep its 1,536-byte size class, and every
+	// row the manager copies out of a node's list pays the next class's 256 bytes otherwise (internal/assistant's
+	// TestSessionReadersCopyNoList, #2528). Mind the padding when adding a field.
+	// WokeByTask: the latest turn was started by a background task reporting back, not by the user; finishing
+	// it sends no push (the user did not ask for anything).
+	WokeByTask bool `json:"woke_by_task,omitempty"`
+	// Starting: Persona is opening its tab and waiting for claude (node/starting.go); messages sent now go in once it is
+	// ready.
+	Starting bool `json:"starting,omitempty"`
+	// Quiet: the agent works (or worked) for a quiet task, one the main conversation opened while the user wanted
+	// those told only there (#1731): set by the hub, also once the task is done. Clients leave it out of task
+	// notifications and global badges; the Agents page shows it as always.
+	Quiet bool `json:"quiet,omitempty"`
+	// QueuedRelayed: the last this many of Queued are messages from other conversations that an assistant
+	// conversation's manager holds until its turn ends (docs/assistant/assistant.md "Queue while running"); the apps
+	// show them but take back, delete, move and send now only the others (#4342). A uint16 here sits in the padding
+	// before SeenAt, so a Session stays the size the allocation budgets measured.
+	QueuedRelayed uint16    `json:"queued_relayed,omitempty"`
+	SeenAt        time.Time `json:"seen_at,omitempty"`
 	// StateSince is when the agent entered its current state, as the hub saw it (the hub restarting resets it):
 	// lists sort "Working" by it, since updated_at moves on every step.
 	StateSince time.Time `json:"state_since,omitempty"`
@@ -222,7 +246,8 @@ type Session struct {
 	// it started, which the apps open through the hub.
 	Ports     []Port    `json:"ports,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
-	LastText  string    `json:"last_text,omitempty"`
+
+	LastText string `json:"last_text,omitempty"`
 	// Asks is what the agent's last reply asks the user, when its closing words put a question or a decision to
 	// them (transcript.AskOf, #5096): read by the node off the whole reply, since LastText is only its beginning.
 	Asks string `json:"asks,omitempty"`
@@ -233,6 +258,13 @@ type Session struct {
 	// #5096) — it asks (Asks, or the triage says it waits on the user) and has no card, error or background work. Set by
 	// the hub on a stopped session (Unread or Seen); an Seen one is listed as Awaiting Reply, not folded with the idle ones.
 	AwaitsReply bool `json:"awaits_reply,omitempty"`
+	// TurnErrorResumes: the CLI said it goes on by itself once the usage limit behind TurnError resets (Claude Code's
+	// "Usage limit reached · continuing automatically at …") and nothing cancelled that since. Typing into the session
+	// cancels it, so nothing is sent to it while it waits.
+	TurnErrorResumes bool `json:"turn_error_resumes,omitempty"`
+	// TurnErrorAfterWork: the turn did some work (a reply, a tool call) before TurnError ended it; false when the error
+	// was all it did (a continuation the limit turned down again).
+	TurnErrorAfterWork bool `json:"turn_error_after_work,omitempty"`
 	// TurnError: the agent's latest turn ended in a model API error (the connection lost mid-response, overloaded,
 	// rate limited, the model service down…). The node sets it when the agent's own record says the turn failed
 	// (Codex: a rollout's task_complete.error, an app-server's failed turn, #2185); otherwise the hub reads it off the
@@ -249,18 +281,14 @@ type Session struct {
 	// rollout's own rate limits), else what the hub reads off Claude Code's words when they name a time zone. Nil: not
 	// known, and nothing waits for it. Only a subscription's limit has one: a gateway's or an API key's 429 never does.
 	TurnErrorResetsAt *time.Time `json:"turn_error_resets_at,omitempty"`
-	// TurnErrorResumes: the CLI said it goes on by itself once the limit resets (Claude Code's "Usage limit reached ·
-	// continuing automatically at …") and nothing cancelled that since. Typing into the session cancels it, so nothing
-	// is sent to it while it waits.
-	TurnErrorResumes bool `json:"turn_error_resumes,omitempty"`
-	// TurnErrorAfterWork: the turn did some work (a reply, a tool call) before the error ended it; false when the error
-	// was all it did (a continuation the limit turned down again).
-	TurnErrorAfterWork bool `json:"turn_error_after_work,omitempty"`
 	// TurnErrorCode says what is wrong when the hub can tell from TurnError (docs/assistant/onboarding.md 5.2): one of the
 	// TurnErrorCode* values, for a card that says what to fix (sign in, the key, the model). Empty: not known.
 	TurnErrorCode string `json:"turn_error_code,omitempty"`
 	// ModelFallback is the refusal fallback still active in this session, as the runtime recorded it.
 	ModelFallback *ModelRefusal `json:"model_fallback,omitempty"`
+	// ModelRestore: "back to the configured model" was asked for this session's refusal fallback (#2528) and no newer
+	// model evidence has come since. Not proof the configured model runs: only a newer reply says that.
+	ModelRestore *ModelRestore `json:"model_restore,omitempty"`
 	// Work is where the session stands in its work (docs/assistant/agent-work.md): working, blocked on a named precondition, or
 	// done, with a line saying what it waits for or what it concluded. Set by the hub; absent before the hub has
 	// triaged a stopped session's turn.
@@ -272,14 +300,8 @@ type Session struct {
 	ActivityAt *time.Time `json:"activity_at,omitempty"`
 	// Rev changes whenever the transcript does (its size): the app pulls new items for every session whose rev
 	// differs from what it has, without opening it. Changes travel as the light `revs` event.
-	Rev int64 `json:"rev,omitempty"`
-	// WokeByTask: the latest turn was started by a background task reporting back, not by the user; finishing
-	// it sends no push (the user did not ask for anything).
-	WokeByTask bool `json:"woke_by_task,omitempty"`
-	// Starting: Persona is opening its tab and waiting for claude (node/starting.go); messages sent now go in once it is
-	// ready.
-	Starting            bool `json:"starting,omitempty"`
-	PendingInteractions int  `json:"pending_interactions"`
+	Rev                 int64 `json:"rev,omitempty"`
+	PendingInteractions int   `json:"pending_interactions"`
 	// Suggestion is the next message Claude Code proposes after a turn (grey in its empty input box), read off the
 	// screen; gone once the agent works again or a message is sent.
 	Suggestion string `json:"suggestion,omitempty"`
@@ -292,10 +314,6 @@ type Session struct {
 	StartErrorArgs map[string]string `json:"start_error_args,omitempty"`
 	// Todo is the active (uncompleted, unreleased) todo this session is linked to (assistant/todos.go).
 	Todo *TodoRef `json:"todo,omitempty"`
-	// Quiet: the agent works (or worked) for a quiet task, one the main conversation opened while the user wanted
-	// those told only there (#1731): set by the hub, also once the task is done. Clients leave it out of task
-	// notifications and global badges; the Agents page shows it as always.
-	Quiet bool `json:"quiet,omitempty"`
 	// SpawnFrom is persona_from reported by node for todo derivation (#762), stripped by hub before client push.
 	SpawnFrom string `json:"spawn_from,omitempty"`
 	// AttentionReason is why the session waits for the user, in the host's words (a botmux attention's reason).
@@ -322,6 +340,15 @@ type Session struct {
 	// paseo for the Paseo runtime's; empty for transcripts with no live host and for other runtimes. The apps label a
 	// row with it when the machine enables more than one host.
 	Host string `json:"host,omitempty"`
+}
+
+// SessionInventory is immutable after collection. ProjectRepo is a SHA-256
+// digest, never a remote URL or a local path. The hub scopes local digests to
+// their machine. CreatedAt is the recorded start, when the source knows it.
+type SessionInventory struct {
+	ProjectKind string     `json:"project_kind,omitempty"` // remote, local, non_git, or empty (unknown)
+	ProjectRepo string     `json:"project_repo,omitempty"`
+	CreatedAt   *time.Time `json:"created_at,omitempty"`
 }
 
 // Session.TurnErrorKind values.

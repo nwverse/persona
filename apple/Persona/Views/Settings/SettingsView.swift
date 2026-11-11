@@ -1,4 +1,5 @@
 import BeautifulUI
+import AuthenticationServices
 import SwiftUI
 import VisionKit
 
@@ -98,7 +99,7 @@ struct SettingsView: View {
                         .settingsListRow(SettingsPage.modelConfiguration)
                         NavigationLink(value: SettingsPage.assistant) {
                             // No model here: the assistant's model is Model Settings › Main Chat (#1291).
-                            SettingsRow(title: String(localized: "Assistant"), symbol: Theme.Icon.ai, tint: Theme.ai)
+                            SettingsRow(title: String(localized: "Assistant Profile"), symbol: Theme.Icon.ai, tint: Theme.ai)
                         }
                         .settingsListRow(SettingsPage.assistant)
                         .accessibilityIdentifier("settings-assistant")
@@ -220,9 +221,9 @@ struct SettingsView: View {
                             }
                             .settingsListRow(SettingsPage.hub)
                             .accessibilityIdentifier("settings.hub")
-                            // The hub's managers, each a whole assistant (docs/assistant/managers.md).
+                            // The hub's managers, "assistants" in the interface (docs/assistant/managers.md).
                             NavigationLink(value: SettingsPage.managers) {
-                                SettingsRow(title: String(localized: "Managers"), symbol: Theme.Icon.managers, tint: Theme.ai)
+                                SettingsRow(title: String(localized: "Assistants"), symbol: Theme.Icon.managers, tint: Theme.ai)
                             }
                             .settingsListRow(SettingsPage.managers)
                             .accessibilityIdentifier("settings.managers")
@@ -1001,6 +1002,7 @@ struct PairView: View {
 
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.webAuthenticationSession) private var webAuth
     var start: Start = .scan
     @State private var url = ""
     @State private var token = ""
@@ -1015,6 +1017,7 @@ struct PairView: View {
     @State private var editingSSH = false
     #endif
     @State private var connecting = false
+    @State private var passwordMode = true
     @State private var error: String?
     @State private var scanning = DataScannerViewController.isSupported && DataScannerViewController.isAvailable
     /// The code was refused as expired or used (401 invalid_token): say so, and offer to scan again.
@@ -1026,7 +1029,20 @@ struct PairView: View {
     var body: some View {
         NavigationStack {
             Form {
-                if expired {
+                Section {
+                    Picker("Connection method", selection: $passwordMode) {
+                        Text("Password sign-in").tag(true)
+                        Text("Scan or token").tag(false)
+                    }.pickerStyle(.segmented)
+                }
+                if passwordMode {
+                    Section("Password sign-in") {
+                        TextField("HTTPS hub address", text: $url).autocorrectionDisabled()
+                        Text("Enter the connection password set by your administrator in the system sign-in window. Use QR pairing for self-signed certificates.")
+                            .font(Theme.Font.caption).foregroundStyle(.secondary)
+                    }
+                }
+                if !passwordMode && expired {
                     Section {
                         Label("This code has expired or was already used; get a new one", systemImage: Theme.Icon.error)
                             .font(Theme.Font.secondaryStrong).foregroundStyle(Theme.danger)
@@ -1042,12 +1058,13 @@ struct PairView: View {
                         Text("Get a new code on the screen from setting up the hub, or on a connected device in Settings › Devices › Connect a new device.")
                     }
                 }
-                if scanning && !other {
+                if !passwordMode && scanning && !other {
                     Section {
                         QRScanner { code in
                             if let cfg = ServerConfig(pairURL: code) {
                                 url = cfg.url.absoluteString
                                 token = cfg.token
+                                passwordMode = false
                                 scanning = false
                                 Task { await connect() }
                             }
@@ -1065,7 +1082,7 @@ struct PairView: View {
                         #endif
                     }
                 }
-                if !other {
+                if !passwordMode && !other {
                     Section {
                         Button { withAnimation(Theme.Motion.standard) { showOther = true } } label: {
                             Label("Other ways", systemImage: Theme.Icon.more).lineLimit(1)
@@ -1075,8 +1092,8 @@ struct PairView: View {
                         Text("Type the address, connect through an SSH tunnel, or make a code with a command on the hub's machine.")
                     }
                 }
-                if other { otherWays }
-                accessSection
+                if !passwordMode && other { otherWays }
+                if !passwordMode { accessSection }
                 if let error { Section { Text(error).foregroundStyle(Theme.danger).font(Theme.Font.caption) } }
             }
             .themedPage()
@@ -1092,6 +1109,7 @@ struct PairView: View {
                 if let cfg = ServerConfig(pairURL: s) {
                     url = cfg.url.absoluteString
                     token = cfg.token
+                    passwordMode = false
                     Task { await connect() }
                 }
             }
@@ -1107,7 +1125,7 @@ struct PairView: View {
             .onAppear { if UserDefaults.standard.bool(forKey: "openPairSSH") { editingSSH = true } }
             #endif
             #endif
-            .modifier(PairSheetChrome(url: $url, token: $token, connecting: connecting, connect: { await connect() }))
+            .modifier(PairSheetChrome(url: $url, token: $token, passwordMode: $passwordMode, connecting: connecting, connect: { await connect() }))
         }
     }
 
@@ -1182,6 +1200,7 @@ struct PairView: View {
 private struct PairSheetChrome: ViewModifier {
     @Binding var url: String
     @Binding var token: String
+    @Binding var passwordMode: Bool
     var connecting: Bool
     var connect: () async -> Void
     @Environment(\.dismiss) private var dismiss
@@ -1198,6 +1217,7 @@ private struct PairSheetChrome: ViewModifier {
                 guard let cfg = ServerConfig(pairURL: typed) else { return }
                 url = cfg.url.absoluteString
                 token = cfg.token
+                passwordMode = false
                 Task { await connect() }
             }
             #endif
@@ -1207,7 +1227,7 @@ private struct PairSheetChrome: ViewModifier {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button { Task { await connect() } } label: { if connecting { ProgressView() } else { Text("Connect [V N C Page a55741]") } }
-                        .disabled(connecting || token.isEmpty || URL(string: url) == nil)
+                        .disabled(connecting || (!passwordMode && token.isEmpty) || url.isEmpty)
                 }
             }
     }
@@ -1239,6 +1259,7 @@ extension AppModel {
 
 extension PairView {
     fileprivate func connect() async {
+        if passwordMode { await passwordLogin(); return }
         guard let u = URL(string: url.trimmingCharacters(in: .whitespaces)) else { return }
         connecting = true
         defer { connecting = false }
@@ -1267,6 +1288,30 @@ extension PairView {
             }
             if !expired { scanning = DataScannerViewController.isSupported && DataScannerViewController.isAvailable } // scan again
             Haptics.error()
+        }
+    }
+
+    private func passwordLogin() async {
+        connecting = true
+        error = nil
+        defer { connecting = false }
+        do {
+            #if os(macOS)
+            let kind = "desktop"
+            #else
+            let kind = "phone"
+            #endif
+            let flow = try PasswordLoginRequest(address: url, name: UIDevice.current.name, kind: kind)
+            let callback = try await webAuth.authenticate(using: flow.page, callback: .customScheme("persona"),
+                preferredBrowserSession: .ephemeral, additionalHeaderFields: [:])
+            let credential = try await flow.exchange(callback)
+            try await model.pair(ServerConfig(url: flow.server, token: credential.token), deviceID: credential.id)
+            Haptics.success()
+            dismiss()
+        } catch let e as ASWebAuthenticationSessionError where e.code == .canceledLogin {
+            return
+        } catch {
+            if !error.isCancellation { self.error = error.localizedDescription; Haptics.error() }
         }
     }
 }

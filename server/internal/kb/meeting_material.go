@@ -11,7 +11,10 @@ import (
 
 // What the answering model of an attended meeting reads (docs/assistant/meeting-minutes.md "What the hub gives the
 // answering model"): an answer may be said aloud in front of other people, who can ask for anything it was given, so
-// the boundary is this material, not the prompt. It is built from four sources and nothing else: this meeting's own
+// the boundary is this material, not the prompt. Until #3862 phase 1 adds a private-meeting mark, only this meeting's
+// own material is included. EarlierMeetingsInAnswers gates the other three sources below together, and with it only
+// meetings marked not private are material ("The private mark", meeting.go).
+// The four possible sources are this meeting's own
 // upload title and calendar hint, live sentences and answered questions; the minutes of earlier meetings (never their
 // transcript, summary, live log or questions); the name and status of the projects those meetings are linked to; and
 // the to-do ids of their action items, whose open or done the assistant looks up. Nothing else of the knowledge base
@@ -28,6 +31,8 @@ type MeetingMaterial struct {
 	Lines []LiveSegment
 	// Asks are this meeting's questions already answered, oldest first.
 	Asks []LiveAsk
+	// EarlierAvailable distinguishes an allowed but empty lookup from material excluded by the privacy policy.
+	EarlierAvailable bool
 	// Earlier are at most materialMaxEarlier earlier meetings, the best ranked first.
 	Earlier []EarlierMeeting
 }
@@ -50,6 +55,27 @@ type EarlierProject struct {
 	Status string // active | paused | done
 }
 
+// EarlierMaterial is the earlier meetings for a question asked during recording id's meeting (the room's
+// meeting_earlier): none while EarlierMeetingsInAnswers is off. ErrRecordingDeleted after a delete, ErrNotFound with no
+// upload of it.
+func (e *Engine) EarlierMaterial(rawID, query string) ([]EarlierMeeting, error) {
+	id, ok := RecordingID(rawID)
+	if !ok {
+		return nil, ErrNotFound
+	}
+	if _, gone := e.Store.tombstones()[id]; gone {
+		return nil, ErrRecordingDeleted
+	}
+	r, ok := e.Store.Recording(id)
+	if !ok {
+		return nil, ErrNotFound
+	}
+	if !e.EarlierMeetingsInAnswers {
+		return nil, nil
+	}
+	return e.earlierMeetings(r, query), nil
+}
+
 // MeetingMaterial is the material for a question asked during recording id's meeting; question ranks the earlier
 // meetings. ErrRecordingDeleted after a delete, ErrNotFound with no upload of it.
 func (e *Engine) MeetingMaterial(rawID, question string) (MeetingMaterial, error) {
@@ -57,7 +83,8 @@ func (e *Engine) MeetingMaterial(rawID, question string) (MeetingMaterial, error
 	if err != nil {
 		return MeetingMaterial{}, err
 	}
-	m := MeetingMaterial{Title: r.Title, Language: r.Language, Lines: latestLines(l.Segments, materialLiveRunes)}
+	m := MeetingMaterial{Title: r.Title, Language: r.Language, Lines: latestLines(l.Segments, materialLiveRunes),
+		EarlierAvailable: e.EarlierMeetingsInAnswers}
 	if c := r.Calendar; c != nil {
 		m.Calendar = &RecordingCalendar{Title: c.Title, Attendees: slices.Clone(c.Attendees), Location: c.Location}
 	}
@@ -67,7 +94,9 @@ func (e *Engine) MeetingMaterial(rawID, question string) (MeetingMaterial, error
 			m.Asks = append(m.Asks, a)
 		}
 	}
-	m.Earlier = e.earlierMeetings(&r, question)
+	if m.EarlierAvailable {
+		m.Earlier = e.earlierMeetings(&r, question)
+	}
 	return m, nil
 }
 
@@ -93,8 +122,9 @@ func latestLines(segs []LiveSegment, n int) []LiveSegment {
 }
 
 // earlierMeetings are the meetings the material may hold besides r, ranked for question. Eligible: another recording
-// still stored whose upload says it is a meeting (kind meeting) or whose minutes the user asked for, with minutes
-// written. Never one that is a meeting only because a calendar item overlapped it, and never a note.
+// still stored whose upload says it is a meeting (kind meeting) or whose minutes the user asked for, marked not
+// private (a meeting with no mark counts as private), with minutes written. Never one that is a meeting only because
+// a calendar item overlapped it, and never a note.
 func (e *Engine) earlierMeetings(r *Recording, question string) []EarlierMeeting {
 	here := meetingTerms{question: termsOf(question)}
 	for _, t := range []string{r.Title, calendarHintTitle(r)} {
@@ -115,7 +145,7 @@ func (e *Engine) earlierMeetings(r *Recording, question string) []EarlierMeeting
 	}
 	var all []ranked
 	for _, o := range e.Store.Recordings() {
-		if o.ID == r.ID || o.Kind != RecordingMeeting && !o.MinutesAsked {
+		if o.ID == r.ID || !o.IsMeeting() || !o.MarkedNotPrivate() {
 			continue
 		}
 		mins, err := e.Store.ReadMinutes(o.ID)

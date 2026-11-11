@@ -271,7 +271,7 @@ func TestNodeSessionScopePinsMCPEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	args := strings.Join(codexArgsForHome("personad", "proc-work", n.dir), " ")
+	args := strings.Join(codexArgsForHome("personad", "proc-work", n.dir, true), " ")
 	if !strings.Contains(args, "PERSONA_HOME="+string(quotedHome)) || !strings.Contains(args, `PERSONA_SESSION_ID="proc-work"`) {
 		t.Fatalf("Codex MCP environment: %s", args)
 	}

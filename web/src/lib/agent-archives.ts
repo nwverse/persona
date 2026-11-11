@@ -6,7 +6,7 @@
 import { useSyncExternalStore } from "react";
 import { api, ApiError, errorText, sessionPath } from "./api";
 import { sessionTitle, stateOf } from "./format";
-import { dropSession, refresh, useStore } from "./store";
+import { dropSession, getState, refresh, upsertSession, useStore } from "./store";
 import { toast } from "../ui/atoms";
 import { t } from "../i18n";
 import type { Session } from "./types";
@@ -66,8 +66,8 @@ export interface CloseResult {
 
 // ── the hub ──────────────────────────────────────────────
 
-export function archiveSession(s: Pick<Session, "machine_id" | "session_id">, close = false): Promise<{ ok: boolean; close?: CloseResult }> {
-  return api(`${sessionPath(s.machine_id, s.session_id)}/archive${close ? "?close=1" : ""}`, { method: "POST", json: {} });
+export function archiveSession(s: Pick<Session, "machine_id" | "session_id">, close = false, force = false): Promise<{ ok: boolean; close?: CloseResult }> {
+  return api(`${sessionPath(s.machine_id, s.session_id)}/archive${force ? "?force=1" : close ? "?close=1" : ""}`, { method: "POST", json: {} });
 }
 
 export function unarchiveSession(s: Pick<Session, "machine_id" | "session_id">): Promise<unknown> {
@@ -134,7 +134,9 @@ export interface ArchiveDeps {
   unarchive: (s: Session) => Promise<unknown>;
   /** Takes the row out of the lists at once (the hub's push follows). */
   drop: (s: Session) => void;
-  /** Re-reads the lists: after a refusal the row comes back. */
+  /** Puts back the removed snapshot after a refusal. */
+  restore: (s: Session) => void;
+  /** Reconciles with the hub after the local update. */
   refresh: () => Promise<unknown>;
   notify: (text: string, tone: "ok" | "error" | "info", action?: { label: string; run: () => void }) => void;
 }
@@ -155,6 +157,7 @@ export async function archiveAgent(s: Session, close: boolean, deps: ArchiveDeps
     else deps.notify(t("lib-agent-archives.archived_still_open", { title, reason: r.close.reason || r.close.detail || r.close.outcome }), "info", undo);
     return { ok: true, close: r.close };
   } catch (e) {
+    deps.restore(s);
     deps.notify(archiveErrorText(e, close), "error");
     return { ok: false };
   } finally {
@@ -184,6 +187,10 @@ export const appArchiveDeps: ArchiveDeps = {
   archive: (s, close) => archiveSession(s, close),
   unarchive: unarchiveSession,
   drop: (s) => dropSession(s.machine_id, s.session_id),
+  restore: (s) => {
+    // A newer socket row wins over the snapshot removed by this request.
+    if (!getState().sessions[s.machine_id]?.some(row => row.session_id === s.session_id)) upsertSession(s);
+  },
   refresh: () => refresh(),
   notify: (text, tone, action) => toast(text, tone, action),
 };
