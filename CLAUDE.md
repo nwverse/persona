@@ -7,6 +7,15 @@ other repository documentation. Changes to the super-rules file, including addit
 GitHub issue and explicit approval from administrator `chyroc` in that issue before editing or opening a PR.
 The PR must link the approved issue. No Agent or delegated task may bypass this requirement, even to fix a failing check.
 
+**Product positioning: Persona is an Agent product for everyone, not only software developers.**
+
+- **Assistant** is for everyday people, with no programming or Agent-tool knowledge required.
+- **Agents** is for people who want to collaborate directly with Claude Code and other Agents.
+- Before every design decision, ask **who it serves**. Keep Assistant and other everyday-facing interfaces simple and
+  understandable; do not let developer terminology, engineering details or accumulating options make them harder to use.
+  Put specialist workflows in Agents or advanced settings, and disclose details only when needed. For example, asking
+  Assistant to organize a trip should not require choosing an Agent runtime or a repository.
+
 Persona is a self-hosted personal SuperAgent. A Go server, `personad`, runs as the **hub** on an always-on machine and holds all state;
 the clients (iPhone, Apple Watch, Mac, Vision Pro, Android and the web) talk only to the hub. Each of your computers runs a **node**
 (connected to the hub through Persona Link), where coding Agents (Claude Code, Codex, pi, opencode and other runtimes) run in an engine
