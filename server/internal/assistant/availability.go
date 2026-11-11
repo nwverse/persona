@@ -22,8 +22,9 @@ import (
 // a work event (session_work_events, kept 30 days like the others): one per answered owner message, per round, per
 // delivered queued message and per ended card. Nothing here calls a model or reads a transcript.
 //
-// GET /api/v1/assistant/availability reads them. It is a route of its own because #4601's north-star read is not on
-// main; its top-level fields are named so that they can be served from that route unchanged once it is.
+// GET /api/v1/assistant/availability reads them. It is a route of its own, not part of #4601's north-star read
+// (north_star.go): that one reads a single day from the database alone, this one a window of days plus the queues and
+// the acceptance book as the running manager has them. Its top-level fields do not collide with the north star's.
 const (
 	// replyWaitEvent: the owner's message to an assistant conversation got its first reply text. Detail: state (what the
 	// conversation was doing when the message came, the wait* constants), wait (seconds), main, open_tasks (the open
@@ -263,11 +264,30 @@ func (s *Service) availOwnerSent(machine, session, id string, now time.Time) {
 	switch {
 	case !waits:
 		b.replayed[k] = now // its session.user_spoke is still on the way
-	case w.fresh && now.Sub(w.at) < availReplayFor:
-		b.dropWait(k)
-		if in, ok := b.inputs[k]; ok && in.source == roundOwner {
-			delete(b.inputs, k)
-		}
+	case now.Sub(w.at) < availReplayFor:
+		b.takeBack(k)
+	}
+}
+
+// availOwnerFailed: the owner's latest message for machine's conversation was not sent (the hub's
+// session.assistant_sent, or the manager refused it): the wait and the round's input it opened are taken back. A
+// wait an earlier message opened stays.
+func (s *Service) availOwnerFailed(machine, session string) {
+	k := [2]string{machine, session}
+	b := &s.avail
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.takeBack(k)
+}
+
+// takeBack undoes the owner's latest message to k when it opened the wait; with b.mu held.
+func (b *availBook) takeBack(k [2]string) {
+	if w, ok := b.waits[k]; !ok || !w.fresh {
+		return
+	}
+	b.dropWait(k)
+	if in, ok := b.inputs[k]; ok && in.source == roundOwner {
+		delete(b.inputs, k)
 	}
 }
 

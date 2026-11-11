@@ -182,8 +182,9 @@ a value crosses its threshold in section 1. Each number has its one-line definit
 (PRINCIPLES 3).
 
 As built (step M1, #4924): the four metrics are recorded and read through `GET /api/v1/assistant/availability`, a
-route of its own because the north-star read is not on `main`; the reply wait starts at the manager's
-`session.user_spoke`. `docs/assistant/assistant.md` ("Availability metrics") has the definitions and their limits.
+route of its own because the north-star read covers one day from the database alone; the reply wait starts at the
+manager's `session.user_spoke`. `docs/assistant/assistant.md` ("Availability metrics") has the definitions and their
+limits.
 
 ## 6. Steps
 

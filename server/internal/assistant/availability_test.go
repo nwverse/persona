@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -284,6 +285,13 @@ func TestAvailabilityReplayAndGone(t *testing.T) {
 	s.UserSpoke(t.Context(), ref)
 	if n := s.avail.waiting.Load(); n != 0 {
 		t.Fatalf("a replay whose send came first opened a wait (%d)", n)
+	}
+	// A message the hub could not send is taken back; one that failed after an earlier message opened the wait is not.
+	s.UserSpoke(t.Context(), ref)
+	s.ConversationSent(t.Context(), ConversationSent{MachineID: "mac", SessionID: "conv", Outcome: assistantwire.ConversationFailed})
+	s.waitWorkEvents()
+	if n := s.avail.waiting.Load(); n != 0 {
+		t.Fatalf("a failed send opened a wait (%d)", n)
 	}
 	superviseRound(t, ft, list, "Hi.") // the replay's input is not the next round's
 	list(proto.StatusDone, "Hi.")

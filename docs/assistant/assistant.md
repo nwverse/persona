@@ -825,10 +825,11 @@ What the numbers do and do not say:
   running round. On Codex, a runtime, the Agent SDK bridge or an older Claude Code the list shows no queue, so a
   message taken into the running round is counted to that round's end (`by: turn_end`), which overstates its wait;
   one that waits for the round to end is counted to the first text of the round that follows.
-- **What is no wait**: a message to an idle conversation that started no turn within 5 minutes (its send was
-  refused, its machine was offline) is dropped, not counted `unanswered`; a replay of a message already delivered
-  (the same `client_msg_id` within an hour) opens no wait. A send that failed while a background round started within
-  those 5 minutes is still counted, against that round's text.
+- **What is no wait**: a message the hub reports as not sent (`session.assistant_sent` failed, or the manager
+  refused it) or that started no turn in an idle conversation within 5 minutes is dropped, not counted `unanswered`
+  (failed sends are the north star's availability, `docs/assistant/north-star.md`); a replay of a message already
+  delivered (the same `client_msg_id` within an hour) opens no wait. A message from a channel or the inbox whose send
+  failed while a background round wrote text within those 5 minutes is still counted, against that text.
 - **Rounds**: the manager names a round after the last input it sent or accepted before the round started. `notice`
   is a task notice, a late `ask_user` answer or a spawned conversation's report; `other` is a round whose input the
   manager did not see (a new conversation's first message, which is the owner's; a background task reporting back,
@@ -848,9 +849,13 @@ What the numbers do and do not say:
   closed or asked again has left the count.
 - Rounds and waits under way are in the manager's memory: a manager restart loses those, not the recorded rows.
 
-The route is a separate one because the north-star read of #4601 is not on `main`; its four top-level fields are
-named so that they can be served from that read unchanged once it is. The reply wait starts at the manager's
-`session.user_spoke`, not at the hub's message outcome the proposal names, for the same reason.
+The route is a separate one, not part of `GET /api/v1/assistant/north-star` as the proposal has it: the north star
+reads one day from the database alone (also from the command line, with no manager running), while these numbers
+cover a window of days and read the queues and the acceptance book of the running manager. The four top-level fields
+do not collide with the north star's, so they can be served from that read later. The north star's own
+`availability` is a different number: whether a conversation could be started or resumed at all. The reply wait
+starts when the hub takes the owner's message (`session.user_spoke`), before the node accepts it; the hub's message
+outcome (`session.assistant_sent`) only takes back the wait of a message that was not sent.
 
 ## Chat titles
 
