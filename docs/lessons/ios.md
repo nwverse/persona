@@ -172,7 +172,7 @@ A frozen transcript can reveal its withheld rows during Jump to Latest and move 
 
 ## Duplicate transcript cache entries (#4305)
 
-`ChatStore.ids` being a Set does not prove `items` is unique after loading a replayed disk cache. A later backlog containing one of those IDs then builds `Dictionary(uniqueKeysWithValues:)` over the duplicates and traps on the main thread. Normalize existing and incoming items before fold/index processing, keeping the last copy of each ID to match the merge's new-copy-wins contract; merely changing the dictionary to `uniquingKeysWith` would hide the crash while retaining duplicate transcript rows. Cover the real `ChatCache.save → ChatStore.init → merge(backlog)` crash and same-batch duplicate metadata in Debug and Release tests.
+`ChatStore.ids` being a Set does not prove `items` is unique after loading a replayed disk cache. A later backlog containing one of those IDs then builds `Dictionary(uniqueKeysWithValues:)` over the duplicates and traps on the main thread. Collect monotone promotion evidence before normalizing existing and incoming items, then keep the last copy of each ID before fold/index processing to match the merge's new-copy-wins contract; merely changing the dictionary to `uniquingKeysWith` would hide the crash while retaining duplicate transcript rows. Cover the real `ChatCache.save → ChatStore.init → apply(backlog)` crash, same-batch duplicate metadata and reconnect tool/image replays in Debug and Release tests.
 
 ## Retained chat visibility (#739)
 
