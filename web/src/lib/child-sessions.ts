@@ -6,6 +6,10 @@
 import { stateOf } from "./format";
 import type { AgentState, Interaction, Session } from "./types";
 
+/** The hub folds child sessions and its paged list takes `roots=1` and `parent_session_id=` (docs/protocol/protocol.md
+ *  "Session hierarchy"): send those keys only when hello lists this. */
+export const SESSIONS_HIERARCHY_FEATURE = "sessions_hierarchy";
+
 /** The state a parent shows and is counted under with its folded children (the hub's `Session.FoldedState`): one of
  *  them waiting on the user makes it need you; one working makes it work, unless it has a reply the user has not read or
  *  awaits the user's own. */
