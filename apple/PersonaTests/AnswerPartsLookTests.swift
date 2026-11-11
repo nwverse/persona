@@ -103,6 +103,36 @@ struct AnswerPartsLookTests {
     }
 }
 
+/// The chat's lines with long answers as parts (`ChatLines.splitAnswers`): the first part keeps the answer's id (a
+/// jump, a quote or a saved place lands on its start), every part holds the answer (its long press, its zIndex), and
+/// short answers and other lines stay as they were.
+@MainActor
+struct AnswerPartLinesTests {
+    private func item(_ seq: Int, _ text: String, role: String = "assistant") -> Item {
+        Item(id: "\(seq)#0", seq: seq, ts: nil, role: role, kind: .text, text: text, toolUseID: nil, toolName: nil, toolInput: nil,
+             isError: nil, image: nil)
+    }
+
+    @Test func aLongAnswerBecomesItsPartsInPlace() throws {
+        let long = item(2, AnswerPartsLookTests.report + "\n\n" + Array(repeating: "补充一段，说明为什么这样拆。", count: 300).joined(separator: "\n\n"))
+        let lines: [ChatLine] = [.row(.user(item(1, "整理方案", role: "user"))), .row(.assistant(long)), .row(.assistant(item(3, "好的。")))]
+        let parts = AnswerPartMemo.parts(long.text ?? "")
+        try #require(parts.count > 1)
+        let split = ChatLines.splitAnswers(lines)
+        #expect(split.count == lines.count - 1 + parts.count)
+        #expect(split.map(\.id) == ["1#0", "2#0"] + (1..<parts.count).map { "2#0/part-\($0)" } + ["3#0"])
+        #expect(split.dropFirst().dropLast().allSatisfy { $0.holds("2#0") })
+        #expect(!split[0].holds("2#0"))
+    }
+
+    @Test func shortAnswersStayAsTheyAre() {
+        let short = "好的，第 6 部分的表核对过了。"
+        let lines: [ChatLine] = [.row(.user(item(1, "你好", role: "user"))), .row(.assistant(item(2, short)))]
+        #expect(AnswerPartMemo.parts(short).isEmpty)
+        #expect(ChatLines.splitAnswers(lines).map(\.id) == ["1#0", "2#0"])
+    }
+}
+
 /// The drawn height, written by the view's geometry callback without redrawing anything.
 private final class HeightBox {
     var height: CGFloat = 0

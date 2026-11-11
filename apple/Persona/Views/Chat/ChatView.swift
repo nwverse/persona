@@ -2705,6 +2705,24 @@ struct ChatView: View {
         .onAppear {
             pin.letGo = { [position = $position] in position.wrappedValue = ScrollPosition(idType: String.self) }
             pin.onRising = { [rising = $pinRising] in rising.wrappedValue = $0 }
+            #if DEBUG && (os(iOS) || os(visionOS))
+            // The page measurements move the list's scroll view themselves (`PagePerf`): tell the chat a finger is on
+            // it, as a drag does (`onScrollPhaseChange`), or it keeps following the newest end and puts its stored
+            // position back whenever rows come in, and the list never gets far (#4970).
+            PagePerf.touch = { down in
+                if down {
+                    scratch.userDragging = true
+                    scratch.lastUserScroll = .now
+                    entry = nil
+                    userScrolled = true
+                    setFollow { $0.touched() }
+                    pin.letGo()
+                } else {
+                    scratch.userDragging = false
+                    setFollow { $0.released() }
+                }
+            }
+            #endif
         }
         #if os(macOS)
         .onAppear {

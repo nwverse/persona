@@ -202,6 +202,10 @@ import UIKit
 /// `-showPagePerfRepeat <n>` glides n times, each its own file after the first (frames-page-glide-2.json, …): the first
 /// pass lays rows out for the first time, the later ones show what scrolling back over them costs.
 @MainActor enum PagePerf {
+    /// The page under a glide, told a finger is on it (true) and lifted (false), so it treats the glide as the user's
+    /// scrolling (a chat stops following its newest end); set by the page itself (`ChatView`).
+    static var touch: ((Bool) -> Void)?
+
     static func runIfAsked() {
         let d = UserDefaults.standard
         guard d.bool(forKey: "showPagePerf") else { return }
@@ -223,12 +227,14 @@ import UIKit
             try? await Task.sleep(for: .seconds(1))
             guard let list = mainScrollView() else { return }
             for n in 1...repeats {
+                touch?(true)
                 list.setContentOffset(CGPoint(x: list.contentOffset.x, y: -list.adjustedContentInset.top), animated: false)
                 try? await Task.sleep(for: .seconds(1))
                 FrameStats.shared.start()
                 await ListGlide.run(list, seconds: seconds, speed: CGFloat(speed))
                 await ListGlide.run(list, seconds: seconds, speed: CGFloat(-speed))
                 FrameStats.shared.stop(label: n == 1 ? "page-glide" : "page-glide-\(n)")
+                touch?(false)
             }
         }
     }
@@ -241,7 +247,10 @@ import UIKit
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(8))
             guard let list = mainScrollView() else { return }
+            touch?(true)
             list.setContentOffset(CGPoint(x: list.contentOffset.x, y: -list.adjustedContentInset.top + y), animated: false)
+            try? await Task.sleep(for: .seconds(0.5))
+            touch?(false)
             try? await Task.sleep(for: .seconds(2))
             if let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
                 try? Data().write(to: dir.appending(path: "list-offset-set"))
