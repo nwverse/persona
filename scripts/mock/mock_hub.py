@@ -4255,14 +4255,14 @@ def followup_send(rid, msg):
     m = conv_of(rid, True)
     f = m.get("followup")
     images = [it("user", "image", 0, image={"mime": x["mime"], "data": x["data"]}) for x in msg["images"]]
-    words = [conv_item("user", msg["text"], client_msg_id="followup-" + msg["id"])] if msg["text"] else []
-    reply = [conv_item("assistant", FOLLOWUP_REPLY)]
+    # The reply is made after the owner's words: items take their seq as they are made, and apps order by it.
     if f and f.get("session_id"):
         if f.get("op_id") == msg["id"]: return 200, {"followup": followup_view(m), "created": True, "client_msg_id": "followup-" + msg["id"]}
-        conv_append(f["machine_id"], f["session_id"], images + words + reply)
+        words = [conv_item("user", msg["text"], client_msg_id="followup-" + msg["id"])] if msg["text"] else []
+        conv_append(f["machine_id"], f["session_id"], images + words + [conv_item("assistant", FOLLOWUP_REPLY)])
         return 200, {"followup": followup_view(m), "created": False, "client_msg_id": "followup-" + msg["id"]}
     first = conv_item("user", followup_seed(rid, msg["text"]), client_msg_id="followup-" + msg["id"])
-    mid, sid = conv_start(rid, "followup", "meeting_followup", images + [first] + reply)
+    mid, sid = conv_start(rid, "followup", "meeting_followup", images + [first] + [conv_item("assistant", FOLLOWUP_REPLY)])
     m["followup"] = {"machine_id": mid, "session_id": sid, "op_id": msg["id"]}
     meeting_changed(rid, ["followup"])
     return 200, {"followup": followup_view(m), "created": True, "client_msg_id": "followup-" + msg["id"]}
@@ -4279,16 +4279,53 @@ def just_me_send(rid, msg):
             f'and its calendar invite, not my words): title "{meeting_name(rec)}".\nRecording: {rid} (read it with kb_get kind=recordings).\n'
             f"Time in the meeting: {at}.\n</persona-context>\n\n{msg['text']}")
     main = ASSISTANT_CONFIG.get("main")
-    if not main or not any(x["session_id"] == main for x in ASSISTANT):
+    made = not main or not any(x["session_id"] == main for x in ASSISTANT)
+    if made:
+        before = ASSISTANT_CONFIG.get("main")
         main = str(uuid.uuid4())
         s = assistant_sess(main, "", 0, "")
         s.update(main=True, rev=0)
         ASSISTANT.append(s)
         ITEMS[main] = []
         ASSISTANT_CONFIG["main"] = main
+        JUST_ME_BEFORE.setdefault(main, {"made": True, "main": before})
+    else:
+        row = next(x for x in ASSISTANT if x["session_id"] == main)
+        JUST_ME_BEFORE.setdefault(main, {"made": False, **{k: row.get(k) for k in ("updated_at", "last_text")}})
     images = [it("user", "image", 0, image={"mime": x["mime"], "data": x["data"]}) for x in msg["images"]]
-    conv_append(mid, main, images + [conv_item("user", text, client_msg_id="just-me-" + msg["id"])])
+    sent = images + [conv_item("user", text, client_msg_id="just-me-" + msg["id"])]
+    JUST_ME_ITEMS.update(x["id"] for x in sent)
+    conv_append(mid, main, sent)
+    # The main chat answers a moment later, as its turn would (the meeting page shows it under Just me); not once a fresh
+    # start (meeting_conversation_reset) came between.
+    generation = JUST_ME_GENERATION[0]
+
+    def reply():
+        if JUST_ME_GENERATION[0] != generation: return
+        answer = conv_item("assistant", just_me_reply(rec))
+        JUST_ME_ITEMS.add(answer["id"])
+        conv_append(mid, main, [answer])
+    timer = threading.Timer(JUST_ME_REPLY_SECONDS, reply)
+    timer.daemon = True
+    timer.start()
     return 200, {"conversation": {"machine_id": mid, "session_id": main}, "client_msg_id": "just-me-" + msg["id"]}
+
+
+JUST_ME_REPLY_SECONDS = float(os.environ.get("MOCK_JUST_ME_REPLY_SECONDS", "1"))
+# What Just me wrote into the main chat since the last fresh start, so meeting_conversation_reset takes exactly that back
+# out (a UI test's question and its reply would otherwise show in every later test's main chat): the items' ids, each
+# main chat's list row as it was (or that Just me made the chat, and which one was the main chat before), and a counter
+# a pending reply checks.
+JUST_ME_ITEMS = set()
+JUST_ME_BEFORE = {}
+JUST_ME_GENERATION = [0]
+
+
+def just_me_reply(rec):
+    """The main chat's made-up private answer, in the recording's language."""
+    if (rec.get("language") or "en").lower().startswith("zh"):
+        return "发布说明一般由负责这个版本的人来写。上周的周会把这个版本交给了张三，可以先请他起个草稿。"  # i18n-ignore: made-up model answer
+    return "Release notes usually come from whoever owns the release. Last week's review gave this one to Bo, so ask Bo for a first draft."
 
 
 def meeting_receipt(h, kind, raw, run):
@@ -4382,7 +4419,8 @@ def meeting_conversation_route(h, method, p):
 
 
 def meeting_conversation_reset():
-    """A fresh start (POST /mock/recording_minutes): the meetings' rooms and follow-ups leave the lists, and the receipts go."""
+    """A fresh start (POST /mock/recording_minutes): the meetings' rooms and follow-ups leave the lists, the receipts go,
+    and what Just me wrote into the main chat (its messages and the replies to them) is taken out again."""
     for m in MEETING_CONV.values():
         for c in (m.get("room") or {}, m.get("followup") or {}):
             if c.get("session_id"):
@@ -4390,6 +4428,20 @@ def meeting_conversation_reset():
                 ITEMS.pop(c["session_id"], None)
     MEETING_CONV.clear(); MEETING_RECEIPTS.clear()
     with MEETING_EVENT_LOCK: MEETING_EVENTS.clear()
+    JUST_ME_GENERATION[0] += 1  # a reply still on its timer is not written
+    for main, before in JUST_ME_BEFORE.items():
+        if before["made"]:
+            ASSISTANT[:] = [x for x in ASSISTANT if x["session_id"] != main]
+            ITEMS.pop(main, None)
+            if ASSISTANT_CONFIG.get("main") == main: ASSISTANT_CONFIG["main"] = before["main"]
+            continue
+        ITEMS[main] = [x for x in ITEMS.get(main, []) if x["id"] not in JUST_ME_ITEMS]
+        row = next((x for x in ASSISTANT if x["session_id"] == main), None)
+        if row is not None:
+            # The rev only goes up: an app that read the chat with Just me in it reads it again.
+            row.update(updated_at=before["updated_at"], last_text=before["last_text"], rev=(row.get("rev") or 0) + 1)
+    if JUST_ME_BEFORE: push_machine(ASSISTANT_CONFIG["machine_id"])
+    JUST_ME_ITEMS.clear(); JUST_ME_BEFORE.clear()
 
 
 # Photos (#3862 phase 3, docs/assistant/meeting-minutes.md "Phase 3: photos"): the feature `meeting_photos` (only beside
@@ -15987,6 +16039,122 @@ def agent_live(step, n):
     return {"ok": True, "step": step}
 
 
+# MOCK_TOOL_TURN=1 (#3005): an agent in the middle of a turn of shell calls with long outputs, a message of the user's
+# queued behind it, history above it. GET /mock/tool_turn?step=… moves it on one push at a time, as the hub pushes them:
+#   call     a new call starts (its tool_use alone: running)
+#   result   the running call's result lands
+#   answer   the agent's answer lands and the turn is over (the agent idle)
+#   next     the queued message is taken: it lands, and a new turn starts on it (a call running)
+#   reset    the agent as it was at the start (open pages keep what they have until reloaded)
+# For the last turn's tool rows keeping what is open, and the list holding still, as all of that comes in (ToolFoldTests).
+TOOL_TURN = os.environ.get("MOCK_TOOL_TURN") == "1"
+TOOL_TURN_SID = "a1f3c2d4-0000-4000-8000-0000000000f5"
+TOOL_TURN_BASE = {}
+TOOL_TURN_N = [0]
+TOOL_TURN_CALLS = [
+    ("Check source subscription issues and PRs", "gh issue list --search 'source subscriptions' --state all",
+     ["#2038  OPEN    Source subscriptions: daily digest per source", "#2036  OPEN    Source subscriptions: mute a source",
+      "#2190  CLOSED  feat(connectors): add source tags", "#2647  OPEN    Send compatible digests to older hubs",
+      "#2492  MERGED  feat(web): add the subscriptions page", "#2440  MERGED  fix(hub): stricter source ids",
+      "#2224  MERGED  fix(web): open the source from a card", "#1345  MERGED  fix(office): keep the source title"]),
+    ("Read the open question on #2037", "gh issue view 2037 --comments",
+     ["closed 2026-11-09T08:21:48Z", "[11-09T07:05 example-dev] Claim: implement the digest", "[11-09T12:51 example-dev] Clarification before merging:",
+      "  - one digest per source, or one for all?", "  - what happens to a muted source's items?", "[11-09T13:02 example-lead] One per source.",
+      "[11-09T13:05 example-dev] Done in #2647.", "labels: enhancement, area/inbox"]),
+    ("Find the PR that closed it", "gh api repos/example/persona/issues/2037/timeline --jq '.[] | .event'",
+     ["cross-referenced  #2038 Source subscriptions", "cross-referenced  #2036 Source subscriptions", "cross-referenced  #2190 feat(connectors)",
+      "closed", "PR #2647  OPEN    11-09T15:56  Send compatible digests", "PR #2492  MERGED  11-09T12:54  feat(web): add the page",
+      "PR #2440  MERGED  11-09T12:00  fix(hub): stricter ids", "PR #2224  MERGED  11-09T08:29  fix(web): open the source"]),
+    ("Ask the lane for its status", "herdr pane send-keys w2:p1 'status?' Enter", ["sent"]),
+    ("Check the lane's reply", "herdr pane read w2:p1 --tail 6",
+     ["status: the digest is in review (#2647)", "next: the mute switch (#2036)", "blocked: nothing"]),
+    ("List what is left", "gh issue list --label area/inbox --state open",
+     ["#2036  OPEN  Source subscriptions: mute a source", "#2647  OPEN  Send compatible digests to older hubs"]),
+]
+
+
+def tool_turn_call(n):
+    """The nth call of the scenario: its tool_use, and its result."""
+    desc, cmd, out = TOOL_TURN_CALLS[n % len(TOOL_TURN_CALLS)]
+    tid = "toolu_fold_%04d" % n
+    use = it("assistant", "tool_use", 0, tool_use_id=tid, tool_name="Bash", tool_input={"command": cmd, "description": desc})
+    return use, it("user", "tool_result", 0, tool_use_id=tid, text="\n".join(out))
+
+
+if TOOL_TURN:
+    SESSIONS.append(sess("macbook", TOOL_TURN_SID, "核对来源订阅的进展", "/Users/me/code/persona", "working", "working", "persona", 4,
+                         "subs", 1, 0, "Find the PR that closed it", state_since=ago(minutes=7),
+                         queued=["顺便看一下静音开关那条还缺什么"]))
+    _earlier = []
+    for _q, _a in (("把收件箱的折叠改一下", "收件箱的折叠改好了：已处理的分组默认收起，网页和 iOS 都在里面。"),
+                   ("网页那边部署了吗", "部署了，网页已经是新版本，iOS 跟下次 TestFlight 走。")):
+        _earlier += [it("user", "text", 30, text=_q)] + tool("Bash", {"command": "git log --oneline -3", "description": "Recent commits"},
+                                                              "abc1234 fix(web): fold handled groups\nbcd2345 docs: inbox folds", 30) \
+            + [it("assistant", "text", 29, text=_a + "\n\n" + "\n".join("- 第 %d 项：已经核对过，没有遗留问题。" % _k for _k in range(1, 9)))]
+    ITEMS[TOOL_TURN_SID] = _earlier + [it("user", "text", 7, text="来源订阅的需求推进情况如何")]
+    for _n in range(3):
+        ITEMS[TOOL_TURN_SID] += list(tool_turn_call(_n))
+    TOOL_TURN_N[0] = 3
+
+
+def tool_turn(step):
+    sid, mid = TOOL_TURN_SID, "macbook"
+    row = next(x for x in SESSIONS if x["session_id"] == sid)
+    if not TOOL_TURN_BASE:
+        TOOL_TURN_BASE.update(items=list(ITEMS[sid]), row=dict(row), n=TOOL_TURN_N[0])
+
+    def stamp():
+        return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    def add(new):
+        before = ITEMS[sid][-1]["seq"]
+        for i, x in enumerate(new):
+            x["seq"], x["ts"] = before + 1 + i, stamp()
+        ITEMS[sid] = ITEMS[sid] + new
+        for out, subs in list(LIVE):
+            if sid in subs:
+                try: out({"type": "items", "machine_id": mid, "session_id": sid, "items": new, **span(new, before)})
+                except Exception: pass
+
+    def state(st, **kw):
+        now = stamp()
+        row.update(state=st, status=STATUS_OF_STATE[st], updated_at=now, rev=(row.get("rev") or 0) + 1, **kw)
+        push_machine(mid)
+
+    running = [x for x in ITEMS[sid] if x["kind"] == "tool_use"
+               and not any(r["kind"] == "tool_result" and r.get("tool_use_id") == x["tool_use_id"] for r in ITEMS[sid])]
+    if step == "call":
+        use, _ = tool_turn_call(TOOL_TURN_N[0])
+        TOOL_TURN_N[0] += 1
+        add([use])
+        state("working", last_text=use["tool_input"]["description"])
+    elif step == "result":
+        if not running:
+            return {"error": "no call is running"}
+        n = int(running[-1]["tool_use_id"].rsplit("_", 1)[1])
+        add([tool_turn_call(n)[1]])
+        state("working")
+    elif step == "answer":
+        add([it("assistant", "text", 0, text="来源订阅这边：每日摘要在评审（#2647），静音开关（#2036）还没开始，其余都已合入。")])
+        state("unread", last_text="来源订阅这边：每日摘要在评审，静音开关还没开始。")
+    elif step == "next":
+        add([it("user", "text", 0, text=(row.get("queued") or ["继续"])[0])])
+        use, _ = tool_turn_call(TOOL_TURN_N[0])
+        TOOL_TURN_N[0] += 1
+        add([use])
+        state("working", state_since=stamp(), queued=[], last_text=use["tool_input"]["description"])
+    elif step == "reset":
+        ITEMS[sid] = list(TOOL_TURN_BASE["items"])
+        TOOL_TURN_N[0] = TOOL_TURN_BASE["n"]
+        rev = (row.get("rev") or 0) + 1
+        row.clear()
+        row.update(TOOL_TURN_BASE["row"], rev=rev)
+        push_machine(mid)
+    else:
+        return {"error": "step is call, result, answer, next or reset"}
+    return {"ok": True, "step": step, "calls": TOOL_TURN_N[0]}
+
+
 NARRATED = {}  # session id → machine id of the conversations /mock/narrate?step=start streamed in
 NARRATED_WORDS = {}  # session id → the words streamed there, which step=finish writes as the thinking line
 LIVE_TEXT = {}  # session id → the text being generated, sent again after a subscription's backlog as the hub does
@@ -18502,6 +18670,8 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/lark_send_delay": return self.send_json(set_lark_send_delay(q.get("s", [""])[0]))  # LarkSendTests
         if p == "/mock/agent_live" and AGENT_LIVE:  # an agent's reply streaming as Claude shows it (MOCK_AGENT_LIVE above)
             return self.send_json(agent_live(q.get("step", [""])[0], int(q.get("n", ["0"])[0])))
+        if p == "/mock/tool_turn" and TOOL_TURN:  # #3005: the last turn's tool calls arriving one push at a time
+            return self.send_json(tool_turn(q.get("step", [""])[0]))
         if p == "/mock/narrate":  # #1966: words streamed before a tool call, recorded as thinking; ?step=start|finish
             args = (q.get("step", [""])[0], q.get("words", ["我先找一下负责的 Agent，再把任务交给它。"])[0], q.get("answer", ["已交给负责的 Agent。"])[0],
                     int(q.get("steps", ["8"])[0]), int(q.get("ms", ["250"])[0]), q.get("line", ["1"])[0] != "0")
