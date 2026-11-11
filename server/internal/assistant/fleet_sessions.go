@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	jsonv2 "encoding/json/v2"
+	"math"
 	"slices"
 	"time"
 
@@ -44,6 +45,7 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 			// reconnect to the same turn. Only a known stopped turn proves a
 			// new one and resets its persisted loop state.
 			newTurn := prev == proto.StatusDone || prev == proto.StatusIdle || prev == proto.StatusInterrupted
+			s.justMeStarted(machine, sess.SessionID, newTurn, sess.WokeByTask) // meeting_justme.go
 			if s.meetingTurnStarted(machine, sess.SessionID, newTurn) {
 				break // a meeting's batch: a side exchange, neither the turn tracker's nor a task's or the Agents' (meeting_turns.go)
 			}
@@ -54,6 +56,8 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 			s.inOrder(func() { s.turnStartedObserved(context.Background(), ref, newTurn) }) // after the items that came before it
 		case prev == proto.StatusWorking && (sess.Status == proto.StatusDone || sess.Status == proto.StatusIdle):
 			ref := SessionRef{MachineID: machine, SessionID: sess.SessionID}
+			// After its finished push is decided against the mark; held while its background work runs.
+			defer s.justMeEnded(machine, sess.SessionID, backgroundRunning(sess))
 			if s.meetingTurnEnded(machine, sess.SessionID) { // no finished push, and the other turns' stay as they were
 				s.inOrder(func() { go s.turnEnded(context.Background(), ref, true) })
 				break
@@ -294,9 +298,12 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 			list[i].Archived = shown[list[i].SessionID].Archived
 			v := shown[list[i].SessionID]
 			list[i].Origin, list[i].OriginRef, list[i].OpenedBy = v.Origin, v.OriginRef, v.OpenedBy // origins.go
-			// Messages from other conversations wait in the assistant while it runs: shown like typed-ahead input.
+			// Messages from other conversations wait in the assistant while it runs: shown like typed-ahead input, after
+			// the user's own (the node's), and counted so the apps leave them alone: the assistant delivers them when the
+			// turn ends, and the queue's actions are claude's (#4342).
 			if q := shown[list[i].SessionID].Queued; len(q) > 0 {
 				list[i].Queued = append(slices.Clip(list[i].Queued), q...) // the node's slice is shared: never write into it
+				list[i].QueuedRelayed = uint16(min(len(q), math.MaxUint16))
 			}
 		}
 		list[i].SeenAt = seen[list[i].SessionID]
@@ -335,8 +342,9 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 // the node lists is decorated alone (as readinessMain does), not the machine's whole list for each finished turn; one
 // the node does not list may still be an archived row (archivedSessions), found in the whole list.
 func (s *Service) decoratedSession(machine, sid string) (proto.Session, bool) {
+	mark := s.archiveMark()
 	if row, ok := s.nodeSession(machine, sid); ok {
-		list, _, err := s.archivedSessions(context.Background(), machine, s.decorateInventory(machine, []proto.Session{row}, false))
+		list, _, err := s.archivedSessions(context.Background(), machine, s.decorateInventory(machine, []proto.Session{row}, false), mark)
 		if err != nil {
 			s.logf("load agent archives: %v", err)
 		}

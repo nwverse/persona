@@ -2,9 +2,6 @@ package persona.feature.knowledge
 
 import persona.core.designsystem.text
 import persona.core.domain.sort.workLine
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
 import android.content.Intent
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -139,7 +136,7 @@ private fun LazyListScope.listContent(page: KnowledgePage, showIgnored: Boolean,
             sections.forEach { section ->
                 item(key = "section/${section.key}", contentType = "section") {
                     JSectionHeader(section.tag?.let { "#$it" } ?: stringResource(section.title), count = section.entries.size,
-                        onClick = if (section.collapsed) toggleIgnored else null,
+                        onClick = if (section.collapsed) toggleIgnored else null, open = showIgnored, trailingIsFoldAction = true,
                         trailing = if (section.collapsed) stringResource(if (showIgnored) R.string.knowledge_collapse else R.string.knowledge_expand) else null)
                 }
                 if (!section.collapsed || showIgnored) items(section.entries, key = { "entry/${it.key}" }, contentType = { "entry" }) {
@@ -280,7 +277,6 @@ internal fun KnowledgeDetailScreen(
     val currentOpenLink by rememberUpdatedState(openLinkInApp)
     val context = LocalContext.current
     val resources = LocalResources.current
-    val feedback = LocalAppFeedback.current
     val uriHandler = remember(page.scope) {
         object : UriHandler {
             override fun openUri(uri: String) {
@@ -311,6 +307,7 @@ internal fun KnowledgeDetailScreen(
         }
     }
     val minutesCopied = stringResource(R.string.knowledge_minutes_copied)
+    val copyText = rememberCopy()
     val detail = page.detail
     val entry = detail?.entry()
     val kindName = KnowledgeKind.fromWire(detail?.kind.orEmpty())?.label().orEmpty()
@@ -318,10 +315,9 @@ internal fun KnowledgeDetailScreen(
         val start = agentStart(detail, kindName)
         if (onNewAgent != null) { onNewAgent(start); return }
         // Until the shell can open "New session" with these filled in: the context goes on the clipboard and Agents opens.
-        (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText(resources.getString(R.string.knowledge_clip_label), start.prompt))
-        navigator.selectTab(AppTab.Agents)
-        feedback?.notice(start.cwd?.let { resources.getString(R.string.knowledge_context_copied_dir, pathTail(it)) }
+        copyText(start.prompt, start.cwd?.let { resources.getString(R.string.knowledge_context_copied_dir, pathTail(it)) }
             ?: resources.getString(R.string.knowledge_context_copied))
+        navigator.selectTab(AppTab.Agents)
     }
     CompositionLocalProvider(LocalUriHandler provides uriHandler) {
         JListPage(entry?.name ?: stringResource(R.string.knowledge_detail_title), onBack = navigator::back,
@@ -382,11 +378,7 @@ internal fun KnowledgeDetailScreen(
                         recordingMinutes(view, MinutesActions(
                             busy = minutesWork.busy || page.loading, message = minutesWork.message,
                             make = model::makeMinutes, add = model::addMinutesTodos,
-                            copy = { markdown ->
-                                (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
-                                    .setPrimaryClip(ClipData.newPlainText(minutesCopied, markdown))
-                                feedback?.notice(minutesCopied)
-                            },
+                            copy = { markdown -> copyText(markdown, minutesCopied) },
                             jump = { at -> segmentAt(lines, at)?.let { index -> scrolls.launch { listState.scrollToKey(segmentKey(index)) } } },
                             dismiss = model::dismissMinutesMessage,
                             share = { markdown ->

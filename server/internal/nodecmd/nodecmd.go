@@ -69,10 +69,12 @@ func Run(ctx context.Context, stop func(), args []string, b Build) (handled bool
 	case "hook":
 		nodeclient.RunHook(ctx, rest, os.Stdin, os.Stdout)
 	case "launch": // a launcher kept in Settings › Models: its settings from the local node, then claude (docs/integrations/launchers.md)
-		if len(rest) < 1 {
-			return true, UsageError("usage: " + CommandName() + " launch <launcher> [claude args…]")
+		ticket, rest, err := launchTicket(rest) // --ticket: a hand-off's values too (node/secretenv.go)
+		if err != nil || len(rest) < 1 {
+			return true, UsageError("usage: " + CommandName() + " launch [--ticket <ticket>] <launcher> [claude args…]\n       " +
+				CommandName() + " launch --ticket <ticket> -- claude [claude args…]")
 		}
-		return true, runLaunch(stop, rest[0], rest[1:]) // launch.go: bounded wait for the node, Ctrl-C ends it
+		return true, runLaunch(stop, ticket, rest[0], rest[1:]) // launch.go: bounded wait for the node, Ctrl-C ends it
 	case "codex-start": // a Codex launcher with the phone's first message, read from a file (node/codex_start.go)
 		return true, node.CodexStart(rest)
 	case "tab-start": // a command a runtime gave to resume its session in a new tab (`pi --session …`, node/pi.go)

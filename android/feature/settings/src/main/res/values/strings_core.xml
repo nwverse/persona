@@ -371,6 +371,7 @@
     <string name="settings_ready_cellular_test">Cellular test</string>
     <string name="settings_ready_skipped_item">%1$s: skipped</string>
     <string name="settings_ready_skip_note">You can skip for now. Items not set up may affect notifications and the background connection after locking; come back here to finish them later.</string>
+    <string name="settings_ready_set_up_later">Set up later</string>
     <string name="settings_ready_skip_rest">Skip the rest</string>
     <string name="settings_cancel">Cancel</string>
     <string name="settings_done">Done</string>
@@ -410,6 +411,8 @@
     <string name="settings_triage_continue">Continue after errors</string>
     <string name="settings_triage_wake">Wake on schedule</string>
     <string name="settings_triage_actions_about">After a temporary model service error (503 and the like), it sends “continue” up to 3 times; an agent waiting on a deploy, CI or another agent is woken on time to check for itself. Both run another turn of the agent on its own model. Pushing code, deploying or messaging others: the hub only asks you, it never does these on its own.</string>
+    <string name="settings_triage_closeout">Ask for a closeout</string>
+    <string name="settings_triage_closeout_about">When an agent stops after doing work without saying whether it\'s done, merged and deployed, and what\'s missing, its stop is held once to ask for that record. Costs one short extra turn on the agent\'s model</string>
     <string name="settings_triage_reply_reminder">Remind when seen but unanswered</string>
     <string name="settings_triage_reply_reminder_about">When an agent asked you something and you looked but haven\'t replied for 30 minutes, you\'re reminded once. Rules only, no tokens spent.</string>
     <plurals name="settings_notify_long_turn">
