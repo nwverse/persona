@@ -3,7 +3,7 @@
 Persona's extension foundation (#1101): the open-source repository holds only general capabilities and **extension points**. Anything that only makes sense for one company or one service is built as an extension: install it and you have it; without it, everything still runs.
 The skeleton follows VS Code (manifest + `contributes` + on-demand activation + separate process), permissions follow Chrome (declared explicitly, shown at install time), and from WordPress we borrow only event notifications, not filters.
 Design trade-offs, the step plan and what is not done yet are in `docs/plans/plan-extensions.md`. Code: manifest, schema subset, permissions and registry in `server/internal/extension`, process host in `extension/host`,
-the program side is the official SDK `sdk/go/ext` (the built-in WeChat program uses it as is, `ext.Serve` in `server/plugins/wechat`; `extension/serve` wraps it for the conformance kit and tests), conformance tests in `extension/conformance`; the wiring lives in the manager (see "Who owns what" below): `server/internal/extmgr/extensions.go`, `extension_routes.go`, `extension_cli.go`, and the admin UI endpoints in `admin_extensions.go`.
+the program side is the official SDK `sdk/go/ext` (public extensions use it through `ext.Serve`; `extension/serve` wraps it for the conformance kit and tests), conformance tests in `extension/conformance`; the wiring lives in the manager (see "Who owns what" below): `server/internal/extmgr/extensions.go`, `extension_routes.go`, `extension_cli.go`, and the admin UI endpoints in `admin_extensions.go`.
 
 Extensions come from three places; the App and the API show them as one list:
 
@@ -197,6 +197,7 @@ Lives at the root of the extension package. Example (a connector for a fictional
 | `permissions` | No | See "Permissions" |
 | `tools` | No | Command-line programs it needs (#4507); the hub installs them in the extension's own directory and puts them on its `PATH`, see "Command-line programs (tools)"; requires `runtime` |
 | `auth` | No | `{title, description?, page?}`: the extension needs a sign-in (#4507); the program implements `auth.*`, see "Sign-in (auth)"; requires a `runtime` that speaks the protocol |
+| `host_integrations` | No | `[{id, version}]`: a configured host CLI integration, by its closed ID and a semantic-version range. At most one; requires an RPC runtime. The program calls `cli.call`, see "Host CLI integrations". This grants no shell, arbitrary command, write or credential access |
 
 Manifests are at most 256 KB and are read strictly: an unknown field at any level means it can't be installed (a misspelled `permission` is not silently ignored).
 
@@ -284,7 +285,7 @@ Every extension that uses the Inbox (its connector declares `inbox`) must follow
 1. **Wake-up** (already existed): when something changes, the connector sends `connector.changed {scope: "inbox"}`; the hub also pulls periodically per `poll_seconds` (`docs/protocol/connector-protocol.md`).
 2. **Its own triage rules**: the settings must have a top-level `triage_rules` (`string`, "Conventional settings" above), attached as `rules` when handing over items.
    **Checked on install and upgrade** (at the preview step: CLI, App, admin UI, browser upload, marketplace, including auto-upgrades of marketplace extensions): without it, it can't be installed ("settings have no triage_rules … can't be installed").
-   Already installed ones are not rechecked and run as usual; rolling back to a previously installed version is not checked either. Built-in extensions (the WeChat bot and so on) are exempt.
+   Already installed ones are not rechecked and run as usual; rolling back to a previously installed version is not checked either. Built-in extensions are exempt.
 3. **Its own fallback (optional)**: add `fallback` to the connector's `capabilities`, promising every Inbox item carries a fallback tier `extra.rule_tier` (`action` / `fyi` / `noise`):
    when the model can't triage, the item enters the Inbox by that tier (`docs/assistant/inbox.md` ("AI triage")); the model still triages first. **Without `fallback`, a working triage model is required** (**Message triage** in **Settings › Models**, `inbox.triage`):
    - **Enabling**: when turning it on (`PUT /api/v1/extensions/{id}/-/enabled`, likewise in the admin UI and the toggle on the channels page), and on install (installed means on) and upgrade while on (including auto-upgrade),
@@ -851,6 +852,29 @@ Exactly one of `archive` and `npm`; if this hub's platform has no `archive` entr
 - **No sudo, nothing global**: it writes only the hub's state directory; anything else the program needs (credentials, caches) goes in the extension's data directory, e.g. by pointing its config directory there with an env var.
 - `tools` in the list and details are the programs this version uses: `[{name, title?, version, reused}]`.
 
+### Host CLI integrations
+
+`tools` installs a program for an extension. `host_integrations` instead names a command-line integration that the owner has already configured on the manager. It is not an alternative way to write an executable or a shell command: the closed integration ID is resolved by the manager, and the extension gets no binary path, profile, configuration or credential.
+
+```json
+"host_integrations": [{"id": "lark-cli", "version": ">=1.0.72 <2.0.0"}]
+```
+
+The supported integration is `lark-cli`, configured by the manager's `lark.cli` section. The owner must additionally set `lark.cli.extensions: true`; without it every request is refused. A configured binary and the manager's effective profile stay in the manager. Installing or upgrading an extension with a newly declared integration requires consent. The integration is optional: a connector can continue serving its own transport when the CLI is unavailable, but must not pretend its auxiliary reads succeeded.
+
+An RPC-speaking program calls the hub with `cli.call`. It must name exactly one declared integration in its manifest; a missing declaration, disabled integration or incompatible installed version fails closed. Input is an object with one `operation` and the bounded fields below. The answer is `{integration, result}`.
+
+| Operation | Input | Result |
+| --- | --- | --- |
+| `auth_status` | None | `{logged_in, expired, user_name?}`; no app binding, tokens or profile configuration |
+| `chats` | `limit?` (0–50; 0 uses the adapter default) | The adapter's bounded chat list |
+| `messages` | `chat_id` or `thread`, `before?`, `limit?` (0–50) | A page of messages |
+| `search` | `query`, `kind`: `messages` / `chats` / `docs` / `people`, `limit?` | `{data}`: the adapter's read-only normalized result; at most 1 MiB |
+
+`query`, chat and thread identifiers and cursors have input bounds. Unknown operations, unsupported search kinds and extra input beyond these contracts are refused. Every invocation has the adapter's bounded timeout. Errors carry only a generic code and category (`permission_denied`, `unsupported`, `rate_limited`, `timeout`, `unavailable` or `invalid_params`): raw command lines, stderr, paths and configuration never enter logs or replies.
+
+This RPC is **read-only**. Message sends and other writes remain connector actions or gated assistant commands, with their existing confirmations. Go SDK programs can call `hub.Call(ctx, "cli.call", params, &result)`.
+
 ### Sign-in (auth)
 
 When an extension needs the user to sign in to some service (scan a QR code, device code, enter a token), the manifest has `auth` and the program implements three methods; the hub turns this into the extension's sign-in state, and every client signs in with the same UI (#4507).
@@ -1149,7 +1173,7 @@ Mirror settings belong to **one extension manager**, not a globally distributed 
 | `GET /api/v1/extensions/-/market-settings` | `{"registry_mirror":"","catalog_mirror":""}` |
 | `PUT /api/v1/extensions/-/market-settings` | Both fields; empty strings clear them |
 
-`registry_mirror` is an HTTPS registry base, optionally with a path prefix; requests use `<base>/v2/<repository>/…`. `catalog_mirror` is a complete official catalog JSON URL, ignored for nonofficial markets. Neither setting changes specs, package references, digests or install origins. URLs cannot contain credentials, queries, fragments or noncanonical paths. Loopback HTTP is reserved for isolated registry tests. Settings use the manager's existing Postgres setting store, with retryable reads and saves. Opening settings does not initialize markets or fetch catalogs. Clients select the manager through the existing manager query routing.
+`registry_mirror` is an HTTPS registry base, optionally with a path prefix; requests use `<base>/v2/<repository>/…`. `catalog_mirror` is a complete official catalog JSON URL, ignored for nonofficial markets. Neither setting changes specs, package references, digests or install origins. URLs cannot contain credentials, queries, fragments or noncanonical paths. Loopback HTTP is reserved for isolated registry tests. Settings use the manager's existing Postgres setting store, with retryable reads and saves. Opening settings does not initialize markets or fetch catalogs. Web pins the selected manager in both the header and the query, which also supports older query-routed hubs. A detected manager or credential-generation change retires the old editor and reloads both fields. The shared pairing epoch lets a current client detect same-token reauthentication and a cross-tab credential round trip at request boundaries before storage events arrive. Older writers, or writers unable to store the shared epoch, cannot announce those transitions in advance; an older writer's same-token sign-in cannot be detected by the token alone. An already dispatched write may still finish; a returning editor waits for it before reading that manager.
 
 Mirrors have an independent eight-second budget and receive **no market token**, even when their origin matches the market. Their bearers are independent and origin-bound. Missing files, timeouts, partial archives and any catalog/manifest/blob/package verification failure fall back upstream with a new staging file, hash and download context. A catalog mirror cannot downgrade the official catalog to unsigned. The configured GitHub network proxy covers GHCR, token and GitHub CDN traffic separately from mirror settings.
 
@@ -1525,7 +1549,7 @@ An extension contributes `api` to provide a set of app-facing endpoints `/api/v1
 An extension contributes `assistant`:
 
 - `skills`: skill directories in the package (each with a `SKILL.md`). The hub brings them in `assistant.prepare` to the computer that runs the assistant (each skill's files only once per computer, after that only a digest;
-  those the node reports as "missing" are brought again next time). The node puts them in `~/.persona/plugin-skills/<name>` and copies them into the assistant directory like built-in skills; the user's own skill with the same name takes precedence; they are removed from the assistant directory when the extension is disabled or uninstalled.
+  those the node reports as "missing" are brought again next time). The assistant's check of its directories every minute compares the skills' digests as well as the CLAUDE.md, so a skill that an upgrade changes reaches that computer within a minute even when the CLAUDE.md stays the same (#4256). The node puts them in `~/.persona/plugin-skills/<name>` and copies them into the assistant directory like built-in skills; the user's own skill with the same name takes precedence; they are removed from the assistant directory when the extension is disabled or uninstalled.
   In the skill list their source is `plugin`. One extension's skills total at most 8 MB.
 - `instructions`: a markdown file in the package, appended after the assistant's CLAUDE.md (starting with `<!-- plugin <id> -->`).
 - `gate`: a JSON file in the package, a **command gate** (#1468): a command in the extension's skills that calls an HTTP API as the user (`<command> METHOD PATH [BODY] [curl args]`; the command carries its own credentials).
@@ -2709,6 +2733,8 @@ Views, components, actions, responses, placements and context all use schema-gen
   - **Auto-Update** switch (`PUT …/{id}/-/auto-upgrade`) keeps the saved preference visible. With `auto_upgrade_paused: "disabled"`, the footer says auto-update is paused until the extension is on again;
     Apple still allows editing that saved preference, while web and Android grey it out (mock hub `MOCK_PLUGIN_UPGRADE=disabled`).
   - With `auto_upgrade_paused: "market_removed"` (#1895), **Auto-Update** and **Check for updates** are greyed out and the page says that adding the marketplace again with the same address restores the saved setting and update checks.
+  - While the master switch is off (`GET /api/v1/extensions/-/upgrades` says `auto: false`), **Auto-Update** keeps showing the extension's saved value but is greyed out, and its footer says the setting applies again once the master switch is back on (#1828).
+    An unknown master switch (still loading, or an older hub without the route) leaves it editable. Web does this; Apple is #4747, Android #4748.
     A marketplace's delete confirmation first counts the default manager's installed extensions with that `ExtensionView.market`; 0, 1 and several have their own wording, while a read failure or an old hub that omits `market` gets the generic stopped-upgrading note rather than a false 0.
     Covered by `ExtensionSettingsLifecycleTests`, `ExtensionMarketModelTests`, `ExtensionMarketTests.testRemovedMarketKeepsPreferenceButPausesUpdates` and `testRemoveMarketConfirmationCountsAffectedExtensions`.
   - With a new version, "New version 1.1.0" plus small status text: auto-update when idle / auto-update off / needs one more permission: … (orange) / last version failed to start, no further auto-update (orange) / you rolled back from this version, no auto-update to it (orange, `skipped_by: "user"`) / failed to install / incompatible.
@@ -2730,6 +2756,7 @@ Views, components, actions, responses, placements and context all use schema-gen
   #1330 adds declarative UI (`settings/ExtensionView.tsx`, `lib/extension-ui.ts`: **Pages** in extension details, launcher-detail sections) and the extension marketplace (`settings/ExtensionMarket.tsx`, `lib/extension-market.ts`: catalog, details, marketplace management).
   #1699 adds auto-upgrade ("Auto-upgrade"): an **Upgrades** group in marketplace-extension details (switch, new-version row and **Review**, last result, `UpgradeGroup`), master switch at the top of marketplace management, same wording as the app (`upgradeDetail` etc. in `lib/extensions.ts`).
   #1895: with `auto_upgrade_paused: "market_removed"` the switch and **Check for updates** are greyed out and the group says that adding the marketplace again with the same address brings upgrades back; a marketplace's delete confirmation says how many installed extensions stop upgrading (`upgradingFrom` in `lib/extension-market.ts`, from `ExtensionView.market`; without it, only that they stop).
+  #1828: while the master switch is off, the switch is greyed out too, keeping the extension's saved value (`globalAuto` in `ExtensionSettingsPage.tsx`).
   #1681 adds `inbox_item` (`inbox/InboxExtensionBody.tsx`: Inbox detail body; list from `lib/extension-slots.ts` cache), see "UI slots" under "Settings" in `docs/web/web.md`.
 - Android (#1206) has the same features, entered through **Extensions** on the Settings home; code and screenshots in [android.md](../android/android.md) ("Extensions (Settings › Extensions)"). Extension-rendered UI (extension pages, launcher sections) and the marketplace (#1329) are covered by "Extension-rendered UI and the extension marketplace" in that section. Auto-upgrade, per-machine switches and detail-page uninstall (**Keep data** checked by default) are in "Auto-upgrade, per-machine switches and uninstall" (#3049).
 
@@ -2791,7 +2818,7 @@ Program-to-hub calls and events follow the same pattern (`connector.secrets.load
 **Error codes**: `not_initialized`, `unknown_method`, `wrong_protocol`, `no_capability`, `no_contribution` (missing contribution), `permission_denied`, `timeout` (generated locally by the hub).
 Other errors have only `message`, a human-readable sentence without secrets or message bodies. Changing field semantics or removing fields increments the protocol version; adding optional fields does not.
 
-Use the official SDK for extensions ("Writing extensions: SDK, templates and command line" below); the built-in WeChat program does too (`server/plugins/wechat`). `connector/serve`'s runner, which also accepts the standalone handshake, is left only for the connector conformance kit and tests.
+Use the official SDK for extensions ("Writing extensions: SDK, templates and command line" below); public extensions, including WeChat, use it too. `connector/serve`'s runner, which also accepts the standalone handshake, is left only for the connector conformance kit and tests.
 
 ## Programs running on computers (`node` section, #1830)
 
@@ -2876,7 +2903,7 @@ extension repos copy a versioned snapshot (the main repo is private, and their C
 ### Go: `sdk/go`
 
 Module `github.com/nwverse/persona/sdk/go`, standard library only. The hub uses it too (`server/go.mod` replaces with the same code, Docker builds copy `sdk/go/`),
-and the built-in WeChat program uses `ext` directly (`server/plugins/wechat`); the conformance kit and the hub's tests run programs through the thin wrapper `server/internal/extension/serve` (converts to hub `InitializeParams` and `rpc.Error`).
+and public extension programs use `ext` directly; the conformance kit and the hub's tests run programs through the thin wrapper `server/internal/extension/serve` (converts to hub `InitializeParams` and `rpc.Error`).
 
 | Package | Contents |
 | --- | --- |
@@ -3112,20 +3139,24 @@ The cases run in order, and each starts from the state the one before leaves. Wh
 | Offline hub, no marketplace | The main difference. A hub that reaches GitHub but not the official marketplace (the owner removed it, its index or signature fails, its host is blocked) gets no GitHub at all, where today it keeps the hub's own connector. Its only ways in are a package installed by hand (`file:`, out of auto-upgrade and in the sandbox) or another marketplace that lists `github`. A hub that is offline at upgrade time gets GitHub once the network is back and the install is retried; with no network, neither option syncs. |
 | More than one manager | Each manager would install it on its own; which managers get it must be decided. |
 
-**If a copy of the extension were bundled instead**, as a built-in plugin in `server/plugins/` like the WeChat plugin and its program `personad-wechat`:
+**If a copy of the extension were bundled instead**, as a built-in plugin with its own program:
 - No marketplace is needed, so a hub that can't reach the official marketplace keeps GitHub. It upgrades and downgrades with personad, with no auto-install and no permission prompts.
 - The cost is the same code in two repositories, kept in step by hand.
 - A hub that already has the marketplace `github` gets the built-in instead: the built-in is registered first, and the installed row with the same id is ignored (its settings unread) until the built-in's first write replaces it; its package and data directories stay behind. `Registry.Yields` is the existing switch for the opposite, an installed copy winning.
 - A built-in's connector starts switched off unless the user's switch was recorded, so the move must keep GitHub on.
 - The program must join the released programs (`update.ProgramNames`) and every install path (`install.sh`, the Docker image).
 
-## Built-in extension: WeChat (`wechat`)
+## Marketplace extension: WeChat (`wechat`)
 
-When `personad-wechat` is beside personad, it registers as built-in extension `wechat` (#1352, `docs/extensions/wechat.md`), contributing connector `wechat` (only `status` and QR-code `login`,
-declared in `wechat/spec`) and channel `wechat` (`channel` extension point, #1466, [channels.md](channels.md)), with only `network: *.weixin.qq.com` permission.
-It must be built alongside the hub and runs with the connector switch. The first version combined `hub_api` + `events` (extension polling sessions and tracking the turn); since #1466 these use the hub's channel pipeline,
-so the extension no longer gets the hub token or subscribes to events. A connector program acts as a channel: implement `channel.Transport` (`Send`, optional `Typing` / `Edit`), hand incoming messages to `serve.Init.Channel` (`Receive`);
-`connector/serve` forwards `channel.*` and sends only once per `ref`.
+The public `nwverse/persona-extensions` marketplace supplies extension `wechat` (`docs/extensions/wechat.md`),
+contributing connector `wechat` (`status` and QR-code `login`) and channel `wechat` (`channel` extension point,
+[channels.md](channels.md)). It is installed and upgraded independently of personad. No built-in connector is
+registered without it. Existing encrypted connector state is keyed by `wechat`, preserving binding after an
+approved single-poller handoff.
+
+The extension uses the shared channel pipeline, not a full hub token or session polling: incoming messages call
+`channel.receive`; outbound messages and typing use `channel.send` and `channel.typing`. Its public manifest declares
+its network permissions. Source, protocol behavior and tests live in the extension repository.
 
 ## Built-in extension: computer control (`cua`)
 

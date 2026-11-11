@@ -1,5 +1,17 @@
 # Lessons: testing and validation
 
+- A test that calls an entry point which sets the process environment must `t.Setenv` that variable first, so the
+  test puts it back (#4581). `nodeclient.RunHook` with `--persona-home <dir>` sets `PERSONA_HOME`; one test left it
+  pointing at its removed `t.TempDir()`, and every later `internal/node` test put `node.sock` there. On macOS that path
+  passed the 104-byte Unix socket limit, so `TestStandbyOnTheSocket` failed with `bind: invalid argument` only in
+  full-package runs, and a test that refuses to dial anything outside its own home skipped silently. Linux's shorter
+  `/tmp` paths still bind: reproduce such leaks on macOS by running the two tests together, in order.
+
+- Async node-start fixtures must cancel and join `n.starts` before closing fake terminal sockets, restoring globals
+  or removing their temporary files (#3345). Waiting only for `pane.send_input` leaves a background start polling a
+  dead host for three minutes, with its diagnostics appearing under a later test. Expected start failures use the
+  node's logger, so tests can capture diagnostics without changing production logging.
+
 - Bulk Postgres fixtures need physical isolation, not just row deletion (#3743). Deleting 500 feed rows left a larger
   unsent B-tree than the sent index; a controlled statistics refresh then changed a later index-choice assertion even
   though no fixture rows remained. Use the existing migrated-database clone for bulk fixtures so table, index and
@@ -45,6 +57,8 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 
 - Fixed `time.Sleep` calls in `_test.go` files under `server/` and `sdk/go/` are ratcheted by `scripts/ci/sleep_ratchet.py` (baseline `scripts/ci/sleep_baseline.json`): a file's count may stay or fall, never rise, a new file starts at zero, and `// sleep-ok: <reason>` on the call's line is the only escape. Prefer `testing/synctest`, a polling helper or a channel.
 
+- To keep a fake hub answer out (a press past `cardAnswerWait`), block it on a channel the test closes, not a fixed sleep (2026-11-11, #4274). The assistant's `fakeHub` runs app answers under its lock, so a held answer blocks every other fake call: close the channel before the test touches the hub again, and register the close with `t.Cleanup` so a failed assertion cannot leave it blocked (`heldAnswer` in `server/internal/assistant/feishu_answer_ended_test.go`). Then wait for the last effect of the late path (its note), not for a fixed time.
+
 - `synctest.Wait` is not a general goroutine barrier (#1836): mutex contention and real socket I/O, including an `httptest` server's accept loop, do not count as durably blocked. A test waiting for quiescence can hang even though its target operation is waiting as intended. For these integration tests, use explicit entered/release/completed channels and bounded waits; reserve `synctest` for fixtures whose blocking operations it can track.
 
 - Test authoring realm comparisons as a matrix, not just default-export shape (#1200). `structuredClone`, Response JSON, iterators, streams and WebCrypto can return host objects during initialization; compare Object/Array, containers, regexps, dates and binary families in both native ESM and the probe. Preserve cycles, transfers, real subclass negatives and native null-prototype records. State the supported `instanceof` contract separately from exact cross-realm prototype identity. EventTarget listener methods must be synchronous and return undefined: observe nonconforming ordinary promise/thenable rejections before returning OPTIONS, and keep secondary cleanup errors alongside the primary failure. If caller constructor/species machinery prevents handler installation, report the observation error and attempt owned-worker cleanup, but do not claim that the original rejection was handled or alter caller promises/global rejection policy. Ready must precede `module.evaluate()`, which can block synchronously forever; recorded SIGINT/SIGTERM exit priority survives a late or failed cleanup without inventing reaping evidence.
@@ -86,6 +100,8 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 
 - Goroutines that outlive a test must not call `t.Logf` or read global switches changed after the test ends (2026-11-06, #4822). `computer.nolock` / `computer.cursor` send in their own goroutines; late logging panics (`Log in goroutine after ... has completed`). A fake Mac node reading global `fakeNodesBuiltin` per request sees changes from the preceding test's cleanup, letting late requests fail an already-finished test. Guard logging with a lock and `over` flag set by `t.Cleanup`; fake nodes capture the switch once at creation.
 
+- Assistant tests swap a service's hub with `setHub`, never `s.hub = h` (2026-11-11, #4006). The inbox's "Needs you" teller (`tellInboxNeedsYou`) reads `s.hub` on a goroutine of its own, and a test's service starts one at its first inbox read, so a plain assignment raced with it under `-race`. The teller reads the hub only under `needsYouMu`, and `setHub` swaps it under that lock. The teller is not the only reader: a timer armed while the service is set up (`directionsSoon`, which reads `s.hub` through `hello`) can fire during the test, on a `synctest` bubble's clock too, and nothing orders it after a swap. Where a test only needs a fake behavior, the fake hub does it under `f.mu` (`hangChannel`) and the hub is never swapped. A test with two racing readers can report one in a combined run and the other when run alone, so check each test in separate processes of its own. In the same run, two leader retry tests ended before their retry ran because `sendsTo` also counts sends the fake refused; the retry goroutine then read a package timing their cleanup restored. Such timings belong on the `Service` (`leaderResume`, like `taskRetry`), and a wait must see the effect it names (`deliveredTo`, the sends the fake took).
+
 - The assistant bus writes `m.sessions` and `h.clients`; tests modifying them need the same lock (2026-11-06, #4822). `takeFleetSessions` writes `fleet.sessions` under `m.mu`. Direct test assignment to `n.m.sessions` produces DATA RACE with `-race -count=30` and can be overwritten by an old list still in transit. Use `editSessions` (first `settleAssistant`, then edit under `m.mu`) and `appClient(h)`, not direct assignment.
 
 - When multiple goroutines independently generate and send the same state, generation and sending need one lock (2026-11-06, #4822). On assistant connection, `FleetUp` sends each machine's list, while `Resync` snapshots also resend lists. Previously each called `decorated()` before leaving its lock, then `Tell` afterward; a stale list lacking the snapshot's "Persona" title sometimes reached hub last and stayed, failing `TestTheMainConversationIsAlwaysPersona` about 3% of the time. `publishList` now generates, deduplicates, and sends under `sentMu`. Waiting in tests for "the new list arrived" is insufficient: it may be that stale list.
@@ -108,6 +124,8 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 
 
 - `-race` reports reads/writes without a happens-before relationship; a test's own lock can hide a race (2026-11-05, #2955). `startAsync` reads the launch record's session after `go func()`; a fast background failure changes it in `finish` under a lock. Existing tests read, then wait through the `startLog` lock; `finish` acquires that lock next, so the detector sees the read before the write. It reports only if the caller is preempted just after `go` (one occasional full-suite `-race` failure). Regression `TestStartAsyncAnswersBeforeAFastFailure` waits only on the record's `done` channel and reports every time before the fix. Race-test result waiting must not share a lock with the code under test.
+
+- A fixture goroutine that reads a shared field when it runs races a test that swaps the field, and a socket orders nothing for the race detector (2026-11-11, #3918). `withFakeHub` started `go func() { _ = n.peer.Serve(…) }()`, which reads `n.peer` whenever the goroutine gets to it; `TestCodexRemoteTurnBegunBeforeJoining` then put its own hub in front with `n.peer = …`. `TestOutsideClaudeSendNotTaken` set the fake inbox's `mode` without its lock after the accept loop had started; the node connecting over the Unix socket afterwards gave the connection's goroutine no happens-before edge to that write. Both failed only under `-race`, which the CI node shard does not use. Have a goroutine serve the value the fixture created (a local variable), and change state a running fake reads through a setter under the fake's own lock (`fakeInbox.setMode`).
 
 - When testing fixed interactive-shell scripts, isolate `HOME`, `USERPROFILE`, and `ZDOTDIR` first (2026-11-05, #3120). Replacing only the update command still reads the user's shell startup files, mixing toolchain notices into `CombinedOutput` and failing exact-output assertions. Point all three directories at a test temp directory; retain success, failure, and unknown-action rejection assertions without changing production shell behavior or user configuration.
 
@@ -328,6 +346,10 @@ The `scripts/ci/` lanes are written for the hosted runners; on a Mac developer m
 - `TRUNCATE` gives every table it names new files, whether it had a row or not, so clearing two dozen mostly empty tables before each test cost more than many of the tests. Check the tables the cascade reaches in one statement and truncate only those with a row (`db.truncateNonEmpty`). Don't replace it with `DELETE`: it does not cascade, and `devices` has a `BEFORE DELETE` trigger (`devices_guarded_delete`, hub 0435) that refuses an unguarded delete with "push retirement requires a guarded writer".
 - A database copied with `CREATE DATABASE ... TEMPLATE` keeps none of its template's `ALTER DATABASE ... SET` settings: set `synchronous_commit` on every copy (`dbtest.create`). Nothing may be connected to the template; Postgres waits up to 5 s on its own for backends that are closing, so no sleep after `Close` is needed. Use `STRATEGY wal_log`: `file_copy` checkpoints the whole server twice.
 - Since Postgres 15, every `DROP DATABASE` forces a checkpoint of the whole server, which writes whatever other tests left dirty. On a loaded machine, one drop took 0.07-3.8 s. Count that before giving more tests a database of their own.
+
+## Live-only Go tests need their own compile pass (2026-11-11, #4654)
+
+Ordinary `go test` and CI do not include `//go:build herdrlive`, so a node helper signature change can leave live-only callers uncompilable while every default test stays green. After changing such a signature, compile the whole node test package with `go test -c -tags herdrlive -o /tmp/node-live.test ./internal/node`; `-run` selects which test executes but does not reduce which source files must compile. Run the live tests themselves only on demand in an isolated herdr session, never against the working one.
 
 ## Dead-code reports depend on the selected build (2026-11-07, #5856)
 

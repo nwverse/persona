@@ -70,6 +70,9 @@ type Service struct {
 	// taskRetry is how long a task waits before its one retry after a dropped link (0: taskStartRetryDelay; tests
 	// shorten it).
 	taskRetry time.Duration
+	// leaderResume bounds each attempt to put a supervision message into a closed task leader agent, and is the first
+	// wait of the retries after one failed (0: leaderResumeWait; tests shorten it, task_leader.go leaderResumeTime).
+	leaderResume time.Duration
 	// superviseTimes are how supervision messages gather and space out (zero fields: the package's; tests shorten
 	// them, supervise_signals.go superviseTimings).
 	superviseTimes superviseTimings
@@ -79,10 +82,13 @@ type Service struct {
 	mux    *http.ServeMux
 	routes []string
 
-	// preparedMD is the CLAUDE.md this hub last wrote on a machine for a directory (key: machine id NUL directory),
-	// by prepareSpaceIf; refreshInstructions writes again what differs.
+	standingJudgeModel jsonModel  // nil: the configured agent.delegate model; tests can supply a deterministic model.
+	standingMu         sync.Mutex // standing_authorizations.go: revocation and automatic answers serialize
+
+	// prepared is what this hub last gave a machine's node for a directory (key: machine id NUL directory), the
+	// CLAUDE.md and the plugin skills, by prepareSpaceIf; refreshInstructions gives again what differs.
 	preparedMu sync.Mutex
-	preparedMD map[string]string
+	prepared   map[string]preparedState
 
 	epoch string
 	pubMu sync.Mutex
@@ -133,6 +139,10 @@ type Service struct {
 	// confirmation at a time reads and records what the others made.
 	minutesMu  sync.Mutex
 	attend     attendState       // meeting_feed.go: feeding the meetings Persona attends, and their turns
+	room       roomState         // meeting_room_tools.go: the meetings' rooms, their asks and sources
+	meetLive   meetingLiveEvents // meeting_events.go: the meeting_live events, at most one a second per recording
+	justMe     justMeBook        // meeting_justme.go: the Just me turns
+	meetLocks  meetingLocks      // meeting_followup.go: one creation at a time per recording
 	live       contextState      // context.go
 	todos      todoBook          // todos.go
 	work       workBook          // agents_work.go: the Agents business
@@ -143,6 +153,7 @@ type Service struct {
 	tevents    todoEvents        // todo_events.go: what the extensions are told of the todos
 	directions directionBook     // directions.go: the leaders' records and what the extensions were told of them
 	lreports   leaderReportBook  // leader_reports.go: what the leaders' tasks were reported as
+	dtree      directionTreeBook // direction_tree.go: the direction tree the apps were last told of
 	offers     routeBook         // route.go: the directions offered for New chats
 	standing   standingBoard     // feishu_board.go: the standing "waiting for you" card
 	workbench  workbenchState    // feishu_workbench_pin.go: the pinned workbench
@@ -199,8 +210,10 @@ func New(o Options) *Service {
 	s.archiveRoutes()
 	s.agentArchiveRoutes()
 	s.alwaysRoutes()
+	s.standingAuthorizationRoutes()
 	s.reporterRoutes()
 	s.directionRoutes()
+	s.directionTreeRoutes()
 	s.routeRoutes()
 	s.agentRouteRoutes()
 	s.directionNameRoutes()
@@ -227,6 +240,7 @@ func New(o Options) *Service {
 	s.modelProfileRoutes()
 	s.launcherRoutes()
 	s.machineLauncherRoutes()
+	s.workSessionStartRoutes()
 	s.launcherQuotaRoutes()
 	s.providerProbeRoutes()
 	s.launcherImportRoutes()
@@ -317,7 +331,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		if _, set := p["is_main"]; !set {
 			id, _ := p["session_id"].(string)
 			cfg := s.settings(ctx)
-			p["is_main"] = id != "" && cfg.Main == id && cfg.MachineID == device
+			p["is_main"] = id != "" && cfg.Main == id && cfg.mainRouteMachine() == device
 		}
 		if _, set := p["interject_background"]; !set && s.interjectBackground(ctx) {
 			p["interject_background"] = true // what the node does with a message that comes while it answers
@@ -474,7 +488,8 @@ func (s *Service) publish(ctx context.Context) {
 	if _, err := s.hub.Snapshot(ctx, snap); err != nil && !errors.Is(err, ErrStaleSnapshot) {
 		s.logf("assistant: snapshot: %v", err)
 	}
-	s.directionsSoon() // a leader, its title or its tasks may have changed (directions.go)
+	s.directionsSoon()    // a leader, its title or its tasks may have changed (directions.go)
+	s.directionTreeSoon() // and so may the direction tree (direction_tree.go)
 }
 
 func (s *Service) Resync(ctx context.Context) { s.publish(ctx) }
@@ -643,6 +658,7 @@ func (s *Service) SessionsChanged(ctx context.Context, d DeviceSessions) {
 	s.taskStageSessions(ctx, d)
 	s.nativeArchivesListed(d.MachineID) // agent_archive_native.go
 	s.followStarts(ctx, d)              // the app's starts, for launcher health (launcher_health_starts.go)
+	s.directionTreeSessions(d)          // an Agent of the direction tree may have moved (direction_tree.go)
 }
 
 func randomHex(n int) string {

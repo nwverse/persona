@@ -1,5 +1,12 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- A task trust key combines a machine and directory with an unescaped delimiter (#4421). Either field can contain
+  that delimiter, and an old ID need not obey current registration rules, so a split can assign the rule to the wrong
+  place. Keep its exact key for matching and deletion; mark an ambiguous listing and give older clients the key as a
+  path-escaped identifier, so a path-component title retains it. A failed settings read is not an empty list:
+  propagate it to the list caller while retaining the fail-closed admission and no-overwrite behavior of writers.
+  Exercise the handler after service reconstruction.
+
 - Reusing a topic to-do must retire the previous plan's execution binding (#3985). Released or dismissed Agents let
   a later plan take over the same to-do, while the old plans stay in storage. A historical `TodoID` match cannot
   impose that plan's read-only constraint on the current session. Clear old execution bindings under the takeover
@@ -70,6 +77,8 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
 - Key assistant prepare state and generated CLI wrappers by the same canonical directory (2026-11-06, #5831). Per-directory connector and CLI maps alone still leave a shared `assistant-bin` vulnerable: preparing another manager can remove a command or replace its connector when both use the same command name. Scope skill synchronization and process PATH too, and check CLI permissions using the authenticated assistant process's directory. Test two directories with disjoint connectors and a shared CLI name, then prepare or sign out one and verify the other's permissions and wrapper remain unchanged; include symlink aliases and unprepared directories. For `skills.list` callers that omit `cwd`, preserve discovery when the only prepared directory is non-default: prefer a prepared default, then the sole prepared directory, and never choose arbitrarily among several. An empty connector list still counts as prepared.
 
 - Reintroducing a retired model purpose must not read its dormant settings record (2026-11-06, #5921). Lark /agent uses a new override namespace and revision sequence, inheriting Agents until a new user save. Keep category-default assignment from creating an opt-in binding, include overrides in provider-in-use checks, and determine client editability from writable fields rather than `category_id != id`. Tests must seed the old record directly, then verify new conversation startup parameters before override, after save, and after reset; merely asserting the resolved binding misses startup precedence.
+
+- A second opt-in model override shows where the first was keyed by ID (#4232). Setting the AI twin apart like Lark /agent needed no new server path, but every client special-cased `id == "lark.agent"` for its status words, reset label and effort rule, so the twin's row and editor would have kept a category's wording (no "Separately configured", "Restore Default" instead of "Follow Agents") while being an override. Recognize such a row by data (`parent: "agent.new"` and writable `fields`) and keep ID checks for wording that really is one purpose's. Server tests start the twin through its own path (`startInboxAgent`), not the conversation route, and check that a save writes only its own key.
 
 - Model-settings HTTP labels must use `requestCtxLang(ctx)`, not `s.lang(ctx)` (2026-11-06, #5057). The latter reads only the hub's language, so catalog-driven launcher role labels can still ignore a client's `Accept-Language`. Test sequential requests with a different hub language, both discovered-model and fallback-model paths, and unchanged model IDs. MCP-only refusals remain original model text; they must not become exemptions for real HTTP, push or approval-card copy.
 
@@ -168,6 +177,14 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   CLAUDE.md each process started with and resumes the conversation in a fresh process on the next idle message once it
   changed (`instructionsStale`). For "the new prompt has no effect" look first at the CLAUDE.md's modification time in
   the assistant's directory on its machine and at `wrote the CLAUDE.md` in the hub's log.
+- **What is handed out only once must not be dropped by a shortcut** (#4256). `plugins.assistant` gives a machine a
+  skill's files once and counts them as sent when it answers, but the minute refresh asked for them before deciding that
+  an unchanged CLAUDE.md needed no `assistant.prepare`, and dropped them: after an upgrade that changed only a skill, the
+  assistant's machine kept the old files for over an hour. The node then reported the skill missing
+  (`plugin_skills_need`), the files were queued to go again, and the next refresh dropped them the same way. Now the
+  refresh compares the skills' names and digests too, never skips an answer that brings files, and prepares a directory
+  again on its next round when the node reported skills missing there. For "the new skill has no effect", compare the
+  modification time of `~/.persona/plugin-skills/<name>/.persona-plugin` on the assistant's machine with the upgrade's.
 
 - Inbox fixtures must wait for the first asynchronous roster count before writing directly to their items (#3459). `inboxReady` returns after scheduling `tellInboxNeedsYou`, whose goroutine holds the Inbox mutex while reading the map and status fields. Legacy fixture seeding bypassed that mutex and could crash the whole test process, even without the race detector. Use `waitNeedsYouIdle` at the fixture readiness boundary; later concurrent mutations must still use the Inbox mutex. Keep the real teller enabled and verify the complete Inbox test group under `-race`.
 - **An optional object in a tool's schema can come filled with zero values** (#3386): runtimes that fill in every field
@@ -259,8 +276,9 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   Android draws them in order — so none of them changes.
 
 - A read-only worker must be able to report while staying in plan mode (#4201). Denying `ExitPlanMode` does not remove
-  the provider's separate permission request for `mcp__persona__report_to_supervisor`. Allow that exact call once only
-  for a supervised task with a current read-only plan binding. Return `Allow` without `Always`, `Approve`, or `Mode`;
+  the provider's separate permission request for `report_to_supervisor`. Recognize both built-in namespaces with
+  `compat.MCPToolNames`: Paseo preserves the requested name, including the compatibility alias (#4318). Allow only
+  that tool for a supervised task with a current started read-only plan binding. Return `Allow` without `Always`, `Approve`, or `Mode`;
   the terminal hook and Paseo then send no permission or mode update. Reuse `PlanTask.TodoID`, whose old bindings are
   retired on takeover, rather than treating a historical read-only plan as authority for a new writable worker.
 
@@ -272,3 +290,31 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   posts the card of a quiet end unless it was recalled (`end != channel.EndRecalled`), not only when it ended as done:
   gating the post on `EndDone` would have made every bad quiet ending silent instead. A branch that answers a run owes
   it the same ending fields as the normal path.
+
+- **A model asked for an option's label copies whatever the input put next to it** (#3929). `delegate_input.md` lists an option as `label：description`, and with Chinese descriptions the delegation model often answered the whole line (`表驱动：和这个包现有的测试一致`): #3923's live runs saw it in 4 of 4, 2 of 5 and 1 of 4 runs of three cases. `interactionAnswers` found no such option, so a choice the assistant had decided to answer went to the user. `optionLabel` (`assistant/tools_apps.go`) now maps an answer to a label only when it writes out exactly one option, its label then a separator (`：`, `:`, a dash, or brackets) and that option's own description, with quotes or spaces; anything else is still refused. Don't widen it to prefixes or the model's own words after a label: those are free text, and a refused answer only costs the user one question. When a prompt shows options with extra text, expect it back and test the hub's check with the exact line the prompt renders.
+
+- **A new scheduled-task `repeat` must survive the apps that don't know it** (#4399). iOS decodes an unknown `repeat`
+  as `once`, and Android and the web send it back as they got it, all without the new rule's field. A `PUT` without
+  `cron` therefore keeps a cron task's `repeat` and `cron` and saves only the rest; otherwise switching such a task
+  off on an older iPhone turned it into a one-off with no time. Keep the new rule's own field out of a body whose
+  task doesn't have one (`cron` is sent only when set), and gate the editor on the hello feature (`task_cron`).
+
+## Cancel confirmation-blocked Agents without granting approval (#4277)
+
+Keep force archive separate from ordinary busy checks. A cancellation path must close the provider or terminal,
+reject or withdraw pending cards, and keep other work protected. A cached blocked inventory after close can undo
+a newly saved archive unless the closed timestamp fences that old snapshot. Persist the archive and a future
+close timestamp in one write before closing, then replace it with the real close time. A failed close removes
+the provisional record with an independent bounded context, including when the request was cancelled.
+Paseo's CLI `archive --force` skips
+a client-side busy check; its archive request has no force field and closes the provider runtime. Check the actual
+archive receipt before removing the Agent from a bridge's local list.
+
+## Standing authorization and notification evidence (#4398)
+
+A quoted instruction in task notes is not a durable grant. Keep explicit grants in manager storage, require the user's
+own approval when adding them, and compare revisions when a setting approval can race App revocation. Recheck the
+grant after condition reads and serialize its final answer against deletion in the database. Commit the answer and
+its task decision together before sending it to a hook. A plan approval must select `default` explicitly: an empty
+mode can fall back to bypass permissions on the node. Count confirmation dispatch at `tellUser`, not interaction
+creation or app presentation; quiet tasks and supervisor routing also show cards without ringing the user.

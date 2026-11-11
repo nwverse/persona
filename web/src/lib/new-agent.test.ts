@@ -177,6 +177,27 @@ describe("本地优先启动", () => {
     expect(body).not.toHaveProperty("effort");
   });
 
+  it("keeps exact host/workspace IDs through retries and the legacy Codex prompt fallback", async () => {
+    const fetcher = vi.fn().mockRejectedValueOnce(new TypeError("network"))
+      .mockResolvedValueOnce(response({ code: "codex_needs_prompt", error: "needs prompt" }, 409))
+      .mockResolvedValueOnce(response({ session }));
+    vi.stubGlobal("fetch", fetcher);
+    const id = launchAgent({ ...input, workspaceId: "empty-nested", host: "orca", launcher: "custom-codex", model: "typed-model", effort: "high" });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(getState().launches[id]).toMatchObject({ phase: "ready", workspaceId: "empty-nested", host: "orca" });
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    const bodies = fetcher.mock.calls.map((c) => JSON.parse(c[1].body));
+    expect(bodies[0]).toEqual(bodies[1]);
+    for (const body of bodies) {
+      expect(body).toMatchObject({ workspace_id: "empty-nested", host: "orca", cwd: input.cwd, launcher: "custom-codex", model: "typed-model" });
+      for (const field of ["permission_mode", "approval_policy", "approvals_reviewer", "sandbox_mode", "network_access", "permissions"]) expect(body).not.toHaveProperty(field);
+    }
+    expect(bodies[2]).toMatchObject({ prompt: input.text });
+    expect(bodies[2]).not.toHaveProperty("effort");
+    expect(fetcher.mock.calls[0][1].headers.get("X-Persona-Op-Id")).toBe(fetcher.mock.calls[1][1].headers.get("X-Persona-Op-Id"));
+    expect(fetcher.mock.calls[2][1].headers.get("X-Persona-Op-Id")).not.toBe(fetcher.mock.calls[0][1].headers.get("X-Persona-Op-Id"));
+  });
+
   it("sends the picked permission mode with the start, and none when following the launcher", async () => {
     const fetcher = vi.fn().mockResolvedValueOnce(response({ session })).mockResolvedValueOnce(response({}));
     vi.stubGlobal("fetch", fetcher);
@@ -251,6 +272,14 @@ describe("本地优先启动", () => {
 });
 
 describe("opened from another page", () => {
+  it("exports an exact workspace preset to consumers", () => {
+    const got: unknown[] = [];
+    const off = onOpenNewAgent((p) => got.push(p));
+    const workspace = { machineId: "desktop", workspaceId: "child", cwd: input.cwd, host: "orca", owner: "opaque-owner", manager: "assistant" };
+    openNewAgent({ workspace });
+    off();
+    expect(got).toEqual([{ workspace }]);
+  });
   it("puts the preset first and keeps what was being written", () => {
     expect(presetPrompt("<ctx/>\n\n", "")).toBe("<ctx/>\n\n");
     expect(presetPrompt("<ctx/>\n\n", "  修一下  ")).toBe("<ctx/>\n\n修一下");
@@ -275,5 +304,38 @@ describe("startKeys", () => {
     expect(startKeys(platformOf({ platform: "Linux x86_64" }), false)).toBe("Ctrl ↵");
     expect(startKeys("mac", true)).toBeNull();
     expect(startKeys("other", true)).toBeNull();
+  });
+});
+
+describe("work-session delivery", () => {
+  const work = { ...input, launcher: "codex-team", agentType: "codex", model: "model-from-catalog", workSession: true };
+  const target = { machine_id: work.machineId, cwd: work.cwd, launcher: work.launcher, agent_type: work.agentType, model: work.model, work_session: true };
+
+  it("sends the same target with Codex's first message and retries a lost reply under the same operation", async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(response({ code: "codex_needs_prompt" }, 409))
+      .mockRejectedValueOnce(new TypeError("lost response"))
+      .mockResolvedValueOnce(response({ session }));
+    vi.stubGlobal("fetch", fetcher);
+    const id = launchAgent(work);
+    vi.stubGlobal("location", { pathname: `/s/desktop/${id}` });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(fetcher.mock.calls.map((c) => [c[0], JSON.parse(c[1].body)])).toEqual([
+      ["/api/v1/sessions", { ...target, async: true, name_hint: work.text }],
+      ["/api/v1/sessions", { ...target, prompt: work.text }],
+      ["/api/v1/sessions", { ...target, prompt: work.text }],
+    ]);
+    expect(fetcher.mock.calls[1][1].headers.get("X-Persona-Op-Id")).toBe(fetcher.mock.calls[2][1].headers.get("X-Persona-Op-Id"));
+    expect(navigate).toHaveBeenLastCalledWith({ name: "session", mid: "desktop", sid: "remote-id" }, true);
+  });
+
+  it("stops after a Codex creation reports an unknown outcome", async () => {
+    const fetcher = vi.fn().mockResolvedValueOnce(response({ state: "unknown" }, 202));
+    vi.stubGlobal("fetch", fetcher);
+    const id = launchAgent({ ...work, inlinePrompt: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(fetcher.mock.calls[0][1].body)).toEqual({ ...target, prompt: work.text });
+    expect(getState().launches[id]).toMatchObject({ phase: "failed", uncertain: true, repeatOnly: true, model: work.model });
   });
 });

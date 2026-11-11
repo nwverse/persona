@@ -167,6 +167,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			})
 		}
 	}
+	if err := s.admitTaskWorkspace(ctx, t); err != nil {
+		return "", "", err
+	}
 	prompt := t.Prompt
 	if len(t.DoneWhen) > 0 { // what the supervisor will check (supervise.go)
 		prompt += "\n\n" + prompts.RenderTaskDoneWhen(t.DoneWhen)
@@ -189,12 +192,19 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	// The project background, and the todo's decisions (a task started again may have some), go before the prompt
 	// (#2820, #1618); the tab is named from the title.
 	prompt = s.withProjectContext(ctx, m.ID, t.Cwd, s.withTodoDecisions(ctx, t.TodoID, prompt))
+	prompt, err = s.withStandingAuthorizations(ctx, m.ID, t.Cwd, prompt)
+	if err != nil {
+		return "", "", err
+	}
 	// The user's attachments end it, copied here when this is not the assistant's computer (#2437): last, so the
 	// pictures' <attached_images> block ends the message as it does one sent straight to an agent.
 	if len(t.Attachments)+len(t.Mentioned) > 0 {
 		prompt = withAttachments(prompt, s.handAttachments(ctx, t.AttachFrom, m.ID, t.Attachments, t.Mentioned))
 	}
 	params["cwd"], params["prompt"], params["tab_name"] = t.Cwd, prompt, s.tabName(ctx, t.Title)
+	if t.WorkspaceResolved != nil && t.WorkspaceResolved.WorkspaceID != "" {
+		params["workspace_id"] = t.WorkspaceResolved.WorkspaceID
+	}
 	if t.Model != "" {
 		params["model"] = t.Model
 	}
@@ -214,7 +224,14 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	}
 	picked, _ := params["launcher"].(string)
 	s.setPlanThen(ctx, m.ID, params)
-	if err := s.call(ctx, m.ID, DeviceSessionStart, params, &res); err != nil {
+	err = s.call(ctx, m.ID, DeviceSessionStart, params, &res)
+	skipped, refused := s.ultracodeRefusal(ctx, err, params)
+	if refused {
+		delete(params, "ultracode") // an extra the agent it landed on cannot have: it starts without it (#3596)
+		s.logf("task %s: start: %s; starting without ultracode", t.TodoID, skipped)
+		err = s.call(ctx, m.ID, DeviceSessionStart, params, &res)
+	}
+	if err != nil {
 		s.recordStartFailure(ctx, m.ID, s.startLauncher(ctx, picked), err)
 		return "", "", err
 	}
@@ -232,14 +249,22 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if !res.Session.Starting {
 		s.recordStartSuccess(ctx, m.ID, s.startLauncher(ctx, picked))
 	}
+	if refused { // only once it started here: a task moved elsewhere after a failed start asks again
+		off := false
+		t.Ultracode = &off // a retry does not ask again
+		t.noteWhy(i18n.T(s.lang(ctx), "assistant-tasks.ultracode_skipped", i18n.Args{"reason": skipped}))
+	}
 	return m.ID, res.Session.SessionID, nil
 }
 
-// updatePlanTask keeps the machine, directory and why task i of started plan planID runs with now.
+// updatePlanTask keeps the machine, directory and why task i of started plan planID runs with now, and its ultracode
+// when the start went without it.
 func (s *Service) updatePlanTask(ctx context.Context, planID string, i int, t PlanTask) {
 	if err := s.patchPlanTask(ctx, planID, i, func(pt *PlanTask) {
 		pt.Machine, pt.Cwd, pt.Why = t.Machine, t.Cwd, t.Why
-		pt.Reroute = t.Reroute
+		pt.Reroute, pt.Ultracode = t.Reroute, t.Ultracode
+		pt.Workspace, pt.WorkspaceResolved, pt.MachinePolicy = t.Workspace, t.WorkspaceResolved, t.MachinePolicy
+		pt.WorkspaceInferred, pt.ReservedTodoID = t.WorkspaceInferred, t.ReservedTodoID
 		pt.Launcher, pt.Model, pt.Effort, pt.Tier = t.Launcher, t.Model, t.Effort, t.Tier
 	}); err != nil {
 		s.logf("plan %s: %v", planID, err)
