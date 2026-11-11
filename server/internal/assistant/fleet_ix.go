@@ -215,7 +215,11 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 	}
 	ix = nodeCard(ix, s.fleetStore() != nil, s.ixInHealth(ctx, ix))
 	if ix.Kind == proto.IxPermission {
-		ix.ToolTitle = personaToolTitle(s.lang(ctx), ix.ToolName, ix.ToolInput)
+		l := s.lang(ctx)
+		ix.ToolTitle = personaToolTitle(l, ix.ToolName, ix.ToolInput)
+		if name := personaToolTitle(l, ix.ToolName, nil); name != ix.ToolTitle {
+			ix.ToolNameTitle = name // the tool alone, for what Always covers: no report's kind
+		}
 	}
 	if r, ok := s.alwaysAllowed(ctx, ix); ok {
 		if ix.Resumable { // its hook's earlier attempt left the card pending: it is answered too
@@ -879,7 +883,7 @@ const maxAlwaysKeys = 32
 // it itself). A node names no tool for people, and has no say in either: only the manager does, on its own cards and
 // on a node's card for one of Persona's own MCP tools (personaToolTitle).
 func nodeCard(ix proto.Interaction, remembers, health bool) proto.Interaction {
-	ix.AlwaysHonored, ix.ToolTitle = nil, ""
+	ix.AlwaysHonored, ix.ToolTitle, ix.ToolNameTitle = nil, "", ""
 	if ix.Kind != proto.IxPermission || ix.SessionID == "" || (len(ix.AlwaysKeys) == 0 && !health) {
 		return ix
 	}
@@ -925,7 +929,8 @@ func toolTitle(l i18n.Lang, tool string) string {
 // namespace too), by its name for people in l for the title of a node's card (#4966): the catalog's name
 // (assistant-tool_titles), a report to the supervisor with what it reports ("Report to supervisor · Done"), the
 // phone's and mail tools by their family and the rest of the name as the chat's tool rows say them ("iPhone · contacts
-// search"), any other "Persona · agent read". "" for every other tool: the apps name those themselves.
+// search"), any other "Persona · agent read". "" for every other tool: the apps name those themselves. Without input,
+// the tool alone ("Report to supervisor"; Interaction.ToolNameTitle).
 func personaToolTitle(l i18n.Lang, name string, input json.RawMessage) string {
 	rest, ok := strings.CutPrefix(name, "mcp__")
 	i := strings.LastIndex(rest, "__")

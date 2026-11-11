@@ -65,9 +65,10 @@ the Agent's own bookkeeping.
 - **The card's title**: whenever a card is shown for one of Persona's own MCP tools (the ones still asked, or any in a
   session started elsewhere), the manager titles it with the tool's name for people in the user's language
   (`tool_title`, `assistant-tool_titles`: "Report to supervisor · Done", "Note a decision"; the phone's tools as the
-  chat's rows name them, "iPhone · contacts search"), never the raw `mcp__persona__…` name
-  (`docs/protocol/protocol.md` "Always allow"). Agents already running pick the rule up when they are next started or
-  resumed.
+  chat's rows name them, "iPhone · contacts search"), never the raw `mcp__persona__…` name, and names the tool alone
+  for the "Always allow" line (`tool_name_title`: every report, not only this "Done"; `docs/protocol/protocol.md`
+  "Always allow"). The title is in the hub's language, like other text the hub writes. Agents already running pick
+  the rule up when they are next started or resumed.
 
 ## Independent ultracode switch (#3427)
 

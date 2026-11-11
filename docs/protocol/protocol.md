@@ -762,6 +762,7 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
  "always_keys":["tool:Bash"],  // node → hub: what "Always Allow" on an assistant chat's permission card lets through; the hub records it and answers the same card itself (docs/assistant/assistant.md "Always allow in this session"); not used by clients
  "always_honored":false,       // manager → clients: whether answering Always is kept; see "Always allow" below
  "tool_title":"iPhone control", // manager → clients: its own tool's name for people, in the user's language; see "Always allow" below
+ "tool_name_title":"Report to supervisor", // manager → clients: the tool alone, beside a tool_title that also says what the call does; see "Always allow" below
  "agent":"codex", "reason":"…", "always_label":"本会话不再问这个命令"} // a card the node read from the Codex / compatible forks TUI ("Codex questions and approvals"); always_label is emitted in Chinese: "don't ask about this command again this session"
 
 // Resolution (by kind)
@@ -804,7 +805,11 @@ the field (or in `tool_title`) is dropped.
 "iPhone control" for `iphone_do`), set by the manager on its own tools' cards and on a node's card for one of
 Persona's own MCP tools (`mcp__persona__…` under either namespace, #4966: "Report to supervisor · Done", the phone's
 tools as "iPhone · contacts search", any other "Persona · agent read"). Clients title the card with it, and otherwise
-with `tool_name` as before; Agents sessions' cards for any other tool never carry it.
+with `tool_name` as before; Agents sessions' cards for any other tool never carry it. Where the title also says what
+this call does (a report's kind), `tool_name_title` names the tool alone ("Report to supervisor"): a line about what
+Always covers, every call of the tool, uses it, else `tool_title`, else the tool's name in words. Both are in the
+hub's language (the manager's `lang`, from the hub's locale) like the rest of the text it writes, whatever language
+the app is in. A node's value for either is dropped.
 
 ### Subagent deliveries as tool results
 

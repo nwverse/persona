@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
@@ -67,27 +68,32 @@ func TestPersonaToolTitle(t *testing.T) {
 }
 
 // The manager titles a node's card for one of Persona's MCP tools itself, replacing whatever the node said; a card
-// for any other tool keeps none.
+// for any other tool keeps none. Where the title says what the call does (a report's kind), the card also names the
+// tool alone, for what "Always allow" covers.
 func TestNodeCardForAPersonaToolIsTitledByTheManager(t *testing.T) {
 	ft := newFleetTest(t)
 	s := ft.s
 	l := s.lang(context.Background())
 	no := false
-	for _, tc := range []struct {
-		name, input, want string
+	report := i18n.T(l, "assistant-tool_titles.report_to_supervisor")
+	for i, tc := range []struct {
+		name, input, want, wantName string
 	}{
-		{"mcp__persona__dispatch_start", `{"machine":"m2","prompt":"x"}`, i18n.T(l, "assistant-tool_titles.dispatch_start")},
-		{"mcp__persona__phone_notify", `{"title":"x"}`, i18n.T(l, "assistant-tool_titles.family_phone") + " · notify"},
+		{"mcp__persona__dispatch_start", `{"machine":"m2","prompt":"x"}`, i18n.T(l, "assistant-tool_titles.dispatch_start"), ""},
+		{"mcp__persona__phone_notify", `{"title":"x"}`, i18n.T(l, "assistant-tool_titles.family_phone") + " · notify", ""},
 		{"mcp__persona__report_to_supervisor", `{"kind":"done","text":"x"}`,
-			i18n.T(l, "assistant-tool_titles.report_to_supervisor") + " · " + i18n.T(l, "assistant-tool_titles.report_to_supervisor_done")},
-		{"Bash", `{"command":"ls"}`, ""},
+			report + " · " + i18n.T(l, "assistant-tool_titles.report_to_supervisor_done"), report},
+		{"mcp__persona__report_to_supervisor", `{"text":"x"}`, report, ""},
+		{"Bash", `{"command":"ls"}`, "", ""},
 	} {
-		id := "ix_t_" + tc.name // a resumable card asked again under its id is the same card
+		id := fmt.Sprintf("ix_t_%d", i) // a resumable card asked again under its id is the same card
 		ix := alwaysIx(id, "agent")
-		ix.ToolName, ix.ToolInput, ix.ToolTitle = tc.name, json.RawMessage(tc.input), "said by the node"
+		ix.ToolName, ix.ToolInput = tc.name, json.RawMessage(tc.input)
+		ix.ToolTitle, ix.ToolNameTitle = "said by the node", "said by the node"
 		go func() { _, _ = s.nodeInteraction(context.Background(), ix) }()
-		if got := ft.waitPending(1)[0]; got.ToolTitle != tc.want {
-			t.Errorf("%s: tool_title %q, want %q", tc.name, got.ToolTitle, tc.want)
+		got := ft.waitPending(1)[0]
+		if got.ToolTitle != tc.want || got.ToolNameTitle != tc.wantName {
+			t.Errorf("%s %s: tool_title %q, tool_name_title %q; want %q, %q", tc.name, tc.input, got.ToolTitle, got.ToolNameTitle, tc.want, tc.wantName)
 		}
 		_ = s.resolve(id, proto.Resolution{Allow: &no})
 		ft.waitPending(0)
