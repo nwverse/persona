@@ -11613,7 +11613,8 @@ def span(items, frm=None, to=None):
 # MOCK_DELAY=<seconds>: every request and pong is that late (a weak network). At runtime, for UI tests:
 #   GET /mock/delay?s=3   the same, from now on (0 turns it off)
 #   GET /mock/down?s=8    the hub is gone for that long: open WebSockets drop, new connections are closed unanswered
-NET = {"delay": float(os.environ.get("MOCK_DELAY", "0")), "down_until": 0.0}
+#   GET /mock/reject?s=8  this device's credential is revoked for that long: open WebSockets drop, handshakes answer 401
+NET = {"delay": float(os.environ.get("MOCK_DELAY", "0")), "down_until": 0.0, "reject_until": 0.0}
 
 # ---------- frames lost, doubled, late or out of order (#1073) ----------
 # POST /mock/wire {"rules": [{"type": "items", "action": "drop" | "dup" | "delay" | "hold", "ms": 1500, "count": 1,
@@ -12705,12 +12706,18 @@ def file_streamed(f, q):
 
 
 def net_control(path, q):
-    """Handles /mock/delay and /mock/down; True if it was one of them."""
+    """Handles /mock/delay, /mock/down and /mock/reject; True if it was one of them."""
     if path == "/mock/delay":
         NET["delay"] = float(q.get("s", ["0"])[0])
         return True
     if path == "/mock/down":
         NET["down_until"] = time.time() + float(q.get("s", ["5"])[0])
+        for sock in list(SOCKETS):
+            try: sock.shutdown(2)
+            except OSError: pass
+        return True
+    if path == "/mock/reject":
+        NET["reject_until"] = time.time() + float(q.get("s", ["5"])[0])
         for sock in list(SOCKETS):
             try: sock.shutdown(2)
             except OSError: pass
@@ -15909,6 +15916,9 @@ class H(BaseHTTPRequestHandler):
         it opens everything until traded once on POST /api/v1/auth/tokens, then for MOCK_PAIR_GRACE seconds (default 10,
         the hub's 2 minutes made short); the device tokens it was traded for keep working (#2766)."""
         u = urlparse(self.path)
+        if NET["reject_until"] > time.time() and u.path.startswith("/api/"):
+            self.send_json({"error": "invalid token"}, 401)
+            return True
         if MOCK_CF_ACCESS and u.path.startswith("/api/"):
             got = (self.headers.get("CF-Access-Client-Id", ""), self.headers.get("CF-Access-Client-Secret", ""))
             if got != MOCK_CF_ACCESS:

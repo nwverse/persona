@@ -869,7 +869,9 @@ TEST_RUNNER_PERSONA_HUB_A=http://127.0.0.1:18760 TEST_RUNNER_PERSONA_HUB_B=http:
 - Shots: `-pairURL <A> -pairURL2 <B> -pairURL3 <C>` (DEBUG; same address/credentials retains group id across restart), plus
   `-tab dev` merged Agents, `-tab settings -openHubs YES`, `-tab settings -openMachines YES` grouped Machines,
   `-openHub <group id or index>` current hub. `-openSession` accepts `group id|machine/session`, otherwise finds by session.
+  On Xcode 27.2 put `--` before direct `simctl launch` DEBUG arguments so they reach `UserDefaults`; `MultiHubTests` uses the same separator.
 - Same-group failover: Settings › hub shows In use; `GET /mock/down?s=40` or stop by port. Within ~10+ seconds another group member becomes In use, title unchanged.
+- Rejected group: `GET /mock/reject?s=30` on every member drops its sockets and answers 401 to API handshakes (`s=0` clears). Apply it to every member so the group cannot fail over. `testRevokedGroupSaysPairingExpiredAndOffersPairAgain` verifies the caution dot, reason, Pair Again, and the other group staying In use; screenshots wait for the system icon-change alert to finish disappearing.
 - One-group zero change: build DEBUG before in detached worktree, same mock/group args/status bar/clock, 14 pages × light/dark;
   repeat after, pixel compare. Repeated shots from same build identify noise (system spinner/Liquid Glass highlights vary per launch); exclude noise, inspect remaining differences.
   Only allowed change: hub row added to Settings Server section.
