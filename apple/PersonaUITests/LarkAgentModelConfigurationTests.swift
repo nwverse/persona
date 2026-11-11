@@ -145,6 +145,9 @@ final class LarkAgentModelConfigurationTests: XCTestCase {
         let app = launch(scheme: scheme, entry: ["-openModelConfiguration", "YES"])
         let row = app.buttons["model-purpose-inbox.agent"]
         XCTAssertTrue(row.waitForExistence(timeout: 10))
+        // Below the fold at large text sizes: scroll until the whole row is on screen.
+        let screen = app.windows.firstMatch.frame
+        for _ in 0..<6 where !row.isHittable || row.frame.maxY > screen.maxY - 80 { app.swipeUp() }
         XCTAssertTrue(row.label.contains("跟随 Agents"), row.label)
         try shot(app, "\(scheme)-twin-catalog")
         row.tapCenter()
