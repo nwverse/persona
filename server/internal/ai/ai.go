@@ -241,7 +241,8 @@ type messageUsage struct {
 	CacheCreationInputTokens *int `json:"cache_creation_input_tokens"`
 }
 
-// into sets the fields u has on to: message_delta's usage carries the totals so far, of only some fields.
+// into sets the fields u has on to: message_delta's usage carries the totals so far, of only some fields. A zero
+// is not taken: some relays send input_tokens 0 in message_delta, which would wipe message_start's real count.
 func (u *messageUsage) into(to *Usage) {
 	if u == nil {
 		return
@@ -251,10 +252,49 @@ func (u *messageUsage) into(to *Usage) {
 		to   *int
 	}{{u.InputTokens, &to.InputTokens}, {u.OutputTokens, &to.OutputTokens},
 		{u.CacheReadInputTokens, &to.CacheReadInputTokens}, {u.CacheCreationInputTokens, &to.CacheCreationInputTokens}} {
-		if f.from != nil {
+		if f.from != nil && *f.from != 0 {
 			*f.to = *f.from
 		}
 	}
+}
+
+// errorOf reads a Messages error: an object with its type and message (type falling back to a code), or only a
+// message string. ok is false when raw holds no error at all.
+func errorOf(raw json.RawMessage) (kind, msg string, ok bool) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return "", "", false
+	}
+	if json.Unmarshal(raw, &msg) == nil {
+		return "error", msg, true
+	}
+	var o struct {
+		Type    string `json:"type"`
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(raw, &o) != nil {
+		return "", "", false
+	}
+	return cmp.Or(o.Type, o.Code, "error"), o.Message, true
+}
+
+// messageFailure is the error a Messages error reported after the 200 stands for, and whether it counts as an
+// answer: a limit (overloaded_error, rate_limit_error) holds the gate like HTTP 529 / 429 and is no answer; any
+// other is a streamFailure, Transient as its type's HTTP status would be (api_error 500, timeout_error 504).
+func messageFailure(kind, msg string) (bool, error) {
+	if limit := streamLimitFor("error", kind, msg); limit != nil {
+		return false, limit
+	}
+	return true, &streamFailure{status: messageErrorStatus[strings.ToLower(kind)], kind: kind, msg: msg}
+}
+
+// streamCut is the error of a stream that ended before its end event: the connection was cut, and whatever text
+// came is only part of the answer (io.ErrUnexpectedEOF, so Transient), not a short reply. what names the end missed.
+func streamCut(gotText bool, what string) error {
+	if !gotText {
+		return fmt.Errorf("ai: stream ended without a reply: %w", io.ErrUnexpectedEOF)
+	}
+	return fmt.Errorf("ai: stream ended before the %s completed: %w", what, io.ErrUnexpectedEOF)
 }
 
 // readMessage reads a whole Messages API answer (a server that didn't stream).
@@ -264,16 +304,23 @@ func readMessage(body io.Reader) (Reply, bool, error) {
 		return Reply{}, true, fmt.Errorf("ai: read response: %w", err)
 	}
 	var out struct {
+		Type    string `json:"type"`
 		Model   string `json:"model"`
 		Content []struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"content"`
-		StopReason string `json:"stop_reason"`
-		Usage      Usage  `json:"usage"`
+		StopReason string          `json:"stop_reason"`
+		Usage      Usage           `json:"usage"`
+		Error      json.RawMessage `json:"error"`
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return Reply{}, true, fmt.Errorf("ai: decode: %w", err)
+	}
+	// An error body sent with 200 (a gateway that ignored "stream" and failed) is the failure it reports.
+	if kind, msg, ok := errorOf(out.Error); out.Type == "error" || (out.Type == "" && ok && len(out.Content) == 0) {
+		answered, err := messageFailure(cmp.Or(kind, "error"), msg)
+		return Reply{}, answered, err
 	}
 	var b strings.Builder
 	for _, part := range out.Content {
@@ -295,25 +342,23 @@ func messageReply(text, stopReason, model string, usage Usage) (Reply, bool, err
 // readMessageStream reads a Messages API event stream, framed by SSEEvents: the model and usage from message_start,
 // the text of the text blocks (content_block_start, text_delta; thinking and tool input are skipped), the stop reason
 // and the usage totals from message_delta. message_stop ends it. A stream that ends with neither message_stop nor a
-// stop reason was cut: an error wrapping io.ErrUnexpectedEOF (Transient), not a short reply. An error event is the
-// failure it reports; overloaded_error and rate_limit_error are the limits HTTP 529 and 429 stand for and hold the
-// gate the same way (streamLimit), so they count as no answer.
+// stop reason was cut (streamCut). An error event, read leniently (errorOf: an object or a string, with or without
+// the event's own type), is the failure it reports (messageFailure). Data that isn't JSON is skipped.
 func readMessageStream(body io.Reader) (Reply, bool, error) {
 	var (
-		b       strings.Builder
-		model   string
-		stop    string
-		usage   Usage
-		failed  error
-		stopped bool
+		b              strings.Builder
+		model          string
+		stop           string
+		usage          Usage
+		failed         error
+		failedAnswered bool
+		stopped        bool
 	)
 	err := SSEEvents(body, func(data string) bool {
 		var ev struct {
-			Type    string `json:"type"`
-			Message struct {
-				Model string        `json:"model"`
-				Usage *messageUsage `json:"usage"`
-			} `json:"message"`
+			Type string `json:"type"`
+			// Message is message_start's message, or an error's text where a relay puts it at the top.
+			Message      json.RawMessage `json:"message"`
 			ContentBlock struct {
 				Type string `json:"type"`
 				Text string `json:"text"`
@@ -323,19 +368,26 @@ func readMessageStream(body io.Reader) (Reply, bool, error) {
 				Text       string `json:"text"`
 				StopReason string `json:"stop_reason"`
 			} `json:"delta"`
-			Usage *messageUsage `json:"usage"`
-			Error *struct {
-				Type    string `json:"type"`
-				Message string `json:"message"`
-			} `json:"error"`
+			Usage *messageUsage   `json:"usage"`
+			Error json.RawMessage `json:"error"`
 		}
 		if json.Unmarshal([]byte(data), &ev) != nil {
 			return false
 		}
+		kind, msg, isError := errorOf(ev.Error)
+		if ev.Type == "" && isError { // an error event without its type: the error is what it carries
+			ev.Type = "error"
+		}
 		switch ev.Type {
 		case "message_start":
-			model = ev.Message.Model
-			ev.Message.Usage.into(&usage)
+			var m struct {
+				Model string        `json:"model"`
+				Usage *messageUsage `json:"usage"`
+			}
+			if json.Unmarshal(ev.Message, &m) == nil {
+				model = m.Model
+				m.Usage.into(&usage)
+			}
 		case "content_block_start":
 			if ev.ContentBlock.Type == "text" {
 				b.WriteString(ev.ContentBlock.Text)
@@ -351,15 +403,10 @@ func readMessageStream(body io.Reader) (Reply, bool, error) {
 			stopped = true
 			return true
 		case "error":
-			kind, msg := "error", ""
-			if e := ev.Error; e != nil {
-				kind, msg = cmp.Or(e.Type, kind), e.Message
+			if msg == "" {
+				_ = json.Unmarshal(ev.Message, &msg) // a relay's {"type":"error","message":"..."}
 			}
-			if limit := streamLimitFor("error", kind, msg); limit != nil {
-				failed = limit
-			} else {
-				failed = fmt.Errorf("ai: error: %s: %s", kind, msg)
-			}
+			failedAnswered, failed = messageFailure(cmp.Or(kind, "error"), msg)
 			return true
 		}
 		return false
@@ -368,14 +415,10 @@ func readMessageStream(body io.Reader) (Reply, bool, error) {
 		return Reply{}, true, fmt.Errorf("ai: read stream: %w", err)
 	}
 	if failed != nil {
-		var limit *streamLimit
-		return Reply{}, !errors.As(failed, &limit), failed
+		return Reply{}, failedAnswered, failed
 	}
-	if !stopped && stop == "" { // the connection was cut: whatever text came is only part of the answer
-		if b.Len() == 0 {
-			return Reply{}, true, fmt.Errorf("ai: stream ended without a reply: %w", io.ErrUnexpectedEOF)
-		}
-		return Reply{}, true, fmt.Errorf("ai: stream ended before the message completed: %w", io.ErrUnexpectedEOF)
+	if !stopped && stop == "" {
+		return Reply{}, true, streamCut(b.Len() > 0, "message")
 	}
 	return messageReply(b.String(), stop, model, usage)
 }
@@ -516,11 +559,7 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 	if stopped {
 		return ended(got, gotErr)
 	}
-	// No terminal event: the connection was cut, and whatever text came is only part of the answer.
-	if b.Len() == 0 {
-		return reply, true, fmt.Errorf("ai: stream ended without a reply: %w", io.ErrUnexpectedEOF)
-	}
-	return reply, true, fmt.Errorf("ai: stream ended before the response completed: %w", io.ErrUnexpectedEOF)
+	return reply, true, streamCut(b.Len() > 0, "response") // no terminal event
 }
 
 // JSON asks for a JSON object and decodes the first one in the reply into out.

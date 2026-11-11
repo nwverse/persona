@@ -203,3 +203,68 @@ func TestMessagesStreamErrorEvents(t *testing.T) {
 		})
 	}
 }
+
+// message_delta's usage carries totals of only some fields, and some relays send the others as 0 there: a zero does
+// not wipe the count message_start gave.
+func TestMessagesStreamUsageKeepsStartCounts(t *testing.T) {
+	reply, _, err, _, _ := messagesStream(t, sse(evStart, evBlock(0, "text"), evText(0, "x"),
+		`message_delta {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":0,"cache_read_input_tokens":0,"output_tokens":7}}`, evStop))
+	want := Usage{InputTokens: 120, OutputTokens: 7, CacheReadInputTokens: 30, CacheCreationInputTokens: 5}
+	if err != nil || reply.Usage != want {
+		t.Fatalf("usage %+v, err %v; want %+v", reply.Usage, err, want)
+	}
+}
+
+// Any other Messages error after the 200, in the stream or as a whole JSON body a gateway sent with 200, is the error
+// it reports, read leniently (an object or a string, with or without the event's own type), and Transient exactly
+// when the HTTP status its type stands for would be: api_error (500) and timeout_error (504) are tried again as
+// they were before streaming, when they came as the status itself.
+func TestMessagesErrorsAfterThe200(t *testing.T) {
+	for _, c := range []struct {
+		name, body, want string
+		transient        bool
+	}{
+		{"api_error event", sse(evStart, `error {"type":"error","error":{"type":"api_error","message":"Internal server error"}}`),
+			"ai: error: api_error: Internal server error", true},
+		{"timeout_error event", sse(evStart, `error {"type":"error","error":{"type":"timeout_error","message":"upstream timed out"}}`),
+			"ai: error: timeout_error: upstream timed out", true},
+		{"invalid_request_error event", sse(evStart, `error {"type":"error","error":{"type":"invalid_request_error","message":"bad"}}`),
+			"ai: error: invalid_request_error: bad", false},
+		{"error as a string, no type", "data: {\"error\":\"upstream failed\"}\n\n", "ai: error: error: upstream failed", false},
+		{"message at the top", "data: {\"type\":\"error\",\"message\":\"boom\"}\n\n", "ai: error: error: boom", false},
+		{"object without the event type", "data: {\"error\":{\"type\":\"api_error\",\"message\":\"oops\"}}\n\n", "ai: error: api_error: oops", true},
+		{"whole JSON error body", `{"type":"error","error":{"type":"api_error","message":"Internal server error"}}`,
+			"ai: error: api_error: Internal server error", true},
+		{"whole JSON error, no type", `{"error":{"type":"invalid_request_error","message":"bad"}}`,
+			"ai: error: invalid_request_error: bad", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			reply, answered, err, _, _ := messagesStream(t, c.body)
+			if err == nil || err.Error() != c.want || Transient(err) != c.transient || !answered || reply != (Reply{}) {
+				t.Fatalf("reply %+v, answered %v, err %v (transient %v); want %q, transient %v", reply, answered, err, Transient(err), c.want, c.transient)
+			}
+		})
+	}
+}
+
+// A limit reported in a whole JSON error body sent with 200, or in an error event without its type, holds the
+// connection like the stream's error event.
+func TestMessagesLimitsInOtherShapesPause(t *testing.T) {
+	for name, c := range map[string]struct{ body, ctype string }{
+		"whole JSON body":    {`{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`, "application/json"},
+		"event without type": {"data: {\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n", "text/event-stream"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fakeClock(t)
+			u := newUpstream(t, answer(200, c.body, "content-type", c.ctype))
+			cl := u.client("k")
+			var errs [2]error
+			for i := range errs {
+				_, errs[i] = cl.Complete(context.Background(), "s", "u", 10)
+			}
+			if p := Held(cl.Config()); p == nil || p.Reason != ReasonBusy || !IsPaused(errs[0]) || !IsPaused(errs[1]) || u.sent.Load() != 1 {
+				t.Fatalf("sent %d, held %+v, errs %v", u.sent.Load(), p, errs)
+			}
+		})
+	}
+}
