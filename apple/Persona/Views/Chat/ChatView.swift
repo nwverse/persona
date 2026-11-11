@@ -4503,10 +4503,8 @@ struct Composer: View, Equatable {
         get { held.images }
         nonmutating set { held.images = newValue }
     }
-    private var imagesBinding: Binding<[(UIImage, ImagePayload)]> { Binding(get: { images }, set: { images = $0 }) }
     private var uploads: FileUploads { held.uploads }
     private var videos: VideoAttachments { held.videos }
-    @State private var editingIndex: Int?
     @State private var showFiles = false
     #if os(iOS)
     /// The iPhone's 「+」 panel (`AttachSheet`, Telegram's attachment menu).
@@ -4813,7 +4811,7 @@ struct Composer: View, Equatable {
                 PasteImageChip(focused: focused) { add($0) }
                 #endif
                 if !images.isEmpty {
-                    ComposerImages(images: imagesBinding) { editingIndex = $0 } // a tap marks it up before sending
+                    ComposerImages.editable(held) // a tap marks it up before sending
                 }
                 #if os(iOS)
                 if !(model.composerComments[key] ?? []).isEmpty {
@@ -4856,6 +4854,7 @@ struct Composer: View, Equatable {
                                  gate: gate,
                                  openAttach: attachOpener,
                                  glows: glowsWhileReplying,
+                                 dictationHints: { [model, key] in DictationLanguage.ownerTexts(model.chat(key).items) },
                                  send: { if let gate { gate.action() } else { Task { await sendText(text) } } }) {
                     #if os(iOS)
                     // The iPhone's tap opens the panel, its touch and hold this menu; the iPad's + is the menu, with
@@ -5126,15 +5125,6 @@ struct Composer: View, Equatable {
             focused = true
         }
         #endif
-        .fullScreenCover(item: Binding(get: { editingIndex.map(EditIndex.init) }, set: { if $0 == nil { editingIndex = nil } })) { e in
-            if images.indices.contains(e.id) {
-                let original = images[e.id].0
-                ImageEditor(image: original) { edited in
-                    // The photo marked up, wherever it is now: another window on the same chat may have taken one out.
-                    if let p = MessagePhotos.payload(edited), let i = images.firstIndex(where: { $0.0 === original }) { images[i] = p }
-                }
-            }
-        }
     }
 
     /// The iPhone's 「+」 opens the panel (iPad and the Mac keep the menu). The keyboard goes down first and the panel
@@ -5192,21 +5182,21 @@ struct Composer: View, Equatable {
     /// What the panel handed back: picked photos and videos into the composer (and sent, from its Send), or a row's action.
     private func attachFinished(_ outcome: AttachOutcome) {
         switch outcome {
-        case .then(let ids, let action):
-            Task { await addPicked(ids) }
+        case .then(let picks, let action):
+            Task { await addPicked(picks) }
             action()
-        case .closed(let ids):
-            Task { await addPicked(ids) }
-        case .send(let ids):
+        case .closed(let picks):
+            Task { await addPicked(picks) }
+        case .send(let picks):
             Task {
-                await addPicked(ids)
+                await addPicked(picks)
                 // As the box's Send: the gate first; videos still on their way hold the message and say so (sendText).
                 if let gate { gate.action() } else if allowsSend { await sendText(text) }
             }
         }
     }
 
-    private func addPicked(_ ids: [String]) async { await held.addPicked(ids, machine: key.machineRef, model: model) }
+    private func addPicked(_ picks: AttachPicks) async { await held.addPicked(picks, machine: key.machineRef, model: model) }
     #endif
 
     @discardableResult
@@ -6570,7 +6560,6 @@ struct WorkLine: View, Equatable {
     }
 }
 
-private struct EditIndex: Identifiable { var id: Int }
 
 /// Where a work line's or tool run's header is, told to the chat's pin (`workHeadMoved`). Not from Full Page's copies of
 /// the lines (#1609): they are off screen, and their positions moved the list the next time a header was tapped.
