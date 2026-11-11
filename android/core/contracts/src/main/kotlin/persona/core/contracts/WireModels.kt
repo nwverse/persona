@@ -50,6 +50,8 @@ data class Fold(
     @SerialName("through_seq") val throughSeq: Int = 0,
     @SerialName("through_id") val throughId: String = "",
     val tasks: List<FoldTaskSnapshot> = emptyList(),
+    /** The folded run belongs to a supervision round the user must see (`fold_supervision.go`); older hubs omit it. */
+    @SerialName("supervision_user") val supervisionUser: Boolean? = null,
 )
 
 @Serializable

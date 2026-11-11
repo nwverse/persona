@@ -30,12 +30,13 @@ const ctl = (id, request) => ({ type: 'control_request', request_id: id, request
 
 test('start: options reach query(), then ready', async () => {
   const b = bridge()
-  b.send(start({ model: 'claude-haiku-4-5', permissionMode: 'default', settings: { env: { A: '1' } }, bogus: 1, includePartialMessages: false }))
+  b.send(start({ model: 'claude-haiku-4-5', permissionMode: 'default', tools: ['Bash', 'Read', 'Monitor', 'Skill', 'Agent'], settings: { env: { A: '1' } }, bogus: 1, includePartialMessages: false }))
   const ready = await b.until((m) => m.type === 'persona_bridge' && m.event === 'ready')
   assert.match(ready.sdk_version, /^\d+\.\d+\.\d+$/)
   const opts = await b.until((m) => m.type === 'fake_options')
   assert.equal(opts.options.model, 'claude-haiku-4-5')
   assert.equal(opts.options.includePartialMessages, true)
+  assert.deepEqual(opts.options.tools, ['Bash', 'Read', 'Monitor', 'Skill', 'Agent'])
   assert.equal(opts.options.bogus, undefined)
   assert.ok(opts.env_keys > 0, 'the bridge passes its env')
   assert.ok(opts.has_stderr)

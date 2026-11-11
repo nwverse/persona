@@ -74,6 +74,19 @@ describe("background rounds in the main conversation", () => {
     expect(chatLines(items, { background: false })).toEqual(off);
   });
 
+  it("keeps Persona continuing the user's own work shown: a usage-limit continuation, a wake-up, an untitled follow-up", () => {
+    const question = mine(1, "Summarize the fictional report");
+    const continued = (seq: number, injected?: Item["injected"]): Item => ({ id: `u${seq}#0`, seq, role: "user", kind: "text", text: "Continue where you stopped.", injected, source: { kind: "followup", ...(injected?.title ? { title: injected.title } : {}) } });
+    for (const input of [
+      continued(3, { kind: "followup", state: "limit_continue", line: "The usage limit reset; Persona continues" }),
+      continued(3, { kind: "followup", state: "wake", title: "the fictional build", line: "Woken for the fictional build" }),
+      continued(3),
+    ]) {
+      const lines = chatLines([question, answer(2, "Starting."), input, answer(4, "The final summary.")], on);
+      expect(kinds(lines)).not.toContain("supervision");
+    }
+  });
+
   it("keeps a queued real message out of a background round", () => {
     const lines = chatLines([scheduled(1), answer(2), mine(3, "Also check the calendar", { queued: true }), answer(4)], on);
     expect(kinds(lines)).toEqual(["supervision", "segment"]);

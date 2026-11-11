@@ -504,7 +504,7 @@
   },
   {
     "name": "agents_list",
-    "description": "The Claude Code / Codex agents running on the user's computers (herdr), with their state: needs_you (waiting for an answer / approval), working, unread (finished, result not looked at), idle. Each line has machine, session id, project, title, last update and the last thing the agent said. Known Claude Code switch states appear as ultracode=on/off; an omitted state is unknown. ultracode=on means every substantive task runs a multi-agent dynamic workflow, independently of thinking effort. Let it finish and wait for workflow results without nudging it. Much faster and more accurate than ssh + herdr. At the end: the launchers that failed their last health check, by machine (agent_start and task_plan move off them).\n\nA line under an agent is something waiting for the user: a question lists its options and the interaction id to answer it with (interaction_answer), an approval is the user's to give in the app.",
+    "description": "The Claude Code / Codex agents running on the user's computers (herdr), with their state: needs_you (waiting for an answer / approval), working, unread (finished, result not looked at), idle. done lists work finished in the last 24 hours, and muted lists the muted agents that would otherwise appear in the live snapshot; both include the work conclusion when known. Each line has machine, session id, project, title, last update and the last thing the agent said. Known Claude Code switch states appear as ultracode=on/off; an omitted state is unknown. ultracode=on means every substantive task runs a multi-agent dynamic workflow, independently of thinking effort. Let it finish and wait for workflow results without nudging it. Much faster and more accurate than ssh + herdr. At the end: the launchers that failed their last health check, by machine (agent_start and task_plan move off them).\n\nA line under an agent is something waiting for the user: a question lists its options and the interaction id to answer it with (interaction_answer), an approval is the user's to give in the app.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -516,10 +516,12 @@
             "working",
             "unread",
             "idle",
+            "done",
+            "muted",
             "archived",
             "all"
           ],
-          "description": "default active = needs_you + working + unread; archived: only the archived sessions (agent_unarchive restores them); the others leave archived ones out, all lists them marked archived"
+          "description": "default active = needs_you + working + unread; done = finished work in the last 24 hours; muted = muted agents in the live snapshot categories; archived: only the archived sessions (agent_unarchive restores them); the others leave archived ones out, all lists them marked archived"
         },
         "machine": {
           "type": "string"
@@ -2324,38 +2326,6 @@
           "description": "evidence links: PRs, deployed pages, documents; the first is shown first"
         }
       }
-    }
-  },
-  {
-    "name": "jarvis_settings",
-    "description": "Read and change Persona's own settings for the user: their inbox sorting rules, how their inbox items link to their tasks, 关于我 (what you know about them), your default launcher (model), their mail accounts, which Claude Code config directories each machine keeps out of Agents, and each extension's settings (extension.\u003cid\u003e: what Settings › Extensions shows, like turning one of its features on). Start with action list (what there is, what each takes); get reads one. set / add / remove put a card on the user's phone that says what changes (before → after) and nothing changes until they approve; what the card needs filled in, like a mail password, the user types there, so never ask for passwords in the conversation. Change only what the user asked for.",
-    "input_schema": {
-      "type": "object",
-      "properties": {
-        "action": {
-          "type": "string",
-          "enum": [
-            "list",
-            "get",
-            "set",
-            "add",
-            "remove"
-          ],
-          "description": "default list"
-        },
-        "key": {
-          "type": "string",
-          "description": "the setting, from list (inbox.rules, mail.accounts, extension.\u003cid\u003e…)"
-        },
-        "value": {
-          "description": "set: the new value; add: the item (each setting's list entry says what)"
-        },
-        "id": {
-          "type": "string",
-          "description": "remove: which item (from get)"
-        }
-      },
-      "additionalProperties": false
     }
   },
   {
