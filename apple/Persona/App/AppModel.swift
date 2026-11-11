@@ -2164,9 +2164,16 @@ final class AppModel {
     /// This device's answer to the card is on its way (the card is hidden meanwhile).
     func isAnswering(_ uid: String) -> Bool { answering.contains(uid) }
 
-    func resolve(_ ix: Interaction, _ r: Resolution) async {
+    /// `handoffCard`: the hand-off card's own buttons answer; an approval of one from anywhere else is refused here, as
+    /// the hub would refuse it (`SecretHandoff`).
+    func resolve(_ ix: Interaction, _ r: Resolution, handoffCard: Bool = false) async {
         // To the hub of the interaction's own group (docs/protocol/multi-hub.md「Connections and routing」).
         guard canAnswer(ix), let api = api(ix.group) else { return }
+        let handoff = ix.isSecretHandoff && r.allow == true
+        if handoff && !handoffCard {
+            toast = Toast(String(localized: "Approve it on its card in the chat."), style: .error)
+            return
+        }
         // No network: the card stays as it is (taking it away and bringing it back a moment later read as "done").
         guard connection.networkUp else { notDone(); return }
         interactions[ix.uid] = nil
@@ -2178,7 +2185,7 @@ final class AppModel {
         // to a minute (OpRetry.limit), then comes back with the error.
         let op = UUID()
         do {
-            let res = try await OpRetry.untilDelivered { try await api.resolve(ix.id, r, opID: op) }
+            let res = try await OpRetry.untilDelivered { try await api.resolve(ix.id, r, opID: op, handoffCard: handoff) }
             if res.already == true, let existing = res.resolution, existing.answeredBy == AssistantAnswer.assistant, ix.kind == .question {
                 // The assistant answered first: its answer shows in the chat, where the user may change it.
                 keepDelegated(ix, AssistantAnswer(answers: existing.answers ?? [:], reason: existing.reason ?? ""))
