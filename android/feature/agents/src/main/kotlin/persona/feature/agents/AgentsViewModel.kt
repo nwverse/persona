@@ -650,12 +650,18 @@ internal class AgentsViewModel(
     fun foldAll(fold: Boolean) {
         previous = null
         settings.update { it.copy(
-            folded = if (fold) (page.value.list.groups.map { group -> group.id } + page.value.list.machines.map { machine -> machine.id }).toSet()
+            // The sections, on top of what is folded: a computer heading stays as it is, as iOS's Collapse All (#4338 A11).
+            folded = if (fold) it.folded + page.value.list.groups.map { group -> group.id }
                 else if (page.value.settings.grouping == AgentGrouping.State) setOf(StateSeenOpened) else emptySet(),
             expandedQuiet = if (fold) emptySet() else page.value.list.groups.filter { group -> group.parent == "quiet" }.map { group -> group.id }.toSet(),
         ) }
         saveFolds()
         if (!fold) localChange { preferences.openAllTabs() }
+    }
+    /** A section's rows past [AgentRowCap]: all of them ([open]), or the first ones again. */
+    fun showAll(group: AgentListGroup, open: Boolean) {
+        val key = AgentRowCap.key(group.id)
+        settings.update { it.copy(expandedIdle = if (open) it.expandedIdle + key else it.expandedIdle - key) }
     }
     fun showIdle(group: AgentListGroup) {
         val key = when {

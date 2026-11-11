@@ -387,6 +387,17 @@ fun buildFlatAgentList(
 private fun repoTitle(name: String): CoreText = if (name == UnnamedRepo) CoreText.of(Key.RepoOther) else CoreText.plain(name)
 
 /** "By to-do"'s sections that are not a to-do: agents opened by hand, then those on none. */
+/**
+ * A long run of a section's rows (iOS `AgentRowCap`): the first [ROWS], then "Show All N"; a run only a few over the cap
+ * shows them all (no "Show All 22").
+ */
+object AgentRowCap {
+    const val ROWS = 20
+    fun capped(count: Int, cap: Int = ROWS): Int? = if (count <= cap + 5) null else cap
+    /** In `expandedIdle` while the section [groupId] shows all its rows. */
+    fun key(groupId: String) = "all:$groupId"
+}
+
 const val TodoManualGroup = "todo/manual"
 const val TodoNoneGroup = "todo/none"
 /** In `expandedIdle` once the user opened "No to-do", which is folded by default under to-dos. */
