@@ -491,13 +491,15 @@ private fun TodoTriageRow(
         JCard(modifier = Modifier.fillMaxWidth(), onClick = onOpen) {
             Column(Modifier.padding(Tokens.Space.m), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                    // TalkBack reads the tick as a checkbox named by what a tap does, with its checked state (#4077)
+                    // TalkBack reads the tick as a "Done" checkbox whose checked state says whether it is done, and the
+                    // double-tap hint says what a tap does: Done or Reopen (#4077)
+                    val tickName = stringResource(R.string.agents_todo_done_action)
                     val tickLabel = stringResource(if (finished) R.string.agents_todo_reopen else R.string.agents_todo_done_action)
                     Box(
                         Modifier.size(Tokens.Space.xxl).clip(CircleShape)
                             .clickable(onClickLabel = tickLabel, role = Role.Checkbox) { onDone(todo, !finished) }
                             .semantics {
-                                contentDescription = tickLabel
+                                contentDescription = tickName
                                 toggleableState = ToggleableState(finished)
                             },
                         contentAlignment = Alignment.Center,
