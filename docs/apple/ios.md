@@ -1152,7 +1152,7 @@ iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and
   | A value or state changes in place (toggle, tone, selection, a menu or card opening) | `state` / `standard`: `.snappy` 0.25 |
   | Things take new places (rows in, out or reordered) | `layout`: `.smooth` 0.3 |
   | A block grows in place and the eye follows its rows | `expand`: `.smooth` 0.4 |
-  | Something opens in the chat, or closes | `.unfolding`: `reveal` easeOut 0.28, `conceal` easeIn 0.2 |
+  | Something opens in the chat, or closes | Opens: `.unfolding`, `reveal` easeOut 0.28, a fade over all the space it takes; closes: at once, its space with it (#3005) |
   | A number changes | `.contentTransition(.numericText)` |
   | The finger lets go of a drawer / of something it dragged aside | `drawer(velocity:)` (no bounce) / `springBack` |
   | Moving with the keyboard | `keyboard` (the system's spring) |

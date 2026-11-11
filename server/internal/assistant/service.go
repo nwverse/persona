@@ -113,18 +113,19 @@ type Service struct {
 	// interrupts: the interrupted receipts re-sent when their tasks change (interruptions.go).
 	interrupts interruptBook
 
-	titles    titleBook     // titles.go
-	prefs     settingsBook  // profile.go
-	main      mainBook      // start.go
-	archived  archiveBook   // conversations.go
-	origins   originBook    // origins.go
-	guests    guestBook     // guest.go
-	relays    relayBook     // conversations.go
-	avail     availBook     // availability.go
-	quiet     quietBook     // quiet.go
-	supervise superviseBook // supervise_signals.go
-	preempt   preemptBook   // owner_preempt.go
-	tbriefs   taskBriefBook // task_brief.go
+	titles     titleBook       // titles.go
+	agentNames agentNamingBook // agent_naming.go
+	prefs      settingsBook    // profile.go
+	main       mainBook        // start.go
+	archived   archiveBook     // conversations.go
+	origins    originBook      // origins.go
+	guests     guestBook       // guest.go
+	relays     relayBook       // conversations.go
+	avail      availBook       // availability.go
+	quiet      quietBook       // quiet.go
+	supervise  superviseBook   // supervise_signals.go
+	preempt    preemptBook     // owner_preempt.go
+	tbriefs    taskBriefBook   // task_brief.go
 	// briefsOptional: task_plan takes a task without done_when / expect_minutes (briefRequired). Only the tests of
 	// what a plan does once it exists set it; the hub never does.
 	briefsOptional bool
@@ -708,6 +709,7 @@ func (s *Service) SessionsChanged(ctx context.Context, d DeviceSessions) {
 	s.nativeArchivesListed(d.MachineID) // agent_archive_native.go
 	s.followStarts(ctx, d)              // the app's starts, for launcher health (launcher_health_starts.go)
 	s.directionTreeSessions(d)          // an Agent of the direction tree may have moved (direction_tree.go)
+	s.agentNamesChanged(d)
 }
 
 func randomHex(n int) string {
