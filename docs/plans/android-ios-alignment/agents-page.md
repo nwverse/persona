@@ -121,6 +121,7 @@ Each becomes an iOS issue or a row in the intentional-differences list, decided 
 
 - Store folds per grouping in `AgentsState.kt`, as herdr tab folds already are.
 - `AgentsViewModel.kt` stops clearing `folded` in `query`, `range` and `grouping`; a search expands through a separate set that is dropped when the query clears.
+- Done (11-11): folds per grouping in DataStore (`AgentsPreferences.folds`), read on start and on a grouping change; a search stashes them and opens every fold, and restores them when it clears (`AgentsFoldAllTest`).
 
 ### A10
 

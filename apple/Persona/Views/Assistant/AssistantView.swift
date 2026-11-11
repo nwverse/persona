@@ -591,7 +591,7 @@ struct AssistantHome: View {
     var body: some View {
         ScrollView {
             if let pending {
-                FirstMessagePending(pending: pending, name: model.assistantDisplayName, shell: false, resend: resend, delete: delete)
+                FirstMessagePending(pending: pending, name: model.persona.name, shell: false, resend: resend, delete: delete)
                     // The page's height inside its margins, the message at its bottom (a long one runs up out of it, as the
                     // chat shows its newest end).
                     .containerRelativeFrame(.vertical, alignment: .bottom)
@@ -1022,7 +1022,7 @@ struct StarterComposer: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             if let shell {
-                ShellComposerBar(placeholder: String(localized: "Ask \(model.assistantDisplayName)"), text: textBinding, selection: $selection, focused: $focused,
+                ShellComposerBar(placeholder: String(localized: "Ask \(model.persona.name)"), text: textBinding, selection: $selection, focused: $focused,
                                  canSend: canSend, hasAttachments: !images.isEmpty || !videos.items.isEmpty || !quotes.isEmpty,
                                  modesTitle: StarterModesMenu.title(modes: shell, launchers: launchers, model: model),
                                  quotes: quotesBinding, history: "assistant.new", gate: gate, send: submit) {
@@ -1032,7 +1032,7 @@ struct StarterComposer: View {
                 }
                 .task(id: machine) { launchers = (try? await model.launchers(machine))?.filter(\.runsAssistant) ?? [] }
             } else {
-                ComposerRow(placeholder: placeholder ?? String(localized: "Ask \(model.assistantDisplayName)…"), text: textBinding, selection: $selection, focused: $focused, canSend: canSend,
+                ComposerRow(placeholder: placeholder ?? String(localized: "Ask \(model.persona.name)…"), text: textBinding, selection: $selection, focused: $focused, canSend: canSend,
                             send: submit, history: "assistant.new", gate: gate) {
                     attachments
                 }
@@ -1160,7 +1160,7 @@ struct BeautifulStarterComposer: View {
             }
             #endif
             if !images.isEmpty { ComposerImages(images: imagesBinding) }
-            PromptComposer(placeholder: placeholder ?? String(localized: "Ask \(model.assistantDisplayName)…"), text: textBinding, selection: $selection, focused: $focused,
+            PromptComposer(placeholder: placeholder ?? String(localized: "Ask \(model.persona.name)…"), text: textBinding, selection: $selection, focused: $focused,
                            hasAttachments: !images.isEmpty || !videos.items.isEmpty || !quotes.isEmpty, disabled: disabled,
                            attach: PromptItems.attachments(camera: false),
                            mentions: { PromptItems.sessions(model.sessionsNow, except: nil) },
