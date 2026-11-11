@@ -608,7 +608,8 @@ private const val BoardBayPeek = 0.4f
 
 /** One quick filter: a label, its count, and the status it filters by. */
 @Immutable
-data class Bay(val label: String, val count: Int? = null, val status: Status? = null)
+/** A quick filter: its words, count and state ([status]'s dot, or [icon] in its color: Waiting in the background's clock). */
+data class Bay(val label: String, val count: Int? = null, val status: Status? = null, val icon: persona.core.designsystem.icons.PhIcon? = null)
 
 /**
  * The quick filters of a list. Glass shows glass chips; brief underlined tabs; the board a counter board with

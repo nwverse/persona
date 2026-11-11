@@ -47,7 +47,7 @@ The Agents page on Android shows the same sessions as on iOS, in the same groupi
 
 **A11. Smaller differences.**
 
-- A "Waiting in the background" quick filter, and the selected chip in its own state's color (Android always tints it like Needs You).
+- A "Waiting in the background" quick filter, and the selected chip in its own state's color (Android always tints it like Needs You). Done (11-12): `AgentQuickFilter.BackgroundWaiting` with its clock, out of Working's count (a paged list takes the hub's `background_waiting` out of working); the Glass home's chosen chip takes its state's color (`ByStatusTest`, `ByStatusShotsTest`). Its lighter tone is still to come.
 - Collapse All keeps the computer headings open.
 - A long list shows 20 rows, then "Show All N".
 - Sort only under By Status.
