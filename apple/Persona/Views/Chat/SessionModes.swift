@@ -308,6 +308,17 @@ struct SessionModesMenu: View {
         Section("Model [Assistant View c98e11]") {
             if picksModel {
                 let list = RunningModelLists.shared.models(key, session)
+                // First, next to the button the menu opens up from: a launcher's list can be long enough to scroll
+                // (#3754), and the last item would be out of reach at the far end.
+                if let otherModel {
+                    // Goes through POST …/modes (the node's checks), not a typed `/model` message.
+                    let busy = SessionModes.modelBusy(session)
+                    Button(action: otherModel) {
+                        Label { Text("Other Model…"); if let busy { Text(busy) } } icon: { ThemedIcon(Theme.Icon.keyboard) }
+                    }
+                    .disabled(busy != nil)
+                    .accessibilityIdentifier("sessionModes.otherModel")
+                }
                 // A typed model (#1644) is a row of its own, by its ID: no alias is ticked for it, and Default switches back.
                 Picker("Model [Assistant View c98e11]", selection: Binding(get: { PromptItems.runningModelID(session?.model, list: list) }, set: { id in
                     guard case .send(let text) = PromptItems.modelPick(id, running: session?.model, list: list) else { return }
@@ -318,15 +329,6 @@ struct SessionModesMenu: View {
                     }
                 }
                 .pickerStyle(.inline)
-                if let otherModel {
-                    // Goes through POST …/modes (the node's checks), not a typed `/model` message.
-                    let busy = SessionModes.modelBusy(session)
-                    Button(action: otherModel) {
-                        Label { Text("Other Model…"); if let busy { Text(busy) } } icon: { ThemedIcon(Theme.Icon.keyboard) }
-                    }
-                    .disabled(busy != nil)
-                    .accessibilityIdentifier("sessionModes.otherModel")
-                }
             } else {
                 Text(SessionModes.modelName(session?.model) ?? String(localized: "Unknown model")) // what it runs; changed where it was started
             }
