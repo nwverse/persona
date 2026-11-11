@@ -223,3 +223,172 @@ func TestGuestRelayTellsTheHub(t *testing.T) {
 		}
 	}
 }
+
+// A meeting's room (#3862): started under the id the hub gives, never the warm spare, its tools and kind kept in its
+// state; every process it runs in has a guest's flags plus only the project's settings sources and the room's own
+// --settings, which excludes the CLAUDE.md files of every directory above it and turns auto-memory off. A start under
+// an id the node already has is that conversation: nothing is sent again.
+func TestMeetingRoomStartsUnderItsID(t *testing.T) {
+	fakeClaudeHome(t, "for a in \"$@\"; do printf ' [%s]' \"$a\"; done > \"$HOME/args-$$\"\nread line\necho '{\"type\":\"system\",\"subtype\":\"init\"}'\nsleep 30\n")
+	n := codexTestNode(t)
+	n.dir = filepath.Join(os.Getenv("HOME"), ".persona")
+	if err := os.MkdirAll(n.dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	withFakeHub(t, n)
+	rec := "0f8fad5b-d9cb-469f-a165-70867728950e"
+	out, err := n.assistantGuestPrepare(json.RawMessage(`{"dir":".persona/guest-meeting/` + rec + `","claude_md":"# room","kind":"meeting"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prep := out.(map[string]any)
+	cwd, _ := prep["cwd"].(string)
+	if prep["kind"] != guestMeeting || prep["start_ids"] != true || !strings.HasSuffix(cwd, filepath.Join("guest-meeting", rec)) {
+		t.Fatalf("prepare = %v", prep)
+	}
+	for _, bad := range []string{`{"dir":".persona/guest","kind":"meeting"}`, `{"dir":".persona/guest-meeting/x","kind":"meeting"}`,
+		`{"dir":".persona/guest-meeting/` + rec + `","kind":"other"}`} {
+		if _, err := n.assistantGuestPrepare(json.RawMessage(bad)); err == nil {
+			t.Errorf("%s accepted", bad)
+		}
+	}
+
+	room := "7d4a3c1e-1111-4222-8333-444455556666"
+	tools := []string{"meeting_lines", "meeting_earlier"}
+	ctx := withNewID(withGuestKind(context.Background(), tools, guestMeeting), room)
+	id, err := n.assistantSend(ctx, "", cwd, "claude", "the meeting's header", nil, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { n.stopAssistant(id) })
+	if id != room {
+		t.Fatalf("started as %s, want %s", id, room)
+	}
+	if st, _ := n.state.get(id); !slices.Equal(st.Guest, tools) || st.GuestKind != guestMeeting || st.Cwd != cwd {
+		t.Fatalf("state = %+v", st)
+	}
+	if !n.knowsConversation(room) {
+		t.Fatal("the node does not know the room it started")
+	}
+	var line string
+	deadline := time.Now().Add(5 * time.Second)
+	for line == "" && time.Now().Before(deadline) {
+		files, _ := filepath.Glob(filepath.Join(os.Getenv("HOME"), "args-*"))
+		for _, f := range files {
+			if raw, _ := os.ReadFile(f); strings.Contains(string(raw), "["+id+"]") {
+				line = string(raw)
+			}
+		}
+		if line == "" {
+			<-time.After(20 * time.Millisecond) // the process writes its arguments as it starts
+		}
+	}
+	for _, want := range []string{"[--tools] []", "[--strict-mcp-config]", "[--setting-sources] [project]", "[--session-id] [" + room + "]",
+		"[--allowedTools] [" + strings.Join(compat.MCPToolNames(tools), ",") + "]"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("the room's process has no %s: %s", want, line)
+		}
+	}
+	_, after, _ := strings.Cut(line, "[--settings] [")
+	settingsPath, _, _ := strings.Cut(after, "]")
+	if filepath.Base(settingsPath) != "assistant-room-"+room+".json" {
+		t.Fatalf("the room's own settings are not its --settings: %s", line)
+	}
+	raw, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings struct {
+		Excludes []string          `json:"claudeMdExcludes"`
+		Env      map[string]string `json:"env"`
+	}
+	if err := json.Unmarshal(raw, &settings); err != nil {
+		t.Fatal(err)
+	}
+	home := os.Getenv("HOME")
+	for _, want := range []string{filepath.Join(home, "CLAUDE.md"), filepath.Join(home, ".persona", "CLAUDE.md"),
+		filepath.Join(home, ".claude", "CLAUDE.md"), filepath.Join(filepath.Dir(cwd), "CLAUDE.md")} {
+		if !slices.Contains(settings.Excludes, want) {
+			t.Errorf("%s is not excluded: %v", want, settings.Excludes)
+		}
+	}
+	if slices.Contains(settings.Excludes, filepath.Join(cwd, "CLAUDE.md")) || settings.Env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] != "1" {
+		t.Errorf("settings %s", raw)
+	}
+	if meetingRoomArgs()[0] != "--setting-sources" {
+		t.Fatal("args changed")
+	}
+}
+
+// assistant.send with new_session_id: an id the node has is that conversation, answered without sending anything;
+// one that is not a session id is refused, as is a new id beside a session's.
+func TestNewSessionIDStartsOnce(t *testing.T) {
+	n := codexTestNode(t)
+	room := "7d4a3c1e-1111-4222-8333-444455556666"
+	n.state.put(room, sessionState{Launcher: "claude", Guest: []string{"meeting_lines"}, GuestKind: guestMeeting})
+	out, err := n.handle(context.Background(), "assistant.send", json.RawMessage(`{"new_session_id":"`+room+`","text":"again","guest":{"tools":["meeting_lines"],"kind":"meeting"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := out.(map[string]any); m["session_id"] != room || m["existed"] != true {
+		t.Fatalf("answer %v", m)
+	}
+	if _, err := n.handle(context.Background(), "assistant.send", json.RawMessage(`{"new_session_id":"not an id","text":"x"}`)); err == nil {
+		t.Error("a bad id accepted")
+	}
+	if _, err := n.handle(context.Background(), "assistant.send", json.RawMessage(`{"session_id":"`+room+`","new_session_id":"`+room+`","text":"x"}`)); err == nil {
+		t.Error("a new id beside a session's accepted")
+	}
+	if _, err := n.handle(context.Background(), "assistant.send", json.RawMessage(`{"text":"x","guest":{"tools":["meeting_lines"],"kind":"other"}}`)); err == nil {
+		t.Error("an unknown guest kind accepted")
+	}
+}
+
+// assistant.guest_delete removes a room's transcript, what Claude Code kept beside it and its directory; it refuses a
+// session that is not a meeting's room, and what is gone already is no error.
+func TestGuestDeleteRemovesOnlyARoom(t *testing.T) {
+	n, home := testNode(t)
+	n.dir = filepath.Join(home, ".persona")
+	rec := "0f8fad5b-d9cb-469f-a165-70867728950e"
+	rel := ".persona/guest-meeting/" + rec
+	dir := n.assistantDirOf(rel)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	room, other := "7d4a3c1e-1111-4222-8333-444455556666", "8e5b4d2f-2222-4333-8444-555566667777"
+	projects := filepath.Join(home, ".claude", "projects")
+	roomProject := filepath.Join(projects, claudeProjectName(dir))
+	otherProject := filepath.Join(projects, "-home-me-code")
+	for _, p := range []string{filepath.Join(roomProject, room+".jsonl"), filepath.Join(roomProject, room, "tool-results", "x.txt"), filepath.Join(otherProject, other+".jsonl")} {
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("{}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n.state.put(room, sessionState{Launcher: "claude", Cwd: dir, Guest: []string{"meeting_lines"}, GuestKind: guestMeeting})
+	n.state.put(other, sessionState{Launcher: "claude", Cwd: "/home/me/code"})
+
+	if _, err := n.assistantGuestDelete(json.RawMessage(`{"dir":"` + rel + `","session_id":"` + other + `"}`)); err == nil {
+		t.Fatal("deleted a conversation that is not the room")
+	}
+	if _, err := os.Stat(filepath.Join(otherProject, other+".jsonl")); err != nil {
+		t.Fatalf("the other conversation's transcript: %v", err)
+	}
+	if _, err := n.assistantGuestDelete(json.RawMessage(`{"dir":".persona/guest","session_id":"` + room + `"}`)); err == nil {
+		t.Fatal("a directory that is not a room's accepted")
+	}
+	out, err := n.assistantGuestDelete(json.RawMessage(`{"dir":"` + rel + `","session_id":"` + room + `"}`))
+	if err != nil || out.(map[string]any)["deleted"] != true {
+		t.Fatalf("delete %v %v", out, err)
+	}
+	for _, gone := range []string{filepath.Join(roomProject, room+".jsonl"), filepath.Join(roomProject, room), dir} {
+		if _, err := os.Stat(gone); !os.IsNotExist(err) {
+			t.Errorf("%s is still there: %v", gone, err)
+		}
+	}
+	if _, err := n.assistantGuestDelete(json.RawMessage(`{"dir":"` + rel + `","session_id":"` + room + `"}`)); err != nil {
+		t.Errorf("deleted again: %v", err)
+	}
+}

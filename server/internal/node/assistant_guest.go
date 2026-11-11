@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/nwverse/persona/server/internal/compat"
-	"github.com/nwverse/persona/server/internal/lazyre"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
+
+	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Guest conversations (the hub's assistant/guest.go, docs/assistant/assistant.md ("Guest conversations")): an assistant conversation that
@@ -37,34 +39,96 @@ func checkGuestTools(tools []string) error {
 	return nil
 }
 
-// guestParams is assistant.send's guest: the tools of Persona's it may use.
+// guestParams is assistant.send's guest: the tools of Persona's it may use, and its kind ("" an extension's,
+// guestMeeting a meeting's room).
 type guestParams struct {
 	Tools []string `json:"tools"`
+	Kind  string   `json:"kind,omitempty"`
 }
+
+// guestMeeting is the kind of a meeting's room conversation (docs/assistant/meeting-minutes.md "The room
+// conversation"): its own directory below guestMeetingDir, and nothing of the owner's Claude Code setup in any of its
+// processes (meetingRoomArgs).
+const guestMeeting = "meeting"
+
+// guestMeetingDir is where the rooms' directories are, one per meeting, relative to the home as the hub names them.
+var guestMeetingDir = compat.StateDir + "/guest-meeting"
 
 type guestKey struct{}
 
+type guestStart struct {
+	tools []string
+	kind  string
+}
+
 // withGuest marks ctx's assistant.send as starting a guest conversation with tools.
 func withGuest(ctx context.Context, tools []string) context.Context {
-	return context.WithValue(ctx, guestKey{}, tools)
+	return withGuestKind(ctx, tools, "")
+}
+
+// withGuestKind is withGuest for a guest of kind.
+func withGuestKind(ctx context.Context, tools []string, kind string) context.Context {
+	return context.WithValue(ctx, guestKey{}, guestStart{tools: tools, kind: kind})
 }
 
 func guestFrom(ctx context.Context) []string {
-	tools, _ := ctx.Value(guestKey{}).([]string)
-	return tools
+	g, _ := ctx.Value(guestKey{}).(guestStart)
+	return g.tools
+}
+
+func guestKindFrom(ctx context.Context) string {
+	g, _ := ctx.Value(guestKey{}).(guestStart)
+	return g.kind
+}
+
+type newIDKey struct{}
+
+// withNewID asks ctx's assistant.send for a new conversation to start it under id (new_session_id).
+func withNewID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, newIDKey{}, id)
+}
+
+func newIDFrom(ctx context.Context) string {
+	id, _ := ctx.Value(newIDKey{}).(string)
+	return id
+}
+
+// knowsConversation: the node has conversation id already (its state, a process, or its transcript): a start under it
+// is that conversation, not a second one.
+func (n *Node) knowsConversation(id string) bool {
+	if _, ok := n.state.get(id); ok {
+		return true
+	}
+	n.mu.Lock()
+	p := n.procs[id]
+	n.mu.Unlock()
+	return p != nil || n.transcriptPath(id) != ""
 }
 
 // errGuestAgent refuses a guest conversation anything but Claude Code on the CLI.
 var errGuestAgent = errors.New("a guest conversation runs on Claude Code only (its built-in tools can be taken away there)")
 
-// assistantGuestPrepare makes a guest conversation's directory and writes only its instructions there.
+// assistantGuestPrepare makes a guest conversation's directory and writes only its instructions there. A meeting's room
+// (kind meeting) gets a directory of its own below guestMeetingDir; the answer then says the node starts rooms
+// ("kind", "start_ids": a start under a given session id), which a hub needs before it opens one: an older node
+// answers neither.
 func (n *Node) assistantGuestPrepare(params json.RawMessage) (any, error) {
 	var a struct {
 		Dir      string `json:"dir"`
 		ClaudeMD string `json:"claude_md"`
+		Kind     string `json:"kind"`
 	}
 	if err := json.Unmarshal(params, &a); err != nil || a.Dir == "" || strings.Contains(a.Dir, "..") || filepath.IsAbs(a.Dir) {
 		return nil, errors.New("bad guest dir")
+	}
+	switch a.Kind {
+	case "":
+	case guestMeeting:
+		if !meetingRoomDir(a.Dir) {
+			return nil, errors.New("bad guest dir")
+		}
+	default:
+		return nil, fmt.Errorf("unknown guest kind %q", a.Kind)
 	}
 	dir, err := n.preparedDir(a.Dir)
 	if err != nil {
@@ -78,7 +142,143 @@ func (n *Node) assistantGuestPrepare(params json.RawMessage) (any, error) {
 			return nil, err
 		}
 	}
+	if a.Kind == guestMeeting {
+		return map[string]any{"cwd": dir, "kind": guestMeeting, "start_ids": true}, nil
+	}
 	return map[string]any{"cwd": dir}, nil
+}
+
+// meetingRoomDir: rel names one room's directory, guestMeetingDir/<recording id> (in either spelling of the state
+// directory).
+func meetingRoomDir(rel string) bool {
+	sub, ok := compat.StateSubpath(filepath.ToSlash(rel))
+	if !ok {
+		return false
+	}
+	parent, name := path.Split(sub)
+	return strings.Trim(parent, "/") == "guest-meeting" && uuidRe.MatchString(name)
+}
+
+var uuidRe = lazyre.New(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// assistantGuestDelete removes a meeting's room (assistant.guest_delete {dir, session_id}, at its transcript's cut or
+// with its recording): its process, its transcript and every file saved for it in its directory. Only a room's: the
+// session must be a meeting guest of this node, or (its state gone) have its transcript under the room's directory's
+// project; anything else is refused. Removing what is gone already is not an error.
+func (n *Node) assistantGuestDelete(params json.RawMessage) (any, error) {
+	var a struct {
+		Dir       string `json:"dir"`
+		SessionID string `json:"session_id"`
+	}
+	if err := json.Unmarshal(params, &a); err != nil || !meetingRoomDir(a.Dir) || !validID(a.SessionID) {
+		return nil, errors.New("bad room")
+	}
+	dir := n.assistantDirOf(a.Dir)
+	transcript := n.transcriptPath(a.SessionID)
+	st, known := n.state.get(a.SessionID)
+	switch {
+	case known && st.GuestKind == guestMeeting && filepath.Clean(st.Cwd) == filepath.Clean(dir):
+	case known:
+		return nil, errors.New("not this meeting's room")
+	case transcript != "" && filepath.Base(filepath.Dir(transcript)) != claudeProjectName(dir):
+		return nil, errors.New("not this meeting's room")
+	}
+	n.stopAssistant(a.SessionID)
+	if transcript != "" {
+		if err := os.Remove(transcript); err != nil && !os.IsNotExist(err) {
+			return nil, err
+		}
+		// What Claude Code keeps beside it (tool results, subagents).
+		if err := os.RemoveAll(strings.TrimSuffix(transcript, ".jsonl")); err != nil {
+			return nil, err
+		}
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return nil, err
+	}
+	return map[string]any{"deleted": true}, nil
+}
+
+// claudeProjectName is the name Claude Code gives the projects folder of the conversations run in dir.
+func claudeProjectName(dir string) string {
+	var b strings.Builder
+	for _, c := range filepath.Clean(dir) {
+		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' {
+			b.WriteRune(c)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	return b.String()
+}
+
+// guestKindOf is conversation id's guest kind ("" for none or an extension's guest).
+func (n *Node) guestKindOf(id string) string {
+	if id == "" {
+		return ""
+	}
+	st, _ := n.state.get(id)
+	return st.GuestKind
+}
+
+// meetingRoomArgs are what a room's process runs with besides a guest's flags, so that only the meeting CLAUDE.md
+// and what the node passes itself reach the model (docs/assistant/meeting-minutes.md "Nothing of the owner's Claude
+// Code setup"): only the project's settings sources (never the user's: their CLAUDE.md, hooks, output style,
+// plugins and permissions), and the room's own --settings, which carries the launcher's environment and excludes
+// every CLAUDE.md of the directories above the room's (~/CLAUDE.md…), which the project source would load too.
+func meetingRoomArgs() []string {
+	return []string{"--setting-sources", "project"}
+}
+
+// meetingRoomSettings adds to a room's settings s what keeps the owner's instructions out: the CLAUDE.md files of
+// every directory above cwd excluded, no auto-memory.
+func meetingRoomSettings(s map[string]any, cwd, home string) {
+	var excludes []string
+	for dir := filepath.Dir(filepath.Clean(cwd)); ; dir = filepath.Dir(dir) {
+		for _, name := range []string{"CLAUDE.md", "CLAUDE.local.md", filepath.Join(".claude", "CLAUDE.md")} {
+			excludes = append(excludes, filepath.Join(dir, name))
+		}
+		if dir == filepath.Dir(dir) {
+			break
+		}
+	}
+	if home != "" {
+		excludes = append(excludes, filepath.Join(home, ".claude", "CLAUDE.md"))
+	}
+	if cfg := os.Getenv("CLAUDE_CONFIG_DIR"); cfg != "" {
+		excludes = append(excludes, filepath.Join(cfg, "CLAUDE.md"))
+	}
+	s["claudeMdExcludes"] = excludes
+	env, _ := s["env"].(map[string]any)
+	if env == nil {
+		env = map[string]any{}
+	}
+	env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
+	s["env"] = env
+}
+
+// meetingRoomSettingsFile writes room id's settings: settings (a file or JSON, "" for none) with meetingRoomSettings.
+func (n *Node) meetingRoomSettingsFile(id, cwd, settings string) (string, error) {
+	s := map[string]any{}
+	if settings != "" {
+		var err error
+		if s, err = readLauncherSettings(settings, cwd, n.home); err != nil {
+			if !os.IsNotExist(err) {
+				return "", err
+			}
+			s = map[string]any{}
+		}
+	}
+	meetingRoomSettings(s, cwd, n.home)
+	b, err := json.Marshal(s)
+	if err != nil {
+		return "", err
+	}
+	dir := n.dir
+	if dir == "" {
+		dir = filepath.Join(n.home, ".persona")
+	}
+	return writeSettings(dir, "assistant-room-"+id+".json", b)
 }
 
 // guestOf is conversation id's guest tools (nil: not a guest).

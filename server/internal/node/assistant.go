@@ -3,6 +3,7 @@ package node
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -256,9 +257,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		isMain = st.IsMain
 	}
 	// A guest conversation (assistant_guest.go): a new one asked for, or one that is.
-	guest := st.Guest
+	guest, guestKind := st.Guest, st.GuestKind
 	if !resume {
-		guest = guestFrom(ctx)
+		guest, guestKind = guestFrom(ctx), guestKindFrom(ctx)
 	}
 	if guest != nil {
 		if resume {
@@ -333,8 +334,11 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	var p *assistantProc
 	if id == "" && guest != nil {
 		// Never the warm spare: it was started with the assistant's tools. Its process reads Guest from the state.
-		id = newUUID()
-		n.state.put(id, sessionState{Launcher: launcher, Cwd: cwd, Guest: guest})
+		// Under the id the hub asked for when it gave one (a meeting's room: made once, also across a restart).
+		id = cmp.Or(newIDFrom(ctx), newUUID())
+		n.state.put(id, sessionState{Launcher: launcher, Cwd: cwd, Guest: guest, GuestKind: guestKind})
+	} else if id == "" && newIDFrom(ctx) != "" && agent == "claude" {
+		id = newIDFrom(ctx) // never the spare either: it has an id of its own
 	} else if id == "" {
 		// The spare was started without --permission-mode, and bypassPermissions can't be switched to later.
 		if p = n.adoptSpareFor(cwd, launcher, mode, execution); p != nil {

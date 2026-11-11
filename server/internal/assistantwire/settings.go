@@ -43,6 +43,11 @@ const (
 	// its CLAUDE.md / AGENTS.md written; the assistant's connectors, CLIs and skills are left as they are. A node without
 	// it answers "unknown method": no guest conversation starts there.
 	DeviceAssistantGuestPrepare = "assistant.guest_prepare"
+	// DeviceAssistantGuestDelete: {dir, session_id} → {deleted}: a meeting's room removed at its transcript's cut or
+	// with its recording (docs/assistant/meeting-minutes.md "Deletion"): its process, transcript and directory. With
+	// kind meeting, assistant.guest_prepare answers {cwd, kind, start_ids} on a node that starts rooms; an older node
+	// answers {cwd} only, or "unknown method" for this one.
+	DeviceAssistantGuestDelete = "assistant.guest_delete"
 	// DeviceAssistantWarm: {cwd, launcher, …model} → {}: a process ready for the next new conversation.
 	DeviceAssistantWarm = "assistant.warm"
 	// DeviceAssistantMemory: {op, cwd, name?, content?} → the memory files (op list) or {}.
