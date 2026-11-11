@@ -345,6 +345,12 @@ For every component: use the design-system one, not a lookalike. Counts are appr
   `Dialog` (a bottom sheet on phones) with palette-style rows; no Share as Image row, as the web has no share card.
 - No shared bubble component exists. Messages, Tasks and Lark rebuild it with different paddings and gutters (DS-20).
 - Web: user bubble 14 px radius; replies unboxed. Android: 20 dp in Glass, max width 86%.
+- Model change divider (web, #5034, `ModelChangeDivider`): where an exchange's reply came from another model than the
+  previous visible reply, between that exchange's message and its reply: two `--line-strong` hairlines and a centered
+  pill chip (`⇄` 12 px, "Opus 5.5 → Sonnet 4.5", 11 px `--ink-3`, `--line-strong` border, `bg-page/50`, padding 10 × 4),
+  `role="separator"` with "Model changed from … to …"; not a control. Only the transcript's record of the replying model
+  counts, never the picker (`docs/web/web.md`, "Model change divider"). Follows cindy's model-only switch chip at the
+  user's request (2026-11-12), with model names instead of raw ids.
 
 ### 3.3 Cards and surfaces
 
@@ -440,6 +446,7 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
 - Busy sheets disable interactive dismissal. Detents and drag indicators are inconsistent (DS-22).
 - Confirmation sheets for Close and Delete agent exist because a system dialog was too wordy (`apple/Persona/DesignSystem/Components.swift:444`).
 - Web: dialog is a centered card, becomes a bottom sheet on phones. Android: `JSheet`.
+- **Image editor** (#4963, `ImageEditor`, tokens `Theme.ImageEdit`): a full-screen cover, dark in both appearances like the image viewer, Cancel and Done (or Select / Add to Message) in the top bar with Undo and Redo between them. Under the picture, a row of the shown tool's options (six ink swatches and a Line Width menu for Box and Pen; Rotate, an Aspect Ratio menu and Reset for Crop) over the tools row (Box, Pen, Crop as `.themedButton`, the one shown prominent, then Clear). Opened from the + panel, the panel's caption field and Send (`ComposerSurface`, `ComposerRoundButton`) sit under the tools. At large text sizes the tools show only their icons and the options row scrolls; no label wraps. One editor for the + panel, the composer's strip and the image viewer. Reason it is not a system sheet: the picture needs the whole screen and the drags in it must not pull a sheet down. The web's (#4991, `web/src/views/chat/ImageEditor.tsx`, measures `IMAGE_EDIT` in `web/src/lib/image-edit.ts`) has the same rows, tools and order: Undo and Redo as icons between Cancel and Done; Line Width shows the chosen line itself (the web has no line-weight glyph) and its menu rows lead with each width; Aspect Ratio shows the chosen shape's name; the tools and Crop's buttons drop their words when their row has no room (measured, as `ViewThatFits`); the menus are the web `Menu`, put inside the editor's layer (`container`) so they draw over it, dark.
 
 ### 3.7 Buttons
 
@@ -575,9 +582,11 @@ A dispatched task's Open link (#3711) is a compact row using existing typography
 | Horizontal drag between pages | pager with 3x resistance past the ends; flick above 300 pt/s or past half way |
 | Edge swipe back | system; the pan yields to it |
 | Swipe on a message (Agents) | quote, threshold 66 pt, with a VoiceOver "Quote" action |
-| Long press on a message | lifted menu with an action bar; a message only on this device ends it in a red Delete (Don't Send while it waits), Undo in a toast (#4626) |
+| Long press on a message | lifted menu with an action bar, over the whole page dimmed (a page's floating top bar included); a message taller than the room shows the part pressed and scrolls inside, the bar fixed; a selection handle held within `Theme.Lift.edgeScroll` of its top or bottom edge scrolls it on, up to `Theme.Lift.edgeScrollSpeed`; a message only on this device ends the bar in a red Delete (Don't Send while it waits), Undo in a toast (#4626) |
 | Hold the mic | cancel by sliding left, lock by sliding up |
 | Touch and hold the composer's + (iPhone) | system menu of the attach panel's More list; a tap still opens the panel, whose More tab is the plain alternative (#3225) |
+| Tap a photo in the + panel's grid | its ring (and a 45 pt corner round it) picks it, as before; the rest of the photo opens it in the image editor. VoiceOver's activation picks, Edit is an action (#4963) |
+| Drag in the image editor | Box and Pen draw (Box is the default tool); in Crop, a corner or edge within 22 pt resizes the crop, inside moves it. Crop's shapes, Rotate and Reset are the controls that need no drag (#4963). The web's the same in CSS pixels, a mouse's cursor showing which handle it would take (#4991) |
 | Link card drag | to 0.6 it stops blocking the chat; further down it closes |
 | Terminal cover drag | its bar follows the finger; past 140 pt or a fast flick it closes. The bar, with a 44 pt Close, is there in every state; with no terminal the whole area drags (#4328) |
 | Tap on a saved place's map | moves the place there (#4248); search and Use Current Location do the same without the gesture |
@@ -660,10 +669,20 @@ A computer's dev server opened from a chat (a forwarded port, `docs/web/preview.
 Tool execution is one summary line, never opens by itself, shows the latest text segment while running and the result when done, and expands by hand. iOS complies: `isOpen` ignores `live` (`apple/Persona/Views/Chat/ChatLines.swift:293`) and tool rows use `autoExpand: false`. The "latest segment only" half was not confirmed from code reading and needs a screenshot test.
 
 Subagent launch receipts, interim reports and final results belong under their launching tool, not in independent
-parent-chat message bubbles (#3378). Reuse the existing work summary and manually opened tool/report disclosures;
-keep each delivery separately inspectable, including its full text. Nonterminal `running` / `waiting` reports retain
-the existing progress presentation. Empty completion pointers update status without creating another report. The
+parent-chat message bubbles (#3378). Empty completion pointers update status without creating another report. The
 shared wire contract is in `docs/protocol/protocol.md` ("Subagent deliveries as tool results").
+
+**Task cards** (web, #5030; the owner asked that the subagent part of the chat follow cindy's `AgentTaskCard` exactly,
+which replaces the earlier grid, recent-steps list and side panel). A subagent call and a workflow call are each one
+full-width card where they were launched (`TaskCard`: a bordered `rounded-xl` surface, 12 px side padding): a 20 px
+round avatar, a small kind word ("Subagent"), the title on one line, the status word with its mark (Running, Completed,
+Failed, Stopped; only Failed is red), and a second line in the tertiary color: what ran it, a model chip (the model it
+actually ran on, short; never the requested one), tokens, tool uses, the time or "Running for …" each second. The head
+opens a subagent card in place (prompt, the latest result folded past four lines, last tool, output file), remembered
+per card; a workflow card's head opens the chat's Background dialog at its run. A subagent is never a conversation of
+its own (no panel, no page, no sidebar row). Like every tool call the cards sit inside the work summary, running or
+not (super rule 2; cindy's running cards outside it wait on #5047). Nested subagents are flat cards by start time. A card offers Stop only
+where the node can stop that task. iOS and Android still draw the earlier design (#5045).
 
 A tool row names its tool in words on iOS, the web and Android (#2986; Android `ToolNaming.kt`, #4339): Claude Code's tools have verbs of their own, another
 server's MCP tool reads "<Server> · <Tool>" ("GitHub · Create issue"), and any other name is humanized. Opened, a tool
@@ -695,6 +714,11 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   diff until Show All and four at the accessibility sizes, so the card's choices stay in view. A card that carries only the
   path (a Codex edit read off its terminal) shows the path as before.
 - **Buttons**: for a tool approval, in this order: Deny, Always Allow for This Session, Allow Once (primary). High-risk actions offer no "always" and ask twice.
+- **Secret hand-off (#3962)**: the card that hands a provider's secret values to one Agent run is a permission card with the tool
+  approval's title ("Waiting for your approval") and buttons (Deny, Always allow, Allow); its body names each variable with the
+  item it comes from, the Agent and its computer, where it runs and what it is asked, never a reference or a value. Like the
+  password card it is answered on the card only: no quick answer on a row, a notification, the Live Activity, the watch or
+  Siri, and no key approves it (`docs/extensions/secret-providers.md` "In the apps").
 - **Task-review decisions (web, #4808)**: reuse the answerable decision row, its recommendation tag, the `Button` action group and the draft's Later / Don't handle labels. The two secondary actions stay on a separate footer so they never displace the recommended choice; the footer follows the tray's scrolling edge and uses the existing 44 px button minimum. Later defers only this browser session and this review round. Don't handle persists a dismissal of this exact review, offers receipt-scoped Undo, leaves the task open and takes no option; a dismissed review cannot take its timed default. A new review is visible again. Old reviews without an acceptance ask show their original explanation and these same controls, never invented choices or an acceptance button with a made-up round. This is a requested correction to the existing row, not a new style or setting.
 - **Questions**: one at a time, with single choice, multiple choice, Other and voice. An unsent answer is kept as a draft per request.
 - **Everywhere at once**: the first decision on any surface (phone, web, notification, watch) wins. Every other entry updates at once, with a light haptic, and offers Undo where the action can be undone.
@@ -959,6 +983,24 @@ done, not applicable, or deviated (with the reason). It is short on purpose. The
 - [ ] Structure: in every grouping a session that needs the user is visible without opening anything; rows follow the work-item row; primary screens show no raw model IDs, session IDs, paths or engine names (sections 3.4, 5.6).
 - [ ] Review size: says whether the change is large or small (section 1.4); a large one has had a person look at its screenshots.
 - [ ] Performance (Apple clients): the review checklist in `docs/apple/performance.md` is pasted and marked; no new main-thread IO, expensive `@State` initial value or work in `body`, and a change to a hot path (chat list, composer, Agents list, pushes, launch, images) attaches before and after numbers.
+
+## Values a form fills in by itself (#4975)
+
+Where a form can work out a value from what the user already gave it (the web provider wizard's Claude Code tiers, read
+from the checked models), it fills the value in and marks it with a neutral **Auto** `Pill`, in the summary and on the
+field, with one line under them saying that automatic values follow what they were read from until the user changes
+one. A value the user picks is never filled in again, an empty one ("Same as default model") included. When what it was
+read from changes (a model unchecked, another default), only values still marked Auto follow, and one that no longer
+fits goes back to empty. Something already saved is never refilled when it is opened: when what it holds would read
+differently now, one line under the summary says what it suggests and **Apply** (the status line's action) takes it.
+The line warns (`--orange` with the warning mark) when the current value costs more for no reason, such as light
+requests running on the heaviest model while a lighter one is checked, and otherwise suggests (`--ink-2`). The summary
+is the inset well (`rounded-card`, `bg-inset`, `shadow-hairline`) with label / value rows; **Adjust** is an accent text
+button with `aria-expanded` that swaps the rows for their fields in place, and rarely changed fields stay under
+Advanced (principle 2). Reason: a default the product can work out should not wait behind a folded group (principle
+1), and an automatic value the user cannot tell from their own, or one that changes after they set it, would take
+control away from them (principle 3). This reuses the wizard's field, pill and status-line styles and adds no setting,
+style or motion.
 
 ## Codex speed controls (#3865)
 

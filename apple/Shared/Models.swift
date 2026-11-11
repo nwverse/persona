@@ -750,6 +750,13 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// When the hub saw it enter its current state (`state_since`).
     var stateSince: Date? = nil
     var queued: [String]?
+    /// The last this many queued messages came from other conversations and arrive when this turn ends (#4342).
+    var queuedRelayed: Int? = nil
+    /// The user's own messages come first; only these can be edited, reordered, deleted or sent now.
+    var ownQueuedCount: Int {
+        let count = queued?.count ?? 0
+        return count - min(max(queuedRelayed ?? 0, 0), count)
+    }
     /// Shells / subagents Claude left running in the background.
     var background: [BackgroundTask]?
     /// Bounded list summaries supply scalars instead of chat-only arrays. Nil means a complete/legacy row.
@@ -895,10 +902,18 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
 
     var hasSource: Bool { !(sourceKind ?? "").isEmpty }
     var canRead: Bool { !hasSource || capabilities?.read == true }
-    var canSend: Bool { !hasSource || capabilities?.send == true }
-    var canInterrupt: Bool { !hasSource || capabilities?.interrupt == true }
-    var canApprove: Bool { !hasSource || capabilities?.approve == true }
-    var canTerminal: Bool { !hasSource || capabilities?.terminal == true }
+    // An Agent's own row with capabilities is one the node says what it can do (a stopped Agent: read and terminal only,
+    // #4754); without them it can do everything, as before.
+    var canSend: Bool { capabilities.map(\.send) ?? !hasSource }
+    var canInterrupt: Bool { capabilities.map(\.interrupt) ?? !hasSource }
+    var canApprove: Bool { capabilities.map(\.approve) ?? !hasSource }
+    var canTerminal: Bool { capabilities.map(\.terminal) ?? !hasSource }
+    /// A stopped Agent (#4754): its conversation and terminal stay, it takes no messages; Resume on its terminal page runs
+    /// it again (node stopped.go).
+    var isStopped: Bool {
+        // "interrupted" (cut off by a restart) reads as unknown here; only the node's stopped rows carry capabilities.
+        !hasSource && !assistant && capabilities.map { !$0.send } == true && (status == .offline || status == .unknown)
+    }
     var canAttach: Bool { hasSource && capabilities?.attach == true && attached != true }
     /// Delete Chat (docs/protocol/protocol.md `DELETE /sessions`) only for one that is not running: offline, finished (seen or not) or unknown,
     /// not still starting, and not the assistant's (those archive). What the hub hides once deleted (`stillDeleted`).
@@ -977,6 +992,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
+        case queuedRelayed = "queued_relayed"
         case listWaiting = "waiting", listBackgroundCount = "background_count", listRunningSubagents = "running_subagents", listRunningWorkflows = "running_workflows"
         case listBackgroundTasksCount = "background_tasks_count", listWorkflowProgress = "workflow_progress"
         case title, cwd, status, launcher, model, agent, effort, efforts, capabilities, attached
@@ -1067,6 +1083,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         seenAt = try c.decodeIfPresent(Date.self, forKey: .seenAt)
         stateSince = try c.decodeIfPresent(Date.self, forKey: .stateSince)
         queued = try c.decodeIfPresent([String].self, forKey: .queued)
+        queuedRelayed = try c.decodeIfPresent(Int.self, forKey: .queuedRelayed)
         background = try c.decodeIfPresent([BackgroundTask].self, forKey: .background)
         listWaiting = try c.decodeIfPresent(Bool.self, forKey: .listWaiting)
         listBackgroundCount = try c.decodeIfPresent(Int.self, forKey: .listBackgroundCount)
