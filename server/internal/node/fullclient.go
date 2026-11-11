@@ -174,6 +174,7 @@ func (f *fullClient) emit(b []byte) {
 	f.sent += int64(len(b))
 	f.mu.Unlock()
 	if f.n.peer != nil {
+		b = f.n.scrubBytes(b) // base64 below: the connection's own hiding cannot see into it (secretenv.go)
 		_ = f.n.peer.Notify("herdr.client.data", map[string]any{"client_id": f.id, "data": base64.StdEncoding.EncodeToString(b)})
 	}
 }

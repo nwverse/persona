@@ -192,6 +192,8 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		resp = n.handleNotify(ctx, req)
 	case "launcher.env": // personad launch <name>
 		resp = n.launcherEnvFor(req)
+	case "secret.env": // personad launch --ticket (secretenv.go)
+		resp = n.secretEnvFor(req)
 	case "mcp.tools":
 		var res struct {
 			Tools []proto.Tool `json:"tools"`

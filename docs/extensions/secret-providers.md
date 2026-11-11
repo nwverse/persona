@@ -58,7 +58,37 @@ Code: `server/internal/assistant/launcher_secrets.go`, `server/internal/extmgr/s
 - **Kept** for 10 minutes in the manager's memory (never on disk), per reference, provider and computer, so a busy provider does not ask the extension at each pull. Dropped when that provider is saved or deleted, when the provider extension is switched off, upgraded or removed, and when any resolution of the reference fails. A use answered from what was kept is not another audit row.
 - **Details**: a provider's view answers `key_reference` and `machine_key_references: {"<machine id>": …}` (`{provider, provider_name, reference, title}`, as for an extension secret) and never the key; `has_key` and `key_machines` stay as they were. A provider extension's `secret_users` lists them as `{kind: "launcher", launcher, launcher_name, machine?, reference}` next to the extensions' secrets (`kind: "extension"`).
 
+## The hand-off to one Agent run
+
+Values handed to one Agent start after the user approves a card (#3962). The computer's side is in place
+(`server/internal/node/secretenv.go`, capability `secret_env`); the card, the Always rules and the hub's approval gate come next.
+
+- **Staged on the computer**: after the approval the manager that connects the computer resolves the references (purpose
+  `agent_run`) and sends `secret.stage {env: [{name, value}]}` over its own connection to the node, never through the hub. The node
+  keeps the values in memory for at most 2 minutes under a random one-time ticket, and the start carries only that ticket
+  (`session.start`'s `secret_ticket`, [protocol.md](../protocol/protocol.md) "hub ↔ node"). A computer this manager does not
+  connect, or a node without `secret_env`, is refused before the card.
+- **Into the process, not the pane**: the node starts Claude Code through `personad launch --ticket <ticket> <provider> …` (or
+  `-- claude …` for plain claude), which fetches the values from node.sock with the machine's launch key and the ticket, then
+  execs claude with them in its environment. They are never typed into a terminal, put on a command line or written to disk
+  by Persona; the start script holds only the ticket. The first fetch uses the ticket up, and an engine's resume after a
+  restart starts without them (its resume command has no ticket). Only a new Claude Code start whose command personad can
+  exec takes one: a Persona-managed provider or plain `claude`, not a launcher defined in the shell's rc file, Codex, other
+  agents or a runtime (`secret_env_agent`).
+- **Names**: 1 to 8 variables, environment variable names that are not the computer's or Persona's (`PATH`, `HOME`, `SHELL`,
+  `TMPDIR`, `LD_*`, `DYLD_*`, `LC_*`, `PERSONA_*`, `CLAUDE_CONFIG_DIR` and the like); values of 8 bytes to 16 KiB.
+- **Hidden in what the computer sends**: from staging until the node exits, it replaces each value (as it is, as JSON writes it
+  inside a string, and in base64) with `***` in every line it sends: transcript items, live text, screens, terminal frames,
+  cards and their tool input. This is best effort: a value split across two pieces of live text or terminal frames is not
+  found, a node restart forgets them, and an Agent that prints a value still writes it into its own transcript file on that
+  computer (as the node's queue of events kept while its manager is away does, before they are sent).
+
 ## What comes next (#3962)
 
-1. The hand-off to one Agent run: a reserved phone card naming the item, field, Agent and computer; values staged on the node over the manager's own connection (`secret.stage`), a one-time ticket in the start, a wrapper that puts them in the Agent's environment, the session's synced output scrubbed. Never cached.
-2. The web and iPhone clients; Android in #3986, which shows the hand-off card with "Approve on iPhone or the web" until then.
+1. The hand-off card and its Always rules (reference × launcher × computer, listed and removable in the provider's details),
+   `secret_env` on the assistant's `agent_start`, results per variable (`granted`, `declined`, `expired`, `failed`), never a value.
+   Only a full-access device whose client draws the card may approve it: the hub refuses any other approval (an answer-only
+   device, an extension, a client without the card's feature) with "Approve on iPhone or the web", and records the refusal.
+   Channels and the assistant cannot answer it.
+2. The web and iPhone clients. Android's part is #3986, which lists the interfaces it needs; until then an Android phone shows the
+   card as the hub sends it and cannot approve it.

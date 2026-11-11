@@ -58,6 +58,11 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	if kind != "claude" && kind != "codex" && kind != traexAgent && kind != ompAgent {
 		return nil, fmt.Errorf("unsupported agent type %q", kind)
 	}
+	if execution.SecretTicket != "" {
+		if err := n.secretStartProblem(kind, launcher, resume, execution.SecretTicket); err != nil {
+			return nil, err
+		}
+	}
 	if kind == ompAgent { // start_agent.go: omp's own command, and none of a Claude start's options
 		if launcher != ompAgent {
 			// Only the launcher named omp is known to run omp: another one (a Codex launcher, a provider of no omp
@@ -181,7 +186,11 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	// herdr told it is Claude (hostherdr.go): a launcher that wraps another binary is otherwise not seen as one. The
 	// node's directory in front, the assistant's environment left out (agentenv.go).
 	shells := paneShells(ctx, created)
-	cmd := withHerdrAgent(typedHerdrAgent(launch, "claude", shells...), n.claudeCommandLine(spec, args+modeFlags(mode, effort)+planThenFlags(mode, planThen), shellQuote))
+	line := n.claudeCommandLine(spec, args+modeFlags(mode, effort)+planThenFlags(mode, planThen), shellQuote)
+	if execution.SecretTicket != "" { // through personad launch --ticket; the spec herdr resumes with keeps none (secretenv.go)
+		line = n.withSecretTicket(line, launcher, execution.SecretTicket, shellQuote)
+	}
+	cmd := withHerdrAgent(typedHerdrAgent(launch, "claude", shells...), line)
 	cmd = n.agentCommand(cmd, shellQuote, shells...)
 	n.notePaneStart(launcher) // not in the agent sandbox unless a managed launcher (agentsandbox.go)
 	st := sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: time.Now().UTC(), Model: execution.Model, ModelFingerprint: execution.Fingerprint,

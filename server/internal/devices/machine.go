@@ -498,6 +498,10 @@ func (m *Machine) call(ctx context.Context, method string, params any, out any) 
 			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-ultracode.node_outdated")}
 		}
 	}
+	if (method == proto.MethodSecretStage || method == "session.start" && startHasSecretTicket(params)) && !nodeHas(info, nodeproto.SecretEnv) {
+		// An older node would ignore the ticket and start the Agent without the values the card gave it.
+		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_secret_env")}
+	}
 	if method == proto.MethodSecretRun && !nodeHas(info, nodeproto.SecretRun) {
 		// An older node would answer "unknown method"; this says what to do about it before the user types anything.
 		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_secret_run")}
@@ -851,4 +855,17 @@ func (m *Machine) isOnline() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.online
+}
+
+// startHasSecretTicket: session.start params carrying a hand-off's ticket.
+func startHasSecretTicket(params any) bool {
+	raw, err := json.Marshal(params)
+	if err != nil {
+		return true // cannot tell: treated as one, so an older node is refused rather than run without it
+	}
+	var fields struct {
+		Ticket string `json:"secret_ticket"`
+	}
+	_ = json.Unmarshal(raw, &fields)
+	return fields.Ticket != ""
 }
