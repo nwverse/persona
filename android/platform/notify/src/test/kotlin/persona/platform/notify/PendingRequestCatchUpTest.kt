@@ -132,9 +132,10 @@ class PendingRequestCatchUpTest {
         fixture.delivery.catchUp()
         assertEquals(listOf(otherRequest().id), fixture.posted.map { it.first.id })
 
+        // HTTP catch-up can finish before the desktops event: only a desktop known to be online mutes.
         val unknown = Fixture(listOf(request), emptyList(), settings = mapOf(null to settings))
         unknown.delivery.catchUp()
-        assertTrue(unknown.posted.isEmpty())
+        assertEquals(listOf(request.id), unknown.posted.map { it.first.id })
     }
 
     @Test fun inputAndMutedManagersAreScopedToTheirOwnHubGroup() = runBlocking {

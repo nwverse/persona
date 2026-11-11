@@ -99,7 +99,7 @@ internal class NotificationDelivery(
                 ix.id in alreadyNotified ||
                 (ix.manager ?: "assistant") in groupSettings.mutedManagers.orEmpty()
             ) return@forEach
-            if (groupSettings.muteWhileDesktop == true && desktopOnline(ix.machineId) != false) return@forEach
+            if (groupSettings.muteWhileDesktop == true && desktopOnline(ix.machineId) == true) return@forEach
             val session = ix.sessionKey.takeIf { it.machineId.isNotBlank() && it.sessionId.isNotBlank() }
             if (session != null && (suppressed(session) || quiet(session))) return@forEach
             postInteraction(ix, NotificationPolicy.hushForCatchUp(groupSettings.quiet, currentTime), groupSettings)
