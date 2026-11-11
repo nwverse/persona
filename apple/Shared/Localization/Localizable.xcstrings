@@ -24191,51 +24191,6 @@
       },
       "extractionState": "manual"
     },
-    "By Repository keeps its own tree of worktrees and agents.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "By Repository keeps its own tree of worktrees and agents."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "「按仓库」仍用它自己的工作树和 Agent 树。"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "「リポジトリ別」は独自のワークツリーとエージェントのツリーを使います。"
-          }
-        }
-      }
-    },
-    "By Repository keeps one line per agent": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "By Repository keeps one line per agent"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "リポジトリ別では各エージェントを 1 行で表示"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "按仓库分组时每个 Agent 一行"
-          }
-        }
-      }
-    },
     "By Rules": {
       "extractionState": "manual",
       "localizations": {
@@ -124401,28 +124356,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "上次交给的 Agent 已经结束，这次交给主对话"
-          }
-        }
-      }
-    },
-    "The Agents list is grouped By Repository: its tree keeps one line per agent. These styles show in the other groupings.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The Agents list is grouped By Repository: its tree keeps one line per agent. These styles show in the other groupings."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "エージェント一覧はリポジトリ別にグループ分けされています。ツリーでは各エージェントを 1 行で表示し、ここで選ぶスタイルは他のグループ分けで使われます。"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Agents 列表现在按仓库分组：仓库树每个 Agent 一行。这里的样式用于其他分组。"
           }
         }
       }
