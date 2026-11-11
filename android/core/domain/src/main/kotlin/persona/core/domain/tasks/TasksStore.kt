@@ -585,8 +585,13 @@ class TasksStore(
         // Shares acceptance's guard so contradictory actions cannot be submitted together.
         act("accept:$todoId", onError) {
             val current = _todos.value.firstOrNull { it.id == todoId }
-            val ask = current?.ask
-            if (current == null || ask == null || ask.askedAt != askedAt || ask.outcome != "decide" ||
+            if (current == null) {
+                // No hub answer yet is not proof that the round ended; load it and leave the action available.
+                if (synchronized(todosLock) { answered != null }) onChanged() else reloadTodos()
+                return@act
+            }
+            val ask = current.ask
+            if (ask == null || ask.askedAt != askedAt || ask.outcome != "decide" ||
                 expectedAsk != null && ask != expectedAsk || current.isDone || current.cancelledAt != null) {
                 onChanged()
                 return@act

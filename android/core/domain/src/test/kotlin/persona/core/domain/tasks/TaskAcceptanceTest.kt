@@ -190,6 +190,20 @@ class TaskAcceptanceTest {
             store.briefOutcomes.value[briefAcceptOutcomeKey(decision.id, decision.ask!!.askedAt)])
     }
 
+    @Test fun briefCompletionBeforeTodosLoadWaitsForTheCurrentRound() = runTest {
+        val api = Api(listOf(decision))
+        val store = TasksStore(api, Connection(), backgroundScope)
+        store.finishBrief(decision.id, decision.ask!!.askedAt, { throw it }); runCurrent()
+        assertTrue(api.patches.isEmpty())
+        assertNull(store.briefOutcomes.value[briefAcceptOutcomeKey(decision.id, decision.ask!!.askedAt)])
+        assertEquals(decision, store.todos.value.single())
+
+        store.finishBrief(decision.id, decision.ask!!.askedAt, { throw it }); runCurrent()
+        assertEquals(listOf(decision.id to true), api.patches)
+        assertEquals(BriefOutcome.Completed,
+            store.briefOutcomes.value[briefAcceptOutcomeKey(decision.id, decision.ask!!.askedAt)])
+    }
+
     @Test fun acceptedRoundCannotResurrectFromDelayedReadButANewAskSurvives() = runTest {
         val original = Todo("task", origin = "main", ask = TodoAsk(verdict = "Check the deployed page", askedAt = "2026-11-01T09:00:00Z"))
         val api = Api(listOf(original))

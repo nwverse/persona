@@ -68,7 +68,7 @@ import persona.core.domain.tasks.TasksStore
 /** The real assistant feed renders a hub brief, with native JVM captures rather than an emulator. */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-@Config(sdk = [35], qualifiers = "en-w400dp-h2400dp-xhdpi")
+@Config(sdk = [35], qualifiers = "en-w400dp-h2800dp-xhdpi")
 class BriefCardShotsTest {
     @get:Rule val rule = createComposeRule()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
@@ -84,8 +84,9 @@ class BriefCardShotsTest {
             {"id":"decision1","title":"Choose the rollout","verdict":"decide","outcome":"decide","recommend":"Canary first","asked_at":"2026-11-10T08:31:00Z","waited_s":180},
             {"id":"decision2","title":"Close the experiment","verdict":"decide","outcome":"decide","recommend":"Keep it","asked_at":"2026-11-10T08:32:00Z","waited_s":240}],
         "later":[{"id":"later1","title":"Document the migration?","waited_s":300,"machine_id":"box","session_id":"agent2"}],"later_total":1,
-        "progress":[{"id":"progress1","title":"Run the tests","stage":"verify","stage_kind":"general"},
-            {"id":"progress2","title":"Run the migration","stage":"verify","stage_kind":"code"}],"progress_total":2}}""")
+        "progress":[{"id":"progress1","title":"Run the tests","stage":"verify","stage_kind":"code"},
+            {"id":"progress2","title":"Run the migration","stage":"verify","stage_kind":"general"},
+            {"id":"progress3","title":"Run the future stage","stage":"future-stage","stage_kind":"code"}],"progress_total":3}}""")
 
     private class TestFailure(override val status: Int?) : RuntimeException("test failure"), HubCodedFailure {
         override val code: String? = null
@@ -180,7 +181,9 @@ class BriefCardShotsTest {
             rule.onNodeWithText("Run the tests").assertIsDisplayed()
             rule.onNodeWithContentDescription("Verified, In progress", substring = true).assertIsDisplayed()
             rule.onNodeWithText("Run the migration").assertIsDisplayed()
-            rule.onNodeWithText("verify").assertIsDisplayed()
+            rule.onNodeWithText("verify").assertDoesNotExist()
+            rule.onNodeWithText("Run the future stage").assertIsDisplayed()
+            rule.onNodeWithText("future-stage").assertIsDisplayed()
             rule.onAllNodes(isHeading()).assertCountEquals(5)
             val bitmap = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
             if (!d) light[s] = bitmap.copy(Bitmap.Config.ARGB_8888, false)

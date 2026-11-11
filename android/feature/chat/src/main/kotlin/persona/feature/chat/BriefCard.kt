@@ -293,9 +293,10 @@ private val briefStages = listOf(
 @Composable
 private fun BriefStage(row: BriefProgress) {
     val stage = row.stage?.trim()?.takeIf(String::isNotEmpty) ?: return
-    val current = if (row.stageKind == "code") -1 else briefStages.indexOfFirst { it.first == stage }
+    if (row.stageKind == "general") return // A general task does not have the six code-task stages.
+    val current = briefStages.indexOfFirst { it.first == stage }
     if (current < 0) {
-        // A newer hub's general stage, or an explicitly free-form code stage, keeps the hub's own words.
+        // A newer hub's stage keeps the hub's own words.
         BriefNote(stage)
         return
     }
