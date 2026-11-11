@@ -228,8 +228,8 @@
     <string name="settings_src_model_group_other">その他</string>
     <string name="settings_src_model_summary_separator">、</string>
     <string name="settings_src_model_follows">%1$sに従う</string>
-    <string name="settings_src_model_lark_separate">個別設定</string>
-    <string name="settings_src_model_lark_follow">Agentsに従う</string>
+    <string name="settings_src_model_agents_separate">個別設定</string>
+    <string name="settings_src_model_agents_follow">Agentsに従う</string>
     <string name="settings_src_model_follow_default">デフォルトに従う</string>
     <string name="settings_src_model_provider_hidden">%1$s（非表示）</string>
     <string name="settings_src_model_provider_unavailable">%1$s（現在は利用できません）</string>
@@ -360,7 +360,16 @@
     <string name="settings_src_messages_read_failed">メッセージの状態を読み取れません：%1$s</string>
     <string name="settings_src_messages_save_failed">変更できませんでした：%1$s</string>
     <string name="settings_src_messages_delete_failed">削除できませんでした：%1$s</string>
-    <string name="settings_src_messages_deleted">会話 %1$d 件、人 %2$d 人、受信トレイ %3$d 件を削除しました</string>
+    <string name="settings_src_messages_deleted">%1$s、%2$s、%3$sを削除しました</string>
+    <plurals name="settings_src_messages_deleted_chats">
+        <item quantity="other">会話 %1$d 件</item>
+    </plurals>
+    <plurals name="settings_src_messages_deleted_people">
+        <item quantity="other">人 %1$d 人</item>
+    </plurals>
+    <plurals name="settings_src_messages_deleted_inbox">
+        <item quantity="other">受信トレイ %1$d 件</item>
+    </plurals>
     <string name="settings_src_messages_guide_header">%1$s でアクセスを許可</string>
     <string name="settings_src_messages_that_mac">その Mac</string>
     <string name="settings_src_messages_recheck">再確認</string>

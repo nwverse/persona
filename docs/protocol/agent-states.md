@@ -34,7 +34,11 @@ forgotten. So a stopped session carries `awaits_reply` (`state` is unchanged; ol
   phrase when the close says there is nothing to decide (没有需要你拍板的问题; a real question mark before it still counts), nor a reply a newer message came after (the user already
   answered; a host's answer such as botmux's counts the same way when the host gives its time). Marks inside inline code and links end no sentence (`user?.name`,
   `…?w=1` ask nothing; the question keeps their words), an ASCII `?` only ends a sentence before a space or the line's end, and a Chinese sentence ending in
-  吗 asks even without its question mark (not 么 / 呢: "…为什么。" is a statement). The node marks the session `asks_read`; only without it (an older node, a
+  吗 asks even without its question mark (not 么 / 呢: "…为什么。" is a statement). A reply whose closeout
+  (`../assistant/agent-work.md` "Closeout") says `status="done"` with no `missing` and no `waiting` line asks nothing,
+  wherever its question stands (#4110, `closeout.WaitsOnNobody`): it is the Agent's own word that the turn waits on
+  nobody, so a closing question is conversation or an offer, as triage reads the same closeout. `not_done`, `blocked`,
+  `done` with something missing or waited for, and no closeout at all leave the words to decide, as before. The node marks the session `asks_read`; only without it (an older node, a
   host that does not say) the manager reads `last_text` itself, and only when it was not cut.
 - **Still waiting** (`awaits_reply`, the manager's): Unread or Seen, no pending interaction (that is Needs You), no model
   error, no background work or `/loop`, and either the triage says it waits on the user (not put off on its card:
@@ -93,6 +97,13 @@ Decisions (when herdr says `done` / `idle` / `unknown`; `blocked` and `working` 
 - **A dialog is open in the terminal** (#2553, `node/dialogstatus.go`): for a Claude still `done` / `idle` / `unknown` after the checks above (excluding botmux, those in Claude's agents list, and ones where Persona itself is operating a picker)
   in a herdr pane, node reads its screen in the background every 5 seconds (the list doesn't wait for the read). If the bottom is a dialog (`screen.Choosing`) it's recorded as `blocked`, `attention_reason` is the dialog's first line, and the "last said" in the App list and the assistant's `agents_list` shows that line.
   Why: Claude Code 2.1.309's auto mode billing notice blocked 3 Agents for several minutes; herdr reported done and Persona showed Unread.
+- **An allow Claude did not take** (#3752, `node/allowwatch.go`): whatever herdr says, `working` included. Once node hands a PermissionRequest
+  hook an allow (a terminal Agent's, not the assistant's), it reads the pane 1.5 s later; a dialog still at the bottom (`screen.DialogHead`) lists
+  the session as `blocked` with the dialog's first line as `attention_reason`, so the manager makes its screen card. The pane is read again every
+  3 s while the dialog stays, until it is gone (or after 3 minutes); keys pressed into the pane drop what was read at once.
+  Why: Claude Code 2.1.322 runs the PermissionRequest hooks for its own safety checks ("Dangerous rm operation …", asked in bypass mode too)
+  but ignores an allow for them. The phone's Always Allow closed the card, herdr kept saying working, and the dialog held the terminal with
+  nothing on the phone to answer it: every message was refused as `dialog_open`.
 
 - **Has hooks and `prompts > completed`**: Working, overriding herdr's `done`.
 - **Has hooks, `prompts == completed`, and a `Stop` was seen**: not working; a leftover spinner glyph in the terminal title doesn't count. Exception: if the transcript has a turn written after the `Stop` (with a 5-second grace for the closing lines) that hasn't ended,

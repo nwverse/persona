@@ -97,7 +97,8 @@ type Person struct {
 	SourceID  string    `json:"source_id"`
 	Connector string    `json:"connector,omitempty"`
 	Name      string    `json:"name"`
-	Note      string    `json:"note,omitempty"` // who they are to the owner, one line (AI)
+	Note      string    `json:"note,omitempty"`   // who they are to the owner, one line (AI)
+	Status    string    `json:"status,omitempty"` // empty or active | ignored | self
 	Chats     []string  `json:"chats,omitempty"`
 	Projects  []string  `json:"projects,omitempty"`
 	LastSeen  time.Time `json:"last_seen,omitempty"`
@@ -204,6 +205,9 @@ type Store struct {
 	recordingRemove   func(string) error         // per-store commit fault injection
 
 	dedupeMu sync.Mutex // projects/.dedupe.json's read-modify-write (dedupe.go)
+	// topicMu: a topic's points.json read-modify-write (the distill and merge steps, forgetting a source) and the
+	// sources' distill marks (topic_distill.go). Acquire before metaMu.
+	topicMu  sync.Mutex
 	ingestMu sync.Mutex // live identity filtering through attachment preparation and commit
 	// chatMu: a chat's read-modify-write of meta.json by the pipeline (Ingest, saveArchived, WriteHistory in history.go,
 	// and compression's write-back, putCompressed), so none writes back a stale copy over what another wrote. Each
@@ -224,7 +228,7 @@ type Store struct {
 }
 
 func NewStore(dir string) (*Store, error) {
-	for _, k := range []string{KindChat, KindPerson, KindProject, KindDoc, KindMeeting, KindEvent, KindRecording} {
+	for _, k := range []string{KindChat, KindPerson, KindProject, KindDoc, KindMeeting, KindEvent, KindRecording, KindTopic} {
 		if err := os.MkdirAll(filepath.Join(dir, k), 0o700); err != nil {
 			return nil, err
 		}

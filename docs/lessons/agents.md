@@ -2,6 +2,11 @@
 
 Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE.md`, index in `docs/lessons/README.md`). Add new lessons to the matching section; create a section if none fits.
 
+- A source-search query containing a colon is not necessarily a URL: Go's `url.Parse` treats `bug: login` and `is:open login` as schemes.
+  In `server/internal/node/worktree_composer.go`, only an explicit HTTP(S) prefix selects URL validation; other text remains a repository-scoped
+  search, even when it contains a URL later in the query. Regress through `worktree.source` and check the exact query sent to `github.listWorkItems`,
+  alongside numbered lookups, URL validation and rejection of links to another repository.
+
 - Task placement must preserve locality (#1175): a failed launcher check is not permission to move an explicitly targeted task to another computer with the original absolute directory. Persist fixed placement by default through preview, card edits and retries; require an explicit flexible policy for portable work. Returning from background dispatch only proves the work was queued, not that a native Agent received its first prompt.
 
 - A successful session deletion must survive a node reclassifying an unchanged offline transcript as `interrupted`. Apply persisted deletion notes to that status too, using machine/session ID and last-use time; neither a shared project name nor a missing worktree means another conversation was deleted (#5933).
@@ -70,6 +75,7 @@ Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE
 - AskUserQuestion: a PermissionRequest hook returning `decision.behavior: allow` + `updatedInput.answers` answers on the user's behalf (real pty on 2.1.319). Persona's PreToolUse lets the terminal dialog open and PermissionRequest waits for the phone; PostToolUse removes `answers` to find the call, then completes every waiter of its exact `tool_use_id` (including one that arrived before PermissionRequest). Don't complete by question text or an empty-id wildcard: a late receipt would cancel the next identical question. Keep the PreToolUse pairing by hook attempt: a resume must reuse its assignment, not consume a newer pending id, and overlapping first / resumed requests need the same binding. After a Node replacement, recover only an unambiguous recent transcript tool_use / tool_result; several possible calls hand that ambiguous generation to the terminal and withdraw its restored cards until each PostToolUse arrives, rather than guess or wait for an unmatchable Post. Standby replay must restore Pre / Permission / Post even when stale event reports are filtered, retained for the hook + reconnect lifetime, not the two-minute `hook.decided` dedup window. Don't route receipts through `decisions.decide`: after a phone answer they would be saved for and wrongly suppress that next question (#2382).
 - ExitPlanMode: uses PermissionRequest, not PreToolUse. `allow` must carry `updatedInput` + `updatedPermissions:[{type:setMode,...}]`
   to work; plain `{behavior:allow}` still shows the TUI dialog. `deny` + `message` delivers feedback to the model as tool_result.
+- A read-only `task_plan` task runs in plan mode to constrain tools, not to seek approval for implementation. Resolve its `ExitPlanMode` request with a denial and instructions to return findings before registering a card; allowing the exit would lift that constraint. Look up the task's saved `readonly` value, including a reused topic to-do whose plan carries its binding instead of `Todo.PlanID` (#3985).
 - After approving a plan in `herdr`, the `PermissionRequest` hook may not exit promptly, and `interaction.cancel` may not reach hub (2026-11-01: the transcript already had a successful `ExitPlanMode` tool_result, session working, phone still needs_you). On sessions / revs changes, hub reads bounded transcript pages for pending plans and ends them using the matching tool_use_id's tool_result. For old hooks without an id, accept only a unique ExitPlanMode call within 30 seconds before creation, with a result no earlier than card creation. Ambiguous matches, offline nodes, "working" alone, or model text never clear it. A 30-second timer covers lost events; per-card rate limiting and single-flight avoid duplicate disk reads.
   Cleanup only removes stale cards, broadcasts `interaction_resolved`, and records dismissed history; it doesn't fabricate phone approval, permission mode, or answers. A still-waiting hook receives only Dismiss, not allow. New plans, questions / tool permissions aren't affected by old plan results. Regressions: `assistant/fleet_cards_test.go` (missing tool_use_id, cross-page matching, local deny / interrupt, fake approval text, old/new card races, App push and persistence).
 - Tool permissions have the same issue (#3563): answering the terminal permission dialog doesn't end PermissionRequest, leaving the phone card until timeout. Permission cards likewise end from the tool_use_id's tool_result, but require an exact id (don't guess for id-less cards); don't collect phone-answered (claimed) cards, to avoid rewriting resolved as dismissed.
@@ -562,6 +568,7 @@ Test report-only hooks with real input: `SessionStart` always carries `source`.
 
 Revoking an assistant conversation's grants kills its whole process group (`resetAssistantPermissions`, #5936). On macOS, a process that is forking while `kill(-pgid, SIGKILL)` goes out can leave a child that missed the signal. The child is adopted by launchd, keeps the group's pipes and goes on working; Linux orders the two, so CI never saw it. `TestResetAssistantPermissionsKillsUncooperativeChild` failed two runs in three on macOS, each time with one `sleep 30` left over (PPID 1, the killed group's pgid).
 After a group kill whose leftovers matter, sweep with `osproc.SweepGroup`, which kills again until `kill(-pgid, 0)` says ESRCH. Killed members count until they are reaped, which happens quickly.
+Leftovers matter whenever anything waits for the group's pipes to close: the Lark CLI login's cancel (`larkcli.Runner.StartLogin`) killed its group once, and a surviving `sleep 30` held stdout, so the login reported done only 30 s later (#4004).
 
 ## Verify the actual question producer and durable consumer (#5976)
 
@@ -746,3 +753,52 @@ freshness window kept such history working for hours. Working requires an owned 
 Apply that native activity before internal-metadata filtering and history limits, and discover running native summaries even
 before a brain directory or transcript is exported. Read titles, workspaces and update times from the native summary when
 the legacy JSON cache is incomplete. Cover these cases through the runtime inventory protocol.
+
+## Antigravity model directories and ACP acknowledgements (#3716)
+
+Native model availability changes independently of Persona releases. Discover the authenticated CLI catalog and use its
+settings and session metadata for defaults and current values. A fixed catalog hides new models and invents labels for
+external sessions. Treat ACP configuration responses and notifications as authoritative, publish acknowledged partial
+changes, and propagate failures. Native `auto` is distinct from full permission bypass.
+
+## Runtime availability checks need the runtime's authentication context (#3790)
+
+An SSH node and a local companion can have different credential access. A model list and session start succeeding in
+the companion do not make a login-shell health probe authenticated. Opt into runtime-owned checks, bound inference and
+cleanup, deny probe tools, and hide transcripts whose temporary probe workspace has been removed. Preserve a real
+workspace sharing the probe prefix while it still exists.
+
+## AGY ACP can ignore the configured initial model (#3817)
+
+Native settings and `session/new` can disagree even when the configured model is valid. Resolve native display names or
+IDs against the catalog and apply the configured default explicitly to new sessions and availability checks. Preserve
+explicit caller choices and the native state of resumed conversations. Announce a model only after ACP accepts it.
+
+## Codex speed has separate native metadata (#3865)
+
+Reasoning effort and speed are independent. Read `serviceTiers` rather than deriving Fast support from a model name,
+and keep the advertised native ID. `thread/read` omits speed even when `thread/resume` and settings notifications
+report it. Preserve acknowledged speed through metadata refreshes, show missing state as unknown, and use a dedicated
+node RPC so an older node cannot silently ignore a billable setting in `session.modes`.
+
+Persona-owned Codex conversations use a separate stdio connection. Share catalog parsing across both transports and
+include the owned connection in session projection, setting routing and native notifications.
+
+## Runtime assistant identity comes from persisted state (#4202)
+
+A runtime can rediscover an assistant conversation with its current project directory. Apply the node's trusted
+session-state projection before publishing runtime rows so the original assistant or health directory and launcher
+survive snapshots and reconnects. The hub uses that directory to classify assistant history. Preserve the runtime's
+status, model, permission choices and capabilities while restoring owned metadata.
+
+## A hook's allow is not an answer for every dialog Claude shows (2026-11-10, #3752, 2.1.322)
+
+A phone's Always Allow closed a permission card while the terminal kept asking: Claude Code runs the PermissionRequest hooks for
+its own safety checks ("Dangerous rm operation …", asked in bypass mode too, with a two-minute countdown) and ignores an allow for
+them, plain or with `updatedPermissions`; a deny it takes. herdr kept saying working, so no screen card came, and every message was
+refused as `dialog_open` with nothing on the phone to answer.
+
+- Don't take a hook's return for the dialog's end: read the pane after an allow (`node/allowwatch.go`) and let what is on screen
+  decide the state.
+- Measure a hook's effect on a real pty with a throwaway `--settings` hook and an empty config directory, answering both ways: the
+  same check that ignored allow honoured deny.

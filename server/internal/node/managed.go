@@ -278,8 +278,9 @@ func agentExecutable(bin string) (string, error) {
 
 func claudeExecutable() (string, error) { return agentExecutable("claude") }
 
-// Launch is `personad launch <name> [claude args…]`: the managed launcher's settings from the local node, then claude.
-func Launch(ctx context.Context, name string, args []string) error {
+// Launch is `personad launch [--ticket <ticket>] <name> [claude args…]`: the managed launcher's settings from the
+// local node, a hand-off's values with a ticket (secretenv.go), then claude.
+func Launch(ctx context.Context, name string, args []string, ticket string) error {
 	line, err := nodeclient.Dial(ctx, launcherEnvRequest(name))
 	if err != nil {
 		return fmt.Errorf("personad launch %s: %w", name, err)
@@ -330,8 +331,40 @@ func Launch(ctx context.Context, name string, args []string) error {
 		// What the launcher sets replaces the shell's: with both, the agent would read the shell's (the first).
 		env = append(withoutEnv(os.Environ(), envNames(resp.Env)), resp.Env...)
 	}
+	if ticket != "" { // last: a launcher that fails above leaves the ticket for nothing else
+		secrets, err := fetchSecretEnv(ctx, ticket)
+		if err != nil {
+			return errors.New("personad launch " + name + ": " + err.Error())
+		}
+		for _, k := range envNames(secrets) { // the launcher's own settings are never replaced by a hand-off
+			if slices.Contains(envNames(resp.Env), k) {
+				return errors.New("personad launch " + name + ": " + k + " is the provider's own setting, not a secret to hand over")
+			}
+		}
+		env = append(withoutEnv(env, envNames(secrets)), secrets...)
+	}
 	argv := launchArgv(agent, args, resp.Args, resp.Effort, resp.Model, resp.Env)
 	exe, argv, env, _ = launchExec(agent, exe, argv, env)
+	return osproc.Exec(exe, argv, env)
+}
+
+// LaunchWithSecrets is `personad launch --ticket <ticket> -- <command> [args…]`: plain claude (or what argv names)
+// with a hand-off's values in its environment (secretenv.go), the rest of the environment as the shell gave it.
+func LaunchWithSecrets(ctx context.Context, ticket string, argv []string) error {
+	if len(argv) == 0 || argv[0] != "claude" { // the only command the node starts this way (withSecretTicket)
+		return errors.New("personad launch --ticket: only -- claude …")
+	}
+	exe, err := exec.LookPath(argv[0])
+	if err != nil {
+		if exe, err = agentExecutable(argv[0]); err != nil {
+			return fmt.Errorf("personad launch: %w", err)
+		}
+	}
+	secrets, err := fetchSecretEnv(ctx, ticket)
+	if err != nil {
+		return errors.New("personad launch " + argv[0] + ": " + err.Error())
+	}
+	env := append(withoutEnv(os.Environ(), envNames(secrets)), secrets...)
 	return osproc.Exec(exe, argv, env)
 }
 
@@ -370,8 +403,11 @@ func launchArgv(agent string, args, respArgs []string, respEffort, respModel str
 		if respEffort != "" && !hasEffortArg {
 			launchArgs = append(launchArgs, "--effort", respEffort)
 		}
-	} else if agent == "codex" && respModel != "" && !hasModelArg {
-		launchArgs = append(launchArgs, "-m", respModel)
+	} else if agent == "codex" {
+		launchArgs = append(launchArgs, codexProviderArgs(append(slices.Clone(cleanRespArgs), args...), respEnv)...)
+		if respModel != "" && !hasModelArg {
+			launchArgs = append(launchArgs, "-m", respModel)
+		}
 	} else if agent == "agy" {
 		if respModel != "" && !hasModelArg {
 			launchArgs = append(launchArgs, "--model", respModel)
@@ -384,6 +420,65 @@ func launchArgv(agent string, args, respArgs []string, respEffort, respModel str
 		}
 	}
 	return append(launchArgs, args...)
+}
+
+// codexProviderArgs point a managed Codex launcher's codex at its gateway: a model provider of Persona's own, read
+// from the OPENAI_BASE_URL and OPENAI_API_KEY the launcher sets (managedEnv). Codex 0.16x no longer reads those two
+// for its built-in OpenAI provider: it went to api.openai.com over a WebSocket, without the key, and every turn ended
+// in "Reconnecting... 5/5". A provider of its own also talks plain HTTP, which a gateway answers. None when the
+// launcher names no gateway, or its arguments choose a provider or profile themselves.
+func codexProviderArgs(args, env []string) []string {
+	base := envValue(env, "OPENAI_BASE_URL")
+	if base == "" {
+		return nil
+	}
+	if codexChoosesProvider(args) {
+		return nil
+	}
+	q := func(s string) string { b, _ := json.Marshal(s); return string(b) } // a JSON string is a TOML basic string
+	provider := "{name=" + q("Persona launcher") + ",base_url=" + q(base) + `,wire_api="responses"`
+	if envValue(env, "OPENAI_API_KEY") != "" {
+		provider += `,env_key="OPENAI_API_KEY"`
+	}
+	return []string{"-c", `model_provider="persona-launcher"`, "-c", "model_providers.persona-launcher=" + provider + "}"}
+}
+
+// codexValueFlags are Codex's options that take the next argument as their value, so that value is no option itself.
+var codexValueFlags = map[string]bool{"-m": true, "--model": true, "-c": true, "--config": true, "-p": true, "--profile": true,
+	"-s": true, "--sandbox": true, "-a": true, "--ask-for-approval": true, "-C": true, "--cd": true, "-i": true, "--image": true,
+	"--enable": true, "--disable": true, "--add-dir": true, "--local-provider": true, "--output-schema": true, "--color": true,
+	"-o": true, "--output-last-message": true}
+
+// codexChoosesProvider: Codex's options in args pick a model provider or profile themselves (-c model_provider=…, in
+// any spelling, -p / --profile, --oss). Options end at "--": what follows is the prompt, whatever it says.
+func codexChoosesProvider(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			return false
+		}
+		if !strings.HasPrefix(a, "-") || a == "-" {
+			continue
+		}
+		flag, val, attached := a, "", false
+		if strings.HasPrefix(a, "--") {
+			flag, val, attached = strings.Cut(a, "=")
+		} else if len(a) > 2 { // -cKEY=V, -pNAME: a short option with its value attached
+			flag, val, attached = a[:2], a[2:], true
+		}
+		if !attached && codexValueFlags[flag] && i+1 < len(args) {
+			i++
+			val = args[i]
+		}
+		key, _, _ := strings.Cut(val, "=")
+		switch {
+		case flag == "--oss", flag == "-p", flag == "--profile":
+			return true
+		case (flag == "-c" || flag == "--config") && strings.TrimSpace(key) == "model_provider":
+			return true
+		}
+	}
+	return false
 }
 
 // launchExec is what `personad launch` execs (exe, argv, env; argv[0] is the agent's name): in the agent sandbox when

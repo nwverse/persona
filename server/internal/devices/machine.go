@@ -372,6 +372,11 @@ type nodePipe struct {
 // shutdownStepTimeout bounds draining a node's pipes once its process is gone.
 const shutdownStepTimeout = 2 * time.Second
 
+// localNodeStopGrace is how long this machine's own node gets, once its stdin is closed, to stop the assistant's
+// conversations and exit before it is killed: the node's own bound for them (node.stopAndWait: 5 s for SIGTERM, 2 s
+// after SIGKILL) and a margin. A variable so tests can shorten it.
+var localNodeStopGrace = 10 * time.Second
+
 func (m *Machine) open(ctx context.Context, via string) (*nodePipe, error) {
 	if m.dialNode != nil {
 		c, err := m.dialNode(ctx)
@@ -405,6 +410,14 @@ func (m *Machine) open(ctx context.Context, via string) (*nodePipe, error) {
 	if err != nil {
 		cancel()
 		return nil, err
+	}
+	if m.cfg.Kind == "local" {
+		// This machine's node is ended the way a hub that went away ends it, by EOF on its stdin: it stops the
+		// assistant's conversations, whose processes lead their own groups, and exits (node.Serve). Killed straight
+		// away, as the default Cancel does, it left them running beside the ones the next node started for the same
+		// conversations (#4259). An ssh node's own end sees EOF when ssh is killed, so ssh keeps the default.
+		cmd.Cancel = stdin.Close
+		cmd.WaitDelay = localNodeStopGrace
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -504,11 +517,14 @@ func (m *Machine) call(ctx context.Context, method string, params any, out any) 
 	}
 	if p == nil && (m.waitWarm(ctx) || m.waitFirst(ctx)) { // the manager just started: its node is on its way (warm.go)
 		m.mu.Lock()
-		p = m.peer
+		p, info = m.peer, m.info
 		m.mu.Unlock()
 	}
 	if p == nil {
 		return fmt.Errorf("%s: %w", m.name(), errOffline)
+	}
+	if err := secretEnvRefusal(ctx, info, method, params); err != nil { // against the node it has, never one on its way
+		return err
 	}
 	select {
 	case <-p.Done(): // closed, a new connection on its way: nothing was sent
@@ -851,4 +867,40 @@ func (m *Machine) isOnline() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.online
+}
+
+// secretEnvRefusal refuses a hand-off (secret.stage, a session.start with a ticket) to a node that has not announced
+// secret_env: an older one would answer "unknown method", or start the Agent without the values the card gave it.
+// Announced, never assumed: a node not yet known (no handshake) is refused too.
+func secretEnvRefusal(ctx context.Context, info proto.NodeInfo, method string, params any) error {
+	if method != proto.MethodSecretStage && (method != "session.start" || !startHasSecretTicket(params)) {
+		return nil
+	}
+	if info.Protocol > 0 && slices.Contains(info.Capabilities, nodeproto.SecretEnv) {
+		return nil
+	}
+	return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_secret_env")}
+}
+
+// startHasSecretTicket: session.start params carrying a hand-off's ticket: a secret_ticket key in any letter case,
+// whatever its value (the node reads it case-insensitively, and a re-marshalled map can reorder duplicates).
+func startHasSecretTicket(params any) bool {
+	raw, ok := params.(json.RawMessage)
+	if !ok {
+		b, err := json.Marshal(params)
+		if err != nil {
+			return true // cannot tell: treated as one, so it is refused rather than run without its values
+		}
+		raw = b
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		return true
+	}
+	for k := range fields {
+		if strings.EqualFold(k, "secret_ticket") {
+			return true
+		}
+	}
+	return false
 }

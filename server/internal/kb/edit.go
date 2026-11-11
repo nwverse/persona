@@ -130,6 +130,8 @@ func (s *Store) putEntity(kind, id string, v any, t *Tagging, manual bool) (err 
 			*entity = Item{}
 		case *Recording:
 			*entity = Recording{}
+		case *Topic:
+			*entity = Topic{}
 		}
 		_ = json.Unmarshal(after, v)
 		t.persisted = true
@@ -210,13 +212,16 @@ func (s *Store) putSummary(kind, id, text string, manual bool) error {
 		}
 	}
 	s.metaMu.Lock()
-	var t Tagging
+	var t struct {
+		Tagging
+		Status string `json:"status"`
+	}
 	exists, err := readJSON(s.entityPath(kind, id), &t)
 	if err != nil {
 		unlock()
 		return err
 	}
-	if !manual && (!exists || t.fieldLocked("summary")) {
+	if !manual && (!exists || t.fieldLocked("summary") || (kind == KindPerson && t.Status == "ignored")) {
 		unlock()
 		return nil
 	}

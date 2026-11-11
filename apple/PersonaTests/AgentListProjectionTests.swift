@@ -23,6 +23,27 @@ import Testing
         #expect(repo.worktrees.count == 1 && repo.flat)
     }
 
+    /// By App (#3756): Collapse All / Expand All act on the app sections, offline agents' apps included, pinned ones'
+    /// not (they are under Pinned).
+    @Test func byAppSectionsAreWhatCollapseAllFolds() throws {
+        var desktop = try session("desktop", state: "offline")
+        desktop.agent = "claude"
+        desktop.agentSurface = "desktop"
+        var terminal = try session("terminal", state: "working")
+        terminal.agent = "codex"
+        terminal.agentSurface = "cli"
+        var pinned = try session("pinned", state: "working")
+        pinned.agent = "codex"
+        pinned.agentSurface = "desktop"
+        var settings = AgentListProjection.Settings()
+        settings.grouping = "app"
+        settings.preferences[""] = .init(pins: Pins(), mutes: Pins())
+        settings.preferences[""]!.pins.sessions = ["fixture-box/pinned"]
+        let result = AgentListProjection.build(input([desktop, terminal, pinned], settings: settings))
+        // The pinned agent is listed under Pinned: its app has no section of its own.
+        #expect(result.menuSections == ["app/desktop/claude code", AppGroups.otherID])
+    }
+
     @Test func pinMuteAndHeldUnreadRulesKeepTheirExistingMeaning() throws {
         let pinned = try session("pinned")
         let muted = try session("muted", state: "unread")

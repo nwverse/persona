@@ -61,6 +61,9 @@ func (s *Service) toolAgentInterrupt(ctx context.Context, machine, self string, 
 	if c.SourceKind != "" && (c.Capabilities == nil || !c.Capabilities.Interrupt || then != "" && !c.Capabilities.Send) {
 		return "", fmt.Errorf("this agent can only be read: %s", c.ReadOnlyReason)
 	}
+	if err := s.exitAllowed(ctx, self, am, c, then, 0); err != nil { // refused before the turn is stopped or the user asked
+		return "", err
+	}
 	summary := i18n.T(s.lang(ctx), "assistant-tasks.interrupt_summary", i18n.Args{"agent": agentLabel(c), "machine": am.Name})
 	if then != "" {
 		summary += "\n\n" + then
@@ -69,6 +72,10 @@ func (s *Service) toolAgentInterrupt(ctx context.Context, machine, self string, 
 		return "", err
 	} else if !ok {
 		return "The user declined on the phone: the agent goes on as it was.", nil
+	}
+	// Again after the phone: the agent may have become another conversation's task while the user was asked.
+	if err := s.exitAllowed(ctx, self, am, c, then, 0); err != nil {
+		return "", err
 	}
 	// Only a turn under way is stopped: an agent still starting has none yet (then is queued for it, as agent_send does).
 	working := c.Status == proto.StatusWorking
@@ -178,16 +185,8 @@ func (s *Service) adoptAgentAs(ctx context.Context, self string, am Device, c pr
 		if !update {
 			return t, false, nil
 		}
-		v, _, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
-			v.Supervisor = self
-			if len(doneWhen) > 0 {
-				v.DoneWhen = doneWhen
-			}
-			if expect > 0 {
-				v.ExpectMinutes = expect
-			}
-			return true
-		})
+		// Its criteria change only through the brief's log (task_brief_scope.go): the same rules as task_scope.
+		v, err := s.rescope(ctx, t, self, "agent_supervise", doneWhen, expect)
 		if err != nil {
 			return Todo{}, false, err
 		}
@@ -213,6 +212,7 @@ func (s *Service) adoptAgentAs(ctx context.Context, self string, am Device, c pr
 	}
 	s.setTaskStageKind(ctx, todo.ID, "", "", taskStageKind(false, doneWhen, todo.PRURL), false)
 	todo.Supervision = &v
+	s.briefFor(ctx, s.callerOrigin(ctx, self), todo, doneWhen, expect) // before its agent is linked (task_brief.go)
 	if err := s.linkTodoAgent(ctx, todo.ID, am.ID, c.SessionID, title, c.Cwd, c.Agent); err != nil {
 		s.dropAdoption(ctx, todo.ID, err)
 		return Todo{}, false, fmt.Errorf("link the agent: %w", err)
@@ -283,8 +283,8 @@ func (s *Service) sendTaskAllowed(ctx context.Context, self string, am Device, c
 	if !s.isMain(ctx, self) {
 		return fmt.Errorf("only the main conversation hands out tasks: send it without task")
 	}
-	if t := strings.TrimSpace(text); t == "/exit" || t == "/quit" {
-		return fmt.Errorf("%s closes the agent, it hands it no work: send it without task", t)
+	if exitText(text) {
+		return fmt.Errorf("%s closes the agent, it hands it no work: send it without task", strings.TrimSpace(text))
 	}
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return err
@@ -297,6 +297,51 @@ func (s *Service) sendTaskAllowed(ctx context.Context, self string, am Device, c
 		return fmt.Errorf("%w; nothing was sent (send it without task to only send it)", err)
 	}
 	return otherWork(c, t, task)
+}
+
+// exitText: text is only the agents' own command to quit, which the node runs by closing the agent (node exitCommand).
+func exitText(text string) bool {
+	t := strings.TrimSpace(text)
+	return t == "/exit" || t == "/quit"
+}
+
+// supervisedElsewhere is the task agent c works for when a conversation other than self supervises it: a reply to it
+// goes as a side conversation, and /exit to it is refused (exitAllowed). Ownership that cannot be read is an error, so
+// a reply never goes without its provenance.
+func (s *Service) supervisedElsewhere(ctx context.Context, self string, am Device, c proto.Session) (Todo, bool, error) {
+	if err := s.ensureTodosLoaded(ctx); err != nil {
+		return Todo{}, false, err
+	}
+	t, ok := s.taskOf(ctx, am.ID, c.SessionID)
+	return t, ok && t.Supervision != nil && t.Supervision.Supervisor != self, nil
+}
+
+// exitAllowed refuses /exit or /quit to an agent on a task another conversation supervises (#3537): a plain
+// agent_send of it, or agent_interrupt's then, before anything is stopped, sent or confirmed on the phone. The node
+// closes an agent only for the bare command without attachments (node send.go), so wrapped as a side conversation it
+// would be typed in as a prompt while the tool said it went; and closing the agent that conversation's task runs on is
+// not this conversation's to do. With attachments the text is no command, and goes as any reply does.
+func (s *Service) exitAllowed(ctx context.Context, self string, am Device, c proto.Session, text string, attachments int) error {
+	if !exitText(text) || attachments > 0 {
+		return nil
+	}
+	t, theirs, err := s.supervisedElsewhere(ctx, self, am, c)
+	if err != nil || !theirs {
+		return err
+	}
+	return exitRefused(c, t, text, attachments)
+}
+
+// exitRefused is exitAllowed's answer once c is known to work for t, a task another conversation supervises: the
+// refusal for a bare /exit or /quit, nil for any other text. A tool that asked the phone first reads the task again
+// after the answer and checks with it, since the agent may have become that task's while the user was asked.
+func exitRefused(c proto.Session, t Todo, text string, attachments int) error {
+	if !exitText(text) || attachments > 0 {
+		return nil
+	}
+	return fmt.Errorf("%s works for task %q (%s) of another conversation: %s asks to close the agent that task runs on, which is "+
+		"not this conversation's to do; nothing was sent or stopped. The user can close it in the app, or with agent_archive "+
+		"and close once it is idle and they confirm on the phone", agentLabel(c), t.Title, t.ID, strings.TrimSpace(text))
 }
 
 // otherWork refuses task for agent c on self's own task t when its title is another (other work, not to be filed under
@@ -346,22 +391,16 @@ func (h *handedTask) sent(ctx context.Context, s *Service, text string) string {
 	if h == nil {
 		return ""
 	}
+	refused := ""
 	if h.made {
 		s.taskCard(ctx, h.self, h.todo.ID)
 	} else {
 		doneWhen, expect := cleanDoneWhen(h.task.DoneWhen), max(0, min(h.task.ExpectMinutes, 24*60))
-		v, _, err := s.updateSupervision(ctx, h.todo.ID, func(v *Supervision) bool {
-			v.Supervisor = h.self
-			if len(doneWhen) > 0 {
-				v.DoneWhen = doneWhen
-			}
-			if expect > 0 {
-				v.ExpectMinutes = expect
-			}
-			return true
-		})
+		s.releaseHold(ctx, h.todo.ID)                                            // the supervisor sent its agent on: follow-ups go again (decision.go)
+		v, err := s.rescope(ctx, h.todo, h.self, "agent_send", doneWhen, expect) // through the brief's log, as task_scope
 		if err != nil {
 			s.logf("task %s: supervision: %v", h.todo.ID, err)
+			refused = " Its done_when was NOT changed: " + err.Error()
 		} else {
 			h.todo.Supervision = &v
 		}
@@ -371,7 +410,7 @@ func (h *handedTask) sent(ctx context.Context, s *Service, text string) string {
 	}
 	if !h.made {
 		return fmt.Sprintf(" It already works for your task %s (%q): no new task was made, done_when %s.", h.todo.ID, h.todo.Title,
-			criteriaWords(nil, h.todo.Supervision))
+			criteriaWords(nil, h.todo.Supervision)) + refused
 	}
 	return fmt.Sprintf(" It is now your task %s (%q, its card is in the conversation): you get a supervision message (📋) when it needs you, "+
 		"and close it with task_review. done_when %s.", h.todo.ID, h.todo.Title, criteriaWords(nil, h.todo.Supervision))
@@ -430,7 +469,7 @@ func criteriaWords(list []string, v *Supervision) string {
 		list = v.DoneWhen
 	}
 	if len(list) == 0 {
-		return "not set (judge by what the task is for; set it with agent_supervise)"
+		return "not set (judge by what the task is for; set it with task_scope)"
 	}
 	return strconv.Quote(strings.Join(list, "; "))
 }
@@ -551,12 +590,13 @@ func (s *Service) agentTool(ctx context.Context, machine, session, name string, 
 // false is no signal: it goes into the queue of questions that can wait (later.go) when a briefing will list it.
 func (s *Service) reportToSupervisor(ctx context.Context, machine, session string, args json.RawMessage, now time.Time) (string, error) {
 	var a struct {
-		Kind     string   `json:"kind"`
-		Text     string   `json:"text"`
-		Evidence []string `json:"evidence"`
-		Step     int      `json:"step"`
-		Steps    int      `json:"steps"`
-		Urgent   *bool    `json:"urgent"`
+		Kind     string            `json:"kind"`
+		Text     string            `json:"text"`
+		Evidence []string          `json:"evidence"`
+		Step     int               `json:"step"`
+		Steps    int               `json:"steps"`
+		Urgent   *bool             `json:"urgent"`
+		Criteria []criterionReport `json:"criteria"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("arguments: %v", err)
@@ -584,8 +624,26 @@ func (s *Service) reportToSupervisor(ctx context.Context, machine, session strin
 	if !ok {
 		return "Nobody receives this: your work is not a task Persona supervises. Ask the user what you need the usual way.", errNoSupervisor
 	}
+	if s.agentSupervised(t) {
+		// A leader whose task closed leaves the worker to the conversation above it: rehome it now, so this report is
+		// told to that conversation instead of being lost until the next watch (task_leader.go). With nobody above, the
+		// worker is cancelled and says so.
+		if lead, _, _ := s.leaderAbove(t); lead.ID == "" || !s.leaderOpen(lead) {
+			var cancelled bool
+			if t, cancelled = s.rehomeWorker(ctx, t); cancelled {
+				return "Your task leader is gone and nobody is above it, so this task was cancelled. Stop here; the user is not asked.", errNoSupervisor
+			}
+		}
+	}
+	reports, err := cleanCriterionReports(a.Criteria, t.Supervision.DoneWhen)
+	if err != nil {
+		return "", err
+	}
 	if !s.upReports.allow(machine, session, now) {
 		return "", fmt.Errorf("too many reports: at most %d in %d minutes; put what is left into one report later", reportLimit, int(reportWindow.Minutes()))
+	}
+	if err := s.recordCriterionReports(ctx, t, machine, session, reports, now.UTC()); err != nil {
+		return "", err
 	}
 	evidence := make([]string, 0, len(a.Evidence))
 	for _, e := range a.Evidence {
@@ -598,7 +656,8 @@ func (s *Service) reportToSupervisor(ctx context.Context, machine, session strin
 	if steps > 0 {
 		step = min(step, steps)
 	}
-	notUrgent := a.Urgent != nil && !*a.Urgent
+	// A task leader's worker has no owner briefing to wait for: its report goes to the leader at once, urgent or not.
+	notUrgent := a.Urgent != nil && !*a.Urgent && !s.agentSupervised(t)
 	if notUrgent && a.Kind == upReportQuestion {
 		answer, queued := s.reportLater(ctx, t, machine, session, text, evidence, now)
 		if queued {

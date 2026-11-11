@@ -90,8 +90,9 @@ struct AgentsListMenu: View {
             Picker("Group By [Agents Menus 399ee6]", selection: groupingChoice) {
                 ForEach(DevGrouping.offered(supportsTodos: TodoStore.shared.isSupported)) { g in Label(g.title, systemImage: g.symbol).tag(g) }
             }
-            if shownGrouping != .state, shownGrouping != .recent {
-                // By Status is sectioned by state, and the rows in a section are by time already; Recently Used is by time only.
+            if shownGrouping != .state, shownGrouping != .recent, shownGrouping != .app {
+                // By Status is sectioned by state, and the rows in a section are by time already; Recently Used is by time
+                // only, as are By App's sections.
                 Picker("Sort", selection: $sort) {
                     ForEach(AgentSort.allCases) { o in Label(o.title, systemImage: o.symbol).tag(o) }
                 }

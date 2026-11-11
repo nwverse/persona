@@ -594,6 +594,7 @@ with node methods `panes.close` / `panes.split` / `panes.agent` / `panes.git` / 
   **Push** asks first in every client (#1883, like the Git panel's Push; Pull and Fetch don't change the remote and run at once). It requires branch/upstream and pending commits (otherwise the `nothing_to_push` outcome), explicit `refs/heads/<branch>:<upstream branch>` without `+`, preventing force push even if `remote.<name>.push = +…` is configured. A remote that rejects a branch behind it is `push_rejected` (pull first; git's words in `detail`).
   All timeout after 60 seconds, don't prompt for passwords (`GIT_TERMINAL_PROMPT=0`, askpass `false`), retain only last 2 KB output.
 - **iOS / Mac** (#3098): Agent-row long-press menus add Split, Git, Close Tab; space ⋯ adds Run Agent Here…, Git, same routes (`docs/apple/ios.md`, "Information architecture"). No standalone terminal; shell pane chosen in Run Agent Here… sheet.
+- **Apple errors** (#3586): an uncoded node refusal reaches the hub as 502 `internal`. `APIClient.nodeAction` marks that call so the existing sheet / toast keeps the node's actionable reason; other `internal` 5xx responses stay generic instead of exposing private exceptions.
 - **Measured** (herdr 0.9.5, local temporary tab): `go test -tags herdrlive -run TestLiveMenuActions ./internal/herdr/` (`HERDR_LIVE_WORKSPACE=<workspace id>`) creates/renames tab, splits twice, closes pane/tab, matching fake herdr node tests.
 - **Tests**: `node/panes_actions_test.go` (fake herdr close/rename/split calls, rejection doesn't touch herdr, run in shell pane, rejection/failure preserves pane; real Git fetch/pull/push, force-push config ineffective, reject nonrepo/dirty/detached HEAD),
   `hub/panes_test.go` (every route denies `answer`/extension tokens before node receives it, forwards only named fields, absent from `answer` allowlist, route scopes `-`).
@@ -642,6 +643,10 @@ Same shape as Moshi `worktree/prepare` + `worktree/create`.
 - **Tests**: `node/worktree_test.go` (real Git + fake herdr: prepare repo name/branch/config directory/linked worktree/detached HEAD/nonrepo; herdr creation with new/existing branches; rejected paths/branches never touch herdr; Git errors; Git fallback/repeated checkout; `panes.list` includes `worktree`),
   `node/hostorca_worktree_test.go` (real Git + a fake Orca whose `worktree.create` behaves like Orca 1.4: Orca's default folder; a new branch from the source workspace's branch, under it, not activated, to the terminal Orca opened; an existing branch without a base; a detached HEAD's commit; a branch in use and an existing empty folder refused without asking Orca; Orca's own folder taken as it is; a renamed branch is an error; a workspace Orca does not list),
   `herdr/worktrees_test.go` (config parsing, slug, folder name, socket args, CLI fallback), `hub/panes_test.go` (permissions, named fields only), `web/src/lib/worktree.test.ts`, `node-actions.test.ts`, `node-palette.test.ts`, `views/NewWorktree.test.tsx`.
+
+### Advanced Orca worktree actions
+
+The local Orca adapter also provides a capability-gated composer, GitHub issue/PR source lookup, sparse presets and preview-confirmed workspace removal. The exact HTTP fields, adapter/runtime capability distinction, receipt handling and deletion reconciliation are specified in [the protocol](../protocol/protocol.md#orca-worktree-composer-and-removal). Legacy branch/path creation remains available. Removal keeps branches by default, unregisters folder workspaces without deleting their directories, and requires a fresh instance-bound preview when identity or dirty content changes. A background acknowledgement is not completion; clients reconcile without automatically repeating the destructive request.
 
 ### A new agent in a worktree (#6115)
 
