@@ -408,10 +408,6 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if err != nil {
 			return "", fmt.Errorf("%w; no agent was started", err)
 		}
-		permissionMode := ""
-		if agent == "claude" {
-			permissionMode = permBypass
-		}
 		if swapped != "" {
 			a.Launcher, _ = run["launcher"].(string)
 			a.Model, _ = run["model"].(string)
@@ -449,9 +445,6 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		defer cancel()
 		// The tab is named from the prompt as written; the agent gets its project's background before it (#2820).
 		params := map[string]any{"cwd": a.Cwd, "launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "tab_name": s.tabName(sctx, a.Prompt)}
-		if permissionMode != "" {
-			params["permission_mode"] = permissionMode
-		}
 		params["prompt"] = s.withProjectContext(sctx, am.ID, a.Cwd, s.withCloseoutBrief(sctx, a.Prompt, false))
 		if a.Ultracode {
 			params["ultracode"] = true
@@ -466,6 +459,13 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if moved {
 			a.Cwd = rehome(a.Cwd, am, alt)
 			params["cwd"], am = a.Cwd, alt
+			// The same launcher name may mean a different agent on the destination. Reuse its list before choosing permissions.
+			if _, agent, err = s.fitLauncher(ctx, am, own, params); err != nil {
+				return "", fmt.Errorf("%w; no agent was started", err)
+			}
+		}
+		if agent == "claude" {
+			params["permission_mode"] = permBypass
 		}
 		if note != "" {
 			note = " Note: " + note + "."
