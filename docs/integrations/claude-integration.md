@@ -355,7 +355,8 @@ Here **numbers move the cursor but do not select**; Enter is required. Number-on
 - Send: `agent prompt <pane> <text>` (atomic paste + Enter, respecting bracketed paste). While Claude works, input enters its queue.
 - Images: save under `~/.persona/uploads/<date>/`, append `<attached_images>` tags with one path per line; tags distinguish them from user text. App shows square thumbnails above text.
   Claude Code's paste turns a line that is only an image path, to a readable image file, into an `[Image #n]` (the model sees the picture) and drops the line,
-  so before Claude the node gives each path in the block that ends the message a second line `path: <path>`, which stays text: the agent knows where the file is (`keepImagePaths`).
+  so before Claude the node gives each path in the block that ends the message a second line `path:<path>`, which stays text: the agent knows where the file is (`keepImagePaths`).
+  No space after the colon: Claude Code before 2.1.316 cuts a pasted line at every space before `/` and attached the picture of `path: <path>` a second time (#4361); without the space it drops the line instead and names the picture's source path to the model itself.
   Blocks a client wrote (Android's composer uploads photos first) get it too. Apps take only lines starting with `/` or `~` as photos.
 - Interrupt: `pane send-keys <pane> esc`.
 - Any TUI dialog: phone Terminal / screen interaction → `pane send-keys` (`up`/`down`/`enter`/`esc`/`tab`/`shift+tab`/`ctrl+c`/numbers), pane send-text.
