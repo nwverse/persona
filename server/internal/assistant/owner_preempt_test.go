@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
+
+	"github.com/nwverse/persona/server/internal/db"
 
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -26,6 +29,26 @@ func seeStatus(s *Service, f *fakeHub, id, status string) {
 	row := proto.Session{SessionID: id, Assistant: true, Status: status}
 	f.setSessions("server", row)
 	s.fleetKeepPrevious("server", []proto.Session{row})
+	s.roundsSeen([]proto.Session{row})
+}
+
+// ageRound makes conversation id's mark by older.
+func ageRound(s *Service, id string, by time.Duration) {
+	b := &s.preempt
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	m := b.rounds[id]
+	m.at = m.at.Add(-by)
+	b.rounds[id] = m
+}
+
+// scheduled is a scheduled follow-up's assistant.send to conversation id.
+func scheduled(t *testing.T, s *Service, id string) {
+	t.Helper()
+	params := map[string]any{"session_id": id, "text": "Look again.", "message_source": &proto.MessageSource{Kind: proto.SourceFollowup, Title: "Later"}}
+	if err := s.call(context.Background(), "server", DeviceAssistantSend, params, nil); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func preemptService(t *testing.T) (*Service, *fakeHub, string) {
@@ -68,7 +91,8 @@ func TestBackgroundRoundKind(t *testing.T) {
 }
 
 // The owner's message to a conversation on a round they did not start carries interject_background with the setting
-// off, once: the round is theirs from then on, and its pushes are no longer held (#4926).
+// off, and so does every later one while that round runs; its pushes are no longer held. Once a list shows the round
+// stopped, the setting decides again (#4926).
 func TestOwnerPreemptsBackgroundRound(t *testing.T) {
 	ctx := context.Background()
 	notice := prompts.RenderTaskNotice(prompts.TaskNotice{Title: "Build", Machine: "server", State: "done", Text: "Built."})
@@ -88,17 +112,166 @@ func TestOwnerPreemptsBackgroundRound(t *testing.T) {
 			if held := s.supervising(main); held != (msg.Tool == superviseTool) {
 				t.Fatalf("pushes held: %v", held)
 			}
-			seeStatus(s, f, main, proto.StatusWorking)
+			// Before any list shows the round working, and after.
 			if got := ownerSend(t, s, main, "are you there?"); got["interject_background"] != true {
 				t.Fatalf("the owner's message does not preempt: %v", got)
 			}
 			if s.supervising(main) {
 				t.Fatal("the owner spoke and the conversation's pushes are still held")
 			}
-			if got := ownerSend(t, s, main, "and another thing"); got["interject_background"] != nil {
-				t.Fatalf("the round is the owner's by now, the setting is off: %v", got)
+			seeStatus(s, f, main, proto.StatusWorking)
+			if got := ownerSend(t, s, main, "and the real question"); got["interject_background"] != true {
+				t.Fatalf("the round still runs and is not the owner's start: %v", got)
+			}
+			seeStatus(s, f, main, proto.StatusOffline) // says nothing of the round
+			seeStatus(s, f, main, proto.StatusWorking)
+			if got := ownerSend(t, s, main, "still"); got["interject_background"] != true {
+				t.Fatalf("a list without the round's status ended it: %v", got)
+			}
+			seeStatus(s, f, main, proto.StatusIdle)
+			if got := ownerSend(t, s, main, "a new thing"); got["interject_background"] != nil {
+				t.Fatalf("the round ended, the setting is off: %v", got)
+			}
+			seeStatus(s, f, main, proto.StatusWorking)
+			if got := ownerSend(t, s, main, "more"); got["interject_background"] != nil {
+				t.Fatalf("the owner's own round, the setting is off: %v", got)
 			}
 		})
+	}
+}
+
+// A message that was not sent uses nothing up: sent again, it preempts (#4926).
+func TestOwnerPreemptSurvivesFailedSend(t *testing.T) {
+	ctx := context.Background()
+	s, f, main := preemptService(t)
+	if err := s.deliverRelay(ctx, "server", main, relayMsg{Tool: superviseTool, Text: "A supervision prompt."}); err != nil {
+		t.Fatal(err)
+	}
+	seeStatus(s, f, main, proto.StatusWorking)
+	bad := SendParams{MachineID: "server", SessionID: main, Params: map[string]any{"text": "hello", "model": "not a model id!"}}
+	if params, err := s.SendParams(ctx, bad); err == nil {
+		t.Fatalf("a model that is no id was taken: %v", params)
+	}
+	if got := ownerSend(t, s, main, "hello"); got["interject_background"] != true {
+		t.Fatalf("the refused message used the round's mark up: %v", got)
+	}
+}
+
+// A mark no list ever shows working is a round that never ran, or ended between two lists: dropped after
+// backgroundRoundStartWait.
+func TestOwnerPreemptRoundNeverSeen(t *testing.T) {
+	ctx := context.Background()
+	supervise := relayMsg{Tool: superviseTool, Text: "A supervision prompt."}
+	s, f, main := preemptService(t)
+	if err := s.deliverRelay(ctx, "server", main, supervise); err != nil {
+		t.Fatal(err)
+	}
+	ageRound(s, main, backgroundRoundStartWait+time.Second)
+	if got := ownerSend(t, s, main, "hello"); got["interject_background"] != nil {
+		t.Fatalf("a round never seen working preempts after the wait: %v", got)
+	}
+	seeStatus(s, f, main, proto.StatusIdle) // the list drops it
+	seeStatus(s, f, main, proto.StatusWorking)
+	if got := ownerSend(t, s, main, "more"); got["interject_background"] != nil {
+		t.Fatalf("the owner's own round: %v", got)
+	}
+
+	// Seen working in time, it is kept however long the round runs.
+	seeStatus(s, f, main, proto.StatusIdle)
+	if err := s.deliverRelay(ctx, "server", main, supervise); err != nil {
+		t.Fatal(err)
+	}
+	seeStatus(s, f, main, proto.StatusWorking)
+	ageRound(s, main, time.Hour)
+	if got := ownerSend(t, s, main, "hello?"); got["interject_background"] != true {
+		t.Fatalf("a long background round: %v", got)
+	}
+}
+
+// A background message sent into the owner's working round joins it, unless it has to wait for the round's end: it
+// then starts the next one, which is not the owner's (#4926).
+func TestOwnerPreemptsQueuedBackgroundRound(t *testing.T) {
+	s, f, main := preemptService(t)
+	ownerSend(t, s, main, "do the long thing")
+	seeStatus(s, f, main, proto.StatusWorking)
+	scheduled(t, s, main)
+	if got := ownerSend(t, s, main, "one more thing"); got["interject_background"] != nil {
+		t.Fatalf("the owner's round is still the one running: %v", got)
+	}
+	seeStatus(s, f, main, proto.StatusIdle)    // the owner's round ended
+	seeStatus(s, f, main, proto.StatusWorking) // the follow-up runs as its own
+	if got := ownerSend(t, s, main, "what now?"); got["interject_background"] != true {
+		t.Fatalf("the follow-up's own round is not preempted: %v", got)
+	}
+	if got := ownerSend(t, s, main, "hello?"); got["interject_background"] != true {
+		t.Fatalf("the follow-up's round still runs: %v", got)
+	}
+	seeStatus(s, f, main, proto.StatusIdle)
+	if got := ownerSend(t, s, main, "next"); got["interject_background"] != nil {
+		t.Fatalf("that round ended: %v", got)
+	}
+
+	// Taken in mid-turn, it starts nothing: the conversation stays stopped and the mark goes.
+	seeStatus(s, f, main, proto.StatusWorking)
+	scheduled(t, s, main)
+	seeStatus(s, f, main, proto.StatusIdle)
+	ageRound(s, main, backgroundRoundStartWait+time.Second)
+	seeStatus(s, f, main, proto.StatusIdle)
+	seeStatus(s, f, main, proto.StatusWorking) // a later round of the owner's
+	if got := ownerSend(t, s, main, "and"); got["interject_background"] != nil {
+		t.Fatalf("a follow-up taken in mid-turn marked a later round: %v", got)
+	}
+
+	// The owner speaking in the stopped conversation first starts the round themselves.
+	scheduled(t, s, main)
+	seeStatus(s, f, main, proto.StatusIdle)
+	ownerSend(t, s, main, "my turn")
+	seeStatus(s, f, main, proto.StatusWorking)
+	if got := ownerSend(t, s, main, "and this"); got["interject_background"] != nil {
+		t.Fatalf("the owner started this round, the setting is off: %v", got)
+	}
+}
+
+// A view action's message is the owner's own: it preempts as a typed one does, and leaves no mark behind (#4926).
+func TestViewActionPreemptsBackgroundRound(t *testing.T) {
+	ctx := context.Background()
+	s, f, main := preemptService(t)
+	action := db.AssistantViewActionRow{Conversation: main, MachineID: "server", MessageID: "m1", Text: "Yes."}
+	if err := s.deliverRelay(ctx, "server", main, relayMsg{Tool: superviseTool, Text: "A supervision prompt."}); err != nil {
+		t.Fatal(err)
+	}
+	seeStatus(s, f, main, proto.StatusWorking)
+	params, err := s.viewActionParams(ctx, action)
+	if err != nil || params["interject_background"] != true {
+		t.Fatalf("a view action in a background round: %v %v", params, err)
+	}
+	if s.supervising(main) {
+		t.Fatal("the owner acted and the conversation's pushes are still held")
+	}
+	seeStatus(s, f, main, proto.StatusIdle)
+	if params, err = s.viewActionParams(ctx, action); err != nil || params["interject_background"] != nil {
+		t.Fatalf("a view action starting the owner's round: %v %v", params, err)
+	}
+	seeStatus(s, f, main, proto.StatusWorking)
+	if got := ownerSend(t, s, main, "and?"); got["interject_background"] != nil {
+		t.Fatalf("the owner's own round, started by a view action: %v", got)
+	}
+}
+
+// The manager's own message written through the owner's path (a channel's "answer again") preempts nothing.
+func TestManagerMessagePreemptsNothing(t *testing.T) {
+	ctx := context.Background()
+	s, f, main := preemptService(t)
+	if err := s.deliverRelay(ctx, "server", main, relayMsg{Tool: superviseTool, Text: "A supervision prompt."}); err != nil {
+		t.Fatal(err)
+	}
+	seeStatus(s, f, main, proto.StatusWorking)
+	again := SendParams{MachineID: "server", SessionID: main, Params: map[string]any{"text": "Answer again."}}
+	if params, err := s.messageParams(ctx, again, false); err != nil || params["interject_background"] != nil {
+		t.Fatalf("the manager's message interjects: %v %v", params, err)
+	}
+	if got := ownerSend(t, s, main, "hello?"); got["interject_background"] != true {
+		t.Fatalf("the owner's message after it: %v", got)
 	}
 }
 

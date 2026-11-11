@@ -418,16 +418,29 @@ merges such a message into the turn with `turn/steer` ("Codex" below); a Claude 
 - **Switch**: `interject_background` in the assistant's settings (`GET/PUT /api/v1/assistant`, `persona_settings` key
   `assistant.interject_background`), **off by default**. The manager adds `interject_background: true` to `assistant.send` and to the
   `session.send` parameters it fills in (`SendParams`) while it is on. It decides for rounds the owner started.
-- **A round the owner did not start is always preempted** (#4926, `assistant/owner_preempt.go`): the owner's own message carries
-  `interject_background: true` whatever the switch says when the conversation's last round was started by a supervision message, a
-  scheduled task or follow-up, another conversation's message (`conversation_send` / `conversation_new`) or a task's notice. Persona
-  continuing the owner's own work (a usage-limit reset, a wake for what it waits on) is not such a round, as under "Background rounds".
-  The manager keeps one mark per conversation, in memory: set when it sends such a message into a conversation its last session list
-  did not show working (a message into a working conversation joins the round in flight, whose starter stands), dropped when another
-  of its messages starts a round there, used up by the owner's next message, and forgotten after 24 hours. So the owner's first message
-  into a background round preempts it, and the round is theirs from then on: the supervision push hold is released (`UserSpoke`) and
-  the answer pushes and mirrors as "A user message absorbed mid-turn" says. Whether the round still runs is the node's check below.
-  After a manager restart the switch decides until the next background round. Codex needs none of this: `turn/steer` merges the message.
+- **A round the owner did not start is always preempted** (#4926, `assistant/owner_preempt.go`). The default in one sentence:
+  Persona answers you first when you write into a round you did not start. The owner's own message (typed in an app, sent through a
+  channel, or a view action's) carries `interject_background: true` whatever the switch says while the conversation is on a round
+  started by a supervision message, a scheduled task or follow-up, another conversation's message (`conversation_send` /
+  `conversation_new`) or a task's notice. Persona continuing the owner's own work (a usage-limit reset, a wake for what it waits on)
+  is not such a round, as under "Background rounds", and neither is a message the manager writes for itself (a channel's "answer
+  again"). This case has no switch of its own: the moved work goes on and reports when done, so nothing is lost by it.
+  - **The mark.** The manager keeps one mark per conversation, in memory, for the message that started the round it is on. It is
+    set when a background message goes into a conversation the last session list did not show working, and it lasts as long as the
+    round: every message of the owner's during it preempts, and a message that failed to go out uses nothing up. It ends when a
+    session list shows the conversation stopped (idle, done or interrupted), or when another message of the manager's starts a round
+    there. A mark no list shows working within 1 minute is dropped (a round that never ran, or ended between two lists), and one no
+    list ever ends is forgotten after 24 hours.
+  - **A background message into a working conversation** joins the round in flight, whose starter stands. If Claude has no tool
+    boundary left to take it in at, it runs as a turn of its own once that round ends: the manager remembers the message and makes
+    it the mark when a list shows the round ended, and drops it again if the conversation stays stopped for 1 minute or the owner
+    speaks first (their message starts the round).
+  - **The answer is the owner's.** The supervision push hold is released (`UserSpoke`) and the answer pushes and mirrors as
+    "A user message absorbed mid-turn" says. Whether a command still runs is the node's check below.
+  - **Limits.** After a manager restart the switch decides until the next background round. A round woken by a background task's
+    report belongs to nobody's message: the switch decides. When one turn ends and the next starts between two session lists, the
+    manager sees one round: a waiting background message's turn is then not marked, and a marked round's mark covers the turn that
+    follows it. Codex needs none of this: `turn/steer` merges the message.
 - **Node** (`node/assistant_interject.go`): when such a message reaches a chat that is busy, runs Claude on the CLI (not the Agent SDK bridge
   or a runtime) and whose `system/init` named `claude_code_version` 2.1.139 or later, the message gets `prompts/assistant/interject.md`
   after its live snapshot, and once it is written the node sends the control request `{"subtype":"background_tasks"}` (Ctrl+B: every
