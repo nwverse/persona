@@ -137,6 +137,30 @@ struct AssistantTopBarTests {
         #expect(groups.map { $0.sessions.map(\.sessionID) } == [["today2", "today"], ["yesterday"], ["week"], ["old", "none"]])
     }
 
+    /// The sidebar's Directions: the leader conversations in the hub's order, never the main one, none the list lacks.
+    @Test func directionsFollowTheHubsOrder() throws {
+        func s(_ id: String) throws -> Session {
+            let o: [String: Any] = ["session_id": id, "machine_id": "hub", "status": "idle", "title": "1110 | explore | \(id)", "assistant": true]
+            return try JSON.decoder.decode(Session.self, from: JSONSerialization.data(withJSONObject: o))
+        }
+        let all = [try s("main"), try s("mine"), try s("lead-b"), try s("lead-a")]
+        let main = all[0].key
+        let picked = AssistantSidebarGroups.directions(all, leaders: ["lead-a", "gone", "main", "lead-b"], main: main)
+        #expect(picked.map(\.sessionID) == ["lead-a", "lead-b"])
+        #expect(AssistantSidebarGroups.directions(all, leaders: [], main: main).isEmpty)
+    }
+
+    /// A direction's name comes from GET /api/v1/assistant/leaders: current ones with a name only.
+    @Test func directionNamesSkipEndedAndBlank() {
+        let names = APIClient.directionNames([
+            .init(id: "a", name: "Product", ended: nil),
+            .init(id: "b", name: "  ", ended: nil),
+            .init(id: "c", name: "Old", ended: true),
+            .init(id: "", name: "Nobody", ended: nil),
+        ])
+        #expect(names == ["a": "Product"])
+    }
+
     /// A drag to the right on something that scrolls sideways and is not at its left edge scrolls it, not the sidebar.
     @Test @MainActor func sidewaysScrollersGoFirst() {
         let root = UIView(frame: CGRect(x: 0, y: 0, width: 400, height: 800))

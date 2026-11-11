@@ -1186,7 +1186,15 @@ struct AssistantSidebar: View {
 
     @ViewBuilder private func conversations(_ all: [Session], archived: Int) -> some View {
         let main = model.assistantMain
-        let pinned = all.filter { isPinned($0) && $0.key != main }
+        // The leader conversations are the Directions group, first, in the hub's order, under each direction's name
+        // (docs/assistant/unified-entry.md "Leader conversations"); this phone's own pins stay Pinned, the rest are Other Chats.
+        let directions = AssistantSidebarGroups.directions(all, leaders: model.assistantLeaders, main: main)
+        let isDirection = { (s: Session) in directions.contains { $0.key == s.key } }
+        if !directions.isEmpty {
+            heading(String(localized: "Directions")) { EmptyView() }
+            ForEach(directions) { row($0, named: model.directionNames[$0.sessionID]) }
+        }
+        let pinned = all.filter { isPinned($0) && $0.key != main && !isDirection($0) }
         if !pinned.isEmpty {
             heading(String(localized: "section.pinned", defaultValue: "Pinned")) {
                 Button { unpinAll() } label: { Label("Unpin All", systemImage: Theme.Icon.unpin) }
@@ -1196,7 +1204,7 @@ struct AssistantSidebar: View {
         // The main conversation is the list's first row (`mainItem`): not here, and not in Auto Chats (`isPinned`).
         // Those Persona opened by itself are in Auto Chats (#3264); with a hub that does not say, the scheduled tasks' ones
         // are on Scheduled Tasks, under each task (#2838). The open one keeps its row.
-        let split = AutoConversations(all.filter { !isPinned($0) }, tasks: taskChats.known(on: model.api), current: current,
+        let split = AutoConversations(all.filter { !isPinned($0) && !isDirection($0) }, tasks: taskChats.known(on: model.api), current: current,
                                       hubSays: model.hubFeatures.contains(AutoConversationSource.feature))
         let rest = AssistantSidebarGroups.newestFirst(split.mine)
         if rest.isEmpty && split.auto.isEmpty {
@@ -1204,7 +1212,7 @@ struct AssistantSidebar: View {
                 .font(Theme.Font.secondary).foregroundStyle(.secondary)
                 .padding(.horizontal, Theme.Space.m).padding(.top, Theme.Space.xl)
         } else {
-            heading(String(localized: "Recent")) {
+            heading(directions.isEmpty ? String(localized: "Recent") : String(localized: "Other Chats")) {
                 Button { newConversation() } label: { Label("New Chat [Quick Actions ea4b29]", systemImage: Theme.Icon.compose) }
                 if split.supported {
                     Button { autoList = AutoConversationsRoute(source: nil) } label: { Label("All Chats", systemImage: Theme.Icon.list) }
@@ -1415,10 +1423,11 @@ struct AssistantSidebar: View {
     }
 
     /// A conversation: a round mark (Persona's face for the main one), its title on one line, its state on the right.
-    private func row(_ s: Session) -> some View {
+    /// `named`: a direction's name, shown instead of its leader conversation's title.
+    private func row(_ s: Session, named: String? = nil) -> some View {
         let selected = s.key == current
         let isMain = s.key == model.assistantMain
-        let title = isMain ? Self.shownMainTitle(model.showsAssistantIdentity) : s.title.isEmpty || s.title == "Claude Code" ? String(localized: "New Chat [Quick Actions ea4b29]") : s.title
+        let title = isMain ? Self.shownMainTitle(model.showsAssistantIdentity) : named ?? (s.title.isEmpty || s.title == "Claude Code" ? String(localized: "New Chat [Quick Actions ea4b29]") : s.title)
         let preview = s.lastText.map { Fmt.plain($0).replacingOccurrences(of: "\n", with: " ") } ?? ""
         return Button { open(s.key) } label: {
             HStack(spacing: Theme.Space.m) {
@@ -1789,6 +1798,12 @@ nonisolated enum AssistantSidebarGroups {
     struct Group: Equatable {
         var title: String
         var sessions: [Session]
+    }
+
+    /// The sidebar's Directions: the listed leader conversations in `leaders`' order (the hub's), never the main one;
+    /// a leader the list does not hold (archived, another manager's) is left out.
+    static func directions(_ sessions: [Session], leaders: [String], main: SessionKey?) -> [Session] {
+        leaders.compactMap { id in sessions.first { $0.sessionID == id && $0.key != main } }
     }
 
     /// Newest first, a fixed order for equal times (the sidebar's Recent).
