@@ -161,7 +161,7 @@ Risks: Glass leaves line height to the platform on purpose (see `Typography.kt`)
 4. `StyleContrastTest` gets floors per style: Glass fails on the three iOS floors and reports the WCAG checks without failing, as `rules.json` does; Brief and Board keep 4.5:1.
 5. `GlassTokenContractTest`, `docs/android/android-design.md` and rule 7 of `DESIGN_SYSTEM.md` section 6 are updated in the same PR.
 
-**The cost.** Android's Glass text gets lighter: secondary text drops from 4.5:1 to about 3.3:1 to 3.4:1 in light mode, below WCAG AA. That is what decision 2 accepts; the contrast report keeps showing it.
+**The cost.** Android's Glass text gets lighter: secondary text drops from 4.5:1 to about 3.3:1 to 3.4:1 in light mode, below WCAG AA. That is what decision 2 accepts; the contrast report keeps showing it. Done: the extension themes keep their 4.5:1 check, since a theme applies to every style and Brief and Board keep 4.5:1; places that picked black or white by contrast on the accent now use the palette's `onAccent` (white in Glass).
 
 ### T7. Icons by meaning
 
