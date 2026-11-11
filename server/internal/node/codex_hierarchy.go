@@ -101,12 +101,13 @@ func (n *Node) decorateCodexSession(s *proto.Session, src codexSource, legacy st
 	// and placeCodexDesktop placed it, whatever folder the App made for it (~/Documents/Codex/<date>/<name>): by its
 	// folder it was a project of its own. A subagent goes by its chat: resolveCodexHierarchy gives it its chat's place,
 	// but not when the chat is not listed (archived in the App, or read from its database without sqlite3).
+	// A project is named as the App names it when its folder is the repository's root (folderName), else by the folder.
 	chat := src.thread
 	if s.IsSubagent {
 		chat = firstNonEmpty(origin.root, s.ParentThreadID, chat)
 	}
 	if s.RepoRoot != "" && !app.inNoProject(chat) {
-		s.SpaceID, s.SpaceName = "codex-project:"+s.RepoRoot, filepath.Base(s.RepoRoot)
+		s.SpaceID, s.SpaceName = "codex-project:"+s.RepoRoot, firstNonEmpty(app.folderName(s.RepoRoot), filepath.Base(s.RepoRoot))
 	} else {
 		s.SpaceID, s.SpaceName = "codex-chats:"+src.home, "Codex 对话"
 	}
