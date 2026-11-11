@@ -107,9 +107,11 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * when each session was last active (#4236 added 1,081 B to ja: the sidebar row's age at its end, the paged list's
  * Active within menu and its folded Earlier group, their words), and 512 B for a Persona chat's queue actions (#4342
  * added 312 B: views/chat/QueueStrip.tsx's own and relayed rows, the photos a take-back brings back, the Persona Send now
- * words and the relayed line). Raise it on purpose, in the change that needs it.
+ * words and the relayed line), and 1,536 B for the refusal fallback (#2528 added 1,115 B to ja: the refusal notice
+ * line, the fallback card above the composer with its way back to the configured model, lib/model-fallback.ts and
+ * lib/refusal-public.ts, their words). Raise it on purpose, in the change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 593_024;
+export const FIRST_SCREEN_BUDGET = 594_560;
 
 /** What the built-in hub sends for `files` (paths below `dir`) to a browser that takes br: each one's brotli copy, or
  *  the file itself when it has none. Build time only. */
