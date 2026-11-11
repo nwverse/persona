@@ -61,6 +61,9 @@ func (s *Service) toolAgentInterrupt(ctx context.Context, machine, self string, 
 	if c.SourceKind != "" && (c.Capabilities == nil || !c.Capabilities.Interrupt || then != "" && !c.Capabilities.Send) {
 		return "", fmt.Errorf("this agent can only be read: %s", c.ReadOnlyReason)
 	}
+	if stoppedAgent(c) { // read-only (#4754): nothing runs to stop, and nothing here starts it again
+		return "", fmt.Errorf("%s has already stopped and is read-only: nothing to interrupt, and nothing was sent", agentLabel(c))
+	}
 	if err := s.exitAllowed(ctx, self, am, c, then, 0); err != nil { // refused before the turn is stopped or the user asked
 		return "", err
 	}
@@ -149,7 +152,7 @@ func (s *Service) toolAgentSupervise(ctx context.Context, self string, args json
 		return fmt.Sprintf("%s already works for your task %s (%q): you supervise it, done_when %s.", agentLabel(c), todo.ID, todo.Title,
 			criteriaWords(nil, todo.Supervision)), nil
 	}
-	s.taskCard(ctx, self, todo.ID)
+	s.taskCard(ctx, self, todo.ID, wakeActive)
 	return fmt.Sprintf("%s on %s is now your task %s (%q, its card is in the conversation): you get a supervision message (📋) when it needs you, "+
 		"and close it with task_review. done_when %s. The agent was not told: if it should work to these criteria or report to you "+
 		"(report_to_supervisor), tell it with agent_send.", agentLabel(c), am.Name, todo.ID, todo.Title, criteriaWords(nil, todo.Supervision)), nil
@@ -273,6 +276,8 @@ type handedTask struct {
 	made bool
 	self string
 	task sendTask
+	// wake: its card's (taskCard), wakeResumed when the agent was closed and the message resumes it
+	wake string
 }
 
 // sendTaskAllowed refuses agent_send's task before anything is sent: only the main conversation supervises; an agent
@@ -376,7 +381,11 @@ func (s *Service) handTask(ctx context.Context, self string, am Device, c proto.
 		return nil, fmt.Errorf("%w; nothing was sent", err)
 	}
 	if made {
-		return &handedTask{todo: todo, made: true, self: self}, nil
+		wake := wakeActive
+		if c.Status == proto.StatusOffline { // closed: the send resumes it first
+			wake = wakeResumed
+		}
+		return &handedTask{todo: todo, made: true, self: self, wake: wake}, nil
 	}
 	if err := otherWork(c, todo, task); err != nil {
 		return nil, err
@@ -393,7 +402,7 @@ func (h *handedTask) sent(ctx context.Context, s *Service, text string) string {
 	}
 	refused := ""
 	if h.made {
-		s.taskCard(ctx, h.self, h.todo.ID)
+		s.taskCard(ctx, h.self, h.todo.ID, h.wake)
 	} else {
 		doneWhen, expect := cleanDoneWhen(h.task.DoneWhen), max(0, min(h.task.ExpectMinutes, 24*60))
 		s.releaseHold(ctx, h.todo.ID)                                            // the supervisor sent its agent on: follow-ups go again (decision.go)
@@ -425,7 +434,7 @@ func (h *handedTask) sendFailed(ctx context.Context, s *Service, err error) erro
 		return err
 	}
 	if startResultUnknown(err) {
-		s.taskCard(ctx, h.self, h.todo.ID)
+		s.taskCard(ctx, h.self, h.todo.ID, h.wake)
 		return fmt.Errorf("%w (it may still arrive: task %s stays; check with agent_read before sending again)", err, h.todo.ID)
 	}
 	if rerr := s.removeTodo(context.WithoutCancel(ctx), h.todo.ID); rerr != nil {
@@ -436,11 +445,30 @@ func (h *handedTask) sendFailed(ctx context.Context, s *Service, err error) erro
 	return fmt.Errorf("%w (no task was made)", err)
 }
 
-// taskCard puts task id's card into conversation self.
-func (s *Service) taskCard(ctx context.Context, self, id string) {
-	if _, err := s.appendFeed(ctx, self, feedTask, id, nil); err != nil {
+// taskCard puts task id's card into conversation self. wake says how the task came to its Agent when it did not start
+// it (#5096, the clients' hand-off badge): wakeActive for an Agent that was running already (agent_supervise,
+// agent_send with a task, an Agent that became a task at its turn's end, a task moved to another conversation),
+// wakeResumed for a closed one the hand-off's message resumed. "": the task started its Agent, as task_plan and
+// agent_start do, and the card has no body.
+func (s *Service) taskCard(ctx context.Context, self, id, wake string) {
+	var body any
+	if wake != "" {
+		body = taskCardBody{Wake: wake}
+	}
+	if _, err := s.appendFeed(ctx, self, feedTask, id, body); err != nil {
 		s.logf("task %s: feed: %v", id, err)
 	}
+}
+
+// A task card's wake (taskCard).
+const (
+	wakeActive  = "active"
+	wakeResumed = "resumed"
+)
+
+// taskCardBody is a task card's body: none for a task that started its Agent.
+type taskCardBody struct {
+	Wake string `json:"wake,omitempty"`
 }
 
 // dropAdoption closes the todo an adoption made when the agent could not be put on it (why), so no empty task stays.
@@ -724,4 +752,11 @@ func (s *Service) reportNow(ctx context.Context, t Todo, machine, session, kind,
 	}
 	return "Sent to your supervisor: it reads it within minutes and answers you by message. Don't wait idle for it if there is " +
 		"other work in the task; stop when you cannot go on.", nil
+}
+
+// stoppedAgent: c is an agent that has stopped and is read-only (node stopped.go, #4754): its terminal engine keeps its
+// conversation and terminal, and a message to it is refused (agent_stopped).
+func stoppedAgent(c proto.Session) bool {
+	return c.SourceKind == "" && c.Capabilities != nil && !c.Capabilities.Send &&
+		(c.Status == proto.StatusOffline || c.Status == proto.StatusInterrupted)
 }

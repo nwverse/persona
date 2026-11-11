@@ -37,6 +37,13 @@ nonisolated extension Theme {
         static let meterRippleSpeed: Double = 9
         /// A paused or ended meter and recording mark: dimmed, never gone.
         static let dimmed: Double = 0.35
+        /// The typed question's field in the live bar (#4486): it grows to this many lines, then scrolls, so the
+        /// timeline above keeps most of the room the keyboard leaves.
+        static let askLines = 5
+        /// The same at accessibility text sizes, where a line is several times taller.
+        static let askLinesLargeType = 2
+        /// Its send button while there are no words to send: there, so the row does not jump, and plainly unavailable.
+        static let askSendIdle: Double = dimmed
         /// A row arriving in the timeline starts this far below its place (the `reveal` curve brings it up).
         static let arrivalOffset: CGFloat = Theme.Space.s
         /// The largest text size the big timer grows to: past it the time stays on one line, readable, instead of
@@ -49,5 +56,26 @@ nonisolated extension Theme {
         /// How often the spoken time (VoiceOver's value for the timer) is refreshed, and the marker's number.
         static let spokenTimeRefresh: TimeInterval = 60
         static let gapRefresh: TimeInterval = 5
+        /// The meeting page (#3862): its title (the live header, the status card after the meeting) takes at most this
+        /// many lines.
+        static let pageTitleLines = 2
+        /// How many of the newest transcript lines its Live box shows, and how many lines of text each may take: the
+        /// box says what is being said now, the whole transcript is one tap away.
+        static let liveLines = 3
+        static let liveLineLength = 2
+        /// The step, in seconds, of the Live box's "About N s behind" (so it changes a few times a minute).
+        static let liveBehindStep = 5
+        /// How many exchanges Show Earlier brings of the room conversation: each batch of lines is a turn of its own,
+        /// so the chat's two would bring little.
+        static let earlierTurns = 6
+        /// A photo in the meeting's thread: its thumbnail's side.
+        static let photoSide: CGFloat = Theme.Size.box80
+        /// The meeting's material (the follow-up's first message) opened: this many lines show until Show All, which a
+        /// text longer than that, or than this many characters, offers.
+        static let materialLines = 12
+        static let materialPreview = 1200
+        /// How often the page after the meeting asks the hub for the minutes while they are on their way, in seconds,
+        /// as the wrap-up and the recording's page do.
+        static let minutesPoll: TimeInterval = 15
     }
 }

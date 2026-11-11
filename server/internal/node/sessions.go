@@ -12,10 +12,10 @@ import (
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/closeout"
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
-	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 // hostTextSlack: the transcript's words this long after the host's record of the answer still belong to that turn.
@@ -144,7 +144,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				if m.title != "" && a.Agent != "codex" && a.Agent != traexAgent {
 					s.Title = m.title
 				}
-				if s.Title == "" || s.Title == "Claude Code" {
+				if s.Title == "" || s.Title == "Claude Code" && !m.titleManual {
 					s.Title = ""
 					untitled(&s, m)
 				}
@@ -183,7 +183,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			if !a.LastTextAt.IsZero() && promptAt.After(a.LastTextAt) {
 				s.Asks = ""
 			} else {
-				s.Asks = transcript.AskOf(a.LastText)
+				s.Asks = closeout.AskOf(a.LastText)
 			}
 			s.AsksRead = true
 		}
@@ -219,6 +219,9 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	// Runtimes (runtimes.go): listed as they say, appended straight into the list and dropped there when already seen.
 	from := len(out)
 	out = n.runtimes.appendSessions(out)
+	if pass != nil {
+		pass.runtimes = n.runtimes.codexThreads() // conversations that are Codex threads here: listed once (runtimecodex.go)
+	}
 	peak := len(out)
 	j := from
 	for i := from; i < len(out); i++ {
@@ -266,6 +269,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	n.markInterrupted(out[from:], seen) // the restart cut these off (#1917)
 	for i := from; i < len(out); i++ {
 		n.decorateIn(&out[i], pass)
+		n.markStopped(&out[i]) // read-only (stopped.go, #4754)
 	}
 	n.listRows.Store(int32(max(peak, len(out))))
 	// Terminal-owned Codex parents were already seen before history was added: over the whole list, before any row goes.

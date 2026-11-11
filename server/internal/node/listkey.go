@@ -42,6 +42,12 @@ func listKeySized(list []proto.Session, size int) string {
 		w.quote(s.Branch, '/')
 		w.quote(s.SpaceID, '/')
 		w.quote(s.SpaceKind, '\n')
+		if s.TitleSource != proto.TitleSourceUnknown || s.TitleManual || s.OutputTokens != 0 {
+			w.b.WriteString("naming:")
+			w.quote(s.TitleSource.String(), '/')
+			w.str(strconv.FormatBool(s.TitleManual), '/')
+			w.int(int64(s.OutputTokens), '\n')
+		}
 		writeUltracodeKey(&w, s)
 		if s.ServiceTier != "" || len(s.ServiceTiers) > 0 {
 			fmt.Fprintf(&w.b, "speed:%q/%v\n", s.ServiceTier, s.ServiceTiers)
@@ -49,6 +55,9 @@ func listKeySized(list []proto.Session, size int) string {
 		// A completed background scan can discover a fallback without a new transcript revision or status.
 		if s.ModelFallback != nil || s.TurnErrorCode != "" {
 			fmt.Fprintf(&w.b, "model-fallback:%+v/%q\n", s.ModelFallback, s.TurnErrorCode)
+		}
+		if s.ModelRestore != nil { // a restore asked (model_restore.go): no new revision says so
+			fmt.Fprintf(&w.b, "model-restore:%+v\n", *s.ModelRestore)
 		}
 		if s.Activity != "" { // a new step shows at once, not with the next 10 s of updated_at
 			w.b.WriteString("activity:")
@@ -153,7 +162,7 @@ func listKeySized(list []proto.Session, size int) string {
 			w.quote(p.Current, '\n')
 		}
 		// A subagent's new call shows at once (its card says what it does now, #5602); the list goes out at most once a
-		// second, with the poll.
+		// second, with the poll. Its model and tokens ride along (#5030).
 		for _, a := range s.Subagents {
 			w.str(a.ID, ':')
 			w.str(strconv.FormatBool(a.Running), ':')

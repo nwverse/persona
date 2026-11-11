@@ -50,12 +50,17 @@ type Settings struct {
 	DefaultPermissionMode string `json:"default_permission_mode,omitempty"`
 	// Timezone is the phone's (IANA name): routines and the snapshot read times in it, and the hub its own.
 	Timezone string `json:"timezone,omitempty"`
+	// TimezonePicked: the user picked Timezone by hand (#1855); while true, a device's own sync (a `timezone` written
+	// without `timezone_picked`) leaves it alone. false: it follows the devices again. nil: never said (every write
+	// lands, as before).
+	TimezonePicked *bool `json:"timezone_picked,omitempty"`
 	// Notes, once edited in the app, replace manager.json's assistant.notes.
 	Notes *string `json:"notes,omitempty"`
 	// OwnerAliases are the names the user explicitly adds for kb.owner; an empty list clears them.
 	OwnerAliases []string `json:"owner_aliases,omitempty"`
 	// Main is the main conversation (the Persona tab opens it): one long-running conversation, the others are side ones.
-	Main string `json:"main,omitempty"`
+	Main          string `json:"main,omitempty"`
+	MainMachineID string `json:"main_machine_id,omitempty"` // confirmed routing device of Main
 	// Former are the main conversations replaced since (newest first, POST /api/v1/assistant/main/new): their machine
 	// keeps listing them, archived, however long they are quiet.
 	Former []FormerMain `json:"former_main,omitempty"`
@@ -86,6 +91,12 @@ type Settings struct {
 	// AgentTasks: every agent Persona starts is on a quiet, supervised todo (#3617, agent_tasks.go). nil is off (the
 	// default).
 	AgentTasks *bool `json:"agent_tasks,omitempty"`
+	// AgentAutoNaming corrects recognizable placeholder names; nil is on. Manual titles are protected.
+	AgentAutoNaming *bool `json:"agent_auto_naming,omitempty"`
+	// AgentAutoNamingMax counts successful automatic title changes per session; nil is one.
+	AgentAutoNamingMax *int `json:"agent_auto_naming_max,omitempty"`
+	// AgentAutoNamingIntervalHours enables refresh after new output; nil or zero is off.
+	AgentAutoNamingIntervalHours *int `json:"agent_auto_naming_interval_hours,omitempty"`
 	// InboxSignals: new Inbox messages the judge links to a supervised task reach its supervisor as the signal inbox
 	// (#4293, supervise_inbox.go). nil is off (the default): each one is a supervisor turn.
 	InboxSignals *bool `json:"inbox_signals,omitempty"`
@@ -104,7 +115,8 @@ type Settings struct {
 	Leaders []string `json:"leaders,omitempty"`
 	// InterjectBackground: a message the user sends while a Claude conversation is still answering moves what runs in
 	// the foreground (Bash commands, subagents) to the background, so the message is taken up at once instead of after
-	// them (Claude Code 2.1.139 or later, node/assistant_interject.go). nil is off (the default).
+	// them (Claude Code 2.1.139 or later, node/assistant_interject.go). nil is off (the default). A round the
+	// user did not start is moved to the background by their message either way (owner_preempt.go).
 	InterjectBackground *bool `json:"interject_background,omitempty"`
 }
 
@@ -226,7 +238,8 @@ func (s *Service) mainTasksQuiet(ctx context.Context) bool {
 }
 
 // interjectBackground: a message sent while a conversation answers moves its foreground work to the background
-// (interject_background, off by default).
+// (interject_background, off by default). The owner's message to a round they did not start does so whatever this says
+// (owner_preempt.go).
 func (s *Service) interjectBackground(ctx context.Context) bool {
 	v := s.settings(ctx).InterjectBackground
 	return v != nil && *v
@@ -370,7 +383,7 @@ func (s *Service) profile(ctx context.Context, tasks []TaskView, todos *TodoRepo
 		return nil
 	}
 	v := s.effective(ctx, saved)
-	p := &Profile{MachineID: v.MachineID, Main: v.Main, Launcher: v.Launcher, Timezone: v.Timezone}
+	p := &Profile{MachineID: v.MachineID, Main: v.Main, MainMachineID: v.MainMachineID, Launcher: v.Launcher, Timezone: v.Timezone}
 	if tasks != nil && todos != nil {
 		p.Keep = keptSessions(v, tasks, todos.Links)
 	}
@@ -390,7 +403,7 @@ func keptSessions(v Settings, tasks []TaskView, links []TodoLink) []SessionRef {
 			out = append(out, SessionRef{MachineID: machine, SessionID: id})
 		}
 	}
-	add(v.MachineID, v.Main)
+	add(v.mainRouteMachine(), v.Main)
 	for _, f := range v.Former { // archived, still to be found
 		add(f.MachineID, f.SessionID)
 	}
@@ -459,7 +472,10 @@ type assistantView struct {
 	// InterjectBackground is in effect, like DoneNeedsDelivery.
 	InterjectBackground bool `json:"interject_background"`
 	// AgentTasks is in effect, like DoneNeedsDelivery.
-	AgentTasks bool `json:"agent_tasks"`
+	AgentTasks                   bool `json:"agent_tasks"`
+	AgentAutoNaming              bool `json:"agent_auto_naming"`
+	AgentAutoNamingMax           int  `json:"agent_auto_naming_max"`
+	AgentAutoNamingIntervalHours int  `json:"agent_auto_naming_interval_hours"`
 	// InboxSignals is in effect, like DoneNeedsDelivery.
 	InboxSignals bool `json:"inbox_signals"`
 }
@@ -473,6 +489,9 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		sp = space[0]
 	}
 	v := s.settings(ctx)
+	if sp == "" {
+		v.MainMachineID = s.confirmedMainMachine(ctx, v)
+	}
 	v.Launcher = s.launcherNow(ctx)
 	out := assistantView{Settings: v, Manager: s.managerIdentity(), PermissionDefaults: s.permissionDefaults(), Conversations: []proto.Session{}, NotesEffective: s.notes(ctx), MainTasksQuiet: quietOn(v.MainTasksQuiet),
 		StartRequestedTasks: quietOn(v.StartRequestedTasks), RecordingDays: recordingDaysOf(v), MinutesDays: kb.MinutesDaysFor(minutesDaysSetting(v), recordingDaysOf(v)),
@@ -480,11 +499,14 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		TaskWorkspacePreference: s.taskWorkspacePreference(ctx),
 		MainBackgroundFolded:    quietOn(v.MainBackgroundFolded),
 		DoneNeedsDelivery:       v.DoneNeedsDelivery != nil && *v.DoneNeedsDelivery, IdleCloseHours: int(s.idleCloseAfter(ctx) / time.Hour),
-		ArchiveClosedDays:   int(s.archiveClosedAfter(ctx) / (24 * time.Hour)),
-		ReviewSamplePercent: s.reviewSamplePercent(ctx),
-		InterjectBackground: v.InterjectBackground != nil && *v.InterjectBackground,
-		AgentTasks:          v.AgentTasks != nil && *v.AgentTasks,
-		InboxSignals:        v.InboxSignals != nil && *v.InboxSignals}
+		ArchiveClosedDays:            int(s.archiveClosedAfter(ctx) / (24 * time.Hour)),
+		ReviewSamplePercent:          s.reviewSamplePercent(ctx),
+		InterjectBackground:          v.InterjectBackground != nil && *v.InterjectBackground,
+		AgentTasks:                   v.AgentTasks != nil && *v.AgentTasks,
+		AgentAutoNaming:              quietOn(v.AgentAutoNaming),
+		AgentAutoNamingMax:           agentNamingLimit(v),
+		AgentAutoNamingIntervalHours: agentNamingInterval(v),
+		InboxSignals:                 v.InboxSignals != nil && *v.InboxSignals}
 	if d, ok := s.device(ctx, v.MachineID); ok {
 		out.Cwd = s.spaceCwd(d, sp)
 		var list []proto.Session
@@ -503,11 +525,20 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 			}
 		}
 	}
+	if sp == "" && v.MainMachineID != "" && v.MainMachineID != v.MachineID {
+		if c, ok := s.session(ctx, v.MainMachineID, v.Main); ok && c.Assistant && spaceOf(c) == "" {
+			out.Conversations = append(out.Conversations, c)
+		}
+	}
 	return out
 }
 
 func (s *Service) profileRoutes() {
 	s.handle("GET /api/v1/assistant", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("view") == "main-runtime" {
+			apierr.WriteJSON(w, s.mainExecution(r.Context()))
+			return
+		}
 		archived := r.URL.Query().Get("archived")
 		space := r.URL.Query().Get("space")
 		if !validSpace(space) {

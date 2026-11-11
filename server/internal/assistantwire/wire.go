@@ -53,6 +53,9 @@ type Hello struct {
 	// Notify is hub.json's notify: the finished push's timings; HookTimeoutMS, how long a hook's card waits by default,
 	// is manager.json's hook_timeout_minutes, over the hello (the interactions and the pushes are the manager's).
 	Notify NotifyTimings `json:"notify,omitzero"`
+	// SecretHandoffGate: the hub lets only a device that may approve a hand-off card say yes to one, and names it in
+	// HTTPRequest.HandoffApprover. An older hub never sends it; a manager then shows no hand-off card at all.
+	SecretHandoffGate bool `json:"secret_handoff_gate,omitempty"`
 }
 
 // NotifyTimings are hub.json's notify section, and manager.json's hook_timeout_minutes, in milliseconds (0: the
@@ -295,9 +298,9 @@ type Snapshot struct {
 type TaskView struct {
 	ID           string    `json:"id"`
 	Label        string    `json:"label"`  // its title, or what stands for one
-	Repeat       string    `json:"repeat"` // once / daily / interval
+	Repeat       string    `json:"repeat"` // once / daily / interval / cron
 	Enabled      bool      `json:"enabled"`
-	At           time.Time `json:"at,omitempty"` // once: when; interval: the next run
+	At           time.Time `json:"at,omitempty"` // once: when; interval, cron: the next run
 	EveryMinutes int       `json:"every_minutes,omitempty"`
 	MachineID    string    `json:"machine_id,omitempty"` // of the conversation it came from
 	RunMachineID string    `json:"run_machine_id,omitempty"`

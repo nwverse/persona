@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -226,14 +227,27 @@ func memoSetting(ctx context.Context, st Store, key string, out any) (bool, erro
 }
 
 func (s *Service) storedLaunchers(ctx context.Context) []storedLauncher {
+	list, _ := s.storedLaunchersKnown(ctx)
+	return list
+}
+
+// storedLaunchersKnown is storedLaunchers with whether the list is really known: false means the setting could not be
+// read, which is not the same as no managed launcher. Callers that judge whether a launcher still exists must not read
+// an unknown list as "it is gone": a message would be refused as launcher_missing while the provider is still
+// configured (#4437). No database configured counts as no managed launchers, as storedLaunchers always did.
+func (s *Service) storedLaunchersKnown(ctx context.Context) ([]storedLauncher, bool) {
 	if list, ok := ctx.Value(managedSnapshotKey{}).([]storedLauncher); ok {
-		return list
+		return list, true
+	}
+	st := s.store()
+	if st == nil {
+		return nil, true // no database configured: no managed launchers, as before
 	}
 	var list []storedLauncher
-	if st := s.store(); st != nil {
-		_, _ = memoSetting(ctx, st, launchersManagedKey, &list)
+	if _, err := memoSetting(ctx, st, launchersManagedKey, &list); err != nil {
+		return nil, false
 	}
-	return list
+	return list, true
 }
 
 var errManagedLaunchersRead = errors.New("managed provider configuration unavailable")
@@ -257,12 +271,35 @@ func (s *Service) readStoredLaunchers(ctx context.Context) (list []storedLaunche
 	return list, nil
 }
 
+// readHiddenLaunchers reads launchers.hidden from the store itself (never a request's memo) for a change to it, made
+// under models.mu so no other hide or restore is lost; a failed read fails the change instead of emptying the list.
+func (s *Service) readHiddenLaunchers(ctx context.Context) ([]string, error) {
+	st := s.store()
+	if st == nil {
+		return nil, i18n.Err("assistant-models.err_no_database")
+	}
+	var list []string
+	_, err := st.Setting(ctx, launchersHiddenKey, &list)
+	return list, err
+}
+
 func (s *Service) hiddenLaunchers(ctx context.Context) []string {
 	var list []string
 	if st := s.store(); st != nil {
 		_, _ = memoSetting(ctx, st, launchersHiddenKey, &list)
 	}
+	if n, _ := ctx.Value(unhiddenKey{}).(string); n != "" && slices.Contains(list, n) {
+		list = slices.DeleteFunc(slices.Clone(list), func(h string) bool { return h == n })
+	}
 	return list
+}
+
+type unhiddenKey struct{}
+
+// withUnhidden has hiddenLaunchers leave name out: a launcher that a configuration or a conversation still names keeps
+// running when it is hidden, as the hide route says; hiding takes it out of the pickers only (#4659).
+func withUnhidden(ctx context.Context, name string) context.Context {
+	return context.WithValue(ctx, unhiddenKey{}, name)
 }
 
 func (s *Service) putSetting(ctx context.Context, key string, v any) error {

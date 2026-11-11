@@ -1,5 +1,13 @@
 # Third-party notices
 
+## Password login WebAssembly client
+
+`web/public/pake/client.wasm` uses `github.com/bytemare/opaque` v0.18.0 (MIT),
+its transitive cryptographic dependencies (MIT and BSD), and the Go runtime (BSD).
+The build collects their full license texts in a generated
+`THIRD_PARTY_NOTICES.txt` under the web build's `pake` output, deployed beside the WASM client at
+`/pake/THIRD_PARTY_NOTICES.txt`. The generated notices must accompany binary distributions.
+
 ## Brand marks
 
 `apple/Persona/Resources/Assets.xcassets/Brands` and `apple/PersonaWatch/Assets.xcassets/Brands` hold other products' marks
@@ -441,41 +449,17 @@ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEM
 COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
 OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-## openclaw-weixin
-
-`server/plugins/wechat/ilink` (the iLink client for the WeChat bot, docs/extensions/wechat.md) follows the wire behavior of Tencent's
-openclaw-weixin v2.4.6: its API types and calls, the QR authorization, the media AES-128-ECB, and its markdown filter. The Go
-code is written for Persona; nothing of the plugin's runtime is copied.
-
-https://github.com/Tencent/openclaw-weixin
-
-Tencent is pleased to support the open source community by making openclaw-weixin available.
-
-Copyright (C) 2026 Tencent.  All rights reserved.
-
-openclaw-weixin is licensed under the MIT.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the Software without restriction, including without limitation the
-rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit
-persons to whom the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the
-Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
-WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
-COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
-OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
 ## cindy
 
 `server/internal/assistant/models_catalog.json` (the built-in model catalog that fills in what a gateway lists) is taken from
 cindy's model registry (`packages/model-providers/catalog/model-registry.json`): for the Claude series and the GLM,
 Kimi, DeepSeek V4, Qwen3, MiniMax, Seed and MiMo models cindy runs on Claude Code, only the id, name, context window,
 thinking levels (low, medium, high, xhigh, max) and default level, as the registry states them, reformatted to a flat
-list. The provider settings (the add-a-provider steps, the connection test and the model list it fetches) follow
-cindy's design. No code is copied.
+list. The provider settings (the add-a-provider steps, the connection test and the model list it fetches) and the web
+chat's subagent and workflow cards (`web/src/views/chat/TaskCard.tsx`, after cindy's `AgentTaskCard`: layout, states and
+wording) and the main chat's hand-off cards with the way-back strip on an Agent's page (`web/src/views/assistant/Handoff.tsx`,
+`web/src/views/chat/HandoffBack.tsx`, after cindy's `SessionHandoffCard` and its return pill: layout, states and wording)
+follow cindy's design. No code is copied.
 
 https://github.com/makecindy/cindy
 

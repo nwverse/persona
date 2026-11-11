@@ -101,6 +101,10 @@ export interface Subagent {
   steps?: number;
   /** Its latest tool call: what it is doing now while it runs (newer nodes). */
   last_tool?: { id?: string; name: string; summary: string };
+  /** The model it ran on, from its own transcript (newer nodes, #5030); never the model its call asked for. */
+  model?: string;
+  /** Its latest reply's context plus output tokens, as a workflow agent's `tokens` (newer nodes, #5030). */
+  tokens?: number;
 }
 
 export interface SessionCapabilities {
@@ -167,6 +171,8 @@ export interface TriageSwitches {
   tool_loop?: boolean;
   /** Ask for a closeout (#3612): hold an agent's stop once when a turn that did work ends without one (off when absent). */
   closeout?: boolean;
+  /** Ask afterwards (#3616): one status question to an unsupervised agent whose turn did work and ended without a closeout (off when absent). */
+  closeout_ask?: boolean;
   /** Remind When Seen, Unanswered (#5096): remind once when an agent asked the user something and it stays unanswered after they saw
    *  it. Rule-based, no tokens, so it is on when absent and does not depend on `enabled`. */
   reply_reminder?: boolean;
@@ -285,8 +291,14 @@ export interface Session {
    *  or "usage_limit" (a subscription limit, until it resets). */
   turn_error_kind?: string;
   /** What is wrong, when the hub can tell from turn_error (docs/assistant/onboarding.md 5.2): not_logged_in / auth_failed /
-   *  model_route / rate_limited. */
+   *  model_route / rate_limited / model_fallback_unavailable (the model Claude Code fell back to after a refusal can't
+   *  be used: no "Continue"). */
   turn_error_code?: string;
+  /** The refusal fallback still active in this session, as Claude Code recorded it (#2289). */
+  model_fallback?: ModelRefusal;
+  /** "Back to the configured model" was asked and no newer reply has come yet (#2528): the next start asks for `to`. Not
+   *  proof the configured model runs. */
+  model_restore?: ModelRestore;
   /** When turn_error_kind is "usage_limit": when that subscription limit resets. Absent when it is not known. */
   turn_error_resets_at?: string;
   /** The CLI continues by itself once the usage limit resets. */
@@ -295,6 +307,9 @@ export interface Session {
   work?: WorkState;
   pending_interactions?: number;
   queued?: string[];
+  /** In a Persona chat, the last this many of `queued` came from other conversations: the assistant delivers them when
+   *  the turn ends, and the strip's actions leave them alone (#4342). */
+  queued_relayed?: number;
   subagents?: Subagent[];
   loop?: LoopInfo;
   /** The goal it works toward until it holds (Claude Code's /goal, a Codex thread goal; docs/integrations/agent-goal.md). */
@@ -532,12 +547,37 @@ export interface Item {
   client_msg_id?: string;
   /** This notice is where the context was compacted (Claude Code's compact_boundary). */
   compact?: CompactInfo;
+  /** A notice for a Claude Code model_refusal_* record (#2289), kept as recorded. */
+  model_refusal?: ModelRefusal;
+  /** The model that wrote this assistant item, as its transcript records it (proto.Item.Model, #5034); absent when the
+   *  transcript does not say and from older nodes. Drawn only as a divider where the replies' model changes. */
+  model?: string;
   /** A message Persona typed in for the model (a task's notice, a scheduled run…), not by you (lib/injected.ts). */
   injected?: Injected;
   /** Display provenance, independent of the model-facing role. Unknown kinds remain non-user sources. */
   source?: MessageSource;
   /** Client-only promotion evidence transferred from a removed Fold.supervision_user during an overlapping merge. */
   supervisionUser?: boolean;
+}
+
+/** A Claude Code model_refusal_* record (server proto.ModelRefusal) as the hub gives it: its known fields, values as
+ *  recorded (unknown ones included), and `text`, the refusal's own words. Never the record's line (#2528). */
+export interface ModelRefusal {
+  subtype: string;
+  original_model?: string;
+  fallback_model?: string;
+  category?: string;
+  scope?: string;
+  explanation?: string;
+  text?: string;
+}
+
+/** A pending "back to the configured model" (server proto.ModelRestore): "next_start" — the idle headless process was
+ *  closed (or none ran), so the next start asks for `to`. */
+export interface ModelRestore {
+  state: "next_start" | (string & {});
+  to?: string;
+  at: string;
 }
 
 /** Message provenance supplied by the assistant, not a group-chat member or a model role. */
@@ -645,8 +685,11 @@ export interface Interaction {
   /** Whether answering "Always allow" is kept, as the manager says (#3590): false hides the choice, true offers it;
    *  absent (an older hub, an Agents session's card) the card's own rule (offersAlways). */
   always_honored?: boolean;
-  /** The manager's own tool by its name for people ("iPhone control" for iphone_do); absent on other cards. */
+  /** The tool by its name for people, from the manager: its own tools ("iPhone control" for iphone_do) and Persona's
+   *  MCP tools on a node's card ("Report to supervisor · Done", #4966); absent on other cards. */
   tool_title?: string;
+  /** The tool alone where tool_title also says what this call does ("Report to supervisor"): what Always covers. */
+  tool_name_title?: string;
   /** Why another agent asks for the permission, in its own words (a Codex and compatible variants approval read off the terminal). */
   reason?: string;
   /** An MCP form or link (kind elicitation, docs/protocol/protocol.md "MCP elicitation"): the server, where it is configured, and
@@ -680,6 +723,9 @@ export interface Delegate {
 
 export interface Launcher {
   name: string;
+  /** A Persona-managed provider's name for people, any language (#5029); absent for an rc alias or from an older hub.
+   *  Show it through lib/provider-names.ts. */
+  display_name?: string;
   model?: string;
   /** What it starts when not Claude Code ("codex"); agent_type: what the hub's machine config says it runs. */
   agent?: string;
@@ -702,6 +748,7 @@ export interface LauncherHealth {
 
 export interface AssistantInfo {
   machine_id: string;
+  main_machine_id?: string;
   launcher?: string;
   cwd?: string;
   main?: string;
