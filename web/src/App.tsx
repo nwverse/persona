@@ -74,11 +74,9 @@ const Inbox = lazyPage(() => import("./views/inbox/Inbox").then((m) => m.Inbox),
 const Messages = lazyPage(() => import("./views/messages/Messages").then((m) => m.Messages), { routes: ["messages"] });
 const Knowledge = lazyPage(() => import("./views/knowledge/Knowledge").then((m) => m.Knowledge), { routes: ["kb"] });
 const TodosView = lazyPage(() => import("./views/Todos").then((m) => m.TodosView), { routes: ["todos"] });
-// The command palette and the new-agent dialog are not on a first screen either, and a shortcut opens them with no link
-// to reach first: their chunks come once the browser is idle after start, and each mounts on its first open (useOpened),
-// so ⌘K right after start waits on the network at most once.
+// Keep the shortcut palette warm. The new-agent dialog loads only when opened.
 const Palette = lazyPage(() => import("./views/Palette").then((m) => m.Palette), { idle: true });
-const NewAgent = lazyPage(() => import("./views/NewAgent").then((m) => m.NewAgent), { idle: true });
+const NewAgent = lazyPage(() => import("./views/NewAgent").then((m) => m.NewAgent));
 
 // A link with the hub's token (`?token=…` or `#token=…`) signs in without the form. The token leaves the address bar
 // before anything else runs (history, bookmarks, a copied link), and is traded for this browser's own one.
