@@ -186,9 +186,14 @@ func TestBackgroundSupervisorEscalatesAndStaysBuiltIn(t *testing.T) {
 	}
 	waitFor(t, "the main conversation's message", func() bool { return len(f.noticesTo("conv1")) == 1 })
 	n := f.noticesTo("conv1")[0]
-	for _, want := range []string{"跟进它的后台督办对话判断要用户决定", "要不要顺手改 iPhone 横屏", "leader 推荐：先只修 iPad"} {
+	for _, want := range []string{"跟进它的后台督办对话判断要用户决定", "要不要顺手改 iPhone 横屏", "后台督办对话推荐：先只修 iPad", "后台督办对话或 leader 升级上来的"} {
 		if !strings.Contains(n, want) {
 			t.Errorf("the main conversation's message lacks %q:\n%s", want, n)
+		}
+	}
+	for _, not := range []string{"leader 推荐", "那个 leader"} { // no leader is on this task
+		if strings.Contains(n, not) {
+			t.Errorf("the main conversation's message names a leader (%q):\n%s", not, n)
 		}
 	}
 	if strings.Contains(n, "你是后台督办对话") {
