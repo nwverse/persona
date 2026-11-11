@@ -44,7 +44,7 @@ func (s *Service) resolveStart(ctx context.Context, params map[string]any) (star
 // not have is refused, naming the ones it has. One a default gave (the agent.new binding, a profile, a tier) gives way
 // to one m has (launcherInstead), with that launcher's own default model and the caller's effort; note says so in the
 // user's language, for the task's why and the tool's answer. A list that can't be read (m offline, a timeout) counts
-// as having it, as launcherAvailable does: nothing is refused or replaced on a guess.
+// as having it, as mainChatFit does: nothing is refused or replaced on a guess.
 func (s *Service) fitLauncher(ctx context.Context, m Device, own startPick, params map[string]any) (note string, err error) {
 	name, _ := params["launcher"].(string)
 	if s.launcherEverywhere(ctx, name) {

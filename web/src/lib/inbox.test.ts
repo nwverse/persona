@@ -48,14 +48,14 @@ describe("一件事", () => {
     expect(triage(item("x", { tier: "" }))).toBe("action");
     expect(triage(item("x", { tier: undefined }))).toBe("action");
     expect(triage(group)).toBe("fyi");
-    expect(badgeCount([dm, mention, doc, mail, group, done, doneLater, bot])).toBe(6);
+    expect(badgeCount([dm, mention, doc, mail, group, done, doneLater, bot])).toBe(4);
   });
 
-  it("counts unread across pending sections without filing read items", () => {
+  it("counts only unread Needs you items without filing other sections", () => {
     let items = [item("unread"), item("read-pending", { read: true }),
       item("read-done", { read: true, done_at: at(1) }), item("unread-done", { done_at: at(1) }),
       item("fyi", { tier: "fyi" }), item("working", { status: "working" }), item("noise", { tier: "noise" })];
-    expect(badgeCount(items)).toBe(4);
+    expect(badgeCount(items)).toBe(1);
     expect(ids(sections(items, all).tiers.action).sort()).toEqual(["read-pending", "unread"]);
     items = items.map((it) => ({ ...it, read: true }));
     expect(badgeCount(items)).toBe(0);
@@ -63,6 +63,9 @@ describe("一件事", () => {
     expect(badgeCount(restored)).toBe(0);
     expect(sections(restored, all).tiers.action).toHaveLength(2);
     expect(restored.find((it) => it.id === "read-pending")?.done_at).toBeUndefined();
+    expect(badgeCount([item("promoted", { tier: "fyi", status: "action" })])).toBe(1);
+    expect(badgeCount([item("demoted", { status: "fyi" })])).toBe(0);
+    expect(badgeCount([item("legacy", { tier: undefined, status: undefined })])).toBe(1);
   });
 
   it("类型标签：@我 红色，@所有人、评论、公司圈、机器人", () => {
@@ -108,11 +111,13 @@ describe("筛选和分段", () => {
     expect(sections(items, { ...all, source: "acc2" }).tiers.action).toEqual([]);
   });
 
-  it("@我 含文档和 @我 的公司圈，群聊含机器人，Agent 不含任何一件", () => {
+  it("@我 含文档和 @我 的公司圈，群聊不含机器人（机器人单独一类），Agent 不含任何一件", () => {
     const m = sections(items, { ...all, kind: "mention" });
     expect([...ids(m.tiers.action), ...ids(m.tiers.fyi)].sort()).toEqual([atAll.id, comment.id, doc.id, mention.id, moment.id].sort());
     const g = sections(items, { ...all, kind: "group" });
-    expect([...ids(g.tiers.fyi), ...ids(g.tiers.noise)].sort()).toEqual([bot.id, group.id].sort());
+    expect([...ids(g.tiers.fyi), ...ids(g.tiers.noise)]).toEqual([group.id]);
+    const b = sections(items, { ...all, kind: "bot" });
+    expect([...ids(b.tiers.fyi), ...ids(b.tiers.noise)]).toEqual([bot.id]);
     const a = sections(items, { ...all, kind: "agent" });
     expect([...a.tiers.action, ...a.tiers.fyi, ...a.tiers.noise, ...a.done]).toEqual([]);
   });

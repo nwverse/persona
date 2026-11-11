@@ -56,6 +56,7 @@ import persona.core.domain.answer.waitingCard
 import persona.core.domain.tasks.TaskNow
 import persona.core.domain.tasks.TaskState
 import persona.core.domain.tasks.isRemovable
+import persona.core.domain.tasks.orphanedLine
 
 // A task's detail, the dock's "All" and the plan's "Edit" (iOS TaskSheets.swift / PlanEditSheet; web TaskPanel): what a
 // tap on a task opens instead of leaving the conversation for its agent's page.
@@ -106,7 +107,10 @@ private fun TaskDetailSheet(todoId: String, host: AssistantTaskHost, onDismiss: 
             TaskMark(state)
             Column(Modifier.weight(1f)) {
                 Text(todo.title, style = PersonaTheme.type.title, color = PersonaTheme.palette.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(state.label.text(), style = PersonaTheme.type.caption, color = PersonaTheme.palette.status(state.status()).text, maxLines = 1)
+                val orphaned = todo.orphanedLine.takeIf { state != TaskState.NeedsYou }
+                Text(orphaned?.text() ?: state.label.text(), style = PersonaTheme.type.caption,
+                    color = if (orphaned != null) PersonaTheme.palette.cautionText else PersonaTheme.palette.status(state.status()).text, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis)
             }
             if (state.isRemovable) JIconButton(PhIcons.DotsThree, stringResource(R.string.chat_task_detail_more), { menu = true })
             JIconButton(PhIcons.X, stringResource(R.string.chat_task_detail_close), onDismiss)
@@ -123,6 +127,7 @@ private fun TaskDetailSheet(todoId: String, host: AssistantTaskHost, onDismiss: 
         Spacer(Modifier.height(Tokens.Space.l))
         TaskOwnerDecision(todo, host)
         TaskLifecycleDetails(todo, host)
+        LatestReport(todo, Modifier.padding(bottom = Tokens.Space.m))
         val failure = todo.startFailure
         when {
             shown != null -> AgentSummary(shown, host, routeTo = todo.id, onDismiss = onDismiss)
@@ -155,7 +160,8 @@ private fun AgentDetailSheet(key: SessionKey, host: AssistantTaskHost, onDismiss
             Column(Modifier.weight(1f)) {
                 Text(session?.displayTitle ?: stringResource(R.string.chat_task_detail_agent), style = PersonaTheme.type.title, color = PersonaTheme.palette.ink,
                     maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(stringResource(R.string.chat_task_detail_own_agent), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2, maxLines = 1)
+                Text(stringResource(R.string.chat_task_detail_own_agent), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             JIconButton(PhIcons.X, stringResource(R.string.chat_task_detail_close), onDismiss)
         }

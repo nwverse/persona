@@ -44,6 +44,8 @@
   "surfaces_external_title": "在 App 内外显示自己的界面",
   "secrets_title": "使用你填的密钥",
   "tools_title": "安装命令行程序",
+  "host_integrations_title": "使用已配置的主机 CLI 集成",
+  "host_integrations_detail": "{tools}。只能经 manager 做有边界的只读调用，不能执行 shell、发消息或导出凭据。",
   "node_secrets_title": "把密钥发给这些电脑",
   "tools_more_title": "安装更多命令行程序",
   "network_more_title": "访问更多网络",
@@ -70,6 +72,7 @@
   "scope_assistant_read": "读你和 Persona 的对话（你的消息和它的回复）",
   "scope_todos_read": "看待办",
   "scope_todos_write": "新建和修改待办、把对话挂到待办上（不能删待办）",
+  "scope_leaders_read": "查看主管对话（方向）和它们的上报",
   "scope_models": "用你在「设置 › 模型配置」里为它选的模型（不经手密钥）",
   "scope_call": "调用扩展「{id}」的接口",
   "slot_nav_page": "主导航上的入口",
@@ -85,6 +88,8 @@
   "event_agent_finished": "有 Agent 做完了（哪台电脑、哪个会话、标题）",
   "event_todo_changed": "待办新建、改动或删除（标题、绑定的话题；需要「看待办」权限）",
   "event_todo_decision": "待办上记了一条决定（问题、选择、来源；需要「看待办」权限）",
+  "event_leader_changed": "有主管对话新建、改名、换了项目或结束（需要「查看主管」权限）",
+  "event_leader_report": "主管的任务达成、要你拍板或卡住了（需要「查看主管」权限）",
   "error_reports_title": "接收错误和崩溃报告",
   "error_reports_detail": "hub 和你各台设备上的错误和崩溃，先脱敏：不含消息正文、token、用户名、机器名和 IP 地址；发到哪里由它决定（比如错误追踪服务）",
   "auth_relay_title": "替你的 Agent 完成授权链接",
@@ -92,5 +97,8 @@
   "network_config_title": "访问你在设置里填的地址",
   "network_config_detail": "设置「{field}」里填的地址（当前：{host}），只连这一个主机和端口，只用 https",
   "network_config_detail_http": "设置「{field}」里填的地址（当前：{host}），只连这一个主机和端口；允许不加密的 http",
-  "network_config_unset": "未填"
+  "network_config_unset": "未填",
+  "secret_provider_title": "提供密钥的值",
+  "secret_provider_more_title": "提供密钥的值（新增）",
+  "secret_provider_detail": "你的设置里填了 {schemes} 引用，或你在手机上批准把某个引用交给 Agent 时，Persona 向它要值。它会知道用的是哪个引用、用在哪里，看不到你别的密钥"
 }

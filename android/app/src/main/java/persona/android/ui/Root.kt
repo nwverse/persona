@@ -8,7 +8,11 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.*
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
@@ -18,6 +22,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
 import androidx.navigation3.runtime.*
 import androidx.navigation3.ui.NavDisplay
@@ -118,7 +123,7 @@ private fun PersonaRootContent(
     onPaired: () -> Unit = {},
 ) {
     val session by shell.session.collectAsStateWithLifecycle()
-    val snackbar = remember { SnackbarHostState() }
+    val toast = persona.core.designsystem.rememberToastState()
     val scope = rememberCoroutineScope()
     var diagnostics by remember { mutableStateOf(false) }
     // First pairing keeps the pairing flow, including its readiness checklist, until it reports ready.
@@ -128,18 +133,8 @@ private fun PersonaRootContent(
         else if (hub == null) entering = true
     }
     val link = MainActivity.pendingPairLink.value
-    val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
-    LaunchedEffect(shell) {
-        shell.feedback.notices.collect { notice ->
-            snackbar.currentSnackbarData?.dismiss()
-            notice.haptic?.let { haptics.play(it) }
-            // A notice with "Undo" waits its own few seconds; collecting the next one dismisses it, as for the others.
-            launch {
-                val result = snackbar.showSnackbar(notice.message, actionLabel = notice.action?.label, duration = SnackbarDuration.Short)
-                if (result == SnackbarResult.ActionPerformed) notice.action?.run?.invoke()
-            }
-        }
-    }
+    // One toast slot for the window, as iOS: the newest notice replaces the one showing; the host plays its haptic.
+    LaunchedEffect(shell) { shell.feedback.notices.collect { toast.show(it) } }
     CompositionLocalProvider(LocalAppFeedback provides shell.feedback) {
         Surface(Modifier.fillMaxSize()) {
             Box(Modifier.fillMaxSize()) {
@@ -159,6 +154,7 @@ private fun PersonaRootContent(
                     // The pairing page scrolls by itself; the demo entry sits in its footer.
                     else PairingScreen(services.pairing, services.sessions, initialLink = link,
                         onReady = { MainActivity.pendingPairLink.value = null; entering = false; onPaired() },
+                        onBack = if (link != null && hub != null) ({ MainActivity.pendingPairLink.value = null }) else null,
                         onDiagnostics = { diagnostics = true }, diagnostics = services.diagnostics,
                         onCredentialsSaved = { MainActivity.pendingPairLink.value = null }, machines = services.machines,
                         attempts = services.pairingAttempts, mainReadiness = services.readiness,
@@ -204,7 +200,7 @@ private fun PersonaRootContent(
                     }
                     active.phone?.let { PhoneConfirmationHost(it.confirmations) }
                 }
-                SnackbarHost(snackbar, Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(12.dp))
+                persona.core.designsystem.JToastHost(toast, Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = Tokens.Space.m))
             }
         }
     }
@@ -260,9 +256,16 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     val sessions by session.sessions.sessions.collectAsStateWithLifecycle()
     val assistant by session.assistant.assistant.collectAsStateWithLifecycle()
     val pending by session.interactions.pending.collectAsStateWithLifecycle()
+    // A request that just arrived is felt while the app is in front, as on iOS (DESIGN_SYSTEM.md 4.3).
+    val haptics = rememberHaptics()
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(session.interactions, lifecycle) {
+        lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+            session.interactions.arrivals.collect { haptics(Haptic.Attention) }
+        }
+    }
     val inbox by session.inbox.snapshot.collectAsStateWithLifecycle()
     val connection by session.connection.state.collectAsStateWithLifecycle()
-    val pins by session.assistant.pinned.collectAsStateWithLifecycle()
     val preferences by session.preferences.snapshots.collectAsStateWithLifecycle(AgentsPreferencesSnapshot())
     val todos by (session.tasks?.todos ?: kotlinx.coroutines.flow.MutableStateFlow(emptyList())).collectAsStateWithLifecycle()
     val todosSupported by (session.tasks?.todosSupported ?: kotlinx.coroutines.flow.MutableStateFlow(false)).collectAsStateWithLifecycle()
@@ -424,7 +427,8 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     val shownPending = pending.filter(counts::owned)
     val assistantRequests = shownPending.filter { currentKind(SessionKey(it.machineId, it.sessionId)) == ConversationKind.Assistant }
     val agentRequests = shownPending - assistantRequests.toSet()
-    val agentNeeds = agentRequests.count(counts::countsCard)
+    // The Agents tab counts its waiting agents, one per session (ShellCounts.agentsWaiting), as iOS and the web do.
+    val agentNeeds = counts.agentsWaiting(agentRequests)
     // What waits at each assistant, for the switcher's badges and the dot on the sidebar's button: its agents waiting
     // (each once), counted here, and its inbox's "Needs you" from the roster.
     val managerRoster = persona.core.designsystem.LocalManagerRoster.current
@@ -527,7 +531,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         // on Agents in a regular window the drawer opens while the Assistant page (kept composed) still holds its column.
         val sharedSidebar: @Composable (String) -> Unit = { stateKey ->
             sidebarState.SaveableStateProvider(stateKey) {
-                AssistantSidebarContent(assistant, session.assistant, pins, sidebar.active, sidebarOperations, session.demo != null,
+                AssistantSidebarContent(assistant, session.assistant, sidebar.active, sidebarOperations, session.demo != null,
                     onOpen = { key ->
                         sidebar.opened.value = false
                         selected = openResolved(ResolvedRoute(AppTab.Persona, ChatRoute(key.machineId, key.sessionId, ConversationKind.Assistant)))
@@ -550,7 +554,6 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                             sidebarDestination(ExtensionUiRoute(page.extension, page.id, page.title.ifBlank { page.id }))
                         }
                     },
-                    onTogglePin = { key -> session.preferences.togglePin(key.path) },
                     onRetired = { key -> sidebar.retired = sidebar.retired + key },
                     // The current assistant at the sidebar's head; its roster opens under it.
                     switcher = { head, trailing, fallback ->
@@ -619,12 +622,11 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         val provider = entryProvider<NavKey> {
             assistantEntries(navigator) {
                 AssistantScreen(assistantNavigator, session.assistant, session.sender, session.assistant::startConversation,
-                    pins, connectionLabel = connection.title(),
+                    connectionLabel = connection.title(),
                     hubOnline = connection == ConnectionState.Online || connection == ConnectionState.Updating, demo = session.demo != null,
                     requestedSession = assistantRequest, onKnowledge = { sidebarDestination(KnowledgeRoute) },
                     needsYou = needsYou, onOpenNeed = { line -> openWithCard(needsYouRoute(line)) },
                     onOpenInbox = { sidebarDestination(InboxRoute) },
-                    onTogglePin = { key -> session.preferences.togglePin(key.path) },
                     onVoice = voiceExtension?.let { extension -> { navigator.navigate(VoiceRoute(extension.id, extension.name)) } },
                     onTodos = { sidebarDestination(persona.core.navigation.TodosRoute) },
                     todoCount = uncompletedTodosCount,
@@ -657,7 +659,8 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                 ?: UnavailablePage(stringResource(R.string.app_unavailable_phone_tools), navigator) }
             session.terminal?.let { terminalEntries(navigator, it, { key -> sessions.firstOrNull { s -> s.key == key }?.displayTitle },
                 panes = shell.terminalPanes.takeIf { session.demo == null }, sessions = session.sessions,
-                routed = shell::groupTerminal) }
+                routed = shell::groupTerminal,
+                resumer = SessionTerminalResumer({ session.sessions.sessions.value }, { session.agentsWiring.state.value.creation })) }
                 ?: run {
                     entry<TerminalRoute> { UnavailablePage(stringResource(R.string.app_demo_no_terminal), navigator) }
                     entry<persona.core.navigation.TerminalPanesRoute> { UnavailablePage(stringResource(R.string.app_demo_no_terminal), navigator) }
@@ -719,21 +722,23 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                         // Agents may close its list beside an open conversation; Inbox and Settings keep theirs (as the old app did).
                         val listDetail = rememberShellListDetail(tab, directive, maxWidth, paneHinges, detailOpen = detail != null,
                             store = paneStore, collapsible = canCollapseList(stacks.getValue(tab)))
-                        CompositionLocalProvider(LocalNavigationEventDispatcherOwner provides back, LocalDetailKey provides detail,
-                            persona.feature.settings.LocalExtensionPageVisible provides shown) {
-                            NavDisplay(backStack = stacks.getValue(tab), modifier = Modifier.fillMaxSize().then(if (shown) Modifier else Modifier.unplaced()),
-                                onBack = navigator::back, entryDecorators = decorators.getValue(tab) + chrome,
-                                sceneStrategies = listOf(listDetail),
-                                // A pushed page slides in over the page it came from, which stays drawn underneath; going
-                                // back, it slides away over the page below. Pages stay opaque the whole way (fading them
-                                // showed both pages' text on top of each other) and nothing in between shows the background.
-                                transitionSpec = { ContentTransform(slideInHorizontally(tween(300, easing = FastOutSlowInEasing)) { width -> width },
-                                    slideOutHorizontally(tween(300, easing = FastOutSlowInEasing)) { width -> -width / 4 }) },
-                                popTransitionSpec = { ContentTransform(slideInHorizontally(tween(260, easing = FastOutSlowInEasing)) { width -> -width / 4 },
-                                    slideOutHorizontally(tween(260, easing = FastOutSlowInEasing)) { width -> width }, targetContentZIndex = -1f) },
-                                predictivePopTransitionSpec = { _ -> ContentTransform(slideInHorizontally(tween(260)) { width -> -width / 4 },
-                                    slideOutHorizontally(tween(260)) { width -> width }, targetContentZIndex = -1f) },
-                                entryProvider = panes)
+                        ShellTabLifecycle(shown) {
+                            CompositionLocalProvider(LocalNavigationEventDispatcherOwner provides back, LocalDetailKey provides detail,
+                                persona.feature.settings.LocalExtensionPageVisible provides shown) {
+                                NavDisplay(backStack = stacks.getValue(tab), modifier = Modifier.fillMaxSize().then(if (shown) Modifier else Modifier.unplaced()),
+                                    onBack = navigator::back, entryDecorators = decorators.getValue(tab) + chrome,
+                                    sceneStrategies = listOf(listDetail),
+                                    // A pushed page slides in over the page it came from, which stays drawn underneath; going
+                                    // back, it slides away over the page below. Pages stay opaque the whole way (fading them
+                                    // showed both pages' text on top of each other) and nothing in between shows the background.
+                                    transitionSpec = { ContentTransform(slideInHorizontally(tween(300, easing = FastOutSlowInEasing)) { width -> width },
+                                        slideOutHorizontally(tween(300, easing = FastOutSlowInEasing)) { width -> -width / 4 }) },
+                                    popTransitionSpec = { ContentTransform(slideInHorizontally(tween(260, easing = FastOutSlowInEasing)) { width -> -width / 4 },
+                                        slideOutHorizontally(tween(260, easing = FastOutSlowInEasing)) { width -> width }, targetContentZIndex = -1f) },
+                                    predictivePopTransitionSpec = { _ -> ContentTransform(slideInHorizontally(tween(260)) { width -> -width / 4 },
+                                        slideOutHorizontally(tween(260)) { width -> width }, targetContentZIndex = -1f) },
+                                    entryProvider = panes)
+                            }
                         }
                     }
                 }
@@ -750,11 +755,16 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                   sidebarColumnShown.value = true
               }
           }
+          // A switch of assistant closes the current assistant's settings pages over the list (docs/assistant/managers.md
+          // "Clients"), in the Settings sheet and on each tab (a link or a readiness card opens them there): none shows one
+          // assistant's settings, or sends what it holds, once another is current; the list shows the new one's.
+          persona.feature.settings.CloseAssistantSettingsOnSwitch(currentAssistant.id) { listOf(settingsSheetStack) + stacks.values }
           if (settingsOpened) {
               val settingsNavigator = remember(navigator, settingsSheetStack) {
                   SettingsSheetNavigator(settingsSheetStack, close = { settingsOpened = false }, outside = navigator)
               }
               JSettingsSheet(onDismiss = { settingsOpened = false }) {
+                CompositionLocalProvider(LocalAssistantWaiting provides waiting) {
                   val settingsEntries = entryProvider<NavKey> {
                       entry<SettingsRoute> { ShellSettings(services, settingsNavigator, shell, onClose = { settingsOpened = false }) }
                       entry<SettingsPageRoute> { route ->
@@ -787,6 +797,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                               })
                       }
                   }
+                }
               }
           }
         }

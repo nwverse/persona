@@ -100,25 +100,25 @@ export const PersonaRow = memo(function PersonaRow({ reg, hover, active, go, mai
   );
 });
 
-// The "Pinned" heading above the pinned conversations (iOS's pinned heading, Android's pinned section): its ⋯ and a right
-// click on it give "Unpin all", which a touch screen reaches through the ⋯.
-export function PinnedHeading({ onMenu }: { onMenu: (at: MenuAt) => void }) {
+/** A group's small title inside a sidebar section (Persona chats' 常驻): the same type
+ *  as the section's own title, optionally with an icon before it and a ⋯ for the group's actions. */
+export function SubHeading({ label, icon, onMenu, menuLabel }: { label: string; icon?: IconName; onMenu?: (at: MenuAt) => void; menuLabel?: string }) {
   return (
-    <div className="flex items-center gap-1 px-2 pt-0.5 pb-0.5" {...contextMenuProps((at) => onMenu(at))}>
+    <div role="heading" aria-level={3} className="flex items-center gap-1 px-2 pt-0.5 pb-0.5" {...(onMenu ? contextMenuProps((at) => onMenu(at)) : {})}>
       <span className="flex min-w-0 flex-1 items-center gap-1 truncate whitespace-nowrap text-[11px] font-semibold text-ink-3">
-        <Icon name="pin" size={10} stroke={2.2} className="shrink-0" />
-        {t("sidebar.pinned_section")}
+        {icon && <Icon name={icon} size={10} stroke={2.2} className="shrink-0" />}
+        {label}
       </span>
-      <button
+      {onMenu && <button
         type="button"
-        aria-label={t("conversation-menu.unpin_all")}
+        aria-label={menuLabel}
         aria-haspopup="menu"
         title={t("sidebar.more")}
         onClick={(e) => onMenu({ anchor: e.currentTarget })}
         className="touch-hit relative z-10 flex size-5 shrink-0 items-center justify-center rounded-[5px] text-ink-3 hover:bg-hover hover:text-ink-2"
       >
         <Icon name="more" size={12} />
-      </button>
+      </button>}
     </div>
   );
 }
@@ -219,7 +219,7 @@ function SecondLine({ line, draft }: { line: { lead?: string; text: string; tone
 }
 
 // `prefix`: a word before the title (a tab's name, a pane's agent), in `prefixClass`
-type SessionRowProps = { menuLabel?: string; /** The mark at the start when the state is not shown (a Persona conversation's; pinned: the pin). */ icon?: IconName; s: Session; k: string; reg: RegFn; hover: (k: string | null) => void; active: boolean; to: Route; go: GoFn; tab?: boolean; label?: string; prefix?: string; prefixClass?: string; hint?: string; host?: string; showState?: boolean; showTodoTag?: boolean; onMenu?: RowMenuFn; endRoom?: boolean };
+type SessionRowProps = { menuLabel?: string; /** The mark at the start when the state is not shown (a Persona conversation's; pinned: the pin). */ icon?: IconName; s: Session; k: string; reg: RegFn; hover: (k: string | null) => void; active: boolean; to: Route; go: GoFn; tab?: boolean; label?: string; prefix?: string; prefixClass?: string; hint?: string; /** The hint is whole, never cut (a lead's counts). */ hintFull?: boolean; host?: string; showState?: boolean; showTodoTag?: boolean; onMenu?: RowMenuFn; endRoom?: boolean };
 
 // Every sessions push re-renders the sidebar and the Agents list, while lib/sessions-delta.ts keeps the object of each
 // session that did not change: a row renders again only when one of its props did. The props compare by identity
@@ -230,10 +230,10 @@ function sameProps<P extends { to: Route }>(a: P, b: P): boolean {
   return keys.every((key) => (key === "to" ? routePath(a.to) === routePath(b.to) : Object.is(a[key], b[key])));
 }
 
-export const SessionRow = memo(function SessionRow({ s: given, k, reg, hover, active, to, go, tab, label, prefix, prefixClass, hint, host, showState = true, showTodoTag, onMenu, menuLabel = t("sidebar.agent_actions"), endRoom, icon = "chat" }: SessionRowProps) {
+export const SessionRow = memo(function SessionRow({ s: given, k, reg, hover, active, to, go, tab, label, prefix, prefixClass, hint, hintFull, host, showState = true, showTodoTag, onMenu, menuLabel = t("sidebar.agent_actions"), endRoom, icon = "chat" }: SessionRowProps) {
   // what it asks you, or what it did, under its title (#3195): no hover or click needed to see why it is red or green
   const ix = useStore((st) => st.interactions.find((i) => i.machine_id === given.machine_id && i.session_id === given.session_id));
-  // a card answered here takes its red dot and "Asking you" line away at once, not at the hub's next push (#4286)
+  // a card answered here takes its red dot and "Has a question" line away at once, not at the hub's next push (#4286)
   const justAnswered = useStore((st) => lastAnsweredAt(st.answered, given.machine_id, given.session_id));
   const pending = useStore((st) => answerPending(st.answered, given.machine_id, given.session_id));
   // seen on this page and not yet recorded by the hub (lib/seen-outbox.ts): the paged list's rows come from the list
@@ -255,11 +255,18 @@ export const SessionRow = memo(function SessionRow({ s: given, k, reg, hover, ac
   const details = useAgentDetails();
   const contextUsed = useContextAsUsed();
   const withDetail = details && showState && !s.assistant;
-  // the age at the row's end (an offline or stateless row), in the details line, or a background workflow's progress
+  // when it was last active, at the row's end after its hint (#4236; the work-item row, DESIGN_SYSTEM 3.4): not twice
+  // when the details line shows it; a tab's row, whose end is the room for "N agents", keeps it to offline and
+  // stateless rows without a hint, as before
+  const ageAtEnd = !withDetail && !!s.updated_at && (!endRoom || (!tail && (st === "offline" || !showState)));
+  // beside the age, a row that already carries its marks (where it was opened, its to-do) drops the hint from its end,
+  // where it would only squeeze the title; the hint stays in the row's tooltip
+  const tailShown = !!tail && !(ageAtEnd && (source || (showTodoTag && s.todo)));
+  // the age at the row's end, in the details line, or a background workflow's progress
   // (#2935) moves on with the clock: the memo keeps an unchanged row from re-rendering on a push, so a minute tick
   // does it, and only in a row that shows one of them. The ages read the clock when the row renders: `now` is the
   // mount time until the first tick, and a row may only start showing an age long after it mounted
-  const showsAge = (!tail && (st === "offline" || !showState)) || (withDetail && !!s.updated_at);
+  const showsAge = ageAtEnd || (withDetail && !!s.updated_at);
   const now = useNow(60_000, showsAge || runningWorkflows(s).length > 0 || s.turn_error_kind === "usage_limit");
   const detail = withDetail ? rowDetail(s, contextUsed) : [];
   const workflow = showState && !s.assistant && st !== "offline" ? workflowShortLine(s) : "";
@@ -271,7 +278,7 @@ export const SessionRow = memo(function SessionRow({ s: given, k, reg, hover, ac
   // behind a prefix (a tab's name, a pane's agent) the title keeps room for a few characters: the prefix shrinks first
   const titleMin = prefix ? ROW_TITLE_MIN : "min-w-0";
   // with words at the end (where it came from, a hint) the title keeps its own width first: those words give way before it does
-  const titleFirst = tail ? "basis-auto" : undefined;
+  const titleFirst = tailShown ? "basis-auto" : undefined;
   // one ref per key, so letting go takes out only this row's entry (keyedRefs)
   const regRow = useMemo(() => reg(k), [reg, k]);
   // words left unsent in its box, once you are not in it (#5568): in place of what it asks or did
@@ -359,8 +366,8 @@ export const SessionRow = memo(function SessionRow({ s: given, k, reg, hover, ac
       )}
       {source && <SourceTag s={s} className={aside} />}
       {/* the row's ⋯ takes the end on hover: what is there steps aside instead of showing half under it */}
-      {tail && <span className={cx("max-w-[72px] min-w-6 shrink-[20] truncate text-[11px] text-ink-3", aside)}>{tail}</span>}
-      {!tail && (st === "offline" || !showState) && <span className={cx("shrink-0 text-[11px] text-ink-3", aside)}>{ago(s.updated_at)}</span>}
+      {tailShown && <span className={cx(hintFull ? "shrink-0 whitespace-nowrap tabular-nums" : "max-w-[72px] min-w-6 shrink-[20] truncate", "text-[11px] text-ink-3", aside)}>{tail}</span>}
+      {ageAtEnd && <span data-row-age className={cx("shrink-0 text-[11px] text-ink-3", aside)}>{ago(s.updated_at, Date.now(), "narrow")}</span>}
       {(s.pending_interactions ?? 0) > 0 && <span className={cx("flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-field px-1 text-[10px] font-semibold text-attention tabular-nums", aside)}>{s.pending_interactions}</span>}
     </a>
   );

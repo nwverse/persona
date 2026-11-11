@@ -49,6 +49,8 @@ class GroupRuntime internal constructor(
         /** No hub of the group accepts this phone any more. */
         fun onRevoked(group: GroupRuntime)
         fun onMemberRevoked(group: GroupRuntime, hubId: String, ownToken: Boolean)
+        /** A paired hub's Cloudflare Access service token (docs/operations/network.md "Behind Cloudflare Access"). */
+        fun access(hubId: String): HubAccess? = null
     }
 
     val id: String = group.id
@@ -93,7 +95,8 @@ class GroupRuntime internal constructor(
         } ?: false
         val connection = OkHttpHubConnection(
             HubConnectionConfig(credentials.hubId.takeUnless { it.startsWith("legacy-") }, credentials.fp,
-                credentials.deviceToken, pairingEndpoints(credentials), settings.version, deviceId = credentials.deviceId,
+                credentials.deviceToken, pairingEndpoints(credentials), settings.version, systemOrigins = credentials.systemOrigins.toSet(),
+                deviceId = credentials.deviceId,
                 clientFeatures = setOf("lock_test", "extension_operations", "extension_auth", "managers"), build = settings.build, os = settings.os,
                 heartbeatPolicy = settings.heartbeatPolicy, members = members, center = isCenter, centerHubId = group.centerHubId,
                 tunnels = tunnels),
@@ -123,6 +126,7 @@ class GroupRuntime internal constructor(
             clockMillis = SystemClock::elapsedRealtime,
             onMemberRevoked = { hubId, ownToken -> listener.onMemberRevoked(this, hubId, ownToken) },
             ways = ways,
+            access = listener::access,
         )
         live = connection
         connection.setForeground(foreground)

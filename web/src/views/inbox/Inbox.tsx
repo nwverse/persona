@@ -7,7 +7,7 @@ import { useInbox, refreshInbox, type InboxItem } from "../../lib/inbox";
 import { useScope } from "../../lib/current-assistant";
 import { ItemManager, otherManager, sameManager } from "../../lib/manager-choice";
 import { newDraft, useMailAccounts } from "../../lib/mail";
-import { navigate } from "../../lib/router";
+import { backToInboxList } from "../../lib/inbox-nav";
 import { t } from "../../i18n";
 import { Button, cx, IconButton, Spinner } from "../../ui/atoms";
 import { ComposeDialog } from "./ComposeDialog";
@@ -48,7 +48,7 @@ export function Inbox({ id, manager, onToggleSidebar }: { id?: string; manager?:
     <div className="@container flex h-full flex-col">
       <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3 sm:px-4">
         <IconButton icon="sidebar" label={t("inbox-inbox.sidebar")} onClick={onToggleSidebar} className="lg:hidden" />
-        {id && <IconButton icon="chevronLeft" label={t("inbox-inbox.back_to_inbox")} onClick={() => navigate({ name: "inbox" })} className="@3xl:hidden" />}
+        {id && <IconButton icon="chevronLeft" label={t("inbox-inbox.back_to_inbox")} onClick={backToInboxList} className="@3xl:hidden" />}
         <h1 className="min-w-0 flex-1 truncate text-[14px] font-semibold text-ink">{t("inbox-inbox.title")}</h1>
         {loading && loaded && <Spinner />}
         {picking ? (

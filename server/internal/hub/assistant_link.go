@@ -82,8 +82,21 @@ func (h *Hub) assistantRoutesRelayed(api *http.ServeMux) {
 			by = h.byTodo
 		}
 		var relay http.HandlerFunc = func(w http.ResponseWriter, r *http.Request) { h.forwardOwned(w, r, by) }
+		if pattern == "GET /api/v1/machines/{mid}/launchers/{name}/start-options" {
+			next := relay
+			relay = h.withMachine(func(w http.ResponseWriter, r *http.Request, m *Machine) {
+				if h.machineUntrusted(m.cfg.ID) {
+					writeErrCode(w, http.StatusConflict, "machine_pending", errors.New("Confirm this computer before starting a session."))
+					return
+				}
+				next(w, r)
+			})
+		}
 		if slices.Contains(storedTerminalTexts, pattern) {
 			relay = h.withoutTerminalControls(relay)
+		}
+		if kind, ok := meetingReceiptRoutes[pattern]; ok {
+			relay = h.withBodyIDReceipt(kind, relay) // meeting_receipts.go
 		}
 		api.HandleFunc(pattern, relay)
 	}
@@ -187,7 +200,7 @@ func (l assistantLink) deviceCallFrom(ctx context.Context, from string, p assist
 			// complete: the list is every machine there is (the manager reported them and the pending computers were
 			// read), so an id in neither it nor others was removed.
 			return json.Marshal(map[string]any{"devices": list, "phone_online": h.phoneClient() != nil,
-				"complete": h.devicesUp() && !h.trustUnknown(), "others": others})
+				"complete": h.devicesUp() && !h.trustUnknown(), "others": others, "apps": h.clientAppList(ctx)})
 		}
 	}
 	m := h.localMachine(p.Device)

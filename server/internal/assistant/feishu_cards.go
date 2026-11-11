@@ -61,6 +61,9 @@ func (s *Service) feishuCardWanted(ctx context.Context, ix proto.Interaction) bo
 	if !ready || !f.Cards {
 		return false
 	}
+	if ix.Private {
+		return false // a Just me turn's card: never on Lark (meeting_justme.go)
+	}
 	// "All cards" does not take a health conversation's: only one the chat drives itself (health.go).
 	if drives := s.botDrives(ctx, ix.MachineID, ix.SessionID); !drives && (!f.AllCards || s.ixInHealth(ctx, ix)) {
 		return false
@@ -142,7 +145,7 @@ func (s *Service) postInteractionCard(ctx context.Context, ix proto.Interaction)
 	case proto.IxQuestion:
 		fallback = "❓ " + clip(firstQuestion(ix), 100)
 	case proto.IxPermission:
-		fallback = "🔐 " + toolDisplayName(ix.ToolName)
+		fallback = "🔐 " + ixToolName(ix)
 	case proto.IxPlan:
 		fallback = "📋 " + clip(firstLine(ix.Plan), 100)
 	case proto.IxScreen:
@@ -529,9 +532,9 @@ func (s *Service) interactionCard(ctx context.Context, ix proto.Interaction) *fe
 			feishubot.Submit(i18n.T(l, "assistant-feishu_cards.send_back"), feishubot.Danger, "plan_reject", val(map[string]any{"approve": "0"})))
 		return safeCard(l, c.Buttons(open), open)
 	case proto.IxPermission:
-		c := feishubot.NewCard("🔐 "+i18n.T(l, "assistant-feishu_cards.permission_title", i18n.Args{"where": s.ixWhere(ctx, ix)}), feishubot.Orange, i18n.T(l, "assistant-feishu_cards.permission_summary", i18n.Args{"tool": toolDisplayName(ix.ToolName)}))
+		c := feishubot.NewCard("🔐 "+i18n.T(l, "assistant-feishu_cards.permission_title", i18n.Args{"where": s.ixWhere(ctx, ix)}), feishubot.Orange, i18n.T(l, "assistant-feishu_cards.permission_summary", i18n.Args{"tool": ixToolName(ix)}))
 		var b strings.Builder
-		fmt.Fprintf(&b, "**%s**", feishubot.EscapeMarkdown(toolDisplayName(ix.ToolName)))
+		fmt.Fprintf(&b, "**%s**", feishubot.EscapeMarkdown(ixToolName(ix)))
 		if ix.Reason != "" {
 			fmt.Fprintf(&b, "\n%s", feishubot.EscapeMarkdown(clip(ix.Reason, maxPermissionReason)))
 		}
@@ -555,6 +558,12 @@ func (s *Service) interactionCard(ctx context.Context, ix proto.Interaction) *fe
 		// Claude's session rule (node/runtimes.go), so the button there would only allow once and ask again.
 		label := ix.AlwaysLabel
 		if label == "" && (ix.Agent == "" || ix.Agent == "claude") && ix.SessionID != "" {
+			label = i18n.T(l, "assistant-feishu_cards.always_allow")
+		}
+		// The manager's word wins where it gave one (#3590): no button that would only allow once.
+		if kept := ix.AlwaysHonored; kept != nil && !*kept {
+			label = ""
+		} else if kept != nil && label == "" {
 			label = i18n.T(l, "assistant-feishu_cards.always_allow")
 		}
 		if label != "" {
@@ -764,7 +773,7 @@ func (s *Service) answeredCard(ctx context.Context, ix proto.Interaction, how st
 			c.Note(strings.TrimSpace(i18n.T(s.botLang(ctx), "assistant-feishu_cards.clipped")))
 		}
 	case proto.IxPermission:
-		c.Markdown(feishubot.EscapeMarkdown(ix.ToolName + " " + clip(oneLine(ix.Summary), 200)))
+		c.Markdown(feishubot.EscapeMarkdown(ixToolName(ix) + " " + clip(oneLine(ix.Summary), 200)))
 	case proto.IxPlan:
 		c.Markdown(feishubot.EscapeMarkdown(clip(planTitle(ix.Plan), 200)))
 	}

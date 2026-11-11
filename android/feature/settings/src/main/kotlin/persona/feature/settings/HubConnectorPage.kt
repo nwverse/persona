@@ -10,6 +10,7 @@ import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import persona.core.contracts.api.*
@@ -22,13 +23,20 @@ internal fun HubConnectorPage(
     connectorId: String,
     onBack: () -> Unit,
     manager: String? = null,
+    /** For the source subscriptions' entry row (#2041), the default manager's only; without them it is left out. */
+    extensions: persona.core.contracts.api.ExtensionManagement? = null,
+    onSubscriptions: (() -> Unit)? = null,
 ) {
     val owner = manager?.takeIf { it.isNotBlank() } ?: LocalManagerRoster.current?.defaultManagerId.orEmpty()
-    key(connectors, connectorId, owner) { HubConnectorDetails(connectors, connectorId, onBack, owner) }
+    val subscriptions = rememberSubscriptionCounts(extensions.takeIf { manager.isNullOrBlank() && onSubscriptions != null }) { it.connector == connectorId }
+    key(connectors, connectorId, owner) {
+        HubConnectorDetails(connectors, connectorId, onBack, owner, subscriptions, onSubscriptions ?: {})
+    }
 }
 
 @Composable
-private fun HubConnectorDetails(connectors: ConnectorsManagement?, connectorId: String, onBack: () -> Unit, owner: String) {
+private fun HubConnectorDetails(connectors: ConnectorsManagement?, connectorId: String, onBack: () -> Unit, owner: String,
+                                subscriptions: Pair<Int, Int>?, onSubscriptions: () -> Unit) {
     val requestManager = remember(owner) { RequestManager(owner) }
     val scope = rememberCoroutineScope { requestManager }
     val feedback = LocalAppFeedback.current
@@ -66,9 +74,18 @@ private fun HubConnectorDetails(connectors: ConnectorsManagement?, connectorId: 
 
     LaunchedEffect(connectors, connectorId, owner) { load() }
     BackHandler(onBack = onBack)
-    // A code on screen: ask the hub again on its own until it is scanned or entered (and the page is open).
+    // A code on screen: ask the hub again on its own until it is scanned or entered, while the page is shown and for a
+    // while after (the user signs in in another app); back in front, ask at once (`pollWhileShown`).
     val polled = signInState.bind.prompt?.takeIf { signInState.bind.polled }
-    LaunchedEffect(signIn, polled?.step, polled?.kind, polled?.userCode, polled?.url) { if (polled != null) kotlinx.coroutines.withContext(requestManager) { signIn?.poll() } }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    // When the page left, once per sign-in: a new code (the effect below starting again) keeps it.
+    val away = remember(signIn, polled != null) { SignInAway() }
+    LaunchedEffect(signIn, lifecycle, away, polled?.step, polled?.kind, polled?.userCode, polled?.url) {
+        val model = signIn ?: return@LaunchedEffect
+        if (polled != null) kotlinx.coroutines.withContext(requestManager) {
+            pollWhileShown(lifecycle.startedFlow(), away, catchUp = { model.catchUp() }, poll = { model.poll() })
+        }
+    }
     LaunchedEffect(signInState.signedInAs) {
         val who = signInState.signedInAs ?: return@LaunchedEffect
         feedback?.notice(if (who.isBlank()) res.getString(R.string.settings_src_connector_signed_in) else res.getString(R.string.settings_src_connector_signed_in_as, who))
@@ -112,6 +129,8 @@ private fun HubConnectorDetails(connectors: ConnectorsManagement?, connectorId: 
                 }
             }
 
+            subscriptionsEntry(subscriptions, onSubscriptions)
+
             if (signIn != null && ConnectorText.signsInHere(c)) {
                 connectorSignIn(c, signInState.bind, signIn, scope, onSignOut = { confirmingLogout = true })
             }
@@ -123,6 +142,8 @@ private fun HubConnectorDetails(connectors: ConnectorsManagement?, connectorId: 
                         scope.launch {
                             try {
                                 connector = connectors?.setConnectorEnabled(c.id, want)
+                            } catch (e: CancellationException) {
+                                throw e
                             } catch (e: Exception) {
                                 feedback?.notice(res.getString(R.string.settings_src_save_failed, e.message.orEmpty()))
                             }
@@ -142,6 +163,8 @@ private fun HubConnectorDetails(connectors: ConnectorsManagement?, connectorId: 
                                 scope.launch {
                                     try {
                                         connector = connectors?.setConnectorFeed(c.id, "archive", want)
+                                    } catch (e: CancellationException) {
+                                        throw e
                                     } catch (e: Exception) {
                                         feedback?.notice(res.getString(R.string.settings_src_save_failed, e.message.orEmpty()))
                                     }
@@ -158,6 +181,8 @@ private fun HubConnectorDetails(connectors: ConnectorsManagement?, connectorId: 
                                 scope.launch {
                                     try {
                                         connector = connectors?.setConnectorFeed(c.id, "inbox", want)
+                                    } catch (e: CancellationException) {
+                                        throw e
                                     } catch (e: Exception) {
                                         feedback?.notice(res.getString(R.string.settings_src_save_failed, e.message.orEmpty()))
                                     }
@@ -220,6 +245,8 @@ private fun HubConnectorDetails(connectors: ConnectorsManagement?, connectorId: 
                         connectors?.deleteConnectorData(c.id)
                         feedback?.notice(res.getString(R.string.settings_src_data_deleted))
                         load()
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         feedback?.notice(res.getString(R.string.settings_src_delete_failed, e.message.orEmpty()))
                     }

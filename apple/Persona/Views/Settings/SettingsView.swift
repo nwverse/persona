@@ -1,4 +1,5 @@
 import BeautifulUI
+import AuthenticationServices
 import SwiftUI
 import VisionKit
 
@@ -98,10 +99,22 @@ struct SettingsView: View {
                         .settingsListRow(SettingsPage.modelConfiguration)
                         NavigationLink(value: SettingsPage.assistant) {
                             // No model here: the assistant's model is Model Settings › Main Chat (#1291).
-                            SettingsRow(title: String(localized: "Assistant"), symbol: Theme.Icon.ai, tint: Theme.ai)
+                            SettingsRow(title: String(localized: "Assistant Profile"), symbol: Theme.Icon.ai, tint: Theme.ai)
                         }
                         .settingsListRow(SettingsPage.assistant)
                         .accessibilityIdentifier("settings-assistant")
+                        #if os(iOS)
+                        // Persona's part in recorded meetings (#2981): the hub's default role, Off until changed. Only from
+                        // a hub that offers attending.
+                        if MeetingAttendees.offered(model) {
+                            NavigationLink(value: SettingsPage.meetings) {
+                                SettingsRow(title: String(localized: "Meetings"), symbol: Theme.Icon.meeting, tint: Theme.ai,
+                                            value: MeetingAttendees.defaultRole(model).title, look: .oneLine)
+                            }
+                            .settingsListRow(SettingsPage.meetings)
+                            .accessibilityIdentifier("settings-meetings")
+                        }
+                        #endif
                         NavigationLink(value: SettingsPage.triage) {
                             SettingsRow(title: String(localized: "Session Triage"), symbol: Theme.Icon.triage, tint: Theme.ai)
                         }
@@ -208,9 +221,9 @@ struct SettingsView: View {
                             }
                             .settingsListRow(SettingsPage.hub)
                             .accessibilityIdentifier("settings.hub")
-                            // The hub's managers, each a whole assistant (docs/assistant/managers.md).
+                            // The hub's managers, "assistants" in the interface (docs/assistant/managers.md).
                             NavigationLink(value: SettingsPage.managers) {
-                                SettingsRow(title: String(localized: "Managers"), symbol: Theme.Icon.managers, tint: Theme.ai)
+                                SettingsRow(title: String(localized: "Assistants"), symbol: Theme.Icon.managers, tint: Theme.ai)
                             }
                             .settingsListRow(SettingsPage.managers)
                             .accessibilityIdentifier("settings.managers")
@@ -289,6 +302,7 @@ struct SettingsView: View {
                         ToolbarItem(placement: .topBarTrailing) {
                             Button { model.shellSettings = false } label: { Label("Close", systemImage: Theme.Icon.close) }
                                 .foregroundStyle(Color.primary)
+                                .keyboardShortcut(.cancelAction) // Esc closes it too: a phone's full-screen cover has no swipe down
                                 .accessibilityIdentifier("settings-close")
                         }
                     }
@@ -371,11 +385,16 @@ struct SettingsView: View {
         else if d.bool(forKey: "openNotificationSettings") { p.append(SettingsPage.notifications) }
         else if d.string(forKey: "openAssistantPage") != nil { p.append(SettingsPage.assistant) }
         else if d.bool(forKey: "openDevices") { p.append(SettingsPage.devices) }
-        else if d.bool(forKey: "openHubs") || d.bool(forKey: "openSSHTunnel") || d.bool(forKey: "openLocalProxy") {
+        else if d.bool(forKey: "openHubs") || d.bool(forKey: "openSSHTunnel") || d.bool(forKey: "openLocalProxy") || d.bool(forKey: "openCloudflareAccess")
+                    || d.bool(forKey: "openHubAddresses") {
             p.append(SettingsPage.hubs)
             // `-openSSHTunnel YES` / `-openLocalProxy YES`: the first hub's Settings › hub › SSH Tunnel / Local Proxy (screenshots).
             if d.bool(forKey: "openSSHTunnel"), let first = model.registry.hubs.first { p.append(SettingsPage.sshTunnel(first.id)) }
             if d.bool(forKey: "openLocalProxy"), let first = model.registry.hubs.first { p.append(SettingsPage.localProxy(first.id)) }
+            // `-openCloudflareAccess YES`: its Settings › hub › Cloudflare Access.
+            if d.bool(forKey: "openCloudflareAccess"), let first = model.registry.hubs.first { p.append(SettingsPage.cloudflareAccess(first.id)) }
+            // `-openHubAddresses YES`: its Settings › hub › Addresses (`-seedHubAddresses` fills them).
+            if d.bool(forKey: "openHubAddresses"), let first = model.registry.hubs.first { p.append(SettingsPage.hubAddresses(first.id)) }
         }
         else if d.bool(forKey: "openHubUpdate") { p.append(SettingsPage.hub) }
         else if d.bool(forKey: "openManagers") || d.string(forKey: "openManagerPage") != nil || d.bool(forKey: "showManagerCode") {
@@ -423,6 +442,11 @@ struct SettingsView: View {
         else if d.bool(forKey: "openConnectorBot") { p.append(SettingsPage.feishuBot) }
         else if d.bool(forKey: "openConnectorDevice") { p.append(SettingsPage.phoneData) }
         else if d.bool(forKey: "openTranslationSettings") { p.append(SettingsPage.translation) }
+        else if d.bool(forKey: "openMeetingSettings") { // Settings › Meetings (#2981)
+            #if os(iOS)
+            p.append(SettingsPage.meetings)
+            #endif
+        }
         else if d.bool(forKey: "openTriageSettings") { p.append(SettingsPage.triage) }
         else if d.string(forKey: "openKnowledgeSelection") != nil { p.append(SettingsPage.knowledgeSelection) } // (rule | chat | doc: with that sheet)
         else if d.string(forKey: "openAppearance") == "layout" { p.append(SettingsPage.layout) } // Layout (#2530)
@@ -492,6 +516,8 @@ struct SettingsView: View {
 enum SettingsPage: Hashable {
     #if os(iOS)
     case health
+    /// Settings › Meetings (#2981): Persona's default role in a recorded meeting.
+    case meetings
     #endif
     case persona, themeColor, style, colorScheme, language, assistant, claude, codex, devices, phoneData, mail, feishu, feishuBot, notifications, storage, translation, modelConfiguration
     /// Settings › Session Triage (docs/assistant/agent-work.md「开关」).
@@ -525,6 +551,10 @@ enum SettingsPage: Hashable {
     case inAppTunnel(String)
     /// Settings › hub › Local Proxy of one paired hub (docs/operations/network.md "Connecting to hub through a local SOCKS5 proxy").
     case localProxy(String)
+    /// Settings › hub › Cloudflare Access of one paired hub (docs/operations/network.md "Behind Cloudflare Access").
+    case cloudflareAccess(String)
+    /// Settings › hub › Addresses of one paired hub (#4670, docs/operations/network.md "Client-added candidates").
+    case hubAddresses(String)
     /// Settings › Managers, and one manager by its id (docs/assistant/managers.md).
     case managers
     case manager(String)
@@ -585,6 +615,7 @@ private struct SettingsDestinations: ViewModifier {
         case .feishuBot: FeishuBotView()
         #if os(iOS)
         case .health: WorkoutReportSettingsView()
+        case .meetings: MeetingSettingsView()
         #endif
         case .notifications: NotificationSettingsView()
         case .storage: StorageView()
@@ -595,6 +626,8 @@ private struct SettingsDestinations: ViewModifier {
         case .sshTunnel(let id): HubSSHTunnelPage(hubID: id)
         case .inAppTunnel(let id): HubInAppTunnelPage(hubID: id)
         case .localProxy(let id): HubLocalProxyPage(hubID: id)
+        case .cloudflareAccess(let id): HubCloudflareAccessPage(hubID: id)
+        case .hubAddresses(let id): HubAddressesPage(hubID: id)
         case .managers: ManagersView()
         case .manager(let id): ManagerDetailView(id: id)
         case .connectors: ConnectorsView()
@@ -674,6 +707,9 @@ struct PhoneDataView: View {
     @State private var enabled: [PhoneDataSource: Bool] = [:]
     @State private var asking: PhoneDataSource?
     @StoredValue(ClipboardOffer.enabledKey) private var offerClipboard = false
+    #if os(iOS)
+    @State private var iphoneConsent = IPhoneConsentModel()
+    #endif
 
     var body: some View {
         List {
@@ -699,6 +735,9 @@ struct PhoneDataView: View {
                 Text("Claude can read the data you turn on through phone_* tools; writes such as new events or reminders ask you on the phone first. Turning one on requests system permission; if you denied it before, you'll go to Settings. The hub can reach the phone only while Persona is in the foreground (or just moved to the background). iOS doesn't expose Messages, Notes, or third-party app data.")
             }
             #if os(iOS)
+            // Being operated by the assistant through a paired Mac (docs/extensions/iphone.md): only while the hub's
+            // extension iphone is on.
+            IPhoneConsentSection(consent: iphoneConsent)
             // Sending the phone's clipboard to a computer (#3064): offered when the app comes back after copying.
             Section {
                 Toggle(isOn: $offerClipboard) {
@@ -716,6 +755,9 @@ struct PhoneDataView: View {
         .navigationTitle(ConnectorText.device)
         .navigationBarTitleDisplayMode(.inline) // like the other connectors' pages
         .task { refresh() }
+        #if os(iOS)
+        .task(id: model.config) { await iphoneConsent.load() } // again once the app has its hub (pairing, switching)
+        #endif
         // Back from the system's Settings, where a permission may have been given or taken away.
         .onChange(of: phase) { _, p in if p == .active { refresh() } }
     }
@@ -958,15 +1000,22 @@ struct PairView: View {
 
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.webAuthenticationSession) private var webAuth
     var start: Start = .scan
     @State private var url = ""
     @State private var token = ""
     /// The SSH tunnel set up here, for a hub this device cannot reach directly (docs/operations/network.md「Connecting to hub through SSH」).
     @State private var ssh: SSHRoute?
+    /// The hub's Cloudflare Access service token, typed in before pairing (docs/operations/network.md "Behind Cloudflare
+    /// Access"): without it the first request is already sent to Access's login.
+    @State private var accessID = ""
+    @State private var accessSecret = ""
+    @State private var showAccess = false
     #if os(macOS)
     @State private var editingSSH = false
     #endif
     @State private var connecting = false
+    @State private var passwordMode = true
     @State private var error: String?
     @State private var scanning = DataScannerViewController.isSupported && DataScannerViewController.isAvailable
     /// The code was refused as expired or used (401 invalid_token): say so, and offer to scan again.
@@ -978,7 +1027,20 @@ struct PairView: View {
     var body: some View {
         NavigationStack {
             Form {
-                if expired {
+                Section {
+                    Picker("Connection method", selection: $passwordMode) {
+                        Text("Password sign-in").tag(true)
+                        Text("Scan or token").tag(false)
+                    }.pickerStyle(.segmented)
+                }
+                if passwordMode {
+                    Section("Password sign-in") {
+                        TextField("HTTPS hub address", text: $url).autocorrectionDisabled()
+                        Text("Enter the connection password set by your administrator in the system sign-in window. Use QR pairing for self-signed certificates.")
+                            .font(Theme.Font.caption).foregroundStyle(.secondary)
+                    }
+                }
+                if !passwordMode && expired {
                     Section {
                         Label("This code has expired or was already used; get a new one", systemImage: Theme.Icon.error)
                             .font(Theme.Font.secondaryStrong).foregroundStyle(Theme.danger)
@@ -994,12 +1056,13 @@ struct PairView: View {
                         Text("Get a new code on the screen from setting up the hub, or on a connected device in Settings › Devices › Connect a new device.")
                     }
                 }
-                if scanning && !other {
+                if !passwordMode && scanning && !other {
                     Section {
                         QRScanner { code in
                             if let cfg = ServerConfig(pairURL: code) {
                                 url = cfg.url.absoluteString
                                 token = cfg.token
+                                passwordMode = false
                                 scanning = false
                                 Task { await connect() }
                             }
@@ -1017,7 +1080,7 @@ struct PairView: View {
                         #endif
                     }
                 }
-                if !other {
+                if !passwordMode && !other {
                     Section {
                         Button { withAnimation(Theme.Motion.standard) { showOther = true } } label: {
                             Label("Other ways", systemImage: Theme.Icon.more).lineLimit(1)
@@ -1027,10 +1090,28 @@ struct PairView: View {
                         Text("Type the address, connect through an SSH tunnel, or make a code with a command on the hub's machine.")
                     }
                 }
-                if other { otherWays }
+                if !passwordMode && other { otherWays }
+                if !passwordMode { accessSection }
                 if let error { Section { Text(error).foregroundStyle(Theme.danger).font(Theme.Font.caption) } }
             }
             .themedPage()
+            #if DEBUG
+            // `-showPairAccess YES`: Cloudflare Access opened (screenshots), its fields from `-seedCloudflareAccess id:secret`;
+            // `-showPairAccess <pairing link>` also pairs with it at once (the Access error, MOCK_CF_ACCESS).
+            .onAppear {
+                let d = UserDefaults.standard
+                guard let s = d.string(forKey: "showPairAccess") else { return }
+                showAccess = true
+                let parts = (d.string(forKey: "seedCloudflareAccess") ?? "").split(separator: ":", maxSplits: 1).map(String.init)
+                if parts.count == 2 { accessID = parts[0]; accessSecret = parts[1] }
+                if let cfg = ServerConfig(pairURL: s) {
+                    url = cfg.url.absoluteString
+                    token = cfg.token
+                    passwordMode = false
+                    Task { await connect() }
+                }
+            }
+            #endif
             #if os(macOS)
             .sheet(isPresented: $editingSSH) {
                 NavigationStack {
@@ -1042,7 +1123,7 @@ struct PairView: View {
             .onAppear { if UserDefaults.standard.bool(forKey: "openPairSSH") { editingSSH = true } }
             #endif
             #endif
-            .modifier(PairSheetChrome(url: $url, token: $token, connecting: connecting, connect: { await connect() }))
+            .modifier(PairSheetChrome(url: $url, token: $token, passwordMode: $passwordMode, connecting: connecting, connect: { await connect() }))
         }
     }
 
@@ -1097,12 +1178,27 @@ struct PairView: View {
                     Text("If you use the terminal on the hub's machine: run this line there and it prints a QR code and a pairing link.")
                 }
     }
+
+    /// Cloudflare Access, closed until needed; filled in before scanning or connecting.
+    private var accessSection: some View {
+        Section {
+            DisclosureGroup(isExpanded: $showAccess) {
+                CloudflareAccessFields(clientID: $accessID, clientSecret: $accessSecret, idPrefix: "pair.access")
+            } label: {
+                Label("Cloudflare Access", systemImage: Theme.Icon.cloudflareAccess).lineLimit(1)
+            }
+            .accessibilityIdentifier("pair.access")
+        } footer: {
+            Text("Only for a hub published through Cloudflare Access: the service token's Client ID and Client Secret. Kept with this hub's pairing in the keychain.")
+        }
+    }
 }
 
 /// The pairing sheet's title, Cancel / Connect and the Mac's paste handling, around its form.
 private struct PairSheetChrome: ViewModifier {
     @Binding var url: String
     @Binding var token: String
+    @Binding var passwordMode: Bool
     var connecting: Bool
     var connect: () async -> Void
     @Environment(\.dismiss) private var dismiss
@@ -1119,6 +1215,7 @@ private struct PairSheetChrome: ViewModifier {
                 guard let cfg = ServerConfig(pairURL: typed) else { return }
                 url = cfg.url.absoluteString
                 token = cfg.token
+                passwordMode = false
                 Task { await connect() }
             }
             #endif
@@ -1128,7 +1225,7 @@ private struct PairSheetChrome: ViewModifier {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button { Task { await connect() } } label: { if connecting { ProgressView() } else { Text("Connect [V N C Page a55741]") } }
-                        .disabled(connecting || token.isEmpty || URL(string: url) == nil)
+                        .disabled(connecting || (!passwordMode && token.isEmpty) || url.isEmpty)
                 }
             }
     }
@@ -1160,15 +1257,21 @@ extension AppModel {
 
 extension PairView {
     fileprivate func connect() async {
+        if passwordMode { await passwordLogin(); return }
         guard let u = URL(string: url.trimmingCharacters(in: .whitespaces)) else { return }
         connecting = true
         defer { connecting = false }
         do {
-            try await model.pair(ServerConfig(url: u, token: token.trimmingCharacters(in: .whitespaces)), ssh: ssh)
+            try await model.pair(ServerConfig(url: u, token: token.trimmingCharacters(in: .whitespaces),
+                                              access: HubAccess(clientID: accessID, clientSecret: accessSecret)), ssh: ssh)
             Haptics.success()
             dismiss()
         } catch {
-            if PairError.isExpiredCode(error) {
+            if error is CloudflareAccessError {
+                // Access, not the address: no advice about networks or SSH; its fields open to fill in or correct.
+                self.error = error.localizedDescription
+                showAccess = true
+            } else if PairError.isExpiredCode(error) {
                 // A code already used or out of date (401 invalid_token): not 「invalid token」, and a way to scan again.
                 self.error = nil
                 expired = true
@@ -1183,6 +1286,30 @@ extension PairView {
             }
             if !expired { scanning = DataScannerViewController.isSupported && DataScannerViewController.isAvailable } // scan again
             Haptics.error()
+        }
+    }
+
+    private func passwordLogin() async {
+        connecting = true
+        error = nil
+        defer { connecting = false }
+        do {
+            #if os(macOS)
+            let kind = "desktop"
+            #else
+            let kind = "phone"
+            #endif
+            let flow = try PasswordLoginRequest(address: url, name: UIDevice.current.name, kind: kind)
+            let callback = try await webAuth.authenticate(using: flow.page, callback: .customScheme("persona"),
+                preferredBrowserSession: .ephemeral, additionalHeaderFields: [:])
+            let credential = try await flow.exchange(callback)
+            try await model.pair(ServerConfig(url: flow.server, token: credential.token), deviceID: credential.id)
+            Haptics.success()
+            dismiss()
+        } catch let e as ASWebAuthenticationSessionError where e.code == .canceledLogin {
+            return
+        } catch {
+            if !error.isCancellation { self.error = error.localizedDescription; Haptics.error() }
         }
     }
 }

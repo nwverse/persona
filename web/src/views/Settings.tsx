@@ -5,7 +5,7 @@ import { BASE, stripBase } from "../lib/base";
 import { href } from "../lib/router";
 import { takeOverlayEntry } from "../lib/back-close";
 import { useScrollMemory } from "../lib/scroll-memory";
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, enc, errorText } from "../lib/api";
 import { splitDevices } from "../lib/devices";
 import { ago } from "../lib/format";
@@ -19,8 +19,8 @@ import { Group, Row, Pill, RowConfirm, Switch } from "./settings/SettingsParts";
 import { LanguageRow } from "./settings/LanguageRow";
 import { TextSizeRow, ThemeColorPicker } from "./settings/LookSettings";
 import { setReplyMotionEnabled, useReplyMotionSetting } from "../ui/stream/motion";
-import { setSidebarTerminals, useSidebarTerminals } from "../lib/sidebar-terminals";
 import { setAgentDetails, setContextAsUsed, useAgentDetails, useContextAsUsed } from "../lib/context-usage";
+import { setSidebarTerminals, useSidebarTerminals } from "../lib/sidebar-terminals";
 import { HubList } from "./Hubs";
 import { useDisconnect } from "./DisconnectBrowser";
 import { KnowledgeSelection } from "./settings/KnowledgeSelection";
@@ -40,18 +40,21 @@ import { ChannelList, ChannelPage } from "./settings/Channels";
 import { ConnectDevice } from "./settings/ConnectDevice";
 import { settingsTarget } from "../lib/channels";
 import { extensionsRoute, routeSub } from "../lib/extension-market";
-import { ownedSub, parseOwnedSub } from "../lib/manager-choice";
+import { otherManager, ownedSub, parseOwnedSub, pinManagerAt, useChosenManager } from "../lib/manager-choice";
 import { HubSettings } from "./settings/HubSettings";
 import { ManagersSettings } from "./settings/ManagersSettings";
 import { LauncherQuota } from "./settings/LauncherQuota";
 import { LauncherExtensionSections } from "./settings/ExtensionView";
 import { hubHasExt } from "../lib/extension-api";
 import { hostOf, type ProviderView } from "../lib/providers";
+import { harnessGroups, harnessLabel, scopeSummary } from "../lib/provider-scope";
 import { ProviderWizard } from "./settings/ProviderWizard";
 import { ProviderImport } from "./settings/ProviderImport";
 import { builtinRows, loadLaunchers, rcFilesOf, rcGroups, syncStateText, type LauncherSync } from "../lib/launcher-list";
 import { TerminalModeRow } from "./settings/TerminalModeSetting";
-import { AGENT_KINDS, categoryState, FROM_LIST, itemIsPage, itemState, NAV_GROUPS, openedFromSub, redirectLegacySettings, searchSettings, settingsAt, settingsHref, SENT_SUB, stepsToList, TAB_INFO, TABS, type AgentTab, type SearchGroup, type SettingsSection, type Tab } from "./settings/nav";
+import { AGENT_KINDS, ASSISTANT_TABS, categoryState, FROM_LIST, itemIsPage, itemState, NAV_GROUPS, openedFromSub, redirectLegacySettings, settingsAt, settingsHref, SENT_SUB, stepsToList, TAB_INFO, TABS, type AgentTab, type SettingsSection, type Tab } from "./settings/nav";
+import { searchSettings, type SearchGroup } from "./settings/search";
+import { GroupAction, GroupFooter, GroupTitle, hasFooter } from "./settings/SettingsGroups";
 import { SHEET_QUERY, useMedia } from "../ui/overlay";
 import { formatList, t } from "../i18n";
 
@@ -110,6 +113,11 @@ interface DeviceToken {
 
 const enLauncher = (n: string) => `/launchers/${enc(n)}`;
 
+/** What the current assistant's pages ask of its manager besides their merged lists and configuration editors (which
+ *  name it themselves): the model providers, session triage, mail accounts, the chat connector (all its routes: accounts, status, message display), the
+ *  chat bot, and the messages sent as you. Pinned to the current assistant while one of those pages is open. */
+const ASSISTANT_PREFIXES = ["/launchers", "/agents/triage", "/mail", "/lark", "/bots", "/connectors/sent"];
+
 export function tokens(n: number): string {
   if (n >= 1_000_000 && n % 100_000 === 0) return `${n % 1_000_000 === 0 ? n / 1_000_000 : (n / 1_000_000).toFixed(1)}M`;
   if (n >= 1000) return `${Math.floor(n / 1000)}K`;
@@ -155,11 +163,29 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     return () => removeEventListener("popstate", back);
   }, []);
   const listed = phone && !at.tab;
-  // one scroller shows the list and every page: each keeps its own spot, and Back to the list lands where it was (#5133)
-  const scroller = useRef<HTMLDivElement>(null);
-  useScrollMemory(scroller, listed ? "settings" : `settings/${at.tab ?? "general"}/${at.sub ?? ""}`);
   const tab: Tab = at.tab ?? "general";
+  // one scroller shows the list and every page: each keeps its own spot, and Back to the list lands where it was (#5133).
+  // An item that opens in a dialog over its category's page (a model purpose) is not a page: the key leaves it out, so
+  // opening and closing it leave the page where it was (#4282).
+  const scroller = useRef<HTMLDivElement>(null);
+  useScrollMemory(scroller, listed ? "settings" : `settings/${tab}/${itemIsPage(tab) ? (at.sub ?? "") : ""}`);
   const { sub } = at;
+  // The current assistant's group (docs/assistant/managers.md "The current assistant"): its pages read and write that
+  // assistant only. Their merged lists are filtered by it, its configuration editors name it, and what else they ask of
+  // its manager (ASSISTANT_PREFIXES) names it while the page is open.
+  const picked = useChosenManager();
+  useLayoutEffect(() => (ASSISTANT_TABS.has(tab) ? pinManagerAt(ASSISTANT_PREFIXES, otherManager(picked ?? undefined)) : undefined), [tab, picked]);
+  // Another assistant made current with one of the group's items open (a connector, an extension, a channel, a model
+  // purpose): that item is the last assistant's, so the page goes back to its list, which then lists the new one's.
+  const [pickSeen, setPickSeen] = useState(picked);
+  if (pickSeen !== picked) {
+    setPickSeen(picked);
+    if (ASSISTANT_TABS.has(tab) && sub) setAt({ tab, sub: null, section: null });
+  }
+  // the address follows an item closed so
+  useLayoutEffect(() => {
+    if (ASSISTANT_TABS.has(tab) && !sub && settingsAt(location.search, location.hash).sub) history.replaceState(categoryState(history.state), "", BASE + settingsHref(tab, null, phone));
+  }, [tab, sub, phone]);
   useEffect(() => {
     if (!at.section || listed) return;
     const section = document.getElementById(`settings-${at.section}`);
@@ -191,7 +217,8 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
       return history.go(-2);
     }
     setAt({ tab: k, sub: id, section: section ?? null });
-    const to = settingsHref(k, id, phone, k === "persona" || k === "models" || k === "hub" || k === "knowledge" ? configurationOwner.current : null, section);
+    // the hub's page keeps its own choice of manager (the download mirrors); the current assistant's pages follow the pick
+    const to = settingsHref(k, id, phone, k === "hub" ? configurationOwner.current : null, section);
     // from the phone's list the category goes on top of it, and an item's page on top of its category's page, so Back
     // returns to each; another item of the category keeps the entry's way back, another category only the way to the list
     if (listed) history.pushState({ [FROM_LIST]: true }, "", BASE + to);
@@ -262,9 +289,14 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
               <SettingsList shown={shown} onPick={pick} />
             </div>
           ) : (
-            <div key={tab} className={cx("mx-auto px-5 py-6 sm:px-8", tab === "channels" || tab === "connectors" || tab === "extensions" ? "max-w-[1120px]" : "max-w-[760px]")} style={{ animation: `fade-up 320ms ${EASE} both` }}>
+            <div key={ASSISTANT_TABS.has(tab) ? `${tab}@${picked ?? ""}` : tab} className={cx("mx-auto px-5 py-6 sm:px-8", tab === "channels" || tab === "connectors" || tab === "extensions" ? "max-w-[1120px]" : "max-w-[760px]")} style={{ animation: `fade-up 320ms ${EASE} both` }}>
               {tab === "general" && <General onModel={() => pick("models", "translate", "model-config")} />}
-              {tab === "persona" && <PersonaSettings onTriageModel={() => pick("models", "agent.triage", "model-config")} onExtensions={() => pick("extensions")} />}
+              {tab === "persona" && <AssistantProfile onTriageModel={() => pick("models", "agent.triage", "model-config")} />}
+              {tab === "avatar" && (
+                <Group title={t("settings.avatar")} footer={t("settings.avatar_footer")} anchor="avatar">
+                  <PersonaPicker onExtensions={() => pick("extensions")} />
+                </Group>
+              )}
               {tab === "notifications" && <NotificationSettings />}
               {tab === "knowledge" && <KnowledgeSelection />}
               {tab === "models" && <>
@@ -273,7 +305,8 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                   <Models />
                 </section>
                 <section id="settings-model-config" className="scroll-mt-4">
-                  <ModelConfiguration open={sub} onOpen={(id) => pick("models", id, "model-config")} onProviders={() => pick("models", null, "providers")} />
+                  {/* no section: the row is on the page in view, which stays where it is (#4282) */}
+                  <ModelConfiguration open={sub} onOpen={(id) => pick("models", id)} onProviders={() => pick("models", null, "providers")} />
                 </section>
               </>}
               {tab === "agents" && <AgentSections section={at.section} />}
@@ -311,7 +344,10 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
               ))}
               {tab === "shortcuts" && <ShortcutSettings />}
               {tab === "devices" && <Devices />}
-              {tab === "hub" && <HubSettings />}
+              {tab === "hub" && <>
+                <HubSettings />
+                <AgentGroup />
+              </>}
               {tab === "managers" && <ManagersSettings />}
             </div>
           )}
@@ -416,9 +452,13 @@ function SettingsNav({ tab, query, onQuery, search, shown, onPick, onGroup, cont
             const its = g.tabs.filter(shown);
             if (!its.length) return null;
             return (
-              <div key={g.title}>
-                <div className="px-3 pt-3 pb-1 text-[11px] font-medium text-ink-3">{g.title}</div>
+              <div key={g.key} data-settings-nav-group={g.key}>
+                <div className="flex min-h-7 items-center gap-1 pt-2 pr-1 pl-3 text-[11px] font-medium text-ink-3">
+                  <span className="min-w-0 flex-1"><GroupTitle group={g.key} compact /></span>
+                  <GroupAction group={g.key} />
+                </div>
                 {its.map((k) => <NavRow key={k} k={k} selected={tab === k} contentId={contentId} onPick={onPick} />)}
+                {hasFooter(g.key) && <p className="px-3 pt-1 pb-1.5 text-[11px] leading-snug text-ink-3"><GroupFooter group={g.key} /></p>}
               </div>
             );
           })
@@ -468,7 +508,7 @@ function SettingsList({ shown, onPick }: { shown: (k: Tab) => boolean; onPick: (
         const tabs = g.tabs.filter(shown);
         if (!tabs.length) return null;
         return (
-          <Group key={g.title} title={g.title}>
+          <Group key={g.key} anchor={`nav-${g.key}`} title={<GroupTitle group={g.key} />} right={<GroupAction group={g.key} />} footer={hasFooter(g.key) ? <GroupFooter group={g.key} /> : undefined}>
             {tabs.map((k) => (
               <Row key={k} icon={TAB_INFO[k].icon} label={TAB_INFO[k].label} hint={TAB_INFO[k].hint} onClick={() => onPick(k)} />
             ))}
@@ -527,41 +567,44 @@ function General({ onModel }: { onModel: () => void }) {
       <section id="settings-translation" className="scroll-mt-4">
         <TranslationSettings onConfigure={onModel} />
       </section>
+
+      <AgentPreferences />
+      <HubList />
+      <About />
     </>
   );
 }
 
-function PersonaSettings({ onTriageModel, onExtensions }: { onTriageModel: () => void; onExtensions: () => void }) {
+/** The assistant's profile (the current assistant's): About me, memory, skills, scheduled tasks and where it runs, then
+ *  session triage. Its avatar is the hub's (the Avatar page), and what was about this browser is under General. */
+function AssistantProfile({ onTriageModel }: { onTriageModel: () => void }) {
+  return (
+    <>
+      <AssistantSettings bare />
+      <TriageSettings onModel={onTriageModel} />
+    </>
+  );
+}
+
+/** This browser's own switches for Agents (the terminal, the sidebar, the details shown). */
+function AgentPreferences() {
+  const workBrowserReady = useStore((s) => s.features.includes("sessions_dimensions"));
   const sidebarTerminals = useSidebarTerminals();
   const agentDetails = useAgentDetails();
   const contextAsUsed = useContextAsUsed();
   return (
-    <>
-      <Group title={t("settings.avatar")} footer={t("settings.avatar_footer")} anchor="avatar">
-        <PersonaPicker onExtensions={onExtensions} />
-      </Group>
-      <AssistantSettings bare />
-
-      <TriageSettings onModel={onTriageModel} />
-
-      <AgentGroup />
-
-      <Group title={t("settings.agent_preferences")} anchor="agent-preferences">
-        <TerminalModeRow />
-        <Row label={t("settings.sidebar_terminals")} hint={t("settings.sidebar_terminals_hint")}>
-          <Switch on={sidebarTerminals} onChange={setSidebarTerminals} label={t("settings.sidebar_terminals")} />
-        </Row>
-        <Row label={t("context.details")} hint={t("context.details_hint")}>
-          <Switch on={agentDetails} onChange={setAgentDetails} label={t("context.details")} />
-        </Row>
-        <Row label={t("context.as_used")} hint={t("context.as_used_hint")}>
-          <Switch on={contextAsUsed} onChange={setContextAsUsed} label={t("context.as_used")} />
-        </Row>
-      </Group>
-
-      <HubList />
-      <About />
-    </>
+    <Group title={t("settings.agent_preferences")} anchor="agent-preferences">
+      <TerminalModeRow />
+      {!workBrowserReady && <Row label={t("settings.sidebar_terminals")} hint={t("settings.sidebar_terminals_hint")}>
+        <Switch on={sidebarTerminals} onChange={setSidebarTerminals} label={t("settings.sidebar_terminals")} />
+      </Row>}
+      <Row label={t("context.details")} hint={t("context.details_hint")}>
+        <Switch on={agentDetails} onChange={setAgentDetails} label={t("context.details")} />
+      </Row>
+      <Row label={t("context.as_used")} hint={t("context.as_used_hint")}>
+        <Switch on={contextAsUsed} onChange={setContextAsUsed} label={t("context.as_used")} />
+      </Row>
+    </Group>
   );
 }
 
@@ -674,7 +717,7 @@ function Models() {
   const rc = rcGroups(shown);
   // a wrapper script on PATH or a runtime's launcher (agy, omp): a computer's, but not from an rc file
   const onPath = shown.filter((l) => !managedProvider(l.source) && l.source !== "builtin" && l.source !== "zshrc" && !l.hidden);
-  const hidden = shown.filter((l) => !managedProvider(l.source) && l.source !== "builtin" && l.hidden);
+  const hidden = shown.filter((l) => !managedProvider(l.source) && l.hidden);
   // the machines that did not answer this time, named on the entries they gave before
   const staleMark = (ids?: string[]) =>
     ids?.length ? <Pill tone="orange">{t("settings.stale", { machines: formatList(ids.map(name), { type: "conjunction", style: "narrow" }) })}</Pill> : null;
@@ -723,13 +766,14 @@ function Models() {
       {list && query && shown.length === 0 && <p className="py-10 text-center text-[13px] text-ink-3">{t("settings.no_matching_providers", { query })}</p>}
       {list && (!query || managed.length > 0) && (
         <Group title={t("settings.managed_title", { count: managed.length })} footer={managed.length ? t("settings.managed_footer") : undefined}>
-          {managed.length ? managed.map(row) : <p className="px-4 py-3 text-[12.5px] text-ink-3">{t("settings.managed_empty")}</p>}
+          {managed.length ? <ManagedRows list={managed} row={row} /> : <p className="px-4 py-3 text-[12.5px] text-ink-3">{t("settings.managed_empty")}</p>}
         </Group>
       )}
       {builtin.length > 0 && (
         <Group title={t("settings.builtin_title", { count: builtin.length })} footer={t("settings.builtin_footer")}>
           {builtin.map((b) => (
-            <div key={`${b.name}/${b.machine}`} className="flex items-center gap-3 px-4 py-2.5">
+            // its page tests it and hides it in Persona (#4384), as an rc-file launcher's does
+            <button key={`${b.name}/${b.machine}`} type="button" onClick={() => setOpen(b.name)} className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-hover">
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <span className="truncate text-[13px] font-medium text-ink">{t("settings.builtin_row", { name: b.name, machine: name(b.machine) })}</span>
@@ -737,7 +781,8 @@ function Models() {
                 </div>
                 <div className="mt-0.5 truncate font-mono text-[11.5px] text-ink-3">{b.version ? `Claude Code ${b.version}` : "Claude Code"}</div>
               </div>
-            </div>
+              <Icon name="chevronRight" size={12} stroke={2} className="shrink-0 text-ink-3" />
+            </button>
           ))}
         </Group>
       )}
@@ -972,6 +1017,8 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit }: { nam
               {l.kind !== "api" && (!l.agent || l.agent === "claude") && l.custom_model && <KVRow k={t("settings.custom_model")} v={l.custom_model} mono />}
               {l.kind !== "api" && (!l.agent || l.agent === "claude") && l.custom_model_name && <KVRow k={t("settings.custom_model_name")} v={l.custom_model_name} />}
               <KVRow k="API Key" v={l.has_key ? t("settings.key_set_hidden") : t("settings.not_set")} />
+              {l.share && <KVRow k={t("settings.devices")} v={scopeSummary(l, mname)} />}
+              {l.share && l.key_machines?.length ? <KVRow k={t("settings.machine_keys")} v={formatList(l.key_machines.map(mname), { type: "conjunction", style: "narrow" })} /> : null}
               {l.api !== "responses" && l.api !== "chat" && (!l.agent || l.agent === "claude") && <KVRow k={t("settings.auth")} v={l.auth === "bearer" ? "Bearer" : "x-api-key"} />}
               {l.kind !== "api" && l.args?.length ? <KVRow k={t("settings.extra_args")} v={l.args.join(" ")} mono /> : null}
               {l.models?.length ? <KVRow k={t("settings.model_list")} v={formatList(l.models.map((m) => m.id), { type: "conjunction", style: "narrow" })} mono sub={t("settings.model_count", { count: l.models.length })} /> : null}
@@ -1014,6 +1061,23 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit }: { nam
         </div>
       )}
     </Dialog>
+  );
+}
+
+/** Persona's providers by harness (Claude Code, Codex, …, direct API), each under a small header; one harness alone
+ *  needs none, so the list stays as it was. */
+function ManagedRows({ list, row }: { list: LauncherView[]; row: (l: LauncherView) => React.ReactNode }) {
+  const groups = harnessGroups(list);
+  if (groups.length < 2) return <>{list.map(row)}</>;
+  return (
+    <>
+      {groups.map((g) => (
+        <div key={g.harness} role="group" aria-label={harnessLabel(g.harness)} className="divide-y divide-line">
+          <div className="bg-inset px-4 py-1.5 text-[11px] font-medium text-ink-3">{harnessLabel(g.harness)}</div>
+          {g.items.map(row)}
+        </div>
+      ))}
+    </>
   );
 }
 

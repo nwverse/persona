@@ -52,6 +52,9 @@ func (s *Service) AgentStartParams(ctx context.Context, p AgentStartParams) (map
 		if err := s.applyModel(ctx, "agent.new", params); err != nil {
 			return nil, badRequest(err, s.appLang(ctx, p.Lang)) // a typed model that is no id among them
 		}
+		if params["launch"] != "engine" {
+			return nil, badRequest(fmt.Errorf("purpose %q requires engine launch for session.start", "agent.new"), s.appLang(ctx, p.Lang))
+		}
 		// Held to what the computer has (#2640): a launcher picked that it lacks is refused, a default it lacks gives
 		// way to one it has.
 		if m, ok := s.device(ctx, p.MachineID); ok {
@@ -59,7 +62,13 @@ func (s *Service) AgentStartParams(ctx context.Context, p AgentStartParams) (map
 				return nil, badRequest(err, s.appLang(ctx, p.Lang))
 			}
 		}
+		if name, _ := params["launcher"].(string); name != "" {
+			if err := s.launcherScopeErr(ctx, p.MachineID, name); err != nil {
+				return nil, err // a provider out of this computer's scope (models_launchers_scope.go)
+			}
+		}
 	}
+	s.setPlanThen(ctx, p.MachineID, params)
 	if name, _ := params["tab_name"].(string); strings.TrimSpace(name) == "" && p.NameFrom != "" {
 		if name := s.tabName(ctx, p.NameFrom); name != "" {
 			params["tab_name"] = name
@@ -87,6 +96,9 @@ func (s *Service) AgentResumeParams(ctx context.Context, p AgentResumeParams) (m
 			s.logf("resume %s: the New Agent launcher not applied: %v", p.SessionID, err)
 			return params, nil
 		}
+	}
+	if name, _ := q["launcher"].(string); s.launcherScopeErr(ctx, p.MachineID, name) != nil {
+		return params, nil // out of this computer's scope: the message goes as it was
 	}
 	for _, k := range []string{"launcher", "model", "effort", "model_fingerprint"} {
 		if v, ok := q[k]; ok {

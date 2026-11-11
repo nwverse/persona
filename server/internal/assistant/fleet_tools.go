@@ -55,6 +55,12 @@ func (s *Service) sessionMCPTools(ctx context.Context, machine, session string, 
 		s.logf("mcp tools: %v", err)
 		return []proto.Tool{}
 	}
+	if _, room, err := s.roomOf(ctx, machine, session); guest && err == nil && room {
+		if s.isWorkMachine(machine) {
+			return []proto.Tool{}
+		}
+		return meetingRoomTools() // a meeting's room: its meeting tools only (meeting_room_tools.go)
+	}
 	if !guest {
 		if guestHint {
 			return []proto.Tool{}
@@ -62,7 +68,11 @@ func (s *Service) sessionMCPTools(ctx context.Context, machine, session string, 
 		if s.isWorkMachine(machine) {
 			return s.AgentTools()
 		}
-		return s.mcpTools(ctx, assistant)
+		tools := s.mcpTools(ctx, assistant)
+		if !assistant {
+			tools = append(tools, s.leaderTools(ctx, machine, session)...) // a task leader's task_plan (task_leader.go)
+		}
+		return tools
 	}
 	if s.isWorkMachine(machine) {
 		return []proto.Tool{}
@@ -89,6 +99,9 @@ func (s *Service) guestRefuses(ctx context.Context, machine, session, name strin
 // mcpCall runs one: a connector's, Cua's or ego's at the hub (it says whether it is one of them), else the
 // assistant's own (for its conversations), else the phone's.
 func (s *Service) mcpCall(ctx context.Context, machine, session, name string, args json.RawMessage, assistant bool) proto.ToolResult {
+	if res, refused := s.meetingRefuses(ctx, machine, session, name, assistant); refused {
+		return res // a meeting's batch started this turn: only reading tools (meeting_turns.go)
+	}
 	if s.isWorkMachine(machine) {
 		if isAgentTool(name) {
 			return s.agentTool(ctx, machine, session, name, args)
@@ -106,6 +119,12 @@ func (s *Service) mcpCall(ctx context.Context, machine, session, name string, ar
 	if !assistant && isAgentTool(name) {
 		return s.agentTool(ctx, machine, session, name, args)
 	}
+	if !assistant && name == "task_plan" { // only a task leader's agent has it (task_leader.go)
+		return s.leaderTaskPlan(ctx, machine, session, args)
+	}
+	if !assistant && name == "task_review" {
+		return s.leaderTaskReview(ctx, machine, session, args)
+	}
 	if !assistant && isDispatchTool(name) {
 		return s.dispatchTool(ctx, machine, session, name, args)
 	}
@@ -116,6 +135,11 @@ func (s *Service) mcpCall(ctx context.Context, machine, session, name string, ar
 	case name == runtimeCLITool:
 		return proto.TextResult("unknown tool "+name, true)
 	case strings.HasPrefix(name, "phone_"):
+		if name == "phone_notify" && s.justMeNow(machine, session) {
+			// A Just me turn (meeting_justme.go): a phone on the table shows its notifications to the room. As
+			// notify_user's: nothing goes out, the text stays in the conversation, which the meeting page shows.
+			return proto.TextResult(justMeNotice(s.lang(ctx)), false)
+		}
 		if name == "phone_notify" && s.inHealth(ctx, session) {
 			var a map[string]any
 			if err := json.Unmarshal(args, &a); err != nil {
@@ -150,7 +174,11 @@ func (s *Service) mailAttachment(ctx context.Context, machine string, req proto.
 	if req.Assistant && !s.assistantCaller(ctx, machine, req.SessionID) {
 		return proto.MailAttachment{}, errors.New(i18n.T(s.lang(ctx), "assistant-privacy.assistant_denied"))
 	}
-	if res, refused := s.guestRefuses(ctx, machine, req.SessionID, saveAttachmentTool, req.Guest); refused {
+	res, refused := s.guestRefuses(ctx, machine, req.SessionID, saveAttachmentTool, req.Guest)
+	if !refused {
+		res, refused = s.meetingRefuses(ctx, machine, req.SessionID, saveAttachmentTool, req.Assistant)
+	}
+	if refused {
 		var why strings.Builder
 		for _, c := range res.Content {
 			why.WriteString(c.Text)

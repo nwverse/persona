@@ -51,6 +51,41 @@ func TestClaudeExecutableFallsBackToInstallLocations(t *testing.T) {
 	}
 }
 
+func TestClaudeExecutableFallsBackToNVMAndActionableError(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", t.TempDir())
+
+	// 1. Missing claude returns actionable message noting service environment and remediation
+	_, err := claudeExecutable()
+	if err == nil {
+		t.Fatal("expected error when claude is missing")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "not found in PATH or the usual install locations") {
+		t.Fatalf("error missing base phrase: %q", msg)
+	}
+	if !strings.Contains(msg, "node service environment") {
+		t.Fatalf("error missing service environment notice: %q", msg)
+	}
+	if !strings.Contains(msg, "symlink into ~/.local/bin") {
+		t.Fatalf("error missing symlink advice: %q", msg)
+	}
+
+	// 2. Claude installed under an nvm version is found
+	nvmClaude := filepath.Join(home, ".nvm", "versions", "node", "v22.1.0", "bin", "claude")
+	if err := os.MkdirAll(filepath.Dir(nvmClaude), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(nvmClaude, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, err := claudeExecutable()
+	if err != nil || got != nvmClaude {
+		t.Fatalf("got %q %v, want %q", got, err, nvmClaude)
+	}
+}
+
 func TestManagedLauncherBearerAuth(t *testing.T) {
 	n := &Node{bin: "personad"}
 	n.setManaged([]proto.ManagedLauncher{{Name: "gw", BaseURL: "http://gw.example.com", Model: "m1", APIKey: "k", Auth: "bearer"}})
@@ -221,5 +256,39 @@ func TestLaunchArgsEffort(t *testing.T) {
 	withLauncherArgEffort := launchArgv("claude", nil, []string{"--effort", "low"}, "medium", "", nil)
 	if !slices.Equal(withLauncherArgEffort, []string{"claude", "--effort", "low"}) {
 		t.Fatalf("with launcher arg effort: got %v, want [claude --effort low]", withLauncherArgEffort)
+	}
+}
+
+// A managed Codex launcher's gateway reaches codex as a model provider of its own: Codex 0.16x reads neither
+// OPENAI_BASE_URL nor OPENAI_API_KEY for its built-in provider, and went to api.openai.com instead.
+func TestLaunchArgsCodexGateway(t *testing.T) {
+	env := []string{"OPENAI_BASE_URL=http://127.0.0.1:9/v1", "OPENAI_API_KEY=k"}
+	provider := []string{"-c", `model_provider="persona-launcher"`,
+		"-c", `model_providers.persona-launcher={name="Persona launcher",base_url="http://127.0.0.1:9/v1",wire_api="responses",env_key="OPENAI_API_KEY"}`}
+	got := launchArgv("codex", []string{"exec", "--ephemeral", "hi"}, nil, "", "gpt-x", env)
+	if want := append(append([]string{"codex"}, provider...), "-m", "gpt-x", "exec", "--ephemeral", "hi"); !slices.Equal(got, want) {
+		t.Fatalf("gateway: got %v, want %v", got, want)
+	}
+	keyless := launchArgv("codex", nil, nil, "", "", env[:1])
+	if want := []string{"codex", "-c", `model_provider="persona-launcher"`, "-c", `model_providers.persona-launcher={name="Persona launcher",base_url="http://127.0.0.1:9/v1",wire_api="responses"}`}; !slices.Equal(keyless, want) {
+		t.Fatalf("no key: got %v", keyless)
+	}
+	for _, own := range [][]string{{"-c", "model_provider=mine"}, {"--config=model_provider=\"mine\""}, {"-cmodel_provider=mine"}, {"-p", "work"}, {"-pwork"}, {"--profile=work"}, {"--oss"}} {
+		if got := launchArgv("codex", own, nil, "", "", env); !slices.Equal(got, append([]string{"codex"}, own...)) {
+			t.Fatalf("own provider %v: got %v", own, got)
+		}
+	}
+	if got := launchArgv("codex", nil, []string{"-c", "model_provider=mine"}, "", "", env); !slices.Equal(got, []string{"codex", "-c", "model_provider=mine"}) {
+		t.Fatalf("the launcher's own provider: got %v", got)
+	}
+	if got := launchArgv("codex", nil, nil, "", "gpt-x", nil); !slices.Equal(got, []string{"codex", "-m", "gpt-x"}) {
+		t.Fatalf("no gateway: got %v", got)
+	}
+	// The prompt after "--" is no option, and an option's value is not one either: the gateway still applies.
+	for _, prompt := range [][]string{{"--", "--oss"}, {"--", "-p"}, {"-m", "-p"}, {"exec", "--", "--profile=work"}} {
+		got := launchArgv("codex", prompt, nil, "", "", env)
+		if want := append(append([]string{"codex"}, provider...), prompt...); !slices.Equal(got, want) {
+			t.Fatalf("prompt %v: got %v", prompt, got)
+		}
 	}
 }

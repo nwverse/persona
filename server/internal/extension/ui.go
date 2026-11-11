@@ -222,6 +222,10 @@ type ErrorReportsItem = wire.ErrorReportsItem
 // AuthRelayItem is a contribution to auth_relay: the authorization links (hosts and paths) it completes.
 type AuthRelayItem = wire.AuthRelayItem
 
+// SecretProviderItem is a contribution to secret_providers: the reference schemes whose values it supplies
+// (docs/extensions/secret-providers.md).
+type SecretProviderItem = wire.SecretProviderItem
+
 // Events this hub has.
 var (
 	// EventTopics are the events by topic; how the install screen says each is extension-permissions.event_<topic with
@@ -234,15 +238,19 @@ var (
 		"agent.finished":  true,
 		"todo.changed":    true,
 		"todo.decision":   true,
+		"leader.changed":  true,
+		"leader.report":   true,
 	}
 
 	// EventScopes are the hub scopes an event needs besides the subscription: only an extension granted the scope
 	// (or the legacy full-hub grant) is told. A topic not listed needs none.
 	EventScopes = map[string]string{
-		"kb.changed":    ScopeKBRead,
-		"kb.forgotten":  ScopeKBRead,
-		"todo.changed":  ScopeTodosRead,
-		"todo.decision": ScopeTodosRead,
+		"kb.changed":     ScopeKBRead,
+		"kb.forgotten":   ScopeKBRead,
+		"todo.changed":   ScopeTodosRead,
+		"todo.decision":  ScopeTodosRead,
+		"leader.changed": ScopeLeadersRead,
+		"leader.report":  ScopeLeadersRead,
 	}
 )
 

@@ -106,6 +106,14 @@ func recoverPanics(h *Hub, next http.Handler) http.Handler {
 			if v == http.ErrAbortHandler {
 				panic(v)
 			}
+			if strings.HasPrefix(r.URL.Path, "/share/") || strings.HasPrefix(r.URL.Path, publicSharePrefix) || strings.Contains(r.URL.Path, "/agent-shares") {
+				// A panic value or captured stack can contain a bearer or prepared
+				// content. Sharing never sends either to logs or error telemetry.
+				shareHeaders(w)
+				h.logf("sharing handler failed on %s", routeOf(r))
+				h.shareTransportError(w, r, http.StatusInternalServerError, "internal")
+				return
+			}
 			stack := debug.Stack()
 			where := r.Method + " " + routeOf(r)
 			// one Write with the marker: the log's tee does not report it again
@@ -122,6 +130,9 @@ func recoverPanics(h *Hub, next http.Handler) http.Handler {
 // routeOf says which route r is without its ids: the mux's pattern when it has one, else the path's first three
 // segments (/api/v1/sessions).
 func routeOf(r *http.Request) string {
+	if strings.HasPrefix(r.URL.Path, "/share/") || strings.HasPrefix(r.URL.Path, publicSharePrefix) {
+		return loggedPath(r.URL.Path)
+	}
 	if r.Pattern != "" {
 		if _, p, ok := strings.Cut(r.Pattern, " "); ok {
 			return p

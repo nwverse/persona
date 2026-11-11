@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -203,15 +204,19 @@ func TestModelConfigurationPreservesLegacyBaselines(t *testing.T) {
 			t.Errorf("%s: %+v %v", id, b, err)
 		}
 	}
-	if err := s.putSetting(ctx, modelKey(purposeLarkAgent), modelRecord{Revision: 9, Binding: ModelBinding{Provider: "launcher.old"}}); err != nil {
-		t.Fatal(err)
-	}
-	if b, _ := s.resolveModel(ctx, "lark.agent"); b.Provider != "launcher.claude" {
-		t.Fatal("deprecated use override still applied")
+	for _, id := range []string{purposeLarkAgent, purposeAgent} {
+		if err := s.putSetting(ctx, modelKey(id), modelRecord{Revision: 9, Binding: ModelBinding{Provider: "launcher.old"}}); err != nil {
+			t.Fatal(err)
+		}
+		if b, _ := s.resolveModel(ctx, id); b.Provider != "launcher.claude" {
+			t.Fatalf("%s: deprecated use override still applied", id)
+		}
 	}
 	setModel(t, s, "agent.new", ModelBinding{Provider: "launcher.new"})
-	if b, _ := s.resolveModel(ctx, "lark.agent"); b.Provider != "launcher.new" {
-		t.Fatal("category selection did not reach the slash agent")
+	for _, id := range []string{purposeLarkAgent, purposeAgent} {
+		if b, _ := s.resolveModel(ctx, id); b.Provider != "launcher.new" {
+			t.Fatalf("%s: category selection did not reach it", id)
+		}
 	}
 	// manager.json's inbox.agent.machine (the hub has it) is where the AI twin runs.
 	f.hello.Models.InboxAgentMachine = "server"
@@ -489,16 +494,16 @@ func TestFourModelCategoriesCatalog(t *testing.T) {
 	ids := []string{}
 	for _, p := range catalog.Purposes {
 		ids = append(ids, p.ID)
-		if p.ID == purposeLarkAgent {
+		if agentsOverride(p.ID) {
 			if p.CategoryID != "agent.new" || p.Parent != "agent.new" || len(p.Fields) == 0 {
-				t.Fatalf("Lark /agent missing independent editor: %+v", p)
+				t.Fatalf("%s missing independent editor: %+v", p.ID, p)
 			}
 		} else if p.CategoryID != p.ID || len(p.Uses) == 0 || len(p.Fields) == 0 {
 			t.Fatalf("category missing scope or editor: %+v", p)
 		}
 	}
 	if !reflect.DeepEqual(ids, modelConfigIDs) {
-		t.Fatalf("catalog is not the ordered categories and Lark /agent: %v", ids)
+		t.Fatalf("catalog is not the ordered categories, the AI twin and Lark /agent: %v", ids)
 	}
 }
 
@@ -510,14 +515,14 @@ func TestModelUsesAreReadOnlyAndIgnoreDeprecatedOverrides(t *testing.T) {
 		"assistant":    {Provider: "launcher.conversation", Model: "conversation", Effort: "high"},
 		"agent.new":    {Provider: "launcher.agent", Model: "agent", Effort: "xhigh"},
 		"kb":           {Provider: "legacy.kb", Model: "processing"},
-		"inbox.triage": {Provider: "legacy.triage", Model: "screening"},
+		"inbox.triage": {Provider: "legacy.triage", Model: "screening", Effort: "off"},
 	}
 	for id, binding := range bindings {
 		setModel(t, s, id, binding)
 	}
-	ids := []string{"task.one"}
+	ids := []string{}
 	for _, p := range modelPurposes {
-		if p.Parent != "" && p.ID != purposeLarkAgent {
+		if p.Parent != "" && !agentsOverride(p.ID) {
 			ids = append(ids, p.ID)
 		}
 	}
@@ -539,6 +544,193 @@ func TestModelUsesAreReadOnlyAndIgnoreDeprecatedOverrides(t *testing.T) {
 		if err != nil || stored.Binding != old {
 			t.Fatalf("deprecated record was destroyed: %+v %v", stored, err)
 		}
+	}
+}
+
+// One scheduled task can run on its own launcher, model and effort; the others keep following Main chat, and the
+// pre-#1570 records (model_config.task.<id>) never come back.
+func TestATaskCanOverrideMainChatAndOtherTasksFollowIt(t *testing.T) {
+	s, f, _ := modelService(t)
+	ctx := context.Background()
+	setTasks(s, Task{ID: "job", Title: "发布守护", Repeat: repeatInterval, EveryMinutes: 30, Enabled: true},
+		Task{ID: "other", Title: "巡检", Repeat: repeatInterval, EveryMinutes: 60, Enabled: true})
+	f.zshrc = map[string][]proto.Launcher{"server": {{Name: "cheap", Model: "cheap-default"}}}
+	main := ModelBinding{Provider: "launcher.claude", Model: "claude-opus-5-5", Effort: "high"}
+	setModel(t, s, "assistant", main)
+	// What a task had before #1570: still there, and not what the task runs.
+	dormant := modelRecord{Revision: 7, Binding: ModelBinding{Provider: "launcher.cheap", Model: "long-ago"}}
+	if err := s.store().PutSetting(ctx, modelKey("task.job"), dormant); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := s.resolveModel(ctx, "task.job"); err != nil || b != main {
+		t.Fatalf("the dormant record came back: %+v %v", b, err)
+	}
+	p := purposeOf(t, s, "task.job")
+	if p.CategoryID != "assistant" || p.Parent != "assistant" || p.Revision != 0 || p.Override != (ModelBinding{}) ||
+		p.InheritedFrom != "主对话" || len(p.Fields) == 0 || !slices.Contains(p.ProviderIDs, "launcher.cheap") ||
+		p.Effective != main || p.MachineID != "server" {
+		t.Fatalf("task purpose: %+v", p)
+	}
+	if p := purposeOf(t, s, "task.other"); p.Override != (ModelBinding{}) || p.Effective != main {
+		t.Fatalf("a task without an override already differs: %+v", p)
+	}
+	// The task's own launcher, model and effort; its own record and revision.
+	if r := modelRequest(s, "PATCH", "task.job", `{"revision":0,"provider":"launcher.cheap","model":"cheap-model","effort":"low"}`); r.Code != http.StatusOK {
+		t.Fatalf("%d %s", r.Code, r.Body.String())
+	}
+	if b, err := s.resolveModel(ctx, "task.job"); err != nil || b != (ModelBinding{Provider: "launcher.cheap", Model: "cheap-model", Effort: "low"}) {
+		t.Fatalf("the task's override did not apply: %+v %v", b, err)
+	}
+	if b, _ := s.resolveModel(ctx, "task.other"); b != main {
+		t.Fatalf("another task followed the first one's override: %+v", b)
+	}
+	if b, _ := s.resolveModel(ctx, "assistant"); b != main {
+		t.Fatalf("Main chat changed: %+v", b)
+	}
+	var old modelRecord
+	if _, err := s.store().Setting(ctx, modelKey("task.job"), &old); err != nil || old != dormant {
+		t.Fatalf("the dormant record was touched: %+v %v", old, err)
+	}
+	p = purposeOf(t, s, "task.job")
+	if p.Revision != 1 || p.Override.Provider != "launcher.cheap" || p.Override.Model != "cheap-model" || p.InheritedFrom != "" {
+		t.Fatalf("task purpose after the save: %+v", p)
+	}
+	// Back to Main chat with nulls, as any other purpose.
+	if r := modelRequest(s, "PATCH", "task.job", `{"revision":1,"provider":null,"model":null,"effort":null}`); r.Code != http.StatusOK {
+		t.Fatalf("%d %s", r.Code, r.Body.String())
+	}
+	if b, err := s.resolveModel(ctx, "task.job"); err != nil || b != main {
+		t.Fatalf("clearing did not return to Main chat: %+v %v", b, err)
+	}
+	// The schedule tools' sparse fields: a launcher alone takes that launcher's default model, and "" clears.
+	text := func(v string) *string { return &v }
+	if err := s.setTaskModel(ctx, "other", text("cheap"), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := s.resolveModel(ctx, "task.other"); b.Provider != "launcher.cheap" || b.Model != "" || b.Effort != "" {
+		t.Fatalf("tool launcher: %+v", b)
+	}
+	if err := s.setTaskModel(ctx, "other", text("no-such-launcher"), nil, nil); err == nil {
+		t.Fatal("an unknown launcher was accepted")
+	}
+	if err := s.setTaskModel(ctx, "other", text(""), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := s.resolveModel(ctx, "task.other"); b != main {
+		t.Fatalf("tool clear: %+v", b)
+	}
+	// A model alone pins the launcher the task runs on now, so a later Main chat change cannot pair it with another
+	// agent; clearing returns it to whatever Main chat is then.
+	if err := s.setTaskModel(ctx, "other", nil, text("pinned-model"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := s.resolveModel(ctx, "task.other"); b.Provider != "launcher.claude" || b.Model != "pinned-model" {
+		t.Fatalf("model-only did not pin its launcher: %+v", b)
+	}
+	later := ModelBinding{Provider: "launcher.cheap", Model: "cheap-default"}
+	setModel(t, s, "assistant", later)
+	if b, _ := s.resolveModel(ctx, "task.other"); b.Provider != "launcher.claude" || b.Model != "pinned-model" {
+		t.Fatalf("a later Main chat change moved the task: %+v", b)
+	}
+	if err := s.setTaskModel(ctx, "other", text(""), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := s.resolveModel(ctx, "task.other"); b != later {
+		t.Fatalf("clearing after the pin: %+v", b)
+	}
+}
+
+// The schedule tools take a task's launcher / model / effort when they create or edit it.
+func TestScheduleToolsSetATasksOwnModel(t *testing.T) {
+	s, f, _ := modelService(t)
+	ctx := context.Background()
+	f.zshrc = map[string][]proto.Launcher{"server": {{Name: "cheap", Model: "cheap-default"}}}
+	main := ModelBinding{Provider: "launcher.claude", Model: "claude-opus-5-5", Effort: "high"}
+	setModel(t, s, "assistant", main)
+	tool := func(name, args string) string {
+		t.Helper()
+		out, err := s.runTool(ctx, "server", "main", name, json.RawMessage(args))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		return out
+	}
+	task := func(title string) Task {
+		t.Helper()
+		sc := s.loadSchedule(ctx)
+		sc.mu.Lock()
+		defer sc.mu.Unlock()
+		for _, t := range sc.tasks {
+			if t.Title == title {
+				return t
+			}
+		}
+		t.Fatalf("no task %q", title)
+		return Task{}
+	}
+	tool("schedule_routine", `{"title":"巡检","prompt":"看看","time":"09:00","launcher":"cheap","model":"cheap-model","effort":"low"}`)
+	rt := task("巡检")
+	if b, err := s.resolveModel(ctx, "task."+rt.ID); err != nil ||
+		b != (ModelBinding{Provider: "launcher.cheap", Model: "cheap-model", Effort: "low"}) {
+		t.Fatalf("routine model: %+v %v", b, err)
+	}
+	tool("schedule_followup", `{"title":"看一眼","prompt":"看看","at":"30m","new_conversation":true,"launcher":"cheap"}`)
+	fu := task("看一眼")
+	if b, _ := s.resolveModel(ctx, "task."+fu.ID); b.Provider != "launcher.cheap" || b.Model != "" || b.Effort != "" {
+		t.Fatalf("follow-up model: %+v", b)
+	}
+	// An unknown launcher creates no task that cannot run.
+	if _, err := s.runTool(ctx, "server", "main", "schedule_routine",
+		json.RawMessage(`{"title":"坏的","prompt":"看看","time":"10:00","launcher":"no-such-launcher"}`)); err == nil {
+		t.Fatal("an unknown launcher was accepted")
+	}
+	if _, ok := func() (Task, bool) {
+		sc := s.loadSchedule(ctx)
+		sc.mu.Lock()
+		defer sc.mu.Unlock()
+		for _, t := range sc.tasks {
+			if t.Title == "坏的" {
+				return t, true
+			}
+		}
+		return Task{}, false
+	}(); ok {
+		t.Fatal("a routine that could not take its launcher was left behind")
+	}
+	// Editing an existing routine checks the model before saving the rest of the change.
+	if _, err := s.runTool(ctx, "server", "main", "schedule_routine",
+		json.RawMessage(`{"id":"`+rt.ID+`","time":"10:30","launcher":"no-such-launcher"}`)); err == nil {
+		t.Fatal("an unknown launcher was accepted on an existing routine")
+	}
+	if got := task("巡检"); got.Time != "09:00" {
+		t.Fatalf("the refused edit was partly saved: %+v", got)
+	}
+	// A follow-up that continues this conversation keeps its launcher; its own needs new_conversation.
+	if _, err := s.runTool(ctx, "server", "main", "schedule_followup",
+		json.RawMessage(`{"title":"跟进的","prompt":"看看","at":"30m","launcher":"cheap"}`)); err == nil {
+		t.Fatal("a model override for a follow-up into this conversation was accepted")
+	}
+	if _, ok := func() (Task, bool) {
+		sc := s.loadSchedule(ctx)
+		sc.mu.Lock()
+		defer sc.mu.Unlock()
+		for _, t := range sc.tasks {
+			if t.Title == "跟进的" {
+				return t, true
+			}
+		}
+		return Task{}, false
+	}(); ok {
+		t.Fatal("a refused follow-up was saved")
+	}
+	// The routine has its own model; Main chat still does not.
+	if b, _ := s.resolveModel(ctx, "assistant"); b != main {
+		t.Fatalf("Main chat changed: %+v", b)
+	}
+	// Deleting it clears that, so a later task that got the same id cannot inherit it.
+	tool("delete_routine", `{"id":"`+rt.ID+`"}`)
+	if r, err := s.modelRecord(ctx, "task."+rt.ID); err != nil || r.Binding != (ModelBinding{}) {
+		t.Fatalf("deleted task kept its model configuration: %+v %v", r, err)
 	}
 }
 
@@ -621,6 +813,59 @@ func TestLaunchersListHideRestoreDelete(t *testing.T) {
 	f.mu.Unlock()
 	if given == nil || len(given) != 0 {
 		t.Fatalf("the nodes are told it went: %+v", given)
+	}
+}
+
+// Automatic selection is not a user's assignment: deleting its provider leaves the next automatic pick, while an
+// explicit choice still protects the provider underneath it (#3198).
+func TestAutomaticProviderDeletionDoesNotCountAsExplicitUse(t *testing.T) {
+	s, _, _ := modelService(t)
+	key, err := s.sealKey("synthetic-provider-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	putLaunchers(t, s,
+		storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "first", Kind: "api", BaseURL: "https://api.example.com", Model: "first-model"}, KeySealed: key},
+		storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "second", Kind: "api", BaseURL: "https://api.example.com", Model: "second-model"}, KeySealed: key})
+	ctx := context.Background()
+	for _, id := range []string{"kb", "inbox.triage", "agent.delegate"} {
+		p := purposeOf(t, s, id)
+		if p.Override != (ModelBinding{}) || p.Effective.Provider != "launcher.first" {
+			t.Fatalf("%s did not start on the automatic provider: %+v", id, p)
+		}
+	}
+	if rec := request(s, http.MethodDelete, "/api/v1/launchers/first", ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"deleted":true`) {
+		t.Fatalf("automatic selection blocked deletion: %d %s", rec.Code, rec.Body.String())
+	}
+	for _, id := range []string{"kb", "inbox.triage", "agent.delegate"} {
+		if b, err := s.resolveModel(ctx, id); err != nil || b.Provider != "launcher.second" {
+			t.Fatalf("%s did not move to the next automatic provider: %+v %v", id, b, err)
+		}
+	}
+	setModel(t, s, "kb", ModelBinding{Provider: "launcher.second"})
+	use := purposeOf(t, s, "kb").Name
+	if rec := request(s, http.MethodDelete, "/api/v1/launchers/second", ""); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), use) {
+		t.Fatalf("an explicit provider was not protected: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// When only one provider is eligible, deleting it leaves automatic API categories with no model, so deletion is
+// still refused with 409 Conflict naming the affected purposes.
+func TestDeletingLastAutomaticProviderStillProtectsBuiltinPurposes(t *testing.T) {
+	s, _, _ := modelService(t)
+	key, err := s.sealKey("synthetic-provider-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	putLaunchers(t, s,
+		storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "only", Kind: "api", BaseURL: "https://api.example.com", Model: "only-model"}, KeySealed: key})
+	p := purposeOf(t, s, "kb")
+	if p.Effective.Provider != "launcher.only" {
+		t.Fatalf("kb did not start on the automatic provider: %+v", p)
+	}
+	rec := request(s, http.MethodDelete, "/api/v1/launchers/only", "")
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), p.Name) {
+		t.Fatalf("deleting the last automatic provider was not protected: %d %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -900,5 +1145,63 @@ func TestProviderModelsListedAndCountForTheSendCheck(t *testing.T) {
 	}
 	if s.launcherHasModel(context.Background(), "server", "relay", "gw/gone") {
 		t.Fatal("a model in no list")
+	}
+}
+
+func TestTriageDefaultEffortIsOffAndHonoursMessagesAPI(t *testing.T) {
+	s, _, _ := modelService(t)
+	ctx := context.Background()
+
+	b, err := s.resolveModel(ctx, "inbox.triage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Effort != "off" {
+		t.Fatalf("expected triage default effort off, got %q", b.Effort)
+	}
+
+	key, err := s.sealKey("test-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	putLaunchers(t, s,
+		storedLauncher{
+			ManagedLauncher: proto.ManagedLauncher{Name: "anthropic", Kind: "api", API: "messages", BaseURL: "https://api.anthropic.com", Model: "claude-haiku-5-5"},
+			KeySealed:       key,
+		},
+		storedLauncher{
+			ManagedLauncher: proto.ManagedLauncher{Name: "other", Kind: "api", API: "messages", BaseURL: "https://api.example.com", Model: "claude-haiku-5-5"},
+			KeySealed:       key,
+		})
+
+	p := purposeOf(t, s, "inbox.triage")
+	if !slices.Contains(p.Fields, "effort") {
+		t.Fatalf("expected Fields to include effort, got %v", p.Fields)
+	}
+
+	r := modelRequest(s, http.MethodPatch, "inbox.triage", fmt.Sprintf(`{"revision":%d,"provider":"launcher.other"}`, p.Revision))
+	if r.Code != http.StatusOK {
+		t.Fatalf("select Messages provider: %d %s", r.Code, r.Body.String())
+	}
+	b, err = s.resolveModel(ctx, "inbox.triage")
+	if err != nil || b.Provider != "launcher.other" || b.Effort != "off" {
+		t.Fatalf("provider-only selection must keep triage's default off: %+v, %v", b, err)
+	}
+	cfg, err := s.apiConfig(ctx, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ReasoningEffort != "off" {
+		t.Fatalf("expected apiConfig ReasoningEffort to be off, got %q", cfg.ReasoningEffort)
+	}
+
+	p = purposeOf(t, s, "inbox.triage")
+	r = modelRequest(s, http.MethodPatch, "inbox.triage", fmt.Sprintf(`{"revision":%d,"effort":"low"}`, p.Revision))
+	if r.Code != http.StatusOK {
+		t.Fatalf("save Messages effort: %d %s", r.Code, r.Body.String())
+	}
+	b, err = s.resolveModel(ctx, "inbox.triage")
+	if err != nil || b.Effort != "low" {
+		t.Fatalf("explicit Messages effort was not preserved: %+v, %v", b, err)
 	}
 }

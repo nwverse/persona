@@ -4,7 +4,7 @@ Agents in Persona come from two kinds of places, integrated differently:
 
 | | Host | Runtime |
 | --- | --- | --- |
-| What it is | Where the terminal lives: herdr, Herdr App, Orca (`docs/integrations/engines.md`) | An Agent runtime that manages its own sessions and has no terminal: DSH (`docs/integrations/dsh.md`), later the pi extension, platforms built on DSH… |
+| What it is | Where the terminal lives: herdr, Herdr App, Orca, Tern (`docs/integrations/engines.md`) | An Agent runtime that manages its own sessions and has no terminal: DSH (`docs/integrations/dsh.md`), later the pi extension, platforms built on DSH… |
 | Where sessions come from | node reads panes, recognizes sessions by process, reads Claude / Codex transcripts | The runtime reports its sessions and provides their content |
 | Interactions (questions / plans / permissions) | Claude Code hooks | The runtime asks itself (`interaction.create`) |
 | Where the code lives | One host implementation in Persona (`internal/host`, `node/host*.go`) | **No code added to Persona**: the runtime implements the same protocol with the SDK |
@@ -39,7 +39,7 @@ With the SDK (`integrations/runtime-sdk`, Node 22+, no dependencies) you only wr
 
 | Driver method | Returns |
 | --- | --- |
-| `listSessions()` | Session rows: `session_id`, `title`, `cwd`, `status` (`working` / `blocked` / `done` / `idle` / `offline`), `updated_at`, `rev` (changes whenever content changes; the App fetches new content based on it), `last_text`, `space_id` / `space_name` (sessions in the same space are grouped together in the App), `model`; optionally `permission_mode` / `effort` (the current mode) and `transcript` (this session's chat is a local Claude transcript: the content belongs to node, see "Runtimes that run Claude Code" below) |
+| `listSessions()` | Session rows: `session_id`, `title`, `cwd`, `status` (`working` / `blocked` / `done` / `idle` / `offline`), `updated_at`, `rev` (changes whenever content changes; the App fetches new content based on it), `last_text`, `space_id` / `space_name` (sessions in the same space are grouped together in the App), `model`; optionally `permission_mode` / `effort` (the current mode), `transcript` (this session's chat is a local Claude transcript: the content belongs to node, see "Runtimes that run Claude Code" below), `codex_thread` (this session's chat is a local Codex thread, see "Runtimes that run Codex" below) and `is_subagent` / `parent_session_id` (another of the runtime's sessions started this one, see "Sub-Agents and background tasks" below) |
 | `items(params)` | One page of items (same params and result as `session.items`: from the end backwards by `turns` / `limit`, `before_seq` to page back, `after_seq` to catch up, `from_seq` + `through_seq` for a range), with `history` and `to_seq` |
 
 Optional (for each one present, the SDK declares the capability in `runtime.hello`; for those missing, node answers "not supported" for you and the App displays as usual):
@@ -51,7 +51,8 @@ Optional (for each one present, the SDK declares the capability in `runtime.hell
 | `send({session_id, text, images, client_msg_id})` | Sending a message from the phone. **Dedup by `client_msg_id`**: the App resends on reconnect |
 | `interrupt` / `rename` / `close` / `start({cwd, prompt})` | Interrupt, rename, close, create from the phone (with `start` and a configured `launcher`, the new-session form gains a launcher field) |
 | `hasLocalClient()` | Whether this runtime's own UI is open (decides who gets permission requests first, see below) |
-| `modes({session_id, permission_mode, effort})` | Switching permission mode / reasoning effort from the phone (`caps.modes`; values are Persona's: `default` / `acceptEdits` / `plan` / `auto` / `bypassPermissions`, `low` … `max`). The apps show the mode chips on its rows whose agent is `claude` or the runtime's own, never Paseo's catch-all `paseo` (`capabilities.modes`, `docs/protocol/protocol.md` "Codex sources and capabilities") |
+| `unlistedTranscripts()` | The Claude session ids of sessions of its own that `listSessions()` no longer lists (archived in the runtime), or nothing while it cannot say yet; no capability is declared. See "Runtimes that run Claude Code" below |
+| `modes({session_id, permission_mode, effort, model})` | Switching permission mode / reasoning effort from the phone (`caps.modes`; optional model changes require `createRuntime` option `modelSwitch: true`, advertised as `caps.model`; values are Persona's: `default` / `acceptEdits` / `plan` / `auto` / `bypassPermissions`, `low` … `max`). The apps show the mode chips on its rows whose agent is `claude` or the runtime's own, never Paseo's catch-all `paseo` (`capabilities.modes`, `docs/protocol/protocol.md` "Codex sources and capabilities") |
 | `archive({session_id})` / `unarchive({session_id})` | The runtime's own reversible archive (`caps.archive`, declared only when both exist): when the user archives a session in Persona, it is archived in the runtime too, and restored with it. Archive an idle session without stopping or closing anything (Persona refuses busy sessions first) and keep it restorable; both must be idempotent (already archived / restored is success). A runtime whose archive also stops the session, or that has no way back, leaves them out: the archive is then Persona's alone (`docs/protocol/protocol.md`, "Agent session archives") |
 | `watchChanged(id, watching, {transcript})` | The phone starts / stops watching a session (when a new node connects or the runtime stops, all stop): for runtimes that only follow a session while someone is watching (Paseo subscribes to the timeline per session) |
 
@@ -108,7 +109,7 @@ Not in the SDK (used by only one runtime, or the two read different things): eac
   JSON escapes and the truncation note. Cuts respect UTF-8 boundaries and the second pass only cuts when the string becomes
   strictly shorter as JSON. A plain ASCII tail of at most the note's encoded size stays whole (37 bytes for a three-digit
   original length); a longer or more heavily escaped tail may be cut. Each implementation measures its own wire encoding:
-  `JSON.stringify` leaves `<>&` and U+2028/U+2029 raw, whereas Go's `json.Marshal` escapes them, so their shares can differ.
+  both leave `<>&` raw, but `JSON.stringify` also leaves U+2028/U+2029 raw while the hub's Go encoder escapes them, so their shares can differ.
   Top-level arrays and other non-object inputs stay unchanged. This is still **not a total input size limit**: many short
   values, large keys, or enough strings at the 256-byte floor can exceed 24 KB. Bounding those inputs remains open in #2907.
 - **Only what people need to see**: context injected for the model (time, skill list, system instructions) and internal scheduling events don't become items.
@@ -165,6 +166,34 @@ with the same parsing and the same look as Claude sessions in herdr; the transcr
 on watch it receives `transcript: true` and only pushes streaming text (the SDK automatically drops `append` for such sessions). Sessions whose transcript hasn't been written yet get content from the runtime as usual,
 and node switches over automatically once the file appears. A daemon can't do this (it would read other sessions on the machine).
 
+Two things stay the runtime's word on such a row. Its own `background` list is kept beside the background tasks the transcript shows (#4494): work the runtime started for the
+session outside Claude Code. And its `model` decides the context window when it names a 1M variant (`…[1m]`, #4496): Claude Code writes the id without the suffix into the
+transcript, and a gateway writes an id of its own, so the transcript alone reads as 200K, or as no window. A window the transcript records itself keeps the transcript's word,
+and so does a session answering as another model: after a refusal's fallback, or when the reply came from a Claude model that is not the one the runtime names.
+
+**Sessions the runtime no longer lists** (#4521). A runtime that starts Claude Code's command line itself (Paseo does; a host on the Agent SDKs does not) writes transcripts
+that say `sdk-cli`, like a script's one-shot `claude -p` run, and node leaves those out of the sessions not running. While the runtime lists a session, its row is the session.
+Once it stops listing it (archived in the runtime), only the transcript is left and nothing in it says whose it was. So the runtime names them: `unlistedTranscripts()` returns
+their Claude session ids, the SDK sends them with every list (`unlisted_transcripts` beside `sessions`, the feature `unlisted_transcripts`), and node lists those transcripts as
+sessions not running, under the usual limits (7 days, the 80 newest). Name only the user's own sessions: not the ones another session started, not ones the user deleted. At
+most 2000 count, the last ones named; a transcript that a row also names is that row. A message to one starts it in the engine again (`start({resume})`).
+
+- An empty list says there are none. While the runtime cannot say (it was just started and has not read its archive), `unlistedTranscripts()` returns nothing, the SDK leaves
+  the field out, and node keeps what the runtime named before. If the method throws, the list still goes out, with the ones named last.
+- Node keeps them for ten minutes after the runtime disconnects, so a runtime that restarts does not take its archived sessions off the list and bring them back. One that
+  stays away takes them with it, as it takes the sessions it lists.
+
+## Runtimes that run Codex (optional)
+
+When a runtime runs Codex itself (e.g. Paseo), each of its sessions is also a Codex thread with a rollout on this computer, which node finds on its own and would list a second
+time as Codex history. If the session row carries `codex_thread: <thread id>` (the feature `codex_thread`, #4495), node lists the chat once, as the runtime's session: the
+thread's history row is not listed, and the thread's own sub-Agents (Codex thread spawns) carry the runtime's session as `parent_session_id` and sit in its space. Content,
+sending and state stay the runtime's. When two rows name one thread, the one that is not `offline` counts, then the one used last. A thread is matched by its id, in whichever
+Codex home its rollout is. A daemon can't do this: its threads are on another computer.
+
+While the runtime's session is `offline`, another program may take the thread up (the Codex App runs it, a shared app-server has it loaded). That program's row is then listed
+as well, with the thread's sub-Agents under it, so a message from the phone goes where the thread is open. Once the runtime's session runs again, the chat is that session alone.
+
 ## Sub-Agents and background tasks (optional)
 
 When an Agent hands work off and ends the turn (background sub-Agents, workflows, commands running in the background), the session is "done" after the turn while the work isn't. The runtime reports them on the session row,
@@ -179,6 +208,15 @@ with the same fields as Claude sessions (`Session.subagents` / `background` in `
 - While any are running, the session counts as Working (#2228), and the hub's "done" push waits until they finish and the turn in which the session is woken up ends. Re-push `runtime.sessions` when they start and end.
 - At most 50 sub-Agents and 50 background tasks per row, text cut to 500 characters; invalid ids are dropped. A daemon's sub-Agent ids are prefixed the same way: `<daemon>.<session>@<id>`.
 - Controls such as messaging or renaming a sub-Agent: if the runtime doesn't support them, it returns `unsupported` (DSH doesn't: sub-Agents are managed by the parent session).
+- **A session of its own that another session started** (Paseo's Agents created by another Agent, #4494) is not a `subagents` entry: it is opened, sent to and can need the user
+  like any session. List it as its own row with `is_subagent: true` and `parent_session_id: <the starting session's id>`; node fills in `root_session_id`, and a daemon's
+  parent ids get the daemon's prefix like its session ids. The hub sends no "done" push for it and holds its parent's while it runs or has background work. It is its parent's
+  subtask: an App that folds subtasks lists it under its parent, and the fleet counts (the Live Activity, a phone's notification and widget) count the parent, not it.
+  - While its `status` is `blocked` (it waits for the user) node lists it without its parent, so it is a row of its own everywhere: every App shows it and counts it under
+    Needs you, whatever it folds. It is listed under its parent again once it was answered.
+  - List every session between a listed one and the session the line starts at: a row whose parent is not listed hangs nowhere.
+  - Give the parent's row a `background` entry of kind `agent` for each one that has not finished (running, or waiting for an answer), so the parent reads Working until they
+    report back. A parent that is `offline` meanwhile is left out of lists of what runs, and its subtasks with it: do not list it as `offline` while they run.
 
 DSH's approach is in `docs/integrations/dsh.md` ("Subagents and background tasks").
 
@@ -246,6 +284,10 @@ Lark tokens and gates. node drives it with calls the protocol already has:
 | `session.send {session_id, text, images, client_msg_id, assistant: true, context, mode, memory_dir}` | `context`: a `<persona-context>` block given to the model before the user's text (the live snapshot; the first message of a new chat also has memory and Lark notes), not shown in the chat; `mode`: Persona's permission mode (`default` / `acceptEdits` / `auto` / `plan` / `bypassPermissions`); `memory_dir`: the memory directory |
 | `session.interrupt` | Stop on the phone; closing the assistant chat = stopping the running turn, the chat stays in the runtime |
 
+For sessions it starts, the node restores persisted ownership and launcher metadata before publishing runtime rows.
+The original assistant or health directory identifies the conversation after rediscovery and reconnects. Runtime
+status, model, permissions and capabilities continue to describe the running session.
+
 A runtime that declares `caps.assistant` must:
 
 1. For **assistant chats** (started with `assistant: true`, or whose directory is the assistant directory), always send permissions and questions to the phone first (when there's a hub), regardless of whether the local UI is open.
@@ -271,7 +313,41 @@ end to end in `integrations/dsh/e2e/assistant.mjs`.
 | DSH (`dsh`, configurable) | `integrations/dsh`: a Cordis plugin for `dsh web`; companion process `companion.mjs` (`dsh-files`) for when DSH isn't running | `docs/integrations/dsh.md` |
 | pi (`pi-<pid>`, `pi-web`, `pi-files`) | `integrations/pi`: pi extension (one connection per pi process) + pi-web companion process | `docs/integrations/pi.md` |
 | opencode (`opencode-<pid>`) | `integrations/opencode`: opencode plugin (one connection per opencode server process; list and chats read from opencode.db, live updates over the event stream, control through the plugin API) | `docs/integrations/opencode.md` |
+| Antigravity CLI (`antigravity`) | `integrations/antigravity/companion.mjs`: companion process; reads CLI transcripts and runs terminal-less Agent and assistant sessions through `agy acp` | "Antigravity CLI" below |
 | echo (example) | `integrations/runtime-sdk/examples/echo-runtime.mjs` (with `--listen <port>` it's a daemon) | "Minimal example" in this doc, `docs/integrations/daemons.md` |
+
+### Antigravity CLI
+
+The implemented integration is for the **Antigravity CLI (`agy`)**, not the Antigravity desktop app. With the node running,
+start `node integrations/antigravity/companion.mjs` from the repository root. The companion connects to the node's runtime
+socket, lists CLI transcripts, and uses `agy acp` for terminal-less session creation, sending and interruption. It can also
+serve as an assistant backend through the optional assistant contract above. It requires an installed, authenticated `agy`
+with ACP support; `--agy-bin`, `--agy-dir` and `--socket` override the executable, CLI data directory and node socket.
+Models come from authenticated `agy models` discovery and ACP session metadata. The companion refreshes the catalog every
+five minutes, and the picker's refresh requests a fresh catalog through optional `models({launcher, refresh})`
+(`caps.models`, `launchers.models`). Discovery never sends a prompt. The native settings file determines the advertised
+default. New sessions and availability checks explicitly apply that model through ACP, since ACP may ignore the
+settings file when choosing its initial model. An explicit caller model takes precedence, and resumed sessions retain
+their native selection. An unavailable catalog returns the native error instead of advertising a built-in model list.
+
+Idle sessions can switch model, thinking level and permission mode through ACP. Native configuration updates determine
+the displayed model and effort. Each accepted field is published even if another field fails, and failures reach the caller.
+`auto` keeps native safe-operation approval, while Persona's explicit full bypass answers permission requests automatically.
+External session models stay unspecified until native metadata is available. Session discovery does not resume them.
+
+Availability checks use optional `check({launcher, cwd, prompt})` (`caps.check`) through the companion's authenticated
+ACP client. They run the existing one-word probe, cancel tool permission requests, and close their temporary session
+on success, failure or timeout. Completed probe workspaces stay out of the user inventory after companion restarts.
+The runtime bounds native calls to a 75-second budget, followed by bounded session cleanup. Older runtimes keep the
+node's shell check. Shell and managed launchers keep their own execution context.
+
+Implementation: `integrations/antigravity/lib/runtime.js` and `integrations/antigravity/lib/acp.js`.
+
+Live text belongs to the ACP prompt currently executing. Queued prompts acquire the stream when they start, with an
+empty boundary. A tool call ends the current text message, so the next message replaces its words in the live slot.
+Each prompt clears its live text on completion, including when another prompt is queued.
+
+### Shared runtime behavior
 
 When two runtimes list the same session (pi's companion lists it from disk while pi-web or a pi terminal is running it), node makes the one running it responsible (ones listing it as `offline` go after),
 and on a tie the newer connection wins. Listing a session as `offline` tells node "I can open it, but it isn't running here".

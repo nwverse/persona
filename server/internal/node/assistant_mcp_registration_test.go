@@ -16,7 +16,7 @@ import (
 // Exercise the actual launch boundary, including the SDK's serialized start and
 // guest restrictions. The fake runtimes never call a model or read a real home.
 func TestAssistantMCPRegistrationAtStart(t *testing.T) {
-	for _, runtime := range []string{"cli", "sdk", "guest"} {
+	for _, runtime := range []string{"cli", "sdk", "guest", "windows-cli", "windows-sdk", "windows-guest"} {
 		for _, tc := range []struct {
 			name    string
 			persona bool
@@ -29,15 +29,21 @@ func TestAssistantMCPRegistrationAtStart(t *testing.T) {
 		} {
 			t.Run(runtime+"/"+tc.name, func(t *testing.T) {
 				f := sdkTest(t)
+				cache := assistantMCPTestCache(t)
+				engine := strings.TrimPrefix(runtime, "windows-")
+				fileConfig := engine != runtime
+				if fileConfig {
+					windowsAssistantMCPTest(t)
+				}
 				n := f.n
 				n.hubPersonaContracts.Store(tc.persona)
 				const id = "11111111-2222-3333-4444-555555555555"
 				cwd := filepath.Join(n.home, ".persona", "assistant")
-				if runtime == "guest" {
+				if engine == "guest" {
 					n.state.put(id, sessionState{Guest: []string{"lark_agent_reply"}})
 				}
 				execution := modelExecution{}
-				if runtime == "sdk" {
+				if engine == "sdk" {
 					execution = sdkExec(proto.AssistantRuntimeAgentSDK)
 				}
 				p, err := n.spawnClaude(id, cwd, "claude", tc.resume, false, execution)
@@ -53,12 +59,13 @@ func TestAssistantMCPRegistrationAtStart(t *testing.T) {
 				}
 
 				var servers map[string]any
-				var allowed []string
-				if runtime == "sdk" {
+				var allowed, builtin []string
+				if engine == "sdk" {
 					var start struct {
 						Options struct {
 							Servers map[string]any `json:"mcpServers"`
 							Allowed []string       `json:"allowedTools"`
+							Tools   []string       `json:"tools"`
 							Resume  string         `json:"resume"`
 							Session string         `json:"sessionId"`
 						} `json:"options"`
@@ -66,7 +73,10 @@ func TestAssistantMCPRegistrationAtStart(t *testing.T) {
 					if err := json.Unmarshal([]byte(f.file("start.json")), &start); err != nil {
 						t.Fatal(err)
 					}
-					servers, allowed = start.Options.Servers, start.Options.Allowed
+					servers, allowed, builtin = start.Options.Servers, start.Options.Allowed, start.Options.Tools
+					if _, err := os.Stat(cache); !os.IsNotExist(err) {
+						t.Fatalf("SDK created a CLI MCP cache: %v", err)
+					}
 					if tc.resume && start.Options.Resume != id || !tc.resume && start.Options.Session != id {
 						t.Fatalf("wrong session start: %+v", start.Options)
 					}
@@ -75,10 +85,25 @@ func TestAssistantMCPRegistrationAtStart(t *testing.T) {
 					var config struct {
 						Servers map[string]any `json:"mcpServers"`
 					}
-					if err := json.Unmarshal([]byte(mcpFlag(t, flags, "--mcp-config")), &config); err != nil {
+					raw := []byte(mcpFlag(t, flags, "--mcp-config"))
+					if fileConfig {
+						path := string(raw)
+						if !filepath.IsAbs(path) || strings.Contains(path, `\`) {
+							t.Fatalf("not an absolute slash path: %q", path)
+						}
+						var err error
+						raw, err = os.ReadFile(path)
+						if err != nil {
+							t.Fatal(err)
+						}
+					}
+					if err := json.Unmarshal(raw, &config); err != nil {
 						t.Fatal(err)
 					}
 					servers, allowed = config.Servers, strings.Split(mcpFlag(t, flags, "--allowedTools"), ",")
+					if engine != "guest" {
+						builtin = strings.Split(mcpFlag(t, flags, "--tools"), ",")
+					}
 					sessionFlag := "--session-id"
 					if tc.resume {
 						sessionFlag = "--resume"
@@ -86,11 +111,11 @@ func TestAssistantMCPRegistrationAtStart(t *testing.T) {
 					if mcpFlag(t, flags, sessionFlag) != id {
 						t.Fatalf("wrong session flag: %v", flags)
 					}
-					if runtime == "guest" && (mcpFlag(t, flags, "--tools") != "" || !slices.Contains(flags, "--strict-mcp-config")) {
+					if engine == "guest" && (mcpFlag(t, flags, "--tools") != "" || !slices.Contains(flags, "--strict-mcp-config")) {
 						t.Fatalf("guest restrictions lost: %v", flags)
 					}
 				}
-				legacy := tc.resume || !tc.persona
+				legacy := !tc.persona
 				wantCount := 1
 				if legacy {
 					wantCount++
@@ -98,12 +123,42 @@ func TestAssistantMCPRegistrationAtStart(t *testing.T) {
 				if len(servers) != wantCount || servers["persona"] == nil || (servers[compat.MCPServer] != nil) != legacy {
 					t.Fatalf("servers = %v, legacy = %v", servers, legacy)
 				}
-				if runtime == "guest" {
+				if engine == "guest" {
 					if want := compat.MCPAllowedToolNames([]string{"lark_agent_reply"}, legacy); !slices.Equal(allowed, want) {
 						t.Fatalf("guest allowed %v, want %v", allowed, want)
 					}
 				} else if !slices.Contains(allowed, "mcp__persona") || slices.Contains(allowed, "mcp__"+compat.MCPServer) != legacy || !slices.Contains(allowed, officeRule(n.assistantOfficeScript())) {
 					t.Fatalf("allowed = %v, legacy = %v", allowed, legacy)
+				}
+				wantBuiltin := []string{"Bash", "Read", "Write", "Edit", "Monitor", "Skill", "Agent", "ListAgents", "SendMessage", "TaskStop", "WebFetch", "WebSearch"}
+				if engine != "guest" && !slices.Equal(builtin, wantBuiltin) {
+					t.Fatalf("built-in tools = %v, want %v", builtin, wantBuiltin)
+				}
+			})
+		}
+	}
+}
+
+func TestCodexAssistantMCPRegistrationAtStart(t *testing.T) {
+	n, _ := testNode(t)
+	for _, tc := range []struct {
+		name    string
+		persona bool
+	}{
+		{name: "unknown-or-old-hub"},
+		{name: "negotiated", persona: true},
+	} {
+		for _, start := range []string{"new", "resume"} {
+			t.Run(tc.name+"/"+start, func(t *testing.T) {
+				n.hubPersonaContracts.Store(tc.persona)
+				args, started := n.codexAssistantArgs("proc-test", n.dir)
+				// A hub switch after this start's one decision must not split the args from the spare's recorded policy.
+				n.hubPersonaContracts.Store(!tc.persona)
+				joined := strings.Join(args, " ")
+				persona := strings.Contains(joined, "mcp_servers.persona.command")
+				legacy := strings.Contains(joined, "mcp_servers."+compat.MCPServer+".command")
+				if started != tc.persona || !persona || legacy != !tc.persona {
+					t.Fatalf("started=%v persona=%v legacy=%v, negotiated=%v: %s", started, persona, legacy, tc.persona, joined)
 				}
 			})
 		}

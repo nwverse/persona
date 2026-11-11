@@ -89,9 +89,18 @@ var Features = []string{
 	"builtin_presets",          // the hub's own provider presets in GET /api/v1/launchers/presets; POST /api/v1/launchers with a preset takes an empty name, display_name and assign (docs/integrations/launchers.md "Built-in presets")
 	"upload_dir",               // POST /api/v1/machines/{mid}/files?dest=dir&dir=&conflict=: into a folder of the home (docs/protocol/protocol.md "Changing files")
 	"file_edit",                // POST /api/v1/machines/{mid}/files/{rename,move,trash,restore} (docs/protocol/protocol.md "Changing files")
+	"launcher_scope",           // a Persona-managed provider's share, scope_machines, delivery, own_service and machine_keys (docs/integrations/launchers.md "Device scope and on-demand delivery")
 	"file_inbox",               // POST /api/v1/machines/{mid}/files?dest=inbox: into the machine's receive folder, kept for good (docs/protocol/file-transfer.md)
 	"file_transfer",            // POST/GET/DELETE /api/v1/files/transfer: computer to computer, run by the manager, file_transfer events (docs/protocol/file-transfer.md)
 	"task_push",                // Task.push on /api/v1/assistant/tasks: "Push when done", every run or only what a run sends (docs/assistant/assistant.md "Push when done")
+	"task_cron",                // repeat "cron" with Task.cron on /api/v1/assistant/tasks, and GET /api/v1/assistant/tasks/cron (docs/assistant/assistant.md "Scheduled tasks")
+
+	// A secret may hold a provider's op://… reference: PUT …/{id}/-/secrets/{name} {reference}; secrets[].reference and
+	// secret_users in the details (docs/extensions/secret-providers.md).
+	"extension_secret_references",
+	// A model provider's key (and a computer's key for it) may be such a reference: api_key_reference /
+	// machine_key_references on POST / PUT /api/v1/launchers, key_reference / machine_key_references in its view.
+	"launcher_secret_references",
 }
 
 // Codes of a failed credential.gh_token (hub → node, node/credential.go).

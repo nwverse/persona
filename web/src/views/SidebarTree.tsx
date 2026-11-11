@@ -15,7 +15,7 @@ import { useStore } from "../lib/store";
 import { treeStateLabel, type TodoTree, type TreeAgent, type TreeState, type TreeTodo } from "../lib/todo-tree";
 import { findTodoForSpace, openTodoFromTag } from "../lib/todos";
 import type { AgentState, Machine, Session } from "../lib/types";
-import { Collapse, cx } from "../ui/atoms";
+import { Collapse, cx, sidebarFoldMotion } from "../ui/atoms";
 import { StatusMark, StateTally } from "../ui/StatusMark";
 import { foldedCounts, hasFoldedCounts } from "../lib/folded-counts";
 import { Icon } from "../ui/icons";
@@ -27,8 +27,10 @@ import { useFolded } from "../lib/use-folded";
 import { sameValue } from "../lib/stable-lines";
 import { stateCount } from "../lib/state-labels";
 import { neverConnected } from "../lib/add-computer";
-import { type GoFn, GroupCount, holdsRow, type NodeMenuFn, type RegFn, rowKey, type RowMenuFn, Section } from "./SidebarParts";
+import { type GoFn, GroupCount, holdsRow, type NodeMenuFn, type RegFn, rowKey, type RowMenuFn, Section, SidebarGroup } from "./SidebarParts";
 import { NavRow, SessionRow } from "./SidebarRows";
+import type { WorkspaceTarget } from "../lib/workspace-catalog";
+import { selectWorkspace, useWorkspaceSelection } from "../lib/workspace-selection";
 
 type TreeRowProps = { machineLabel: MachineLabel; showHost?: boolean; reg: RegFn; hover: (k: string | null) => void; activeKey: string; go: GoFn; onRowMenu: RowMenuFn; onNavigate?: () => void };
 /** A computer's name as an agent row shows it ("" with a single computer). */
@@ -101,7 +103,7 @@ const TreeTodoRows = memo(function TreeTodoRows({ td, ...p }: { td: TreeTodo } &
     <div className="mt-px">
       <div className="relative z-10 flex w-full min-w-0 items-center gap-1.5 rounded-control py-1 pl-2 pr-2 text-[12px] text-ink-2 hover:bg-hover">
         <button type="button" aria-expanded={!folded} aria-label={td.name} onClick={toggle} className="touch-hit flex shrink-0 items-center">
-          <Icon name="chevron" size={9} stroke={2.4} className="opacity-60 transition-transform" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
+          <Icon name="chevron" size={9} stroke={2.4} className="opacity-60 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
         </button>
         {td.todoId && <Icon name="todo" size={11} stroke={2} className="shrink-0 text-ink-3" />}
         {td.todoId ? (
@@ -116,7 +118,7 @@ const TreeTodoRows = memo(function TreeTodoRows({ td, ...p }: { td: TreeTodo } &
           <TreeStateText state={td.state} />
         )}
       </div>
-      <Collapse open={!folded}>
+      <Collapse open={!folded} sidebarFold>
         <div className="flex flex-col gap-px pl-3" inert={folded || undefined}>
           {td.agents.map((a) => <TreeAgentRows key={a.key} a={a} depth={0} {...p} activeKey={withinAgent(a, p.activeKey)} />)}
         </div>
@@ -137,7 +139,7 @@ const TreeAgentRows = memo(function TreeAgentRows({ a, depth, machineLabel, show
       <div className="flex items-center">
         {a.children.length > 0 && (
           <button type="button" aria-expanded={!folded} aria-label={t("lib-todo-tree.spawned_agents", { count: a.children.length })} onClick={toggle} className="touch-hit relative z-10 -mr-1 flex size-4 shrink-0 items-center justify-center text-ink-3">
-            <Icon name="chevron" size={9} stroke={2.4} className="opacity-60 transition-transform" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
+            <Icon name="chevron" size={9} stroke={2.4} className="opacity-60 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
           </button>
         )}
         <div className="min-w-0 flex-1">
@@ -145,7 +147,7 @@ const TreeAgentRows = memo(function TreeAgentRows({ a, depth, machineLabel, show
         </div>
       </div>
       {a.children.length > 0 && (
-        <Collapse open={!folded}>
+        <Collapse open={!folded} sidebarFold>
           <div className="flex flex-col gap-px border-l border-line ml-2" inert={folded || undefined}>
             {a.children.map((c) => <SpawnedAgentRows key={c.key} a={c} depth={depth + 1} machineLabel={machineLabel} showHost={showHost} reg={reg} hover={hover} activeKey={withinAgent(c, activeKey)} go={go} onRowMenu={onRowMenu} />)}
           </div>
@@ -157,20 +159,30 @@ const TreeAgentRows = memo(function TreeAgentRows({ a, depth, machineLabel, show
 // the memo again, for the spawned agents' rows: inside the function above, its own name is the bare function
 const SpawnedAgentRows = TreeAgentRows;
 
+/** Exact-target hooks for workspace menus and empty selections. The tree never infers action destinations from cwd. */
+export interface WorkspaceTreeActions {
+  onSelectWorkspace?: (target: WorkspaceTarget) => void;
+  onWorkspaceMenu?: (target: WorkspaceTarget, anchor: HTMLElement, at?: MenuAt) => void;
+}
+
+const holdsWorkspace = (w: RepoWorktree, key?: string): boolean => Boolean(key && (w.key === key || w.children.some((child) => holdsWorkspace(child, key))));
+
 /** One computer in the repository tree (#2108 / #2126): header folds the whole computer; flat when only one computer has agents. */
-export function RepoMachineSection({ m, flat, machines, reg, hover, activeKey, go, onRowMenu }: { m: RepoMachine; flat: boolean; machines: Machine[]; reg: RegFn; hover: (k: string | null) => void; activeKey: string; go: GoFn; onRowMenu: RowMenuFn }) {
+export function RepoMachineSection({ m, flat, machines, reg, hover, activeKey, go, onRowMenu, ...actions }: { m: RepoMachine; flat: boolean; machines: Machine[]; reg: RegFn; hover: (k: string | null) => void; activeKey: string; go: GoFn; onRowMenu: RowMenuFn } & WorkspaceTreeActions) {
   const online = m.machine.online;
-  const [folded, toggle] = useFolded(m.foldKey, !online, { holds: holdsRow(m.sessions, activeKey) });
-  const repos = m.repos.map((tree) => <RepoSection key={tree.key} tree={tree} reg={reg} hover={hover} activeKey={activeKey} go={go} onRowMenu={onRowMenu} />);
+  const selected = useWorkspaceSelection();
+  const onSelectWorkspace = (target: WorkspaceTarget) => { selectWorkspace(target); actions.onSelectWorkspace?.(target); };
+  const [folded, toggle] = useFolded(m.foldKey, !online, { holds: m.repos.some((r) => r.worktrees.some((w) => holdsRow(w.navigationTree ?? w.tree, activeKey) || holdsWorkspace(w, selected))) });
+  const repos = m.repos.map((tree) => <RepoSection key={tree.key} tree={tree} reg={reg} hover={hover} activeKey={activeKey} go={go} onRowMenu={onRowMenu} selected={selected} {...actions} onSelectWorkspace={onSelectWorkspace} />);
   if (flat) return <>{repos}</>;
   return (
-    <div className="mt-3">
+    <SidebarGroup className="mt-3" heading={
       <div className="group/sec flex items-center gap-1 px-2 pb-0.5">
         <button type="button" aria-expanded={!folded} onClick={toggle} className="relative z-10 flex min-h-7 min-w-0 flex-1 items-center gap-1.5 whitespace-nowrap text-left [@media(pointer:coarse)]:min-h-11">
           <span aria-hidden className={cx("size-1.5 shrink-0 rounded-full", online ? "bg-green" : "bg-line-strong")} />
           <span className={cx("min-w-0 truncate text-[12.5px] font-semibold", online ? "text-ink" : "text-ink-3")}>{machineWithHub(m.machine.id, machines)}</span>
           <span className="sr-only">{online ? t("sidebar.online") : neverConnected(m.machine) ? t("sidebar.not_connected_yet") : t("sidebar.offline")}</span>
-          <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 text-ink-3 opacity-0 transition-[opacity,transform] duration-200 group-hover/sec:opacity-100 [@media(hover:none)]:opacity-100" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
+          <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 text-ink-3 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
         </button>
         {m.needs > 0 && !(folded && online) ? (
           <span title={stateCount("needs_you", m.needs)} className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-field px-1 text-[10.5px] font-semibold text-attention tabular-nums">
@@ -182,18 +194,19 @@ export function RepoMachineSection({ m, flat, machines, reg, hover, activeKey, g
           <SessionTally sessions={m.sessions} folded={folded} />
         )}
       </div>
-      <Collapse open={!folded}>
+      }>
+      <Collapse open={!folded} sidebarFold unclipped>
         <div className="flex flex-col gap-px" inert={folded || undefined}>
           {repos}
         </div>
       </Collapse>
-    </div>
+    </SidebarGroup>
   );
 }
 
 /** One repository on one machine ("By repo"): its working trees under it, the main checkout marked and first. */
-function RepoSection({ tree, reg, hover, activeKey, go, onRowMenu }: { tree: RepoTree; reg: RegFn; hover: (k: string | null) => void; activeKey: string; go: GoFn; onRowMenu: RowMenuFn }) {
-  const [folded, toggle] = useFolded(tree.key, false, { holds: tree.worktrees.some((w) => holdsRow(w.tree, activeKey)) });
+function RepoSection({ tree, reg, hover, activeKey, go, onRowMenu, selected, ...actions }: { tree: RepoTree; reg: RegFn; hover: (k: string | null) => void; activeKey: string; go: GoFn; onRowMenu: RowMenuFn; selected?: string } & WorkspaceTreeActions) {
+  const [folded, toggle] = useFolded(tree.key, false, { holds: tree.worktrees.some((w) => holdsRow(w.navigationTree ?? w.tree, activeKey) || holdsWorkspace(w, selected)) });
   const row = (s: Session, hint: string) => {
     const key = `s:${s.machine_id}/${s.session_id}`;
     return <SessionRow key={key} s={s} k={key} reg={reg} hover={hover} active={activeKey === key} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} hint={hint} onMenu={onRowMenu} />;
@@ -207,36 +220,48 @@ function RepoSection({ tree, reg, hover, activeKey, go, onRowMenu }: { tree: Rep
       onToggle={toggle}
       right={<GroupCount n={tree.count} label={t("sidebar.agent_count", { count: tree.count })} />}
     >
-      {flat ? tree.worktrees[0]!.sessions.map((s) => row(s, tree.name)) : tree.worktrees.map((w) => <RepoWorktreeRows key={w.key} w={w} repo={tree.name} row={row} activeKey={activeKey} />)}
+      {flat ? tree.worktrees[0]!.sessions.map((s) => row(s, tree.name)) : tree.worktrees.map((w) => <RepoWorktreeRows key={w.key} w={w} repo={tree.name} row={row} activeKey={activeKey} go={go} selected={selected} {...actions} />)}
     </Section>
   );
 }
 
 /** One working tree's agents under its own folding row: the main checkout wears a home mark, and a tree with nothing
  *  running says so. Orca child worktrees have their own remembered, initially expanded chip after the parent's agents. */
-function RepoWorktreeRows({ w, repo, row, activeKey }: { w: RepoWorktree; repo: string; row: (s: Session, hint: string) => React.ReactNode; activeKey: string }) {
-  const [folded, toggle] = useFolded(w.key, w.sessions.length === 0, { holds: holdsRow(w.tree, activeKey) });
-  const descendants = w.tree.slice(w.sessions.length);
-  const [childrenFolded, toggleChildren] = useFolded(`${w.key}/children`, false, { holds: holdsRow(descendants, activeKey) });
+function RepoWorktreeRows({ w, repo, row, activeKey, go, selected, ...actions }: { w: RepoWorktree; repo: string; row: (s: Session, hint: string) => React.ReactNode; activeKey: string; go: GoFn; selected?: string } & WorkspaceTreeActions) {
+  const [folded, toggle] = useFolded(w.key, !w.workspace && w.sessions.length === 0, { holds: holdsRow(w.navigationTree ?? w.tree, activeKey) || w.children.some((child) => holdsWorkspace(child, selected)) });
+  const descendants = w.navigationTree ? w.children.flatMap((c) => c.navigationTree ?? c.tree) : w.tree.slice(w.sessions.length);
+  const [childrenFolded, toggleChildren] = useFolded(`${w.key}/children`, false, { holds: holdsRow(descendants, activeKey) || w.children.some((child) => holdsWorkspace(child, selected)) });
+  const selectedRow = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const row = selectedRow.current;
+    if (selected !== w.key || !row || row.closest("[inert]") || !row.getClientRects().length) return;
+    row.scrollIntoView?.({ block: "nearest" });
+  }, [selected, w.key]);
   const mutes = useStore((st) => st.mutes);
   const running = w.sessions.filter((s) => !isQuiet(s, mutes)).length;
+  const title = [w.workspace?.project_name, w.name, w.branch, w.path, w.workspace?.source].filter(Boolean).join(" · ");
+  const label = <><span className="min-w-0 truncate">{w.name}</span>{w.workspace?.project_name && w.workspace.project_name !== repo && <span className="min-w-0 max-w-24 truncate text-ink-3">{w.workspace.project_name}</span>}</>;
   return (
-    <div className="mt-px">
-      <button type="button" aria-expanded={!folded} onClick={toggle} className="relative z-10 flex w-full min-w-0 items-center gap-1.5 whitespace-nowrap rounded-control py-1 pl-3 pr-2 text-left text-[11.5px] text-ink-2 hover:bg-hover">
-        <Icon name="chevron" size={9} stroke={2.4} className="shrink-0 opacity-60 transition-transform" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
+    <div ref={selectedRow} className="mt-px" data-workspace-key={w.workspace ? w.key : undefined}>
+      <div className={cx("group/sec relative z-10 flex w-full min-w-0 items-center gap-1.5 whitespace-nowrap rounded-control py-1 pl-3 pr-2 text-left text-[11.5px] text-ink-2 hover:bg-hover", selected === w.key && "bg-hover")} {...(w.target && actions.onWorkspaceMenu ? contextMenuProps((at, anchor) => actions.onWorkspaceMenu!(w.target!, anchor, at)) : {})}>
+        <button type="button" aria-label={t("workspace-tree.disclosure", { name: w.name })} aria-expanded={!folded} onClick={toggle} className="touch-hit relative flex min-h-7 shrink-0 items-center [@media(pointer:coarse)]:min-h-11">
+          <Icon name="chevron" size={9} stroke={2.4} className="shrink-0 opacity-60 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
+        </button>
         {w.main && <Icon name="home" size={11} stroke={2} className="shrink-0 text-ink-3" />}
-        <span className="min-w-0 truncate">{w.name}</span>
+        <button type="button" title={title} aria-pressed={selected === w.key} aria-expanded={!folded} onClick={() => { if (w.target) actions.onSelectWorkspace?.(w.target); toggle(); }} className="flex min-h-7 min-w-0 flex-1 items-center gap-1.5 text-left hover:text-ink [@media(pointer:coarse)]:min-h-11">{label}</button>
+        {w.workspace?.available === false && <Icon name="warning" size={11} className="shrink-0 text-ink-3" aria-label={t("workspace-tree.unavailable")} />}
         <span className="ml-auto shrink-0 text-[10.5px] text-ink-3 tabular-nums">{running > 0 ? t("sidebar.worktree_agents", { count: w.sessions.length }) : t("sidebar.idle")}</span>
-      </button>
-      <Collapse open={!folded}>
+        {w.target && actions.onWorkspaceMenu && <button type="button" data-row-menu aria-label={t("workspace-tree.actions", { name: w.name })} aria-haspopup="menu" onClick={(e) => actions.onWorkspaceMenu!(w.target!, e.currentTarget)} className="touch-hit relative flex size-5 shrink-0 items-center justify-center rounded-control text-ink-3 hover:bg-hover-2 focus-visible:text-ink [@media(hover:none)]:size-8"><Icon name="more" size={12} /></button>}
+      </div>
+      <Collapse open={!folded} sidebarFold>
         <div inert={folded || undefined}>
           <div className="flex flex-col gap-px pl-2">{w.sessions.map((s) => row(s, `${repo} › ${w.name}`))}</div>
           {w.children.length > 0 && (
             <>
               <RepoChildToggle count={w.children.length} counts={w.childStates} folded={childrenFolded} onToggle={toggleChildren} />
-              <Collapse open={!childrenFolded}>
+              <Collapse open={!childrenFolded} sidebarFold>
                 <div className="ml-3.5 flex w-[calc(100%-0.875rem)] flex-col gap-px" inert={childrenFolded || undefined}>
-                  {w.children.map((c) => <RepoWorktreeRows key={c.key} w={c} repo={repo} row={row} activeKey={activeKey} />)}
+                  {w.children.map((c) => <RepoWorktreeRows key={c.key} w={c} repo={repo} row={row} activeKey={activeKey} go={go} selected={selected} {...actions} />)}
                 </div>
               </Collapse>
             </>
@@ -285,7 +310,7 @@ function RepoChildToggle({ count, counts, folded, onToggle }: { count: number; c
                 ))}
               </span>
             )}
-            <Icon name="chevron" size={10} stroke={2.4} className="size-2.5 shrink-0 text-ink-3 transition-transform duration-200 motion-reduce:transition-none" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
+            <Icon name="chevron" size={10} stroke={2.4} className="size-2.5 shrink-0 text-ink-3 transition-transform motion-reduce:transition-none" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
           </span>
         </span>
       </button>
@@ -400,13 +425,13 @@ export function MachineSection({ m, shells, ...p }: { m: HerdrMachine; shells?: 
   const [folded, toggle] = useFolded(m.foldKey, !online, { holds: holdsRow(m.sessions, p.activeKey) });
   const name = machineWithHub(m.machine.id, p.machines);
   return (
-    <div className="mt-3">
+    <SidebarGroup className="mt-3" heading={
       <div className="group/sec flex items-center gap-1 px-2 pb-0.5 [@media(hover:none)]:pr-11" {...contextMenuProps((at) => p.onNodeMenu(machineNode(m.machine, { fold: { folded, toggle } }), at, name))}>
         <button type="button" aria-expanded={!folded} onClick={toggle} className="relative z-10 flex min-h-7 min-w-0 flex-1 items-center gap-1.5 whitespace-nowrap text-left [@media(pointer:coarse)]:min-h-11">
           <span aria-hidden className={cx("size-1.5 shrink-0 rounded-full", online ? "bg-green" : "bg-line-strong")} />
           <span className={cx("min-w-0 truncate text-[12.5px] font-semibold", online ? "text-ink" : "text-ink-3")}>{machineWithHub(m.machine.id, p.machines)}</span>
           <span className="sr-only">{online ? t("sidebar.online") : neverConnected(m.machine) ? t("sidebar.not_connected_yet") : t("sidebar.offline")}</span>
-          <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 text-ink-3 opacity-0 transition-[opacity,transform] duration-200 group-hover/sec:opacity-100 [@media(hover:none)]:opacity-100" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
+          <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 text-ink-3 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
         </button>
         {m.needs > 0 && !(folded && online) ? (
           <span title={stateCount("needs_you", m.needs)} className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-field px-1 text-[10.5px] font-semibold text-attention tabular-nums">
@@ -418,7 +443,8 @@ export function MachineSection({ m, shells, ...p }: { m: HerdrMachine; shells?: 
           <SessionTally sessions={m.sessions} folded={folded} />
         )}
       </div>
-      <Collapse open={!folded}>
+      }>
+      <Collapse open={!folded} sidebarFold unclipped>
         <div className="flex flex-col gap-px" inert={folded || undefined}>
           {m.spaces.map((sp) => <WorkspaceBlock key={sp.key} sp={sp} {...p} />)}
           {shells && shells.length > 0 && <ShellTree mid={m.machine.id} online={online} spaces={shells} {...p} />}
@@ -431,7 +457,7 @@ export function MachineSection({ m, shells, ...p }: { m: HerdrMachine; shells?: 
           {!m.sessions.length && <p className="truncate px-3 py-1 text-[12px] text-ink-3">{online ? t("sidebar.none_running") : t("sidebar.agents_in_recent")}</p>}
         </div>
       </Collapse>
-    </div>
+    </SidebarGroup>
   );
 }
 
@@ -443,13 +469,13 @@ function TreeBlock({ foldKey, sessions, activeKey, state, title, right, children
     <div>
       <div className="group/sec relative flex items-center gap-1 pr-2 pl-2 [@media(hover:none)]:pr-11" {...(onMenu ? contextMenuProps((at, el) => onMenu(at, el, { folded, toggle })) : {})}>
         <button type="button" aria-expanded={!folded} onClick={toggle} className="relative z-10 flex min-h-7 min-w-0 flex-1 items-center gap-1.5 whitespace-nowrap text-left text-[12px] text-ink-2 hover:text-ink [@media(pointer:coarse)]:min-h-11">
-          <Icon name="chevron" size={9} stroke={2.4} className="shrink-0 text-ink-3 transition-transform duration-200" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
+          <Icon name="chevron" size={9} stroke={2.4} className="shrink-0 text-ink-3 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
           {state ? <StatusMark state={state} size="sm" /> : <span className="size-1.5 shrink-0" />}
           {title}
         </button>
         {right(folded)}
       </div>
-      <Collapse open={!folded}>
+      <Collapse open={!folded} sidebarFold>
         <div className="flex flex-col gap-px pl-3" inert={folded || undefined}>{children}</div>
       </Collapse>
     </div>
@@ -498,11 +524,11 @@ function ChildSpaces({ sp, ...p }: { sp: HerdrSpace } & TreeProps) {
   return (
     <div>
       <button type="button" aria-expanded={!folded} onClick={toggle} className="relative z-10 flex min-h-7 w-full min-w-0 items-center gap-1.5 pr-2 pl-2 text-left text-[11.5px] whitespace-nowrap text-ink-3 hover:text-ink [@media(pointer:coarse)]:min-h-11">
-        <Icon name="chevron" size={9} stroke={2.4} className="shrink-0 transition-transform duration-200" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
+        <Icon name="chevron" size={9} stroke={2.4} className="shrink-0 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
         <span className="min-w-0 flex-1 truncate">{t("sidebar.child_count", { count: n })}</span>
         {folded && <SessionTally sessions={sp.tree.slice(sp.sessions.length)} folded />}
       </button>
-      <Collapse open={!folded}>
+      <Collapse open={!folded} sidebarFold>
         <div className="flex flex-col gap-px" inert={folded || undefined}>
           {sp.children.map((c) => <WorkspaceBlock key={c.key} sp={c} {...p} />)}
         </div>
@@ -615,10 +641,10 @@ function TabRow({ t: tab, ...p }: { t: HerdrTab } & TreeProps) {
           className="touch-hit absolute top-1/2 right-8 z-20 flex h-6 -translate-y-1/2 items-center gap-0.5 whitespace-nowrap rounded-[6px] pr-0.5 pl-1 text-[11px] text-ink-3 tabular-nums hover:bg-hover hover:text-ink-2 [@media(hover:none)]:right-11"
         >
           {t("sidebar.agent_count", { count: n })}
-          <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 transition-transform duration-200" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
+          <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
         </button>
       </div>
-      <Collapse open={!folded}>
+      <Collapse open={!folded} sidebarFold>
         <div className="flex flex-col gap-px pl-3" inert={folded || undefined}>
           {tab.sessions.map((s, i) => {
             const key = rowKey(s);
