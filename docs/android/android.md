@@ -1491,6 +1491,76 @@ python3 scripts/app/android_shots_diff.py /tmp/shots-before-glass /tmp/shots-aft
 - Diff script compares pixels, reports changed count/bounding rectangle, `--diff` images; `--tolerance` / `--ignore '<filename glob>=x0,y0,x1,y1'` off by default.
 - Two runs of same package differ only in diagnostics "Identity verified, N ms" (measured single probe) and Glass light Lark bottom 49 rows with channel difference 1 (unknown reason). Exclude with `--tolerance 1 --ignore '*-diagnostics.png=0,Y0,1079,Y1'`; style Y: Glass 1385–1425, Brief 1360–1410, Board 1305–1355.
 
+## Live adaptive screenshots
+
+`shots-live` proves state continuity in one App process. It reuses the batch command's dedicated application id, APK installation, mock hub, fixture discovery, `adb reverse`, permissions, frozen clock and cleanup, but does not cold-start each capture:
+
+```sh
+SHOTS_STYLE=glass SHOTS_MOCK_PORT=<mock port> \
+  ./scripts/app/android.sh shots-live -s <emulator> --theme both \
+  --scenario scripts/app/android_adaptive_scenes/window-selftest.json \
+  --out /tmp/persona-adaptive-window
+```
+
+`-s` must be an already running, dedicated emulator. `--theme` accepts `light`, `dark` or `both` (the default); `--out` has the same default rule as `shots`. Each theme runs the complete ordered scene with its own initial PID. Package clearing is allowed only for that theme's initial pairing; steps within a scene never use `force-stop`, `am start -S` or `pm clear`. An `open` step establishes the initial scene and cannot reopen the same destination after a window transformation. Opening a different destination is allowed for a continuous multi-page scene, so navigation to a new page is not mistaken for recovering a lost route. The old `shots` command and its cold-start captures are unchanged.
+
+### Scene format
+
+A scene is one JSON object with `id`, `description`, `requires` and ordered `steps`. An optional `manifestId` maps the scene to an existing paired-screenshot manifest entry without rewriting that manifest. `requires.page` selects an exact probe page or one page with the given prefix; `requires.fields` lists page-specific evidence that must be present. PID, window width/height and route are always required. A missing field, stale or malformed probe, ambiguous page, changed PID or unreadable navigation checkpoint fails the run rather than writing a null value and passing.
+
+For a scene with several live pages, `requires.pages` instead maps aliases to probe pages and their required local fields. `capture` and `assert` may provide a step-local `requires` object, replacing the scene-level page selection for that evidence point. Existing single-page scenes need no change. Assertions address aliased evidence through `probePages.<alias>.<field>`. When a list field is required without an explicit page, the runner selects the unique probe page whose title is visible in the current UI XML; ambiguity fails. `selectedKey=null` is valid evidence for an unselected root, and `detailAgentsExpanded=null` means the current page has no detail-agent control; use explicit `equals` assertions on pages where those states apply.
+
+The canonical `{"step": "open", "page": "machines"}` spelling and the compact `{"open": {"page": "machines"}}` spelling are equivalent. Compact `wm-size` width/height, `posture.state`, `rotate.direction`, direct assert-check maps and capture names are normalized before execution. `requires.mockEnv` accepts single-line `MOCK_*` values and exports them before starting this run's mock hub; it never restarts the mock during a continuous scene.
+
+```json
+{
+  "requires": {
+    "fields": [],
+    "pages": {
+      "settings": {"page": "Settings", "fields": ["firstVisibleKey", "contentBounds", "hingeBounds"]},
+      "composer": {"page": "chat", "fields": ["draftHmac", "selection"]}
+    }
+  }
+}
+```
+
+For machine grids, `columns` is derived from the number of stable machine IDs in the first visible `machine-row|…` Compose key. `detailAgentsExpanded` reads the current detail page's Show all / Show less control in English, Chinese or Japanese; it is false while the collapsed control is visible and true while the expanded control is visible. These values never infer a session key from a visible title. `firstVisibleOffset` is accepted as an alias of `firstVisibleOffsetPx`.
+
+| Step | Behavior |
+| --- | --- |
+| `launch` | Starts the DEBUG entry with the selected style/theme and records the initial PID. Later launches are rejected. `session`, `tab`, `page`, `link`, `conversationKind` and `windowingMode` use the existing DEBUG arguments. `session: "chat"` and `link: "terminal"` can reference `fixture.tsv`. |
+| `open` | Reuses `debug.openTab`, `debug.openSession`, `debug.openPage` or `debug.openLink` without clearing the package. A different destination may open after a transformation; reopening the same destination is rejected. Secondary-page route/selected IDs supplement the two-tab `shell-position.json`, which does not persist every child route. |
+| `tap` | Reads fresh UI XML, selects exactly one node by `resource-id`, `content-desc` or exact `text`, and taps the center of its bounds. Zero or multiple matches fail. |
+| `text` | Waits for `focused=true`, then injects printable ASCII with `adb input text`. Spaces become `%s`. Shift, Ctrl, Alt and Meta are reset before and after input. Newlines use `keycombination: ["SHIFT_LEFT", "ENTER"]`. Chinese or other IME composing text is deliberately unsupported here and requires instrumentation with `InputConnection`; ASCII input is not evidence of composing behavior. |
+| `key` | Injects `key` through `input keyevent` or `keycombination` through `input keyboard keycombination`, records the keys, and resets modifiers around the action. |
+| `rotate` | Runs `adb emu rotate`, then polls the actual window dp and orientation. No fixed sleep substitutes for readback. |
+| `posture` | Runs `adb emu posture 1|2|3` and polls `dumpsys device_state`. Emulator posture evidence is labeled `folding-feature`; `fake: true` with `posture: "book"` or `"tabletop"` uses `debug.posture` and is labeled `fake`, never real hinge evidence. |
+| `wm-size` | Sets `size: "WxH"` and optional `density`, then reads back the actual dp. Before a compact size it explicitly unfolds and waits for `OPENED`. `reset: true` restores the size; `densityReset: true` also restores density. `resize-display` is not used. |
+| `freeform-resize` | Finds the currently resumed Persona task by application id, runs `am task resize <id> 0 0 <right> <bottom>`, and polls the same task's dp bounds. At 320 dpi, 599/600, 759/760 and 839/840 dp therefore use 1198/1200, 1518/1520 and 1678/1680 px respectively. A missing or changed task fails. |
+| `assert` | Evaluates a `checks` object using `equals`, `unchanged`, `matches` or `notOverlaps`. Dotted paths address fields such as `window.widthDp`, `selection.start`, `firstVisibleKey` and `attachments`; scalar shorthand means `equals`. `unchanged` compares with the previous capture/assert evidence, and `pid: "unchanged"` always compares with the initial PID. For hinge safety use `"contentBounds": {"notOverlaps": "hingeBounds"}`, or the corresponding `probePages.<alias>` paths. Rectangles must be present, numeric and non-empty; touching edges do not overlap, intersecting areas fail. |
+| `capture` | Waits for three identical frames with a 20-second bound, validates the PNG, collects fresh evidence, and writes the PNG and sidecar. A stability timeout or bad frame fails instead of saving the last frame as a success. |
+
+`window-selftest.json` keeps an Agent chat's multiline draft, full selection, focus and attachment list through expanded → rotated → real book half-open → unfolded compact size → expanded. Generic Fold's compact simulation explicitly unfolds first. Freeform boundary cases belong in tablet scenes using the same DSL.
+
+### Probe and sidecar
+
+`DebugEntryActivity` enables `AdaptiveProbe` only for a debuggable build launched with `debug.automation=true`. The probe is disabled by default: no snapshot listener, file write or additional recomposition is installed. `AdaptiveListProbe(page, LazyListState)` publishes the first non-chrome Compose item key and its pixel offset, plus the list viewport and current hinge rectangle. `AdaptiveBoundsProbe(page, contentBounds, hingeBounds)` provides the same bounds evidence for `JPage` and other non-list containers; callers supply page-local rectangles in one shared coordinate space. `AdaptiveComposerProbe(page, TextFieldValue, attachmentStates)` publishes an HMAC-SHA-256 draft digest, selection, focus and attachment `id:uploadState` evidence. Focus is reported from the existing `onFocusChanged` callback because `TextFieldValue` does not contain it. Each enable session generates a new random HMAC key; neither the key nor draft plaintext is written to the probe or sidecar. Attachment names, URIs and paths are omitted too.
+
+Evidence is atomically written to the App-private `no_backup/hub-data/adaptive-probe.json`, with field version, PID, session, monotonic update time and per-page timestamps. Active pages heartbeat without recomposing; a stale snapshot is not accepted. Route and selected session key come from the pairing-scoped `shell-position.json`, never from a visible row title. UI XML supplements node bounds and focus only. UI dumps delete the old device file and retry at most five times, 0.5 seconds apart; a null root, old file or empty hierarchy fails.
+
+Every capture has two files:
+
+```text
+<out>/<scenario>/<step>-<state>-<style>-<theme>.png
+<out>/<scenario>/<step>-<state>-<style>-<theme>.json
+```
+
+The sidecar includes scenario/manifest id, step/state, serial, initial/before/after PID, window px/dp/density/orientation/task evidence, DeviceState and posture evidence type, style, theme, locale, route, selected key, first visible key/offset, draft HMAC, selection, focused node, attachment states, content/hinge bounds, all aliased `probePages`, assertion results, input/modifier records, timestamp and PNG SHA-256. A multi-display warning before the PNG signature is stripped; an empty file or missing signature is an error.
+
+On exit, the Python runner removes only its UI/probe files, resets input modifiers, and restores window size, density and posture it changed. The shell cleanup then stops only its own mock/clock processes, removes its own reverse forwarding and test package state, and restores frozen-clock/demo settings. It does not use `pkill`, stop another emulator or touch another lane's ports. Cleanup failure also makes the command fail.
+
+Current environment limits remain explicit: hover, secondary-click and cross-App drag/drop are not implemented by this driver; IME composing needs instrumentation; fake tabletop is visual evidence only; a Generic Fold compact `wm-size` is not a physical outer display; and emulator results are not physical-device performance measurements.
+
 ## Proactive work (Settings › Assistant › Proactive work)
 
 Requested 2026-11-02: "There is no setting for where Persona chats, memory and the rest run." Assistant settings split into two; this part manages Persona's scheduled tasks, self-arranged follow-ups and run history (iOS `apple/Persona/Views/Settings/AssistantProactiveViews.swift`). Code `feature/assistant/…/proactive/`, public `AssistantProactiveScreen(onBack, onOpenConversation)` only; `onOpenConversation` opens assistant chats created/resumed/run-now. API/coroutine scope default to current pairing in Persona host `LocalAssistantHost`. Internal child pages (task, create, all follow-ups, history) own navigation/back, pushing from right like App pages.
