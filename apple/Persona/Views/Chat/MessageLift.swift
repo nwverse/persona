@@ -55,14 +55,16 @@ struct MessageLift {
 }
 
 /// Where a pressable part is, written on every scrolled frame without drawing anything again (not observed). Written
-/// during layout too (`RecordsOffer`), which is not the main actor's.
+/// during layout too (`RecordsOffer`), which is not the main actor's. Views hold it in `@State`, so its stored values
+/// start as plain values, no calls (performance rule P3).
 nonisolated final class LiftPlace {
     nonisolated struct Frames: Equatable {
+        static let zero = Frames()
         var global: CGRect = .zero
         /// In its row's coordinates (`MessageMenu.row`), where the press is reported.
         var row: CGRect = .zero
     }
-    var frames = Frames()
+    var frames = Frames.zero
     /// The size the chat offered it (`RecordsOffer`) and the environment around it (`LongPressAt`).
     var offer: ProposedViewSize?
     var environment: EnvironmentValues?

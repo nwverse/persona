@@ -817,6 +817,35 @@ nonisolated enum Theme {
         static let fetchLimit = 600
     }
 
+    /// The image editor (`ImageEditor`, `ImageEdits`): Box, Pen and Crop over a picture on black, as Photos edits.
+    nonisolated enum ImageEdit {
+        /// A mark's line on screen: thin, medium, thick. Medium is the 3.5 pt Box and Pen drew with before there was a
+        /// choice, and the default; the line is burned in at the same width relative to the picture as it is seen.
+        static let lineWidths: [CGFloat] = [2, 3.5, 7]
+        static let defaultLineWidth = 1
+        /// Six inks, Apple's dark-mode system colors as fixed values (red, yellow, green, blue, white, black): a mark keeps
+        /// its color in the picture whatever the appearance it is later seen in.
+        static let inks: [(red: CGFloat, green: CGFloat, blue: CGFloat)] = [
+            (1, 0.271, 0.227), (1, 0.839, 0.039), (0.188, 0.820, 0.345), (0.039, 0.518, 1), (1, 1, 1), (0, 0, 0),
+        ]
+        /// The ink swatch's ring: the one picked, the others.
+        static let swatchRing: CGFloat = 3
+        static let swatchRingIdle: CGFloat = 1
+        static let swatchRingIdleOpacity = 0.4
+        /// Room left round the picture while cropping, so the handles on its edges can be taken.
+        static let cropInset: CGFloat = 28
+        /// The crop frame's line, its corner marks (length and thickness), and how far round an edge a finger takes it.
+        static let cropLine: CGFloat = 1
+        static let cropCorner: CGFloat = 20
+        static let cropCornerWidth: CGFloat = 3
+        static let cropGrab: CGFloat = 22
+        /// The smallest crop, a side on screen.
+        static let cropMinimum: CGFloat = 64
+        /// Outside the crop, dimmed; the thirds drawn inside it while it is dragged.
+        static let cropDim = 0.6
+        static let cropThirdsOpacity = 0.45
+    }
+
     /// Hold the mic to dictate, slide left to drop it, slide up to keep it going hands-free: Telegram's thresholds
     /// for its voice button (`DictationHold`).
     enum Hold {
