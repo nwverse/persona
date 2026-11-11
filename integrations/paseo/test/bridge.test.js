@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { startFakeNode, until } from '../../runtime-sdk/testing/fake-node.js'
 import { createPaseoBridge, TIMELINES_MAX, uuidOf } from '../lib/bridge.js'
@@ -66,8 +66,8 @@ test("Paseo's agents are the engine's sessions: Claude Code's by its session and
   const byId = Object.fromEntries(rows().map((r) => [r.session_id, r]))
   assert.deepEqual(Object.keys(byId).sort(), [SID, 'paseo-e1', `paseo-${a.codex.id}`, `paseo-${a.grok.id}`].sort(), 'a Claude agent without a session yet is not listed')
   assert.deepEqual([byId[SID].agent, byId[SID].transcript, byId[SID].status, byId[SID].launcher], ['claude', SID, 'done', 'my-claude'])
-  assert.deepEqual([byId[SID].space_id, byId[SID].space_name, byId[SID].slot_id, byId[SID].slot_name], ['prj_1', 'proj', 'wks_1', '主线'],
-    "the project is the space, Paseo's workspace the slot")
+  assert.deepEqual([byId[SID].space_id, byId[SID].space_name, byId[SID].slot_id, byId[SID].slot_name], ['prj_1', 'proj', undefined, '主线'],
+    "the project is the space; Paseo's workspace names where in it, and is no slot")
   assert.deepEqual([byId['paseo-e1'].transcript, byId['paseo-e1'].title], [SID2, 'E'])
   assert.deepEqual([byId[`paseo-${a.codex.id}`].agent, byId[`paseo-${a.codex.id}`].status, byId[`paseo-${a.codex.id}`].transcript], ['codex', 'working', undefined])
   assert.deepEqual([byId[`paseo-${a.grok.id}`].agent_label, byId[`paseo-${a.grok.id}`].status], ['Grok', 'offline'])
@@ -491,8 +491,8 @@ test("a project's worktrees are one space; a new session at a worktree goes into
   await until('the worktree agents', () => ['M', 'W', 'S'].every((title) => rows().some((r) => r.title === title)))
   const byTitle = Object.fromEntries(rows().filter((r) => r.space_id === key).map((r) => [r.title, r]))
   assert.deepEqual(['M', 'W', 'S'].map((x) => [byTitle[x].space_name, byTitle[x].slot_id, byTitle[x].slot_name]),
-    [['app', 'wks_main', '主线'], ['app', 'wks_wt', '修登录'], ['app', 'wks_stray', 'brave-fox']],
-    "one space named after the repository's project, the stray record's too; each workspace a slot")
+    [['app', undefined, '主线'], ['app', undefined, '修登录'], ['app', undefined, 'brave-fox']],
+    "one space named after the repository's project, the stray record's too; each names its workspace")
   assert.deepEqual(['M', 'W', 'S'].map((x) => byTitle[x].repo_root), [app, app, app], "按仓库: the repository's main checkout (#2840)")
 
   const started = (params) => call(node, 'session.start', { prompt: 'x', launcher: 'my-codex', ...params })
@@ -508,9 +508,26 @@ test("a project's worktrees are one space; a new session at a worktree goes into
   fake.handlers['agent.create.request'] = () => null
   const slow = (params) => call(node, 'session.start', { prompt: 'x', launcher: 'my-codex', ...params }).then((r) => r.session)
   const inWt = await slow({ cwd: wt })
-  assert.deepEqual([inWt.space_id, inWt.space_name, inWt.slot_id, inWt.slot_name], [key, 'app', 'wks_wt', '修登录'])
+  assert.deepEqual([inWt.space_id, inWt.space_name, inWt.slot_id, inWt.slot_name], [key, 'app', undefined, '修登录'])
   const inApp = await slow({ cwd: app, workspace_id: key })
-  assert.deepEqual([inApp.space_id, inApp.space_name, inApp.slot_id], [key, 'app', undefined], 'a new workspace of the project: no slot yet')
+  assert.deepEqual([inApp.space_id, inApp.space_name, inApp.slot_name], [key, 'app', undefined], 'a new workspace of the project: no name yet')
+})
+
+test('a repository opened through a symbolic link is named by its physical directory', async (t) => {
+  const dir = mkdtempSync('/tmp/ppaseo-ln-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  mkdirSync(join(dir, 'data', 'app'), { recursive: true })
+  symlinkSync(join(dir, 'data'), join(dir, 'home'))
+  const opened = join(dir, 'home', 'app') // as the project was opened in Paseo
+  const physical = realpathSync(join(dir, 'data', 'app')) // the temporary directory may be behind a link itself
+  const placed = { agent: agentSnapshot({ provider: 'my-codex', cwd: opened, workspaceId: 'wks_ln', title: 'LN' }),
+    project: { projectKey: 'prj_ln', projectName: 'app', workspaceName: null,
+      checkout: { cwd: opened, isGit: true, currentBranch: 'main', remoteUrl: null, worktreeRoot: opened, isPaseoOwnedWorktree: false, mainRepoRoot: null } } }
+  const base = Object.values(agents()).map((agent) => ({ agent, project: PROJECT }))
+  const { rows } = await setup(t, { agents: [...base, placed] })
+  await until('the agent', () => rows().some((r) => r.title === 'LN'))
+  const row = rows().find((r) => r.title === 'LN')
+  assert.deepEqual([row.cwd, row.repo_root], [opened, physical], "its cwd as Paseo has it; the repository as the node names its working tree (#4492)")
 })
 
 test("cards: Paseo's requests go to the phone and its answers back; one answered in Paseo leaves the phone", async (t) => {

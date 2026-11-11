@@ -51,15 +51,20 @@ run with `ELECTRON_RUN_AS_NODE=1`. A plain `node` always runs the bridge without
 
   Read state is one-way, as with herdr (#2831): viewed in Paseo means Seen in Persona; views in Persona are tracked by hub and not written back to Paseo.
 
-- **Spaces and slots** (#2784, #2802): two levels, matching Paseo's sidebar.
+- **Spaces and workspaces** (#2784, #2802, #4493): the space is Paseo's project; the workspace names where in it an Agent is.
   - **A space is a Paseo project**: a repository's main checkout and its worktrees form one group in the App, named after the project.
     The space ID is Paseo's project-record ID: the `projectKey` field in the location information Paseo gives the Agent contains this ID (not the project's own key).
   - **Separate worktree project records are merged into the main repository**: when only a worktree directory is given to Paseo, it creates a separate project record for it
     (named after the worktree directory). These records are grouped with the main repository's project by its path (`checkout.mainRepoRoot`, compared after resolving symlinks).
     If Persona does not yet know the main repository's project (it has no Agents), the record forms its own group, named after the main repository directory.
-  - **A slot is a Paseo workspace**: a worktree, or a task in the same directory. Its name is the workspace title; if absent, the branch name; if that is absent too, the directory name.
-  - Agents without project information from Paseo keep the existing behavior: their workspace is their space, with no slot.
-- **Repository** (#2840): Agents in Git repositories carry `repo_root` (the main repository directory for a worktree, or the checkout itself for a main checkout). "By repository" on all three clients uses it to group
+  - **A Paseo workspace is the Agent's place label, not a slot**: a workspace is a worktree, or a task in the same directory. Its name goes in `slot_name`:
+    the workspace title; if absent, the branch name; if that is absent too, the directory name. The Apps show it beside the Agent ("project › workspace").
+    There is no `slot_id`: a slot is one tab, and the Apps draw the Agents that share one as that tab's panes: one row for all of them, each named
+    by its Agent rather than its title, and one that stopped running shown as replaced by another there. A workspace's Agents are separate conversations,
+    as they are separate tabs in Paseo, so each is a row of its own under the project.
+  - Agents without project information from Paseo keep the existing behavior: their workspace is their space, with no workspace name.
+- **Repository** (#2840): Agents in Git repositories carry `repo_root` (the main repository directory for a worktree, or the checkout itself for a main checkout), as its physical
+  directory (symbolic links resolved, #4492), the way node names a session's working tree. "By repository" on all three clients uses it to group
   Paseo worktrees under the main repository. Paseo worktrees live at `~/.paseo/worktrees/<project hash>/<name>`; the path alone does not identify the repository.
 - **Streaming**: while the phone is viewing a session, the bridge subscribes to that Agent's timeline and shows text as it is written. Unviewed sessions have no bridge subscription. If a session changes Agents (the original closes and another resumes it), the bridge subscribes to the new one. Non-Claude sessions use the new history to make the phone refetch the whole page.
 

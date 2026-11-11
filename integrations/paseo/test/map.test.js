@@ -75,7 +75,7 @@ test('a row: its space, the agent the apps know, model, modes and transcript', (
   const row = agentRow(a, { roots, project: { projectKey: 'prj', projectName: 'proj', workspaceName: '登录修复' } })
   assert.deepEqual(row, {
     session_id: CLAUDE_SID, title: '修登录', cwd: '/w/proj', status: 'idle', updated_at: '2026-11-04T10:00:00.000Z',
-    rev: Date.parse('2026-11-04T10:00:00.000Z'), space_id: 'prj', space_name: 'proj', slot_id: 'wks_9', slot_name: '登录修复',
+    rev: Date.parse('2026-11-04T10:00:00.000Z'), space_id: 'prj', space_name: 'proj', slot_name: '登录修复',
     agent: 'claude', launcher: 'my-claude',
     model: 'claude-x[1m]', permission_mode: 'acceptEdits', effort: 'max', transcript: CLAUDE_SID,
   })
@@ -100,7 +100,7 @@ test("a Codex row: Paseo's full-access is Persona's bypassPermissions, the other
   assert.equal(paseoMode('acp', 'bypassPermissions'), undefined)
 })
 
-test("spaces: a project's checkout and its worktrees are one space, Paseo's workspaces its slots", () => {
+test("spaces: a project's checkout and its worktrees are one space; a workspace names where an agent is, and is no slot", () => {
   // The placement's projectKey is Paseo's project record id.
   const at = (dir, o = {}) => ({ cwd: dir, isGit: true, currentBranch: o.branch ?? null, remoteUrl: null, worktreeRoot: dir,
     isPaseoOwnedWorktree: o.paseo ?? false, mainRepoRoot: o.main ?? null })
@@ -135,10 +135,13 @@ test("spaces: a project's checkout and its worktrees are one space, Paseo's work
     { roots, project, spaceId: s.idOf(project), spaceName: s.names.get(s.idOf(project)) })
   const rows = [row('wks_main', main), row('wks_wt', wt), row('wks_stray', stray)]
   assert.deepEqual(rows.map((r) => [r.space_id, r.space_name, r.slot_id, r.slot_name]), [
-    ['prj_app', 'app', 'wks_main', '主线'], ['prj_app', 'app', 'wks_wt', '修登录'], ['prj_app', 'app', 'wks_stray', 'fix-login'],
-  ])
+    ['prj_app', 'app', undefined, '主线'], ['prj_app', 'app', undefined, '修登录'], ['prj_app', 'app', undefined, 'fix-login'],
+  ], "no slot id: the apps draw the agents of one slot as one tab's panes (#4493)")
   assert.deepEqual(rows.map((r) => r.repo_root), ['/w/app', '/w/app', '/w/app'], "按仓库: the repository's main checkout (#2840)")
   assert.equal(row('wks_notes', folder).repo_root, undefined, 'not a git repository: the path says enough')
+  const physical = agentRow(agentSnapshot({ provider: 'grok', cwd: main.checkout.cwd, workspaceId: 'wks_main' }),
+    { roots, project: main, canon: (path) => `/data${path}` })
+  assert.equal(physical.repo_root, '/data/w/app', 'by its physical directory, as the bridge resolves it (#4492)')
   const bare = agentRow(agentSnapshot({ provider: 'grok', cwd: '/w/x', workspaceId: 'wks_x' }), { roots })
   assert.deepEqual([bare.space_id, bare.space_name, bare.slot_id], ['wks_x', 'x', undefined], 'no placement: its workspace, as before')
 })

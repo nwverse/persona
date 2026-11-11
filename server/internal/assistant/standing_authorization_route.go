@@ -288,7 +288,7 @@ func standingQuestionHasNoOptions(ix proto.Interaction, question string) bool {
 }
 
 // Quoted paths stay whole: unsupported quoting, shell expansion and ambiguous paths remain manual.
-var standingPathToken = lazyre.New("\"[^\"]*\"|'[^']*'|`[^`]*`|[^\\s\"'`()<>;,!?。；，！？]+")
+var standingPathToken = lazyre.New("\"[^\"]*\"|'[^']*'|`[^`]*`|[^\\s\"'`()<>;,!?。；，！？]+") // i18n-ignore: punctuation separates paths in incoming text
 
 func standingCardPaths(ix proto.Interaction) ([]string, bool) {
 	texts := []string{ix.Plan, ix.Summary, ix.Reason}

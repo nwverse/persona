@@ -376,7 +376,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
       const a = agents.get(agentId)
       const spaceId = a && s.idOf(a.project)
       const row = a && agentRow(a.agent,
-        { project: a.project, roots, labels, lastText: lastTexts.get(agentId), spaceId, spaceName: s.names.get(spaceId) })
+        { project: a.project, roots, labels, lastText: lastTexts.get(agentId), spaceId, spaceName: s.names.get(spaceId), canon })
       if (row && row.session_id === sid) rows.push(row)
     }
     return rt.recent(rows, { days: 3650, max: LIST_MAX, pinned: (r) => r.status === 'working' || r.status === 'blocked' })
@@ -561,17 +561,20 @@ export function createPaseoBridge(deps = {}, options = {}) {
     const a = agents.get(agent.id)
     const s = spaces()
     const spaceId = s.idOf(a?.project)
-    return agentRow(agent, { project: a?.project, roots, labels, lastText: lastTexts.get(agent.id), spaceId, spaceName: s.names.get(spaceId) })
+    return agentRow(agent, { project: a?.project, roots, labels, lastText: lastTexts.get(agent.id), spaceId, spaceName: s.names.get(spaceId), canon })
   }
 
-  /** A path as compared: symbolic links resolved (a home under another mount), else as written. */
+  /**
+   * A path as compared: symbolic links resolved (a home under another mount), else as written. One that cannot be
+   * resolved now (a volume away for a moment) is asked again the next time, not kept as written.
+   */
   function canon(p) {
     let c = canonical.get(p)
     if (c === undefined) {
       try {
         c = realpathSync(p)
       } catch {
-        c = resolve(p)
+        return resolve(p)
       }
       if (canonical.size > 1000) canonical.clear()
       canonical.set(p, c)
@@ -609,7 +612,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
   }
 
   /**
-   * Where a session still being created is listed: its workspace's project and slot; a new workspace, the project of
+   * Where a session still being created is listed: its workspace's project and name; a new workspace, the project of
    * an agent at the same directory; else the folder's own space.
    */
   function placeOf(workspaceId, cwd) {
@@ -620,7 +623,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
     const space = s.idOf(a?.project)
     if (!space) return { space_id: cwd, space_name: basename(cwd) }
     const place = { space_id: space, space_name: s.names.get(space) ?? a.project.projectName }
-    return workspaceId ? { ...place, slot_id: workspaceId, slot_name: slotNameOf(a.project, cwd) } : place
+    return workspaceId ? { ...place, slot_name: slotNameOf(a.project, cwd) } : place
   }
 
   /**

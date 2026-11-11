@@ -165,6 +165,11 @@ with the same parsing and the same look as Claude sessions in herdr; the transcr
 on watch it receives `transcript: true` and only pushes streaming text (the SDK automatically drops `append` for such sessions). Sessions whose transcript hasn't been written yet get content from the runtime as usual,
 and node switches over automatically once the file appears. A daemon can't do this (it would read other sessions on the machine).
 
+Its `model` stays the runtime's word on such a row: it decides the context window when it names a 1M variant (`…[1m]`, #4496). Claude Code writes the id without the
+suffix into the transcript, and a gateway writes an id of its own, so the transcript alone reads as 200K, or as no window. A window the transcript records itself keeps
+the transcript's word, and so does a session answering as another model: after a refusal's fallback, or when the reply came from a Claude model that is not the one the
+runtime names.
+
 ## Sub-Agents and background tasks (optional)
 
 When an Agent hands work off and ends the turn (background sub-Agents, workflows, commands running in the background), the session is "done" after the turn while the work isn't. The runtime reports them on the session row,
