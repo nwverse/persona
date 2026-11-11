@@ -36,9 +36,14 @@ func contextWindowOf(model string, recorded, used int) int {
 	return 0
 }
 
-// setContext fills a session's context fields from its transcript meta; both stay zero (and so off the wire)
-// while the transcript has no reply yet.
+// setContext copies cached title provenance and cumulative output alongside the context fields.
+// The context fields stay zero (and so off the wire) while the transcript has no reply yet.
 func setContext(s *proto.Session, m quickMeta) {
+	s.OutputTokens = m.outputTokens
+	s.TitleManual = s.TitleManual || m.titleManual
+	if m.title != "" && s.Title == m.title {
+		s.TitleSource = proto.ParseTitleSource(m.titleSource)
+	}
 	if m.contextTokens <= 0 {
 		return
 	}
