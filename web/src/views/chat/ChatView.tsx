@@ -19,6 +19,7 @@ import { useRuntimeSession } from "../../lib/runtime-session";
 import { ArchivedNotice, SessionDetailNotice } from "../../ui/SessionDetailNotice";
 import { REVIEW_FEATURE } from "../../lib/session-review";
 import { getSession, getState, hubHas, listenSession, refresh, refreshTodos, saveMutes, useStore, viewSession } from "../../lib/store";
+import { foldRows } from "../../lib/folded-rows";
 import { PREVIEW_FEATURE } from "../../lib/preview";
 import { agentsWorking, buildTaskIndex, stableSubagents, STOP_LOOP_MESSAGE, subagentCall, subagentCardKey, terminalCalls, type TaskIndex } from "../../lib/tasks";
 import { stabilizeLines, stableValue } from "../../lib/stable-lines";
@@ -250,7 +251,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const machineName = useStore((s) => machineWithHub(mid, s.machines));
   // only the tab's own rows (the same objects, the same array): a push for another agent on the machine leaves the chat be
   const panes = useStore((s) => (session && !assistant ? tabSessions(s.sessions[mid] ?? [], session) : NO_PANES));
-  const siblings = useStore((s) => (session?.space_id ? (s.sessions[mid] ?? []).filter((x) => x.space_id === session.space_id && stateOf(x) !== "offline") : []));
+  // the space's other agents, its child sessions folded into their parents (#5120: a child is never one of them)
+  const siblings = useStore((s) => (session?.space_id ? foldRows(s.sessions[mid] ?? []).filter((x) => x.space_id === session.space_id && stateOf(x) !== "offline") : []));
   // its own requests and those of the child sessions folded under it (#5120): a child's are answered here, in the order
   // they came, each saying which child asks
   const ownCard = (ix: Interaction) => ix.machine_id === mid && (ix.session_id === sid || ix.folded_under === sid);
