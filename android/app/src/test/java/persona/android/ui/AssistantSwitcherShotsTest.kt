@@ -262,6 +262,8 @@ class AssistantSwitcherShotsTest {
         scenario.close()
     }
 
+    // Taller than the class's screen: the drawer's Health row (#4329) left the conversations below 900dp.
+    @Config(qualifiers = "zh-w400dp-h1000dp-xhdpi")
     @Test fun oneInstalledAssistantIsPixelIdenticalToTheProductSidebarWithoutARoster() {
         var style by mutableStateOf(AppStyle.Glass)
         var dark by mutableStateOf(false)

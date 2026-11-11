@@ -152,7 +152,8 @@ import Testing
             let before = ChatLines(openWork: []).build(ChatStore.rebuild(items, settled: nil).blocks, live: nil)
             #expect(folded(off) == nil)
             #expect(off.map(\.id) == before.map(\.id))
-            #expect(!off.contains(where: \.hidesPrompt))
+            let hides = off.contains(where: \.hidesPrompt)
+            #expect(!hides)
         }
     }
 

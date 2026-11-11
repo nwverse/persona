@@ -519,6 +519,9 @@ func (e *Engine) apply(kind, id string, u Update) (string, error) {
 		e.index(KindChat, c.ID, c.Name, c.Tagging, c.OneLine, c.LastAt)
 		return c.ID, nil
 	case KindPerson:
+		if u.Status != "" && u.Status != "active" && u.Status != "ignored" && u.Status != "self" {
+			return "", fmt.Errorf("unknown person status %q", u.Status)
+		}
 		p, ok := e.Store.Person(id)
 		if !ok {
 			return "", ErrNotFound
@@ -542,6 +545,9 @@ func (e *Engine) apply(kind, id string, u Update) (string, error) {
 			protectUpdate(u, &p.Tagging)
 			if u.Note != "" {
 				p.Note = oneLine(u.Note)
+			}
+			if u.Status != "" {
+				p.Status = u.Status
 			}
 			p.Projects = addUnique(p.Projects, linked...)
 			p.Chats = removeStrings(p.Chats, u.RemoveChats)
@@ -700,7 +706,7 @@ func (e *Engine) entries(projects, chats, people []string) []Entry {
 		}
 	}
 	for _, id := range people {
-		if p, ok := e.Store.Person(id); ok {
+		if p, ok := e.Store.Person(id); ok && p.Status != "ignored" && p.Status != "self" {
 			ps = append(ps, Entry{Kind: KindPerson, ID: p.ID, Name: p.Name, OneLine: p.Note, Importance: p.Importance,
 				Relevance: p.Relevance, Tags: p.Tags, Updated: p.LastSeen})
 		}

@@ -786,6 +786,18 @@ session-state projection before publishing runtime rows so the original assistan
 survive snapshots and reconnects. The hub uses that directory to classify assistant history. Preserve the runtime's
 status, model, permission choices and capabilities while restoring owned metadata.
 
+## A hook's allow is not an answer for every dialog Claude shows (2026-11-10, #3752, 2.1.322)
+
+A phone's Always Allow closed a permission card while the terminal kept asking: Claude Code runs the PermissionRequest hooks for
+its own safety checks ("Dangerous rm operation …", asked in bypass mode too, with a two-minute countdown) and ignores an allow for
+them, plain or with `updatedPermissions`; a deny it takes. herdr kept saying working, so no screen card came, and every message was
+refused as `dialog_open` with nothing on the phone to answer.
+
+- Don't take a hook's return for the dialog's end: read the pane after an allow (`node/allowwatch.go`) and let what is on screen
+  decide the state.
+- Measure a hook's effect on a real pty with a throwaway `--settings` hook and an empty config directory, answering both ways: the
+  same check that ignored allow honoured deny.
+
 ## A headless Claude's queue is on its stdout, not in its transcript (#4342)
 
 `claude -p --input-format stream-json` writes `queue-operation enqueue` with no content for a message that waits, so a transcript reader

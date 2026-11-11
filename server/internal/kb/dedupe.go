@@ -153,7 +153,11 @@ func (e *Engine) DedupeProjects(ctx context.Context, max int) int {
 	verdicts := e.Store.dedupeVerdicts()
 	asked, merged := 0, 0
 	gone := map[string]bool{} // merged away this run: their other pairs are stale
-	for _, c := range dedupeCandidates(e.Store.Projects()) {
+	projects := e.Store.Projects()
+	for _, p := range projects {
+		p.People = e.externalPeople(p.People)
+	}
+	for _, c := range dedupeCandidates(projects) {
 		if asked >= max || ctx.Err() != nil {
 			break
 		}
