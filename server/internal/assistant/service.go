@@ -146,7 +146,8 @@ type Service struct {
 	questions        questions    // tools.go (ask_user)
 	// deadlineSweeping: a sweep of the decisions past their deadline is running (decision_deadline.go).
 	deadlineSweeping atomic.Bool
-	askTodos         askTodoBook // ask_todo.go: the questions nobody answered, now to-dos
+	askTodos         askTodoBook  // ask_todo.go: the questions nobody answered, now to-dos
+	askLaters        askLaterBook // ask_later.go: the questions asked without waiting, still out
 	// minutesMu is held while confirmed action items of meeting minutes become to-dos (kb_minutes.go): one
 	// confirmation at a time reads and records what the others made.
 	minutesMu  sync.Mutex
@@ -608,6 +609,7 @@ func (s *Service) UserSpoke(ctx context.Context, r SessionRef) {
 	s.meetingTurnUserSpoke(r.MachineID, r.SessionID)
 	s.releasePushes(ctx, r.SessionID) // the user speaks: its turns are pushed as ever (supervise_digest.go)
 	s.withdrawAskUser(r.SessionID)    // a question it waits on is taken back: the user's words are not left behind its turn
+	s.askLaterSpoke(ctx, r.SessionID) // one asked without waiting stays up; that they wrote is kept (ask_later.go)
 	s.unarchiveOnSend(r.MachineID, r.SessionID)
 	s.userSpoke(r.SessionID)
 	if s.reporterStopped(ctx, r.SessionID) { // talked to again: its tasks are told to it again (#3308)

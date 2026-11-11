@@ -12,7 +12,6 @@ import { createContext, lazy, Suspense, useContext, useMemo, useState } from "re
 import { assistantView, cardText } from "../lib/assistant-view";
 import { blockKey, blockOf, cardKnown, checkCard, openTarget, type OpenTarget } from "../lib/assistant-blocks";
 import { hasHtml, HTML_BRIDGE_FEATURE, WEB_HTML_RUNTIME_VERIFIED } from "../lib/assistant-html";
-import { cardHeight } from "../lib/html-runtime/limits";
 import { conversationCards, draftKey, submitAction, updateDraft, useCards, type CardDraft } from "../lib/assistant-views";
 import type { AssistantView, ViewAction } from "../lib/extension-wire";
 import { fieldValues, numberProblem, readView, type UIAction, type UIItem, type UIView } from "../lib/extension-ui";
@@ -118,14 +117,10 @@ function HtmlFallback({ text, title }: { text: string; title?: string }) {
   );
 }
 
-/** One html component of a card that runs them: a component without a key gets no bridge and shows the words. */
+/** One html component of a card that runs them: nothing while the card's code loads (the first card only), its words for
+ *  a component without a key (no bridge). */
 function HtmlItem(p: { item: UIItem; conversation: string; cardKey: string; version: number; page: string; fallback: string }) {
-  if (!p.item.key) return <HtmlFallback text={p.fallback} title={p.item.title} />;
-  return (
-    <Suspense fallback={<div className="card-ui rounded-card bg-surface shadow-card" style={{ height: cardHeight((p.item as { height?: unknown }).height) + 30 }} />}>
-      <HtmlCard {...p} />
-    </Suspense>
-  );
+  return p.item.key ? <Suspense fallback={null}><HtmlCard {...p} /></Suspense> : <HtmlFallback text={p.fallback} title={p.item.title} />;
 }
 
 // ── the card ──

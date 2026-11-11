@@ -2954,6 +2954,7 @@ Deploys are frequent (hub restarts, node binary swaps). Questions / plans / perm
 - **hub**: `resumable` interactions aren't withdrawn when the node connection drops; they're kept for 3 minutes (`resumeGrace`) for the hook to reclaim. An `interaction.create` with the same id
   reattaches to the original card (no repeat push; the App dedups by id), and if it was answered on the phone in the meantime, the returning hook gets the answer straight from the database. At startup, pending `resumable` interactions in the database
   are reloaded (also waiting 3 minutes), and the rest are marked cancelled. Old nodes don't send `resumable`; behavior is unchanged.
+  The assistant's `ask_user` raised with `wait: false` is `resumable` too (#4928): no hook waits on it, the manager's own record of the question claims the card back after a restart (`docs/assistant/assistant.md`, "Asking without holding the turn").
 - Measured locally (fake hub + sandboxed node + real `personad hook`): killing the node during a question and starting a new node 2 seconds later, the hook got the phone's answer after 3.1 seconds, and the hub saw only one id.
 
 ### When the manager is away (resident nodes)

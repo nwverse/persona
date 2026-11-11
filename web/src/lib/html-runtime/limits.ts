@@ -44,10 +44,3 @@ export const RUNNING_NARROW = 2;
 export const RUNNING_WIDE = 4;
 /** Off screen this long and the card is torn down; back on screen, it starts again from the beginning. */
 export const HIDDEN_GRACE_MS = 1000;
-
-/** The component's height (the schema's bounds and default). */
-export const HEIGHT_MIN = 160;
-export const HEIGHT_MAX = 640;
-export const HEIGHT_DEFAULT = 320;
-
-export const cardHeight = (h: unknown) => (typeof h === "number" && Number.isFinite(h) ? Math.min(HEIGHT_MAX, Math.max(HEIGHT_MIN, Math.round(h))) : HEIGHT_DEFAULT);
