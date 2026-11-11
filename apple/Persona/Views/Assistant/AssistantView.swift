@@ -288,12 +288,16 @@ struct AssistantView: View {
             // (`DrawerProbe`, with `-showDrawerProbe YES`).
             .navigationDestination(isPresented: $showAvatars) { PersonaGallery() }
             .task {
+                let d = UserDefaults.standard
+                guard d.string(forKey: "openAssistantPage") != nil || d.string(forKey: "openShellPage") != nil else { return }
                 // With `-openAssistantManager <id>` the page first switches to that assistant, which closes pushed pages
-                // (`assistantSwitches`): open them once it is current.
-                if let id = UserDefaults.standard.string(forKey: "openAssistantManager") {
+                // (`assistantSwitches`), and a launch with no conversation kept picks the main one once the hub answers,
+                // which goes back to the root too: open them after both.
+                if let id = d.string(forKey: "openAssistantManager") {
                     for _ in 0..<40 where model.currentAssistant?.id != id { try? await Task.sleep(for: .milliseconds(250)) }
-                    try? await Task.sleep(for: .milliseconds(300)) // after the switch's own going back
                 }
+                for _ in 0..<20 where model.assistantCurrent == nil { try? await Task.sleep(for: .milliseconds(250)) }
+                try? await Task.sleep(for: .milliseconds(300)) // after their own going back
                 switch UserDefaults.standard.string(forKey: "openAssistantPage") {
                 case "avatars": showAvatars = true
                 case "knowledge": showKnowledge = true
