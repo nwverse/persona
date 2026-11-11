@@ -155,7 +155,7 @@ func TestWorktreePrepareNamesTheRepositoryOfALinkedCheckout(t *testing.T) {
 	linked := filepath.Join(w.home, "elsewhere", "feature-checkout")
 	runPullGit(t, w.repo, "worktree", "add", "-b", "feature", linked)
 	w.f.reply("session.snapshot", snapshot(
-		[]any{map[string]any{"workspace_id": "w1", "label": "linked", "number": 1, "cwd": linked}}, nil, nil,
+		[]any{map[string]any{"workspace_id": "w1", "label": "linked", "number": 1}}, nil, nil,
 		[]any{map[string]any{"pane_id": "w1:p1", "tab_id": "w1:t1", "workspace_id": "w1", "cwd": linked}},
 	))
 	listSessions(t, w.n)
@@ -177,7 +177,8 @@ func TestWorktreePrepareRefusals(t *testing.T) {
 		t.Error("prepared no workspace")
 	}
 	plain := mkdir(t, filepath.Join(w.home, "notes"))
-	w.f.reply("session.snapshot", snapshot([]any{map[string]any{"workspace_id": "w1", "label": "notes", "number": 1, "cwd": plain}}, nil, nil, nil))
+	w.f.reply("session.snapshot", snapshot([]any{map[string]any{"workspace_id": "w1", "label": "notes", "number": 1}}, nil, nil,
+		[]any{map[string]any{"workspace_id": "w1", "pane_id": "w1:p1", "cwd": plain}}))
 	listSessions(t, w.n)
 	if _, err := request(t, w.n, "worktree.prepare", map[string]any{"workspace_id": "w1"}); err == nil || !strings.Contains(err.Error(), "Git") {
 		t.Errorf("a directory that is not a repository: %v", err)
