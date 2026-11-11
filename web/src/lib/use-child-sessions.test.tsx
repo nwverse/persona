@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 // The rows a parent's chat draws its children's cards from (#5120): the store's on a hub that pushes every row, the
-// hub's `parent_session_id` list (complete rows, into the store) on a paging one that folds, none on one that does not.
+// hub's `parent_session_id` list (summaries, held for the chat's cards, never put among the store's complete rows) on a
+// paging one that folds, none on one that does not.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,8 +9,9 @@ import { setToken } from "./api";
 import { SESSIONS_HIERARCHY_FEATURE } from "./child-sessions";
 import { SESSIONS_LIST_FEATURE } from "./session-list";
 import { getSession, getState, reset, upsertSession } from "./store";
-import type { Session } from "./types";
-import { sameRows, useChildSessions, type ChildSessions } from "./use-child-sessions";
+import type { Interaction, Session } from "./types";
+import { InteractionCard } from "../views/chat/Interactions";
+import { heldChild, sameRows, useChildSessions, type ChildSessions } from "./use-child-sessions";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -48,6 +50,8 @@ describe("useChildSessions on a hub that pushes every row", () => {
     act(() => root.render(<Probe />));
     expect(last().rows.map((s) => s.session_id)).toEqual(["a", "b"]);
     expect(last().loaded).toBe(true);
+    expect(heldChild("m", "a")).toBe(last().rows[0]);
+    expect(heldChild("m", "x")).toBeUndefined();
     const before = last().rows;
     const renders = seen.length;
     act(() => upsertSession(row("x", { title: "moved", folded_under: "q" })));
@@ -67,7 +71,7 @@ describe("useChildSessions on a hub that pushes every row", () => {
 });
 
 describe("useChildSessions on a paging hub", () => {
-  it("reads only this session's children, complete rows, while open; they go into the store", async () => {
+  it("reads only this session's children, as summaries, while open; the chat holds them until it closes", async () => {
     Object.assign(getState(), { loaded: true, features: [SESSIONS_LIST_FEATURE, SESSIONS_HIERARCHY_FEATURE] });
     const asked: string[] = [];
     vi.stubGlobal("fetch", vi.fn(async (url: string) => {
@@ -75,7 +79,7 @@ describe("useChildSessions on a paging hub", () => {
       asked.push(`${u.pathname}?${u.searchParams}`);
       const body = u.searchParams.get("counts") === "1"
         ? { total: 1, machine: {}, project: {}, group: {}, state: {}, revision: "r1" }
-        : { sessions: [row("kid", { folded_under: "p", effort: "high" })], remove: [], has_more: false, revision: "r1", total: 1 };
+        : { sessions: [row("kid", { folded_under: "p", effort: "high", waiting: false })], remove: [], has_more: false, revision: "r1", total: 1 };
       return new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } });
     }));
     act(() => root.render(<Probe />));
@@ -85,8 +89,20 @@ describe("useChildSessions on a paging hub", () => {
     const read = asked.find((a) => !a.includes("counts=1"))!;
     expect(read).toContain("parent_session_id=p");
     expect(read).toContain("machine_id=m");
-    expect(read).toContain("summary=0");
-    expect(getSession("m", "kid")?.effort).toBe("high");
+    expect(read).toContain("summary=1");
+    expect(heldChild("m", "kid")?.effort).toBe("high");
+    // the child's request card on the parent's page can be answered: its row is the one the chat holds
+    const ask = { id: "ix_kid", machine_id: "m", session_id: "kid", folded_under: "p", session_title: "kid", kind: "permission", tool_name: "Bash", tool_input: { command: "ls" } } as Interaction;
+    const cardHost = document.createElement("div");
+    const cardRoot = createRoot(cardHost);
+    act(() => cardRoot.render(<InteractionCard ix={ask} />));
+    expect(cardHost.querySelector("fieldset")?.disabled).toBe(false);
+    act(() => cardRoot.unmount());
+    // a summary is not a complete row: the store's complete rows never get it
+    expect(getSession("m", "kid")).toBeUndefined();
+    act(() => root.unmount());
+    expect(heldChild("m", "kid")).toBeUndefined();
+    root = createRoot(host);
   });
 
   it("a session whose row counts no children: nothing asked", async () => {

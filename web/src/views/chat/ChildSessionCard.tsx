@@ -2,7 +2,7 @@
 // AgentTaskCard): never a conversation of its own, and no link to one. The same TaskCard as a subagent call's: "Subagent",
 // its title and its status word; then what ran it, the model it runs on with its effort, and how long it took, or
 // "Running for …" each second while it runs. Its parent's transcript names no call for it: everything comes from the
-// child's own row, which the card reads itself (a child's update redraws only its card). The head opens the card in
+// child's own row (lib/use-child-sessions.ts), which the card reads itself (a child's update redraws only its card). The head opens the card in
 // place, remembered per card: what it was asked, its latest words (folded past four lines) and its last tool, read from
 // the child's transcript only while it is open (lib/child-detail.ts).
 import { memo, useEffect, useRef, useState } from "react";
@@ -14,6 +14,7 @@ import { stateOf } from "../../lib/format";
 import { effortTitle } from "../../lib/session-actions";
 import { getSession, useStore } from "../../lib/store";
 import { modelChipLabel } from "../../lib/tasks";
+import { useChildRow } from "../../lib/use-child-sessions";
 import { mcpServer, toolDisplayName, toolLabel } from "../../lib/turns";
 import type { Session } from "../../lib/types";
 import { tsMs, workDuration, type AgentStatus } from "../../lib/work-groups";
@@ -68,7 +69,10 @@ export function childMeta(s: Session, harness: boolean): { harness?: string; mod
 }
 
 export const ChildSessionCard = memo(function ChildSessionCard({ mid, sid, scope }: { mid: string; sid: string; scope: string }) {
-  const child = useStore(() => getSession(mid, sid));
+  // the row its parent's chat holds (a paging hub's is a list summary), else the store's
+  const held = useChildRow(mid, sid);
+  const stored = useStore(() => (held ? undefined : getSession(mid, sid)));
+  const child = held ?? stored;
   const { lineStyle } = useChatContext();
   const [open, setOpen] = useExpanded(childCardKey(scope, sid));
   if (!child) return null;

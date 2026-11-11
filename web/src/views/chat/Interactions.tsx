@@ -18,6 +18,7 @@ import { cardToolName, mcpServerLabel } from "../../lib/turns";
 import { isSecretHandoff, isSecretRun, optionDisplay, secretHandoffInput, secretRunInput } from "../../lib/tool-detail";
 import { RecommendedTag } from "../../ui/RecommendedTag";
 import { dropAnswered, getSession, useStore, type AnsweredCard as Answered } from "../../lib/store";
+import { useChildRow } from "../../lib/use-child-sessions";
 import { Button, Collapse, cx, EASE, Kbd, Menu, SECRET_INPUT, toast, useMenu } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { Markdown } from "../../ui/Markdown";
@@ -1169,7 +1170,10 @@ export function AnsweredCard({ card }: { card: Answered }) {
 }
 
 export function InteractionCard({ ix }: { ix: Interaction }) {
-  const canApprove = useStore(() => interactionCanAnswer(ix, getSession(ix.machine_id, ix.session_id)));
+  // a child session's card on its parent's page (#5120): its row is the one the parent's chat holds (a paging hub's
+  // summary, which the store's complete rows never have)
+  const child = useChildRow(ix.machine_id, ix.session_id);
+  const canApprove = useStore(() => interactionCanAnswer(ix, child ?? getSession(ix.machine_id, ix.session_id)));
   // an answer still on its way (the hub away, apiOp retrying) holds the card, also after leaving the chat and coming back
   const { pending, line } = usePendingLine(ix);
   const card = ix.kind === "question" && ix.tool_name === "persona_tool_loop" ? <ToolLoopCard key={ix.id} ix={ix} />
