@@ -612,6 +612,10 @@ func (s *Service) turnEnded(ctx context.Context, r SessionRef, meeting bool) {
 	// A usage limit marks the launcher there until it resets (launcher_health.go).
 	s.afterSettle(context.WithoutCancel(ctx), s.launcherLimitTurnSettled, r.MachineID, r.SessionID)
 	if !meeting {
+		// An assistant turn that failed is logged; a conversation conversation_new opened tells its parent (spawned.go).
+		s.afterSettle(context.WithoutCancel(ctx), s.assistantTurnSettled, r.MachineID, r.SessionID)
+	}
+	if !meeting {
 		s.titleAfterTurn(ctx, r.MachineID, r.SessionID)
 	}
 }
