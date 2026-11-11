@@ -22634,25 +22634,25 @@
         }
       }
     },
-    "Automatic upgrades are paused globally for this assistant.": {
+    "Auto-upgrade is paused because automatic extension updates are off for this assistant. Your setting is kept and applies again once they're turned back on.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Automatic upgrades are paused globally for this assistant."
+            "value": "Auto-upgrade is paused because automatic extension updates are off for this assistant. Your setting is kept and applies again once they're turned back on."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "このアシスタントでは自動アップグレードが全体で一時停止しています。"
+            "value": "このアシスタントで拡張機能の自動アップデートがオフのため、自動アップグレードは一時停止しています。設定は保持され、自動アップデートをオンに戻すと再び適用されます。"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "此助手的全局自动升级已暂停。"
+            "value": "这个助手已关闭自动升级扩展，此扩展的自动升级暂停。你的设置会保留，重新打开后恢复。"
           }
         }
       }
