@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { markModelChanges, replyModel, replyModelName } from "./model-change";
+import { bareModel, markModelChanges, modelIdentity, replyModel, replyModelName } from "./model-change";
 import { chatLines, type ChatLine } from "./turns";
 import type { Item } from "./types";
 
@@ -23,15 +23,68 @@ describe("replyModelName", () => {
     expect(replyModelName("claude-opus-5-5[1m]")).toBe("Opus 5.5 1M");
     expect(replyModelName("gpt-6.1-sol")).toBe("6.1 Sol"); // as the model lists name a raw GPT id
     expect(replyModelName("glm-5.1")).toBe("glm-5.1");
-    expect(replyModelName("vendor/some-model")).toBe("vendor/some-model");
+  });
+
+  it("reads through a gateway's, Bedrock's and Vertex's way of writing an id", () => {
+    expect(replyModelName("us.anthropic.claude-sonnet-4-5-20250929-v1:0")).toBe("Sonnet 4.5");
+    expect(replyModelName("claude-sonnet-4-5@20250929")).toBe("Sonnet 4.5");
+    expect(replyModelName("vendor/glm-5.1")).toBe("glm-5.1");
+    expect(replyModelName("openrouter/anthropic/claude-opus-5-5")).toBe("Opus 5.5");
+  });
+});
+
+describe("bareModel", () => {
+  it.each([
+    ["claude-sonnet-4-5", "claude-sonnet-4-5"],
+    ["claude-sonnet-4-5-20250929", "claude-sonnet-4-5"],
+    ["us.anthropic.claude-sonnet-4-5-20250929-v1:0", "claude-sonnet-4-5"],
+    ["eu.anthropic.claude-sonnet-4-5-20250929-v1:0", "claude-sonnet-4-5"],
+    ["global.anthropic.claude-sonnet-4-5-20250929-v1:0", "claude-sonnet-4-5"],
+    ["anthropic.claude-sonnet-4-5-20250929-v2:0", "claude-sonnet-4-5"],
+    ["claude-sonnet-4-5@20250929", "claude-sonnet-4-5"],
+    ["publishers/anthropic/models/claude-sonnet-4-5@20250929", "claude-sonnet-4-5"],
+    ["vendor/GLM-5.1", "GLM-5.1"],
+    ["claude-opus-5-5-20260101[1m]", "claude-opus-5-5[1m]"],
+    ["deepseek-v3", "deepseek-v3"], // a version in the name is the model's, not Bedrock's suffix
+    ["gpt-6.1-sol", "gpt-6.1-sol"],
+  ])("%s → %s", (id, bare) => expect(bareModel(id)).toBe(bare));
+});
+
+describe("modelIdentity", () => {
+  it("gives every spelling of one model the same canonical id, and another model another", () => {
+    const sonnet = ["claude-sonnet-4-5", "claude-sonnet-4-5-20250929", "us.anthropic.claude-sonnet-4-5-20250929-v1:0", "claude-sonnet-4-5@20250929", "CLAUDE-SONNET-4-5"];
+    expect(new Set(sonnet.map((id) => modelIdentity(id).canonical))).toEqual(new Set(["claude-sonnet-4-5"]));
+    expect(modelIdentity("claude-opus-5-5").canonical).not.toBe(modelIdentity("claude-sonnet-4-5").canonical);
+    expect(modelIdentity("claude-opus-5-5[1m]").canonical).not.toBe(modelIdentity("claude-opus-5-5").canonical); // modelShort names it "1M"
+  });
+
+  it("works each id out once, and keeps no more than 256 of them", () => {
+    const first = modelIdentity("memo-probe-0");
+    expect(modelIdentity("memo-probe-0")).toBe(first);
+    for (let i = 1; i <= 300; i++) modelIdentity(`memo-probe-${i}`);
+    expect(modelIdentity("memo-probe-300")).toBe(modelIdentity("memo-probe-300"));
+    expect(modelIdentity("memo-probe-0")).not.toBe(first); // the oldest went to make room
+    expect(modelIdentity("memo-probe-0")).toEqual(first);
   });
 });
 
 describe("replyModel", () => {
-  it("is the answer's model, else the latest step's that names one", () => {
+  it("is the model of the exchange's latest assistant item that names one", () => {
     const [withAnswer, steps] = chatLines([user(1, "a"), call(2, OPUS), result(3), said(4, SONNET), user(5, "b"), call(6, OPUS), result(7), call(8)]);
     expect(withAnswer.kind === "segment" && replyModel(withAnswer.seg)).toBe(SONNET);
     expect(steps.kind === "segment" && replyModel(steps.seg)).toBe(OPUS);
+  });
+
+  it("counts work done after the last words: a fallback's tool calls make the exchange that model's", () => {
+    const [line] = chatLines([user(1, "a"), said(2, OPUS, "Looking."), call(3, SONNET), result(4), call(5, SONNET), result(6)]);
+    expect(line.kind === "segment" && line.seg.answer?.model).toBe(OPUS); // the words on screen are still Opus's
+    expect(line.kind === "segment" && replyModel(line.seg)).toBe(SONNET);
+  });
+
+  it("orders blocks of one line by their index", () => {
+    const blocks: Item[] = [user(1, "a"), { ...call(2, OPUS), id: "t2#0" }, { ...call(2, SONNET), id: "t2#1", tool_use_id: "call2b" }];
+    const [line] = chatLines(blocks);
+    expect(line.kind === "segment" && replyModel(line.seg)).toBe(SONNET);
   });
 });
 
@@ -58,6 +111,23 @@ describe("model change divider placement", () => {
 
   it("treats a dated id and its alias as one model", () => {
     expect(marks(chatLines([user(1, "first"), said(2, OPUS), user(3, "second"), said(4, `${OPUS}-20260101`)]))).toEqual(["first", "second"]);
+  });
+
+  it("draws nothing between spellings of one model (alias, pinned, Bedrock, Vertex, a gateway's), and one at a real change", () => {
+    const spellings = ["claude-sonnet-4-5", SONNET, "us.anthropic.claude-sonnet-4-5-20250929-v1:0", "claude-sonnet-4-5@20250929", "anthropic/claude-sonnet-4-5"];
+    const items = spellings.flatMap((model, k) => [user(k * 2 + 1, `q${k}`), said(k * 2 + 2, model)]);
+    expect(marks(chatLines(items))).toEqual(["q0", "q1", "q2", "q3", "q4"]);
+    const changed = chatLines([...items, user(20, "q5"), said(21, "us.anthropic.claude-opus-5-5-v1:0")]);
+    expect(marks(changed).at(-1)).toBe("q5 [anthropic/claude-sonnet-4-5 → us.anthropic.claude-opus-5-5-v1:0]");
+    expect(marks(chatLines([user(1, "a"), said(2, "vendor/glm-5.1"), user(3, "b"), said(4, "glm-5.1"), user(5, "c"), said(6, "vendor/glm-5.2")])))
+      .toEqual(["a", "b", "c [glm-5.1 → vendor/glm-5.2]"]);
+    // the names keep the id's case, so only the canonical id says these are one model
+    expect(marks(chatLines([user(1, "a"), said(2, "GLM-5.1"), user(3, "b"), said(4, "glm-5.1")]))).toEqual(["a", "b"]);
+  });
+
+  it("marks an exchange by the model of its latest work, not its earlier words", () => {
+    const lines = chatLines([user(1, "first"), said(2, OPUS), user(3, "second"), said(4, OPUS, "Looking."), call(5, SONNET), result(6)]);
+    expect(marks(lines)).toEqual(["first", `second [${OPUS} → ${SONNET}]`]);
   });
 
   it("skips folded rounds: they are no visible reply", () => {
