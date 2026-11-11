@@ -20,8 +20,18 @@ data class BackgroundFolding(val open: Set<String> = emptySet(), val reveal: Str
         /** The message sources whose rounds fold (the web's `supervisionRound`, widened by #4314). */
         val kinds = setOf("conversation", "followup", "patrol")
 
-        /** The source of a round's first input when that round folds, else null. */
-        fun sourceOf(item: Item): MessageSource? = persona.core.domain.sourceOf(item)?.takeIf { it.kind in kinds }
+        /**
+         * The source of a round's first input when that round folds, else null. A follow-up folds only as a scheduled
+         * one: never a usage-limit continuation or a wake-up (they carry on the user's own exchange), and never one
+         * without a title (nothing to say which task ran).
+         */
+        fun sourceOf(item: Item): MessageSource? {
+            val source = persona.core.domain.sourceOf(item)?.takeIf { it.kind in kinds } ?: return null
+            if (source.kind != "followup") return source
+            val injected = persona.core.domain.injectedOf(item)
+            if (injected?.kind == "limit_continue" || injected?.state in setOf("limit_continue", "wake")) return null
+            return source.takeIf { !it.title.isNullOrBlank() }
+        }
 
         /** The id of the line that stands for the round [roundId] (its first input's id). */
         fun lineId(roundId: String): String = "bg-$roundId"

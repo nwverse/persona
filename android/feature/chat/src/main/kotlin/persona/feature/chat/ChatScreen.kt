@@ -219,12 +219,17 @@ private fun ChatPage(
             catch (_: Exception) { /* A failed read retains the last confirmed schedule list. */ }
         }
     }
-    // #4314 "Fold background rounds": the hub's switch (on until read, and on a hub without it) and the main
+    // #4314 "Fold background rounds": the hub's switch (until read, the value last read this run, else on; on for a hub without it) and the main
     // conversation's id. Only the main conversation folds; read again each time the page opens.
-    var foldSetting by remember(chrome.assistantManagement) { mutableStateOf(BackgroundFoldSetting()) }
+    var foldSetting by remember(chrome.assistantManagement, key) { mutableStateOf(BackgroundFoldSetting.lastKnown(key.sessionId)) }
     LaunchedEffect(chrome.assistantManagement, connection) {
         if (renderStyle != ChatRenderStyle.Assistant) return@LaunchedEffect
-        try { chrome.assistantManagement?.config()?.let { foldSetting = BackgroundFoldSetting(it.backgroundFolded, it.main) } }
+        try {
+            chrome.assistantManagement?.config()?.let {
+                foldSetting = BackgroundFoldSetting(it.backgroundFolded, it.main)
+                BackgroundFoldSetting.store(key.sessionId, foldSetting)
+            }
+        }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { /* Unread: the default (folded) stands, as on a hub without the setting. */ }
     }

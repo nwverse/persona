@@ -7,7 +7,18 @@ import androidx.compose.ui.res.stringResource
 import persona.core.domain.tasks.BackgroundRound
 
 /** The hub's "Fold background rounds" switch (#4314; on until read and on a hub without it) and the main conversation. */
-internal data class BackgroundFoldSetting(val on: Boolean = true, val main: String? = null)
+internal data class BackgroundFoldSetting(val on: Boolean = true, val main: String? = null) {
+    companion object {
+        /**
+         * The last value read this run, by conversation (in memory only): until the hub answers again the page draws
+         * with it, so a user who turned folding off does not see a round fold for a moment.
+         */
+        private val lastRead = java.util.concurrent.ConcurrentHashMap<String, BackgroundFoldSetting>()
+
+        fun lastKnown(conversation: String): BackgroundFoldSetting = lastRead[conversation] ?: BackgroundFoldSetting()
+        fun store(conversation: String, setting: BackgroundFoldSetting) { lastRead[conversation] = setting }
+    }
+}
 
 /**
  * A folded background round of the main conversation (#4314, docs/assistant/assistant.md "Background rounds"): one muted

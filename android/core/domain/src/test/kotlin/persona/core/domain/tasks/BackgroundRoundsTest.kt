@@ -58,6 +58,23 @@ class BackgroundRoundsTest {
         assertTrue("Folded, not moved into the background record", projection.background.none { it.id in setOf("u3", "a4", "u5", "a6") })
     }
 
+    @Test fun usageContinuationsWakeUpsAndUntitledFollowUpsAreNotFolded() {
+        val items = listOf(user(1, "My question"), reply(2, "Partial answer"),
+            user(3, "Continue after the usage limit", MessageSource("followup", title = "Usage limit"),
+                Injected("followup", "limit_continue", "Usage limit", line = "Continued")), reply(4, "The answer, continued"),
+            user(5, "Background task finished", MessageSource("followup", title = "Wake"),
+                Injected("followup", "wake", "Wake", line = "Woken")), reply(6, "The answer after the wake"),
+            user(7, "A follow-up without a title", MessageSource("followup")), reply(8, "The untitled answer"),
+            user(9, "Usage reset", injected = Injected("limit_continue", line = "Continued")), reply(10, "Continued again"))
+        val foreground = project(items).foreground
+        assertTrue(folds(foreground).isEmpty())
+        for (id in listOf("a4", "a6", "a8", "a10")) assertTrue(id, foreground.any { it.id == id })
+        // a titled scheduled follow-up still folds
+        val scheduled = listOf(user(1, "Remind me", MessageSource("followup", "main", "PR reminder"),
+            Injected("followup", "once", "PR reminder", line = "PR reminder")), reply(2, "Reminded"))
+        assertEquals(1, folds(project(scheduled).foreground).size)
+    }
+
     @Test fun aRoundThatAskedTheUserStaysShown() {
         val items = listOf(user(1, "Please check the build", MessageSource("conversation", "c2", "Release plan")),
             use(2, "mcp__persona__ask_user"), result(3, 2, "Yes"), reply(4, "Done"),
