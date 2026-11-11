@@ -299,6 +299,7 @@ export interface Contributes {
   voice?: NamedItem[];
   computer?: NamedItem[];
   browser?: NamedItem[];
+  iphone?: NamedItem[];
   quota?: QuotaItem[];
   providers?: ProviderItem[];
   api?: APIItem[];
@@ -318,6 +319,7 @@ export interface Contributes {
   tunnels?: TunnelItem[];
   error_reports?: ErrorReportsItem[];
   auth_relay?: AuthRelayItem[];
+  secret_providers?: SecretProviderItem[];
   messaging?: MessagingItem[];
   /** Extra keys are opaque JSON; declared properties keep their own types. */
   [key: string]: unknown;
@@ -490,6 +492,19 @@ export interface AuthRelayItem {
   hosts: string[];
   /** The pages' exact paths (a trailing / is ignored). */
   paths: string[];
+}
+
+/**
+ * Secret values it supplies for references of its schemes (op://vault/item/field): the manager calls secrets.describe
+ * and secrets.resolve when a setting holds such a reference or the user approves handing one to an Agent run. Needs
+ * the program to speak the protocol. A scheme another installed extension claims fails the install.
+ */
+export interface SecretProviderItem {
+  id: string;
+  /** Whose secrets these are, in a few words (1Password): the settings say From <name>. */
+  name: string;
+  /** The reference schemes it resolves, without :// (op). */
+  schemes: string[];
 }
 
 /**
@@ -1258,6 +1273,64 @@ export interface AuthRelayResult {
 }
 
 /**
+ * What a secret value is resolved for: kind extension (an extension's secret, id its id), launcher (a launcher's or
+ * model provider's key, id its name, machine the computer it goes to) or agent_run (handed to one Agent run after the
+ * user approved it on the phone, id the variable's name, machine and session the Agent's).
+ */
+export interface SecretPurpose {
+  kind: string;
+  id: string;
+  machine?: string;
+  session?: string;
+}
+
+/**
+ * secrets.describe's parameters: a reference of one of the contribution's schemes.
+ */
+export interface SecretsDescribeParams {
+  contribution: string;
+  reference: string;
+}
+
+/**
+ * What secrets.describe answers: words for people (the item and field), never a value.
+ */
+export interface SecretsDescribeResult {
+  title: string;
+  detail?: string;
+}
+
+/**
+ * secrets.resolve's parameters: the reference and what it is resolved for. Only the manager calls it.
+ */
+export interface SecretsResolveParams {
+  contribution: string;
+  reference: string;
+  purpose: SecretPurpose;
+}
+
+/**
+ * What secrets.resolve answers: the value, at most 16 KB. Errors: not_found, not_signed_in, rate_limited
+ * (data.retry_after), refused.
+ */
+export interface SecretsResolveResult {
+  value: string;
+}
+
+/**
+ * secrets.used (an event to the provider, no answer): a reference it resolved was used, for the usage record its own
+ * page shows. Never the value.
+ */
+export interface SecretsUsedEvent {
+  contribution: string;
+  reference: string;
+  purpose: SecretPurpose;
+  at: string;
+  /** settings (a reference saved in Settings), rule (an Always rule) or the approving device's id. */
+  approved_by?: string;
+}
+
+/**
  * extension_notification in an extension's alert push: whose it is, the page a tap opens (ui with state) and its
  * buttons (category ext.<extension>.<hash of the action ids>, registered by the app as it meets it).
  */
@@ -1341,8 +1414,8 @@ export const PLATFORMS = ["ios", "mac", "android", "web"] as const;
  * money; 4 for those after settings; 6 for those after file, and a metric's, a tile's, a row action's). Each app
  * draws its own icon for the meaning; an unknown one draws as the default (extension; plugin is its old name).
  */
-export type NavIcon = "plugin" | "chart" | "gauge" | "list" | "bell" | "doc" | "calendar" | "money" | "extension" | "person" | "chat" | "mail" | "link" | "folder" | "star" | "check" | "warning" | "clock" | "tag" | "search" | "settings" | "branch" | "commit" | "code" | "pull_request" | "merge" | "file" | "home" | "sofa" | "light" | "power" | "fan" | "thermometer" | "droplet" | "lock" | "unlock" | "door" | "window" | "camera" | "video" | "play" | "pause" | "stop" | "speaker" | "tv" | "plug" | "battery" | "bolt" | "sun" | "moon" | "cloud" | "rain" | "snow" | "wind" | "leaf" | "car" | "location" | "robot" | "wifi" | "shield" | "trend_up" | "trend_down" | "wallet" | "bank" | "heart" | "plus" | "minus" | "trash" | "edit" | "refresh" | "share" | "info" | (string & {});
-export const NAV_ICONS = ["plugin", "chart", "gauge", "list", "bell", "doc", "calendar", "money", "extension", "person", "chat", "mail", "link", "folder", "star", "check", "warning", "clock", "tag", "search", "settings", "branch", "commit", "code", "pull_request", "merge", "file", "home", "sofa", "light", "power", "fan", "thermometer", "droplet", "lock", "unlock", "door", "window", "camera", "video", "play", "pause", "stop", "speaker", "tv", "plug", "battery", "bolt", "sun", "moon", "cloud", "rain", "snow", "wind", "leaf", "car", "location", "robot", "wifi", "shield", "trend_up", "trend_down", "wallet", "bank", "heart", "plus", "minus", "trash", "edit", "refresh", "share", "info"] as const;
+export type NavIcon = "plugin" | "chart" | "gauge" | "list" | "bell" | "doc" | "calendar" | "money" | "extension" | "person" | "chat" | "mail" | "link" | "folder" | "star" | "check" | "warning" | "clock" | "tag" | "search" | "settings" | "branch" | "commit" | "code" | "pull_request" | "merge" | "file" | "home" | "sofa" | "light" | "power" | "fan" | "thermometer" | "droplet" | "lock" | "unlock" | "door" | "window" | "camera" | "video" | "play" | "pause" | "stop" | "speaker" | "music" | "tv" | "plug" | "battery" | "bolt" | "sun" | "moon" | "cloud" | "rain" | "snow" | "wind" | "leaf" | "car" | "location" | "robot" | "wifi" | "shield" | "trend_up" | "trend_down" | "wallet" | "bank" | "heart" | "plus" | "minus" | "trash" | "edit" | "refresh" | "share" | "info" | (string & {});
+export const NAV_ICONS = ["plugin", "chart", "gauge", "list", "bell", "doc", "calendar", "money", "extension", "person", "chat", "mail", "link", "folder", "star", "check", "warning", "clock", "tag", "search", "settings", "branch", "commit", "code", "pull_request", "merge", "file", "home", "sofa", "light", "power", "fan", "thermometer", "droplet", "lock", "unlock", "door", "window", "camera", "video", "play", "pause", "stop", "speaker", "music", "tv", "plug", "battery", "bolt", "sun", "moon", "cloud", "rain", "snow", "wind", "leaf", "car", "location", "robot", "wifi", "shield", "trend_up", "trend_down", "wallet", "bank", "heart", "plus", "minus", "trash", "edit", "refresh", "share", "info"] as const;
 
 export interface View {
   title?: string;
@@ -3287,6 +3360,10 @@ export interface ConnectorStatus {
   error?: string;
   /** How to fix it, a step a sentence. */
   guide?: string[];
+  /** Optional HTTPS page the App may open for the fix; never a secret. */
+  guide_url?: string;
+  /** Permissions the connector can identify as absent. */
+  missing_scopes?: string[];
   last_sync?: string;
   last_event?: string;
 }
@@ -4103,6 +4180,10 @@ export interface ConnectorPrompt {
   /** Seconds between asks of a device_code or qr step. */
   interval?: number;
   qr?: ConnectorQRCode;
+  /** An absolute URL where this step's action is completed; empty means no link. */
+  link?: string;
+  /** The label for the optional link. */
+  link_text?: string;
   hint?: string;
   error?: string;
   done?: boolean;
@@ -4856,32 +4937,44 @@ export interface TodoDecisionEvent {
  * event.leader.changed: a leader conversation was made (a side conversation added to assistant.leaders), its title
  * changed, it was filed under another knowledge-base project, it ended (it left assistant.leaders; nothing is
  * deleted) or it was made a leader again. id is the leader conversation's session id, the key a work-log record
- * keeps; title its title as the apps show it; project the knowledge-base project's slug, left out while it has none;
+ * keeps; title its title as the apps show it; name what the direction is called, to show it by (the name the owner or
+ * the secretary gave it, else its knowledge-base project's name, else the title without its "MMDD | kind | " prefix;
+ * always sent by a hub that has it, #3679); project the knowledge-base project's slug, left out while it has none;
  * ended true once it is no longer a leader, left out while it is.
  */
 export interface LeaderChangedEvent {
   id: string;
   title: string;
+  name?: string;
   project?: string;
   ended?: boolean;
 }
 
 /**
  * event.leader.report: one of a leader's tasks reached its goal (reached: its review accepted it), needs the owner's
- * decision (decision: its review says needs_user), or is stuck (stuck: in Waiting on you or stopped unfinished for 24
- * hours, told at most once per 24 hours). Written by the hub from the task's ledger, never by a model; progress is
- * never reported. id names the report (never sent twice; key on it to be safe), leader the leader conversation's id,
- * todo the task's to-do id (GET /api/v1/todos with todos.read reads it), text at most 300 characters in the owner's
- * language, link the task's PR or delivery link when it has one, at when what it reports happened.
+ * decision (decision: its review says needs_user, or a plan of the leader's waits for the owner's Start), or is stuck
+ * (stuck: in Waiting on you or stopped unfinished for 24 hours, told at most once per 24 hours); those are written by
+ * the hub from the task's ledger, never by a model. progress (#3679) is the leader's own summary of its direction at
+ * the goal level, sent with its leader_progress tool: reached, doing (and where it is stuck), needs_you (what the
+ * owner has to do) and links (evidence; link is the first), text the three put together, todo "". id names the report
+ * (never sent twice; key on it to be safe), leader the leader conversation's id, todo the task's to-do id (GET
+ * /api/v1/todos with todos.read reads it; "" for a plan, which has no to-do until it starts), plan the waiting plan's
+ * id (only on a decision about a plan), text at most 300 characters in the owner's language, link the task's PR or
+ * delivery link when it has one, at when what it reports happened.
  */
 export interface LeaderReportEvent {
   id: string;
   leader: string;
   kind: string;
   todo: string;
+  plan?: string;
   text: string;
   link?: string;
   at: string;
+  reached?: string;
+  doing?: string;
+  needs_you?: string;
+  links?: string[];
 }
 
 /**

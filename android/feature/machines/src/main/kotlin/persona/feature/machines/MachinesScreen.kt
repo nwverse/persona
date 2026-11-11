@@ -62,7 +62,8 @@ internal fun MachinesScreen(
     // The dashboard's are every manager's: only the ones of a listed computer, or of one the list doesn't know at all.
     val known = remember(allMachines) { allMachines.mapTo(HashSet()) { it.id } }
     val listed = remember(machines) { machines.mapTo(HashSet()) { it.id } }
-    val metrics = state.dashboard?.machines.orEmpty().filter { it.machineId in listed || it.machineId !in known }.associateBy { it.machineId }
+    val metrics = state.dashboard?.machines.orEmpty().filter { it.machineId in listed || it.machineId !in known }
+        .associate { it.machineId to it.live(machines.firstOrNull { m -> m.id == it.machineId }) }
     val ids = (machines.map { it.id } + metrics.keys).distinct()
     val online = ids.count { metrics[it]?.online ?: machines.firstOrNull { m -> m.id == it }?.online ?: false }
     val attention = metrics.values.count { alerts(it.current(state.now), it.system?.cores).isNotEmpty() }
@@ -103,7 +104,9 @@ internal fun MachinesScreen(
         if (state.sessionsFailure) item("sessions-failure") { JNotice(stringResource(R.string.machines_sessions_failure)) }
         if (machineId == null) {
             usageWindows(healthState.usage, java.time.Instant.ofEpochSecond(state.now))
-            if (!state.loading && ids.isEmpty()) item("empty") {
+            // An offline assistant with no computer the hub still keeps: out of reach, not a first run (no Add).
+            if (!state.loading && ids.isEmpty() && assistant.offline != null) item("offline") { JAssistantOffline(assistant) }
+            else if (!state.loading && ids.isEmpty()) item("empty") {
                 JEmptyState(stringResource(if (state.failure == null) R.string.machines_empty_title else R.string.machines_empty_unavailable),
                     stringResource(R.string.machines_empty_body), icon = PhIcons.Desktop,
                     // How to add one (docs/assistant/onboarding.md 4.5), until the phone adds computers itself.
@@ -121,7 +124,7 @@ internal fun MachinesScreen(
             }
             items(ids, key = { it }, contentType = { "machine" }) { card(it) }
         } else {
-            val metric = state.history?.metrics ?: MachineMetrics(machineId, machine?.online ?: false, machine?.system)
+            val metric = state.history?.metrics?.live(machine) ?: MachineMetrics(machineId, machine?.online ?: false, machine?.system)
             val system = metric.system ?: machine?.system
             val current = metric.current(state.now)
             val agents = machineSessions(sessions, machineId)

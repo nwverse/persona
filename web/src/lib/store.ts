@@ -256,6 +256,9 @@ export function taskSessionLookup(s: Pick<State, "sessions" | "sessionSummaries"
     const row = listed(mid, sid);
     if (!row || !detail || row === detail) return row ?? detail;
     if ((detail.rev ?? 0) > (row.rev ?? 0)) return detail;
+    // New summaries carry all the tray's live work metadata. A same-state update can change counts/phase/progress
+    // without changing work or pending cards; never let an older open-chat snapshot hide it.
+    if (row.background_tasks_count !== undefined) return row;
     const same = row.state === detail.state && !!row.background_working === !!detail.background_working
       && (row.pending_interactions ?? 0) === (detail.pending_interactions ?? 0) && sameValue(row.work, detail.work);
     return same ? detail : row;
@@ -903,6 +906,8 @@ export function upsertSession(s: Session) {
   const next = i < 0 ? [...list, s] : list.map((x, j) => {
     if (j !== i) return x;
     const merged = { ...x, ...s };
+    merged.background_working = s.background_working;
+    merged.background_waiting = s.background_waiting;
     // An optimistic action can start from getSession's summary fallback. A later complete info response must
     // drop its scalar summary markers, or they keep overriding the complete task arrays indefinitely.
     if (typeof s.waiting !== "boolean") {
@@ -910,6 +915,18 @@ export function upsertSession(s: Session) {
       delete merged.background_count;
       delete merged.running_subagents;
       delete merged.running_workflows;
+      delete merged.background_tasks_count;
+      delete merged.workflow_progress;
+      merged.background = s.background;
+      merged.subagents = s.subagents;
+      merged.workflows = s.workflows;
+    } else {
+      // A summary is a complete projection: omitted zero counts and a disappeared run clear the previous one.
+      merged.background_count = s.background_count ?? 0;
+      merged.running_subagents = s.running_subagents ?? 0;
+      merged.running_workflows = s.running_workflows ?? 0;
+      merged.background_tasks_count = s.background_tasks_count;
+      merged.workflow_progress = s.workflow_progress;
     }
     return merged;
   });

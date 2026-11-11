@@ -67,6 +67,8 @@ fun JSectionHeader(
      *  section's (caption, regular, in every style; as iOS and the web), and a caret for whether it is open (null: none). */
     sub: Boolean = false,
     open: Boolean? = null,
+    /** The [count] in a capsule of this state's tone (the To-dos list's sections, #3712, as iOS `CountBadge`); none: quiet digits. */
+    countTone: Status? = null,
     action: (@Composable RowScope.() -> Unit)? = null,
 ) {
     val palette = PersonaTheme.palette
@@ -99,12 +101,27 @@ fun JSectionHeader(
                 color = if (muted) palette.ink3 else if (sub || style == AppStyle.Glass) palette.ink2 else palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f, fill = false),
             )
-            count?.let { Spacer(Modifier.width(6.dp)); Text("$it", style = PersonaTheme.type.micro, color = palette.ink3) }
+            count?.let {
+                Spacer(Modifier.width(6.dp))
+                if (countTone == null) Text("$it", style = PersonaTheme.type.micro, color = palette.ink3)
+                else {
+                    val tone = palette.status(countTone)
+                    Text("$it", style = PersonaTheme.type.micro.copy(fontWeight = FontWeight.SemiBold), color = tone.text, maxLines = 1,
+                        modifier = Modifier.clip(CircleShape).background(tone.tint)
+                            .padding(horizontal = SectionHeaderTokens.countPadding, vertical = SectionHeaderTokens.countPaddingVertical))
+                }
+            }
         }
         if (trailing != null || action != null) Spacer(Modifier.width(8.dp))
         trailing?.let { Text(it, style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1) }
         action?.invoke(this)
     }
+}
+
+/** A [JSectionHeader]'s count capsule ([JSectionHeader] `countTone`). */
+object SectionHeaderTokens {
+    val countPadding = 6.dp
+    val countPaddingVertical = 1.dp
 }
 
 /**
@@ -346,7 +363,11 @@ fun JCard(
     }
 }
 
-/** A notice inside a page (connection lost, permission needed). [status] picks the tone. */
+/**
+ * A notice inside a page (connection lost, permission needed). [status] picks the tone. [inlineAction] puts the action
+ * at the end of the text's line as a text button (a one-line notice over a list: "1 more waiting on you · Show all",
+ * #3740) instead of a button under the text.
+ */
 @Composable
 fun JNotice(
     text: String,
@@ -356,23 +377,32 @@ fun JNotice(
     icon: PhIcon = PhIcons.Info,
     actionLabel: String? = null,
     onAction: (() -> Unit)? = null,
+    inlineAction: Boolean = false,
 ) {
     val palette = PersonaTheme.palette
     val tone = palette.status(status)
-    JCard(modifier, status = status, padding = 16.dp) {
-        Row(verticalAlignment = Alignment.Top) {
-            JIcon(icon, null, size = 20.dp, tint = if (PersonaTheme.style == AppStyle.Brief) palette.ink else tone.dot, modifier = Modifier.padding(top = 2.dp))
+    val action = if (actionLabel != null && onAction != null) actionLabel to onAction else null
+    JCard(modifier, status = status, padding = if (inlineAction) NoticeTokens.inlinePadding else 16.dp) {
+        Row(verticalAlignment = if (inlineAction) Alignment.CenterVertically else Alignment.Top) {
+            JIcon(icon, null, size = 20.dp, tint = if (PersonaTheme.style == AppStyle.Brief) palette.ink else tone.dot,
+                modifier = if (inlineAction) Modifier else Modifier.padding(top = 2.dp))
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 title?.let { Text(it, style = PersonaTheme.type.headline, color = palette.ink) }
                 Text(text, style = PersonaTheme.type.callout, color = palette.ink2)
-                if (actionLabel != null && onAction != null) {
+                if (action != null && !inlineAction) {
                     Spacer(Modifier.height(10.dp))
-                    JButton(actionLabel, onAction, kind = JButtonKind.Secondary, size = JButtonSize.Medium)
+                    JButton(action.first, action.second, kind = JButtonKind.Secondary, size = JButtonSize.Medium)
                 }
             }
+            if (action != null && inlineAction) JTextButton(action.first, action.second)
         }
     }
+}
+
+/** A [JNotice] whose action sits on its line ([JNotice] `inlineAction`): less padding above and below, the text button's own height filling it. */
+object NoticeTokens {
+    val inlinePadding = 12.dp
 }
 
 @Composable
@@ -384,10 +414,13 @@ fun JEmptyState(
     action: (@Composable () -> Unit)? = null,
     /** A named colour for the icon and its well (an extension's `icon_color`); none: the quiet ink. */
     iconHue: JHue? = null,
+    /** Drawn where the icon goes, in its place (an assistant's monogram, [JAssistantOffline]). */
+    leading: (@Composable () -> Unit)? = null,
 ) {
     val palette = PersonaTheme.palette
     Column(modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 40.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        icon?.let {
+        if (leading != null) { leading(); Spacer(Modifier.height(16.dp)) }
+        else icon?.let {
             val hue = iconHue?.let { h -> palette.hue(h) }
             Box(
                 Modifier.size(64.dp).clip(if (PersonaTheme.style == AppStyle.Board) RoundedCornerShape(12.dp) else CircleShape).background(hue?.tint ?: palette.surfaceStrong),
@@ -475,7 +508,8 @@ fun JSelectableText(
 fun JCodeBlock(code: String, modifier: Modifier = Modifier, maxLines: Int = Int.MAX_VALUE, small: Boolean = false) =
     JCodeBlock(androidx.compose.ui.text.AnnotatedString(code), modifier, maxLines, small)
 
-/** Rich code text (links, search highlights); [onTextLayout] lets readers locate matches. */
+/** Rich code text (links, search highlights); [onTextLayout] lets readers locate matches. [header]: a title bar drawn
+ *  inside the block, above the code (a reply's code block: its language and Copy, #2984). */
 @Composable
 fun JCodeBlock(
     code: androidx.compose.ui.text.AnnotatedString,
@@ -483,15 +517,24 @@ fun JCodeBlock(
     maxLines: Int = Int.MAX_VALUE,
     small: Boolean = false,
     onTextLayout: (androidx.compose.ui.text.TextLayoutResult) -> Unit = {},
+    header: (@Composable () -> Unit)? = null,
 ) {
     val palette = PersonaTheme.palette
     val shape = RoundedCornerShape(if (PersonaTheme.style == AppStyle.Board) 6.dp else 14.dp)
-    SelectionContainer {
-        Text(
-            code, style = if (small) PersonaTheme.type.codeSmall else PersonaTheme.type.code, color = palette.ink, maxLines = maxLines, overflow = TextOverflow.Ellipsis,
-            onTextLayout = onTextLayout,
-            modifier = modifier.fillMaxWidth().clip(shape).background(if (PersonaTheme.style == AppStyle.Brief) palette.background else palette.sunken)
-                .then(if (PersonaTheme.style == AppStyle.Brief) Modifier.border(1.dp, palette.line, shape) else Modifier).padding(14.dp),
-        )
+    val box = Modifier.fillMaxWidth().clip(shape).background(if (PersonaTheme.style == AppStyle.Brief) palette.background else palette.sunken)
+        .then(if (PersonaTheme.style == AppStyle.Brief) Modifier.border(1.dp, palette.line, shape) else Modifier)
+    val inset = 14.dp
+    val text: @Composable (Modifier) -> Unit = { m ->
+        SelectionContainer {
+            Text(
+                code, style = if (small) PersonaTheme.type.codeSmall else PersonaTheme.type.code, color = palette.ink, maxLines = maxLines, overflow = TextOverflow.Ellipsis,
+                onTextLayout = onTextLayout, modifier = m.padding(inset),
+            )
+        }
+    }
+    if (header == null) text(modifier.then(box))
+    else Column(modifier.then(box)) {
+        header()
+        text(Modifier.fillMaxWidth())
     }
 }

@@ -36,5 +36,6 @@
   "other_model": "其他模型…",
   "model_id_placeholder": "模型 ID，比如 vendor/model-name",
   "forget_typed": "忘记输入过的模型",
-  "forget_failed": "没能忘记「{id}」：{error}"
+  "forget_failed": "没能忘记「{id}」：{error}",
+  "pick_dropped": "「{launcher}」跑不了助手对话，已换回默认启动器"
 }

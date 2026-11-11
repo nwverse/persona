@@ -92,4 +92,15 @@ class NextWaitingShotsTest {
 
     @Config(qualifiers = "ja-w400dp-h800dp-xhdpi")
     @Test fun japanese() = shots("ja", "ほかに3件が対応待ち · 次：照片同步脚本 · 保存为哪种格式？")
+
+    // An agent with no title or folder comes without a name: the row says "Agent" in the app's language (#3889).
+    @Config(qualifiers = "ja-w400dp-h800dp-xhdpi")
+    @Test fun unnamedAgentInJapanese() {
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
+                NextWaitingRow(NextWaiting(WaitingRequest(SessionKey("mac", "v"), "r3", "", "保存为哪种格式？"), 1), {})
+            }
+        }
+        rule.onNodeWithText("ほかに1件が対応待ち · 次：エージェント · 保存为哪种格式？").assertExists()
+    }
 }

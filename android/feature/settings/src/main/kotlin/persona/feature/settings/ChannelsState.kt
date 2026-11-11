@@ -111,13 +111,15 @@ internal object ChannelText {
     fun canBind(c: HubChannel): Boolean = binds(c) && c.enabled && !isBound(c)
 
     /**
-     * The page the hub links to (`settings_url`), where Android has it: an extension's page, "Model configuration". The Feishu bot's own
+     * The page the hub links to (`settings_url`), where Android has it: an extension's page (of [manager]'s), "Model configuration". The Feishu bot's own
      * settings page is iOS's and the web's only; without a page here the row is left out.
      */
-    fun settingsDestination(url: String?): NavKey? {
+    fun settingsDestination(url: String?, manager: String? = null): NavKey? {
         val path = url?.trim()?.trim('/') ?: return null
         return when {
-            path.startsWith("settings/plugins/") -> path.removePrefix("settings/plugins/").takeIf { it.matches(ExtensionId) }?.let(::ExtensionRoute)
+            // The extension of the assistant whose channel it is ([manager]; null: the default's), not the default's copy.
+            path.startsWith("settings/plugins/") -> path.removePrefix("settings/plugins/").takeIf { it.matches(ExtensionId) }
+                ?.let { ExtensionRoute(it, manager = manager?.takeIf(String::isNotBlank)) }
             path == "settings/model-config" -> SettingsPageRoute(SettingsPage.ModelConfig)
             path == "settings/connectors/feishu-bot" -> SettingsPageRoute(SettingsPage.FeishuBot)
             else -> null

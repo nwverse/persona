@@ -49,6 +49,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
+import persona.core.contracts.api.SUBSCRIPTIONS_UI
 
 /**
  * Settings › Extensions (docs/extensions/extensions.md "App: Settings › Extensions"): every extension of the hub's (built in, from hub.json, installed on
@@ -69,7 +70,9 @@ internal fun ExtensionsPage(extensions: ExtensionManagement?, onBack: () -> Unit
     LaunchedEffect(model) { ExtensionChanges.of(extensions).collect { model.load() } }
     // Signed in or out somewhere else: " · Not signed in" follows.
     LaunchedEffect(model) { model.watchAuth() }
-    val list = state.extensions
+    // The current assistant's alone (docs/assistant/managers.md "Clients"): a merged list is filtered by each one's stamp.
+    val assistant = currentAssistant()
+    val list = state.extensions?.filter { assistant.owns(it.manager) }
     val roster = LocalManagerRoster.current
     val detail = LocalDetailKey.current
     JListPage(title = stringResource(R.string.settings_ext_title), onBack = onBack, refreshing = state.loading && list != null, onRefresh = { scope.launch { model.load() } }) {
@@ -91,8 +94,6 @@ internal fun ExtensionsPage(extensions: ExtensionManagement?, onBack: () -> Unit
             JEmptyState(stringResource(R.string.settings_ext_empty_title), stringResource(R.string.settings_ext_empty_text), icon = PhIcons.PuzzlePiece)
         }
         if (!list.isNullOrEmpty()) {
-            // Several managers (docs/assistant/managers.md step 4): each one's extensions under its name instead of one list.
-            val byManager = roster?.groups(list) { it.manager }
             val rows: LazyListScope.(List<HubExtension>) -> Unit = { shown ->
                 // keyed by manager and id in every path: a built-in is listed under each manager, and the list can come
                 // before the roster; a pair that still repeats (a hub that stamps nothing) takes its place too
@@ -108,13 +109,8 @@ internal fun ExtensionsPage(extensions: ExtensionManagement?, onBack: () -> Unit
                     }
                 }
             }
-            if (byManager == null) {
-                item("top") { JSectionHeader(stringResource(R.string.settings_ext_list_header), count = list.size) }
-                rows(list)
-            } else byManager.forEach { group ->
-                item("manager-${group.id}") { JManagerHeader(group, count = group.items.size) }
-                rows(group.items)
-            }
+            item("top") { JSectionHeader(stringResource(R.string.settings_ext_list_header), count = list.size) }
+            rows(list)
             item("footer") {
                 SettingsCaption(stringResource(if (state.markets && onMarket != null) R.string.settings_ext_list_footer_market
                     else R.string.settings_ext_list_footer),
@@ -158,7 +154,10 @@ fun ExtensionPage(
     startSignIn: Boolean = false,
     /** Whose extension it is (several managers); null: the default's. The requests this page makes name it. */
     manager: String? = null,
+    /** Opens its connectors' source subscriptions (#2041); without it, or for another manager's, the row is left out. */
+    onSubscriptions: (() -> Unit)? = null,
 ) {
+    val subscriptionCounts = rememberSubscriptionCounts(extensions.takeIf { manager == null && onSubscriptions != null }) { it.extension == extensionId }
     val owner = remember(extensions, extensionId, manager) { ExtensionOwners.of(manager) }
     if (extensions == null) {
         JListPage(title = stringResource(R.string.settings_ext_title), onBack = onBack) { item { JNotice(stringResource(R.string.settings_ext_demo_none)) } }
@@ -249,6 +248,7 @@ fun ExtensionPage(
                 if (onChannel != null) channelLink(detail, onChannel)
                 val pages = detail.ui.filter { auth?.page.isNullOrBlank() || it.id != auth.page }
                 if (onPage != null) extensionPages(pages, onPage)
+                if (onSubscriptions != null) subscriptionsEntry(subscriptionCounts, onSubscriptions)
                 if (connectors != null) connectorInbox(hubConnectors, onConnector) { c, on ->
                     scope.launch {
                         try {
@@ -668,7 +668,9 @@ internal fun persona.core.contracts.api.ManagerRoster?.ownerOrDefault(manager: S
     manager?.takeIf { it.isNotBlank() } ?: this?.defaultManagerId ?: persona.core.contracts.api.ManagerRoster.ASSISTANT_MANAGER
 
 /** An extension's own requests' paths (`extensions/<id>/…`, `plugins/<id>/…` on an older hub). */
-internal fun extensionPrefixes(extensionId: String) = listOf(listOf("extensions", extensionId), listOf("plugins", extensionId))
+internal fun extensionPrefixes(extensionId: String) =
+    if (extensionId == SUBSCRIPTIONS_UI) listOf(listOf("subscriptions")) // the subscription pages (#2041)
+    else listOf(listOf("extensions", extensionId), listOf("plugins", extensionId))
 
 /**
  * [extensions] naming [manager] on its requests under [prefixes] (segments under /api/v1), for an extension's page to hand

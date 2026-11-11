@@ -9,7 +9,7 @@ Extensions come from three places; the App and the API show them as one list:
 
 | Source | What it is | What you can do |
 | --- | --- | --- |
-| `builtin` | Ships with personad, manifest compiled into the binary (Telegram connector, WeChat bot, computer control `cua`, browser `ego`) | Toggle, configure, secrets; cannot be uninstalled |
+| `builtin` | Ships with personad, manifest compiled into the binary (Telegram connector, WeChat bot, computer control `cua`, browser `ego`, phone control `iphone`) | Toggle, configure, secrets; cannot be uninstalled |
 | `hub.json` | `extensions[]` in the manager's `manager.json` (formerly hub.json, hence the source value), written by hand by the owner (the current voice extension), see "Extensions in manager.json" below | Read-only: change it in manager.json or the admin UI |
 | `installed` | A package installed on the hub machine with `personad extension install`, or an extension running elsewhere and attached over a socket | Everything: toggle, configure, secrets, upgrade, roll back, uninstall |
 
@@ -109,6 +109,7 @@ What an extension contributes where is written in the manifest's `contributes`: 
 | `voice` (version 1) | — | `id`, `name?` | `runtime.http` | The App's voice chat; contract under "Voice" below |
 | `computer` (version 1) | — | `id`, `name?` | — | The assistant's computer-control tools and the toggle on the machine page (only the built-in `cua`), see [computer-use.md](computer-use.md) |
 | `browser` (version 1) | — | `id`, `name?` | — | The assistant's browser tools (`browser_run` / `browser_look`) and **Browser** on the machine page (only the built-in `ego`), see [plan-ego-browser.md](../plans/plan-ego-browser.md) |
+| `iphone` (version 1) | — | `id`, `name?` | — | The assistant's phone-control tools (`iphone_status` / `iphone_look` / `iphone_do`), **Phone Control** on a computer's page and **Control of This iPhone** on the iPhone (only the built-in `iphone`), see [iphone.md](iphone.md) |
 | `quota` (version 1) | `quota.` | `id`, `name`, `hosts?` (gateway host names, may start with `*.`) | Process speaks the protocol, permission `launcher_keys` | **Quota** on the launcher page, see "Quota" below |
 | `providers` (version 1) | `provider.` | `id`, `name`, `description?`, `kind?` (`launcher` / `api`), `api?` (`messages` / `responses`), `base_url`, `model?`, `small_model?`, `models?: [{id, name?}]`, `dynamic_models?`, `key_hint?` | Declarative is enough; `dynamic_models` needs the process to speak the protocol | **From Extension** in **Settings › Model Providers**, see "Model providers" below |
 | `api` (version 1) | `api.` | `id`, `prefix` (one path segment), `features?`, `events?`, `receipts?` (`[{method, path, kind}]`: writes that need send receipts) | `runtime.http`, `on_startup`; with `events`, the process must speak the protocol | A block of App-facing API `/api/v1/<prefix>/…`, see "App API" below |
@@ -129,6 +130,7 @@ What an extension contributes where is written in the manifest's `contributes`: 
 | `messaging` (version 1, #2138) | — | `id` (`^[a-z][a-z0-9_]{0,31}$`, also the source id in API paths and events), `name`, `icon?`, `capabilities?`, `composer_modes?`, `settings_ui?` (an `extension_page` from the same extension), `links?` | `runtime.http`, with `on_startup` in `activation_events` | The App's **Messages** entry: conversations, chats and sending all go through `/api/v1/messaging/<id>/…`, drawn by the App with shared native messaging components; see [extension-messaging.md](extension-messaging.md) |
 | `error_reports` (version 1, #5533) | `error_reports.` | `id`, `sources?` (`hub` / `manager` / `web` / `android` / `ios` / `mac` / `watch` / `vision`; omitted means all) | Process speaks the protocol, `on_startup`, permission `error_reports` | The hub's and the devices' errors and crashes, scrubbed, given to the program as `error_reports.deliver`; see "Error reports" below |
 | `auth_relay` (version 1, #5644) | `auth_relay.` | `id`, `name?`, `hosts` (exact lowercase host names, 1–16), `paths` (exact paths, 1–16; a trailing `/` is ignored) | Process speaks the protocol, permission `auth_relay`; **starts off** at install and when an upgrade adds it, whatever `off_by_default` says | Authorization links the user's Agents stop at, on these hosts and paths and printed by the Agent's own command, handed to the program as `auth_relay.complete` to complete with the account it is signed in with; see [auth-relay.md](../operations/auth-relay.md) |
+| `secret_providers` (version 1, #3962) | `secrets.` | `id`, `name` (1–80 characters: the settings say "From <name>"), `schemes` (1–4 of `^[a-z][a-z0-9+.-]{0,15}$`, not `http`, `https`, `file`, `data`, `persona`, `about`, `javascript`) | Process speaks the protocol; a scheme another installed extension claims fails the install | Values for references of its schemes (`op://vault/item/field`), asked by the manager only (`secrets.describe`, `secrets.resolve`, the event `secrets.used`), each resolution recorded on it; see [secret-providers.md](secret-providers.md) |
 
 Extension points the hub doesn't know: the extension still installs (it may be written for a newer hub), that item has no effect, and the preview and list show a warning. When adding extension points later (knowledge base sources, link recognition…), add a row to this table.
 
@@ -452,6 +454,7 @@ Scopes cover what an extension calls with its token. The owner's own answers tha
   On a manager other than the built-in one, the manager signs it the same way, and `PERSONA_HUB_URL` / `hub.url` is that manager's relay to the hub on the loopback of its computer; the extension also gets `PERSONA_MANAGER` / `hub.manager` (`docs/assistant/managers.md`, "Extensions and the hub's API").
 - Local only: requests with an extension token coming from the public internet return 403 `extension_token_local_only`, unless they came through the extension's manager's relay with its proof (`X-Persona-Manager-Proof`, `docs/assistant/managers.md` "Extensions and the hub's API", which also has the answers to a proof that is the manager's but not taken: `clock_skew`, `proof_replayed`, `proof_busy`, and `manager_offline` for one naming a manager the hub has no bus connection to): a relayed manager's computer may reach the hub no other way. Routes without a scope return 403 `{"code": "permission_denied"}`, and a missing scope also carries `scope` (the missing one).
 - When an extension calls these routes with its token, it is treated like a device with full access (not limited the way read-only devices like the watch are: answering cards and sending messages work as usual), except Inbox replies with `changes` / `/agent` and terminal control characters (below).
+- **Who opened a chat, and its title**: only a scoped token tells the hub which extension asks. A chat an extension opens with it counts as opened by that extension (`origin` `lark_agent` / `extension`, `opened_by`, folded into Auto Chats), and a title it gives (`rename`) is a hint the hub names the chat by after its first turn (#3758). With the full token (`hub_api`) it is the user: the chat lands in Recent and its rename is the user's title.
 - **Permission mode** (`agents.permission_mode`): a chat is the extension's when the extension opened it with its token (`POST /api/v1/assistant/conversations`, whatever its `purpose`), on its own manager's computer.
   That includes a chat it opened for a `/agent …` it received: an Inbox reply starting with `/agent` is posted as the user (it still needs full access) and comes back to the extension like any message, so the chat it then opens is its own.
   The manager notes who opened each chat when it opens, from the token's extension and nothing else (`opened_by`, `docs/protocol/protocol.md` "Origin of assistant chats"), and reports it in its snapshot to the hub (`assistantwire.SessionView`); the hub compares it with the token's extension before the computer hears of the change (`server/internal/hub/extension_modes.go`).
@@ -495,7 +498,7 @@ The params, answers, error codes and events are described in `schema/extension/k
 
 kind is `projects`, `chats`, `people`, `docs`, `meetings`, `events` or `recordings`. list returns 30 by default, at most 200, with offset starting at 0;
 if not finished, continue with next_offset. Paging is not a snapshot when things change between requests, so extensions should deduplicate and re-read when needed. search searches messages by default, 40 by default, at most 200;
-get includes the most recent 12000 characters of messages by default; recent_chars may be 0, at most 20000. Empty lists return `[]`.
+get includes a chat's most recent 12000 bytes of messages by default, cut at a message or line start, or inside a long line at a whole character when the next start would drop more than half of them (a recording's transcript: its first 12000 characters); recent_chars may be 0, at most 20000. Empty lists return `[]`.
 `kb.get` does not include live Agents; reading Agent state still needs the matching permission. A missing scope returns `permission_denied` with `scope` in the error data;
 unknown fields, missing required fields or bad formats return `invalid_params`, a missing entity returns `not_found`, a write touching what someone else holds returns `conflict`, a manager that is offline returns `assistant_offline`, and a knowledge base that isn't ready returns `kb_unavailable`.
 Internal methods such as `kb.forget`, `kb.context`, `kb.posts_*` are not on this allowlist, and even extensions with full access can't call them this way.
@@ -1400,6 +1403,7 @@ the host side (every call, every run, every log line) is the `Observer` in `exte
 - Config is stored in the database (`plugins.config`) and validated against the schema on change; the extension gets the copy with `default`s filled in.
 - Secrets are encrypted with the manager's `secret.key` (like mail passwords, launcher keys and connector secrets; [managers.md](../assistant/managers.md) ("The built-in manager's own files")), one per row (`plugin_secrets`), and are **write-only**: endpoints only return "set / not set".
 - Extensions that speak the protocol get `config` and `secrets` in `initialize`; ones that do not get them through the env vars `PERSONA_EXTENSION_CONFIG` and `PERSONA_EXTENSION_SECRETS` (both JSON).
+  A secret saved as a reference (`op://…`) reaches them as the value it stands for, resolved through its provider each time ([secret-providers.md](secret-providers.md) "References in an extension's secrets").
   Each extension only gets its own. When config, secrets or the switch change, the hub restarts the extension's process (no hot reload).
 - Env vars: `PERSONA_EXTENSION_ID`, `PERSONA_EXTENSION_DIR` (package directory), `PERSONA_EXTENSION_DATA` (`~/.persona/extensions/data/<id>/`, the extension's own cache and data, deleted on uninstall),
   `PERSONA_EXTENSION_SOCKET` (when it has `http`); extensions that asked for `hub` scopes also get `PERSONA_HUB_URL` and `PERSONA_HUB_TOKEN` (only those scopes, a new one each start, see "Permissions", "The hub's API: scopes"), and ones that accepted `hub_api` (the old form) get the full token. The old `PERSONA_*` names are given too.
@@ -2148,7 +2152,7 @@ Still no arbitrary values: colors are named, icons a fixed set, text sizes two m
 | `field` | `earliest`, `latest` (date / time / datetime), `detail` | Bounds written like `value` (`earliest ≤ latest`); a line of help under any field |
 | `TextStyle` | `title`, `headline` | A section's big title and a small heading (at most 200 characters) |
 | `Color` | `red orange amber yellow green teal blue indigo purple pink gray` | On `Badge.color`, `row.icon_color`, `metric.icon_color`, `empty.icon_color`, `Tile.color`, `ChartSeries.color`, `Spark.color` only, never on text. `tone` is a meaning (good / caution / bad), `color` only a category: one object never has both. A chart's series colors differ |
-| `NavIcon` | 45 more (`home`, `light`, `power`, `thermometer`, `camera`, `lock`, `trend_up`, …) | Also `metric.icon`. Each app maps every name to its own icon |
+| `NavIcon` | 46 more (`home`, `light`, `power`, `thermometer`, `camera`, `lock`, `music`, `trend_up`, …) | Also `metric.icon`. Each app maps every name to its own icon |
 
 Field names starting with `~` are the hub's (below) and refused in an extension's view.
 
@@ -2433,16 +2437,26 @@ side conversation in `assistant.leaders`; one leader is one direction. Schema: `
 ```
 
 - **Who is told**: as for the to-do events, with `leaders.read` (or the legacy full access); `todos.read` is not enough.
-- **`leader.changed {id, title, project?, ended?}`**: `id` is the leader conversation's session id, the key to keep a
-  record by; `title` its title as the apps show it; `project` the knowledge-base project's slug it is filed under (left
+- **`leader.changed {id, title, name, project?, ended?}`**: `id` is the leader conversation's session id, the key to keep a
+  record by; `title` its title as the apps show it; `name` what the direction is called, **the one to show** (#3679): the
+  name the owner (`PUT /api/v1/assistant/directions/{id}/name`) or the secretary (`direction_name`) gave it, else its
+  knowledge-base project's name, else `title` without its `MMDD | kind | ` prefix (and when that starts `你是「X」`, a role given in the first message, just `X`, #3744); a new name is a change, told once; `project` the knowledge-base project's slug it is filed under (left
   out while none; the hub files a new direction under the project most of its tasks are filed under); `ended: true`
   once it left `assistant.leaders` (nothing is deleted; made a leader again, it is sent without `ended`). Sent once per
   change: what was last told is kept in the hub's store, so a restart or a replay of the same state sends nothing.
-- **`leader.report {id, leader, kind, todo, text, link?, at}`**: written by the hub from the task's ledger, never by a
-  model; `kind` is `reached` (its review accepted it), `decision` (its review needs the owner) or `stuck` (in Waiting
+- **`leader.report {id, leader, kind, todo, plan?, text, link?, at, reached?, doing?, needs_you?, links?}`**: written by the hub from the task's ledger, never by a
+  model; `kind` is `reached` (its review accepted it), `decision` (its review needs the owner, or a plan of the
+  leader's waits for the owner's Start: then `plan` is the plan's id and `todo` is `""`, as a plan has no to-do until
+  it starts; #3608) or `stuck` (in Waiting
   on you, or stopped unfinished, for 24 hours; at most once per 24 hours). `id` names the report and is never sent
   twice; `text` is at most 300 characters in the owner's language; `link` the task's PR when it has one. Progress is
-  never reported.
+  never reported. Besides those, `kind: "progress"` (#3679) is the
+  leader's own summary of its direction at the goal level, sent with its `leader_progress` tool (each reached task, each
+  report cycle): `reached` (what was reached), `doing` (what is being done, and where it is stuck), `needs_you` (what the
+  owner has to do) and `links` (evidence, at most 5; `link` is the first), each part at most 200 characters; `text` puts
+  the parts together in the owner's language (「达成：…」「在做：…」「要你做：…」, one per line); `todo` is `""`. A work-log
+  card renders one line per direction from the day's latest `progress`. `GET /api/v1/assistant/leaders` lists each
+  direction's `name` and latest `progress` (`{reached?, doing?, needs_you?, links?, at}`).
 - **Leaders made before the extension**: `GET /api/v1/assistant/leaders` (`leaders.read`) lists every direction as
   `leader.changed` would tell it now, with `by` (`assistant` or `user`), `at` and `ended_at?`; current leaders first.
 - They share the to-do events' queue and its limits.
@@ -2454,7 +2468,7 @@ Extensions with an `error_reports` contribution (and the permission `error_repor
 - **Off unless an extension takes them**: reporting is on only while an enabled, running extension has an `error_reports` contribution switched on. The manager then adds `error_reports` to `features` (the WebSocket `hello`, `GET /api/v1/health`); the hub, the manager and the apps collect and send only while it is there. An extension whose required secret is missing doesn't start, so it turns nothing on.
 - **What goes in**: the apps send `POST /api/v1/error-reports` ([protocol.md](../protocol/protocol.md)); the hub's handlers' panics (answered with 500) and its log's error lines (`panic`, `error`, `failed`, a 5xx request) go to the manager over the bus (`extensions.error_reports`); the manager's process reports its own log's error lines.
 - **Format**: `ErrorReport` in `schema/extension/protocol.schema.json`: `id` (the sender's, for dedupe), `source`, `kind` (`exception` / `crash` / `anr` / `panic` / `log`), `level` (`fatal` / `error` / `warning`), `time`, `release` / `build` / `commit`, `os` / `os_version` / `device_model` (the model only), `message`, `exceptions` (`type`, `value`, `frames`, innermost last), `breadcrumbs`, `tags`, `previous_launch`. The manager adds `fingerprint`, `count` and `received_at`. Longer fields are cut: message 1 KB, 5 exceptions of 64 frames, 30 breadcrumbs of 200 characters, 16 tags.
-- **Scrubbing** (`server/internal/errreport`, applied to every string before an extension sees it; clients don't put user content in reports to begin with): quoted spans in messages become `"<redacted>"`; named secrets (`token=`, `password`, `Authorization`, `Bearer …`), known key prefixes, JWTs and long hex / base64 become `<redacted>`; home directories become `~` (no user names); e-mail addresses `<email>`; IPv4 / IPv6 `<ip>`; URLs keep scheme and path only (`https://<host>/api/v1/inbox`); the hub machine's host name and user name, and every computer's name, id, SSH host, host name and user name become `<machine>`.
+- **Scrubbing** (`server/internal/errreport`, applied to every string before an extension sees it; clients don't put user content in reports to begin with): quoted spans in messages become `"<redacted>"` (also when they span lines; single quotes only within one line); a breadcrumb keeps its `level` only if it is `debug` / `info` / `warning` / `error` / `fatal`, and its `time` only as an RFC 3339 time (in UTC); named secrets (`token=`, `password`, `Authorization`, `Bearer …`), known key prefixes, JWTs and long hex / base64 become `<redacted>`; home directories become `~` (no user names); e-mail addresses `<email>`; IPv4 / IPv6 `<ip>`; URLs keep scheme and path only (`https://<host>/api/v1/inbox`); the hub machine's host name and user name, and every computer's name, id, SSH host, host name and user name become `<machine>`.
 - **Dedupe and limits**: the same `id` within 24 hours is dropped (a retry); the same fingerprint within 10 minutes is folded, and the next one after that carries `count`; at most 30 reports a minute per device, 60 from the hub and the manager, 300 overall.
 - **Delivery**: notifications `error_reports.deliver {contribution, reports}` (`ErrorReportsDeliver`), at most 20 reports or every 2 seconds, one per contribution with the sources it takes. Nothing is persisted for redelivery: a report lost while the extension restarts is lost.
 
@@ -2807,6 +2821,8 @@ and the node follows (`node/plugins.go`). Reconciliation runs on computer connec
   Reading `chat.db` needs **Full Disk Access** on the chosen Mac for the process that runs the node. Grant it to the SSH-server process for an SSH-launched node, or to the program of the launchd agent it runs under: the node's own agent's (`persona-node` or `personad`), or, for the node of the hub's computer, the built-in manager's agent's (`persona-manager` on a new install, `personad` on an older one), or the hub's agent's (`persona-hub` or `personad`) when the hub starts the manager as its child. The error the node reports names that program. Reconnect/restart the node after granting. The connector page reports the resulting access error instead of treating a configured extension as proof of permission.
   manager.json values migrate once at hub startup: name becomes machine id, extension enabled, marker recorded (`imessage.migrated_to_extension`); later user disable/switch choices are not overwritten.
   Unknown machine names or failed writes produce one log line and retry next startup, reading manager.json meanwhile. The manager.json field remains unchanged for one version.
+  **iphone** (#3450) is a built-in node program as well: only `plugin.node.call {id: "iphone", method: status | call | pair | forget | cancel}`,
+  with no old names (`node/iphone.go`, `docs/extensions/iphone-pairing.md`).
   All three built-in manifests specify `node: {command: "builtin", machines: "machines"}` (`NodeBuiltin`). Installed packages with `builtin` are rejected; only hub built-ins may use it.
   Their `Manifest.NodeProgram()` is nil: no packages, no `plugin.node.sync`, no `nodes` / `node_machines`, no added "Runs on this computer…" confirmation,
   no node permission rows, and the consent digest is the same as without a node section. UI is therefore unchanged. Anything related to packages, status, confirmation or consent uses `NodeProgram()`, not `Node` directly.
