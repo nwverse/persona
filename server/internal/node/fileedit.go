@@ -35,7 +35,10 @@ func errNotFound(path string) error {
 }
 
 func (n *Node) entry(path, cwd string) (editEntry, error) {
-	shown := strings.TrimSpace(path)
+	if path == "" {
+		return editEntry{}, errors.New("empty path")
+	}
+	shown := path
 	if s := strings.TrimRight(shown, "/"); s != "" {
 		shown = s
 	}
@@ -152,7 +155,7 @@ func (n *Node) moveFiles(paths []string, cwd, dir, conflict string) (map[string]
 	if err != nil {
 		return nil, err
 	}
-	shownDir := strings.TrimSpace(dir)
+	shownDir := dir
 	if s := strings.TrimRight(shownDir, "/"); s != "" {
 		shownDir = s
 	}
@@ -258,7 +261,7 @@ func decodeTrashID(s string) (trashID, error) {
 	if err == nil {
 		err = json.Unmarshal(b, &t)
 	}
-	if err != nil || checkName(t.Name) != nil || !filepath.IsAbs(t.Real) || filepath.Clean(t.Real) != t.Real {
+	if err != nil || t.Name == "" || t.Name == "." || t.Name == ".." || strings.ContainsAny(t.Name, "/\x00") || filepath.Base(t.Name) != t.Name || !filepath.IsAbs(t.Real) || filepath.Clean(t.Real) != t.Real {
 		return trashID{}, fmt.Errorf("bad trash_id")
 	}
 	return t, nil

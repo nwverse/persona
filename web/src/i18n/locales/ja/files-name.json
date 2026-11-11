@@ -1,0 +1,14 @@
+{
+  "space": "スペース",
+  "nbsp": "改行なしスペース",
+  "tab": "タブ",
+  "newline": "改行",
+  "return": "復帰",
+  "marked_prefix": "空白を含む名前",
+  "literal_prefix": "文字どおりのファイル名",
+  "literal_mark": "文字どおり",
+  "leading": "{name}、先頭の空白 {marks}",
+  "trailing": "{name}、末尾の空白 {marks}",
+  "both": "{name}、先頭の空白 {leading}、末尾の空白 {trailing}",
+  "only": "空白だけの名前 {marks}"
+}

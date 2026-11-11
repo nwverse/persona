@@ -3,6 +3,7 @@
   "deploy_upgrade_first": "Upgrade the node service on this computer once first. After that you can update it remotely from here",
   "deploy_offline": "This computer is offline. Update it once it reconnects",
   "node_no_model_config": "This computer’s node doesn’t support model config yet. Update the node",
+  "node_exact_file_paths": "This computer’s node cannot safely use file paths with surrounding whitespace. Update the node",
   "node_protocol_old": "This computer’s node speaks an older protocol than its assistant. Update the node",
   "node_protocol_new": "This computer’s node needs a newer assistant. Update the hub",
   "done": "Done",

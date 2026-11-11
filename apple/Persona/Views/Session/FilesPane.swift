@@ -137,15 +137,25 @@ struct FilesPane: View {
             }
             Button("Cancel", role: .cancel) { trashing = [] }
         } message: {
-            Text("It goes to the computer’s Trash. You can undo right after, or put it back from the Trash there.")
+            if trashing.count == 1 && FileNameDisplay.spoken(trashing[0]) != trashing[0] {
+                Text("It goes to the computer’s Trash. You can undo right after, or put it back from the Trash there.")
+                + Text(verbatim: " ") + Text(verbatim: FileNameDisplay.spoken(trashing[0]))
+            } else {
+                Text("It goes to the computer’s Trash. You can undo right after, or put it back from the Trash there.")
+            }
         }
-        .alert(String(localized: "“\(edits.conflictName)” already exists"),
+        .alert(String(localized: "“\(FileNameDisplay.label(edits.conflictName))” already exists"),
                isPresented: Binding(get: { edits.conflict != nil }, set: { if !$0 { edits.answer(nil) } })) {
             Button("Replace") { edits.answer("replace") }
             Button("Keep Both") { edits.answer("keep") }
             Button("Cancel", role: .cancel) { edits.answer(nil) }
         } message: {
-            Text("The folder already has an item with that name. Replace moves the one there to the Trash; Keep Both names this one “name 2”.")
+            if FileNameDisplay.hint(edits.conflictName).isEmpty {
+                Text("The folder already has an item with that name. Replace moves the one there to the Trash; Keep Both names this one “name 2”.")
+            } else {
+                Text("The folder already has an item with that name. Replace moves the one there to the Trash; Keep Both names this one “name 2”.")
+                + Text(verbatim: " ") + Text(verbatim: FileNameDisplay.hint(edits.conflictName))
+            }
         }
         .sheet(isPresented: Binding(get: { !moving.isEmpty }, set: { if !$0 { moving = [] } })) {
             FolderPicker(machineID: machineID, group: group, cwd: cwd, start: stack, moving: moving.map(full)) { dir in
@@ -257,7 +267,7 @@ struct FilesPane: View {
     }
 
     private var trashTitle: String {
-        trashing.count == 1 ? String(localized: "Move “\(trashing[0])” to the Trash?") : String(localized: "Move \(trashing.count) items to the Trash?")
+        trashing.count == 1 ? String(localized: "Move “\(FileNameDisplay.label(trashing[0]))” to the Trash?") : String(localized: "Move \(trashing.count) items to the Trash?")
     }
 
     /// Under the list while selecting: what is picked, and Move / Move to Trash for all of it.
@@ -294,7 +304,7 @@ struct FilesPane: View {
             Haptics.tap()
             stack = Array(stack.prefix(level))
         } label: {
-            Text(name.isEmpty ? "/" : name)
+            Text(name.isEmpty ? "/" : FileNameDisplay.label(name))
                 .font(current ? Theme.Font.captionStrong : Theme.Font.caption)
                 .lineLimit(1)
                 .foregroundStyle(current ? Color.primary : Color.secondary)
@@ -338,7 +348,8 @@ struct FilesPane: View {
                 }
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                     HStack(spacing: Theme.Space.xs) {
-                        Text(e.name).font(Theme.Font.secondary).foregroundStyle(e.name.hasPrefix(".") ? Color.secondary : Color.primary).lineLimit(1)
+                        FileNameView(name: e.name).font(Theme.Font.secondary).foregroundStyle(e.name.hasPrefix(".") ? Color.secondary : Color.primary)
+                            .lineLimit(1).truncationMode(FileNameDisplay.needsMarker(e.name) ? .middle : .tail)
                         if e.symlink == true { ThemedIcon("arrow.turn.up.right").font(Theme.Font.label).foregroundStyle(.tertiary) }
                     }
                     HStack(spacing: Theme.Space.sm) {

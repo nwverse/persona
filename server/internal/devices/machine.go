@@ -533,6 +533,9 @@ func (m *Machine) call(ctx context.Context, method string, params any, out any) 
 	if p == nil {
 		return fmt.Errorf("%s: %w", m.name(), errOffline)
 	}
+	if !slices.Contains(info.Capabilities, nodeproto.ExactFilePaths) && proto.NeedsExactFilePaths(method, params, info.OS == "windows") {
+		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_exact_file_paths")}
+	}
 	if err := secretEnvRefusal(ctx, info, method, params); err != nil { // against the node it has, never one on its way
 		return err
 	}

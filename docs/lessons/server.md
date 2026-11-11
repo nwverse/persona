@@ -1,5 +1,9 @@
 # Lessons: hub / node and networking
 
+## Preserve the path the file browser selected (#4567)
+
+Trimming a whole nonempty filesystem path can silently select a neighboring file or destination directory. Keep the exact path across listing, reads, uploads and mutations; only a truly empty listing path means the current directory. Regression fixtures need both neighboring names, a missing whitespace-suffixed name, an isolated trash and Undo, and platform-specific rejection where lookup cannot preserve identity. Shared rename inputs must also compare and submit file names without trimming while retaining their existing validation for new names.
+
 ## Virtual-file sizes and EOF (#4425)
 
 Some Linux sysfs attributes report a stable page-sized length even when their readable contents are shorter. A short

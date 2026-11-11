@@ -53,7 +53,6 @@ type FileContent struct {
 // resolvePath turns a path as the conversation wrote it into one on this machine: ~ is the home, a relative path is
 // in cwd. "" when there is nothing to resolve it against.
 func (n *Node) resolvePath(path, cwd string) string {
-	path = strings.TrimSpace(path)
 	switch {
 	case path == "":
 		return ""
@@ -81,7 +80,7 @@ func (n *Node) readFile(path, cwd string, offset int64, stream bool) (*FileConte
 	if n.fileReadDeps != nil && n.fileReadDeps.isSysfs != nil {
 		isSysfs = n.fileReadDeps.isSysfs
 	}
-	asked := strings.TrimSpace(path)
+	asked := path
 	if asked == "" {
 		return nil, fmt.Errorf("empty path")
 	}
@@ -453,7 +452,6 @@ func (n *Node) resolveDir(path, cwd string) (shown, real string, err error) {
 // expandPath turns a path as the app gives it (~/…, relative to cwd, empty for cwd itself) into a clean one; "" when
 // there is nothing to go by. Links are not followed.
 func (n *Node) expandPath(path, cwd string) string {
-	path = strings.TrimSpace(path)
 	switch {
 	case path == "":
 		path = cwd

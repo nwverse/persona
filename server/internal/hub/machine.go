@@ -15,6 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/streams"
@@ -245,6 +246,9 @@ func (m *Machine) call(ctx context.Context, method string, params any, out any) 
 	}
 	if p == nil {
 		return fmt.Errorf("%s: %w", m.name(), errOffline)
+	}
+	if !slices.Contains(info.Capabilities, nodeproto.ExactFilePaths) && proto.NeedsExactFilePaths(method, params, info.OS == "windows") {
+		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(m.hub.contextLang(ctx), "hub-machine.node_exact_file_paths")}
 	}
 	select {
 	case <-p.Done(): // closed, a new connection on its way: nothing was sent

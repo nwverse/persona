@@ -125,6 +125,12 @@ describe("inline rename", () => {
     expect(renameCommit("build", "build")).toBeNull();
     expect(renameCommit(" build ", "build")).toBeNull();
   });
+  it("keeps file-name whitespace and compares the exact name", () => {
+    expect(renameCommit("report", "report ", true)).toBe("report ");
+    expect(renameCommit("report ", "report", true)).toBe("report");
+    expect(renameCommit("report ", "report ", true)).toBeNull();
+    expect(renameCommit("report", "   ", true)).toBeNull();
+  });
 });
 
 describe("opening on a row", () => {

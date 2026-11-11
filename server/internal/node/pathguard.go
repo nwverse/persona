@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 
@@ -323,6 +324,9 @@ func (n *Node) realPath(path string) (string, error) {
 	if !filepath.IsAbs(path) {
 		return "", fmt.Errorf("path is not absolute: %s", path)
 	}
+	if err := checkNativePath(path); err != nil {
+		return "", err
+	}
 	if err := n.offLimits(path); err != nil {
 		return "", err
 	}
@@ -341,6 +345,9 @@ func (n *Node) realPath(path string) (string, error) {
 			continue
 		}
 		next := filepath.Join(done, c)
+		if err := checkNativePath(next); err != nil {
+			return "", err
+		}
 		if err := n.offLimitsResolved(next); err != nil {
 			return "", err
 		}
@@ -378,6 +385,27 @@ func (n *Node) realPath(path string) (string, error) {
 		pending = append(splitPath(target), pending...)
 	}
 	return done, nil
+}
+
+// Windows APIs may interpret a trailing ASCII space as a different entry. Refuse such paths before any lookup.
+func checkNativePath(path string) error {
+	return checkPathForOS(path, runtime.GOOS)
+}
+
+func checkPathForOS(path, goos string) error {
+	if goos == "windows" && windowsPathHasTrailingSpace(path) {
+		return fmt.Errorf("%w: path has a trailing space that Windows cannot safely resolve", errOffLimits)
+	}
+	return nil
+}
+
+func windowsPathHasTrailingSpace(path string) bool {
+	for _, component := range strings.FieldsFunc(path, func(r rune) bool { return r == '/' || r == '\\' }) {
+		if strings.HasSuffix(component, " ") {
+			return true
+		}
+	}
+	return false
 }
 
 func splitPath(p string) []string {

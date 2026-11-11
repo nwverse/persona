@@ -54,4 +54,18 @@ describe("Safari's candidate keys in a menu", () => {
     await key(input, "Enter", false);
     expect(commit).toHaveBeenCalledExactlyOnceWith("新名字");
   });
+
+  it("passes a file name with its trailing whitespace", async () => {
+    const commit = vi.fn(async () => {});
+    act(() => root.render(<Menu anchor={null} onClose={() => {}} items={[{ key: "r", label: "Rename", onSelect: () => {}, rename: { value: "report", preserveWhitespace: true, commit } }]} />));
+    const row = [...document.querySelectorAll("button")].find((b) => b.textContent?.includes("Rename"))!;
+    act(() => row.click());
+    const input = document.querySelector<HTMLInputElement>("input")!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "report\u00a0");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await key(input, "Enter", false);
+    expect(commit).toHaveBeenCalledExactlyOnceWith("report\u00a0");
+  });
 });

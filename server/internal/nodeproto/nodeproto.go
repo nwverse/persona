@@ -69,6 +69,8 @@ const (
 	SecretEnv = "secret_env"
 	// Clipboard: clipboard.get / clipboard.set and node.info's clipboard (docs/operations/clipboard.md).
 	Clipboard = "clipboard"
+	// ExactFilePaths: file operations preserve whitespace in existing paths and destination directories.
+	ExactFilePaths = "exact_file_paths_v1"
 )
 
 // Error codes in the manager's answers to a resident node's replayed notifications (a notify with spool_id,
@@ -93,7 +95,7 @@ const (
 )
 
 // Announced is what a node built from this code announces.
-var Announced = []string{ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, Sessions, ModelConfiguration, AssistantConfigDir, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv}
+var Announced = []string{ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, Sessions, ModelConfiguration, AssistantConfigDir, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, ExactFilePaths}
 
 // ShareProjection is the bounded complete-source sharing projection, not light Items.
 const ShareProjection = "share_projection.v1"

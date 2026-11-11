@@ -1,6 +1,102 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "literal [File Name Whitespace]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "literal" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "字面" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "文字どおり" } }
+      }
+    },
+    "Name with whitespace [File Name Whitespace]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Name with whitespace" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "含空白的名称" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "空白を含む名前" } }
+      }
+    },
+    "Literal filename [File Name Whitespace]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Literal filename" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "字面文件名" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "文字どおりのファイル名" } }
+      }
+    },
+    "Whitespace-only name %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Whitespace-only name %@" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "仅含空白的名称 %@" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "空白だけの名前 %@" } }
+      }
+    },
+    "%@, leading whitespace %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "%1$@, leading whitespace %2$@" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "%1$@，开头空白 %2$@" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "%1$@、先頭の空白 %2$@" } }
+      }
+    },
+    "%@, trailing whitespace %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "%1$@, trailing whitespace %2$@" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "%1$@，末尾空白 %2$@" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "%1$@、末尾の空白 %2$@" } }
+      }
+    },
+    "%@, leading whitespace %@, trailing whitespace %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "%1$@, leading whitespace %2$@, trailing whitespace %3$@" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "%1$@，开头空白 %2$@，末尾空白 %3$@" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "%1$@、先頭の空白 %2$@、末尾の空白 %3$@" } }
+      }
+    },
+    "space [File Name Whitespace]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "space" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "空格" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "スペース" } }
+      }
+    },
+    "non-breaking space [File Name Whitespace]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "non-breaking space" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "不换行空格" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "改行なしスペース" } }
+      }
+    },
+    "tab [File Name Whitespace]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "tab" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "制表符" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "タブ" } }
+      }
+    },
+    "line break [File Name Whitespace]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "line break" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "换行" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "改行" } }
+      }
+    },
+    "carriage return [File Name Whitespace]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "carriage return" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "回车" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "復帰" } }
+      }
+    },
     "Connection method": {
       "extractionState": "manual",
       "localizations": {

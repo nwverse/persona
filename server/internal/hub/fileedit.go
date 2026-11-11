@@ -32,12 +32,12 @@ type fileEditRequest struct {
 
 // check says what makes the request not one of op's, nil when it is one.
 func (q fileEditRequest) check(op string) error {
-	nonEmpty := func(list []string, what string) error {
+	nonEmpty := func(list []string, what string, trim bool) error {
 		if len(list) == 0 || len(list) > maxFileEditPaths {
 			return errors.New(what + " must list 1 to 1000")
 		}
 		for _, p := range list {
-			if strings.TrimSpace(p) == "" {
+			if p == "" || (trim && strings.TrimSpace(p) == "") {
 				return errors.New(what + " can't have an empty one")
 			}
 		}
@@ -45,14 +45,14 @@ func (q fileEditRequest) check(op string) error {
 	}
 	switch op {
 	case "rename":
-		if strings.TrimSpace(q.Path) == "" {
+		if q.Path == "" {
 			return errors.New("path is required")
 		}
 		if n := q.Name; strings.TrimSpace(n) == "" || n == "." || n == ".." || strings.ContainsAny(n, "/\x00") {
 			return errors.New("name can't be a file's name")
 		}
 	case "move":
-		if strings.TrimSpace(q.Dir) == "" {
+		if q.Dir == "" {
 			return errors.New("dir is required")
 		}
 		switch q.Conflict {
@@ -60,11 +60,11 @@ func (q fileEditRequest) check(op string) error {
 		default:
 			return errors.New("conflict must be replace or keep")
 		}
-		return nonEmpty(q.Paths, "paths")
+		return nonEmpty(q.Paths, "paths", false)
 	case "trash":
-		return nonEmpty(q.Paths, "paths")
+		return nonEmpty(q.Paths, "paths", false)
 	case "restore":
-		return nonEmpty(q.TrashIDs, "trash_ids")
+		return nonEmpty(q.TrashIDs, "trash_ids", true)
 	}
 	return nil
 }

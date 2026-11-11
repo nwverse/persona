@@ -32,9 +32,12 @@ import (
 // receive folder (hub.json machines[].inbox_dir), a taken name gets " 2"; up to proto.MaxInboxUploadBytes; only while
 // the machine's file transfer switch is on (403 file_transfer_disabled otherwise).
 func (h *Hub) uploadFile(w http.ResponseWriter, r *http.Request, m *Machine) {
-	name := strings.TrimSpace(r.URL.Query().Get("name"))
+	name := r.URL.Query().Get("name")
 	size := r.ContentLength
 	dest, limit := r.URL.Query().Get("dest"), int64(proto.MaxUploadBytes)
+	if dest != proto.UploadDestDir && dest != proto.UploadDestInbox {
+		name = strings.TrimSpace(name)
+	}
 	switch dest {
 	case "", proto.UploadDestHealth:
 	case proto.UploadDestTerminal:
@@ -43,7 +46,7 @@ func (h *Hub) uploadFile(w http.ResponseWriter, r *http.Request, m *Machine) {
 		limit = proto.MaxInboxUploadBytes
 	case proto.UploadDestDir:
 		limit = proto.MaxDirUploadBytes
-		if strings.TrimSpace(r.URL.Query().Get("dir")) == "" {
+		if r.URL.Query().Get("dir") == "" {
 			writeErr(w, http.StatusBadRequest, errors.New("dir is required"))
 			return
 		}

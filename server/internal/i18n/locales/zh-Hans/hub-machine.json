@@ -3,6 +3,7 @@
   "deploy_upgrade_first": "请先在这台电脑上升级一次 node 服务，之后即可在这里远程更新",
   "deploy_offline": "这台电脑不在线，连上以后再更新",
   "node_no_model_config": "这台电脑的 node 还不支持统一模型配置，请更新 node",
+  "node_exact_file_paths": "这台电脑的 node 还不能安全处理首尾带空白的文件路径，请更新 node",
   "node_protocol_old": "这台电脑上的 node 协议比助手旧。请更新 node",
   "node_protocol_new": "这台电脑上的 node 需要更新的助手。请更新 hub",
   "done": "完成了",

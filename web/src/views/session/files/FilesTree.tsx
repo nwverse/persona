@@ -15,6 +15,7 @@ import { useFsLive } from "../../../lib/use-fs-live";
 import { Button, copyText, cx, IconButton, Loading, Spinner } from "../../../ui/atoms";
 import { Icon } from "../../../ui/icons";
 import { RowCheck, rowClick, rowFrameProps, RowMore, type OpTarget, type RowOps } from "./FileOps";
+import { FileName } from "./FileName";
 import { Empty, FileGlyph, GitBadge, GitDot } from "./parts";
 
 export function FilesTree({
@@ -234,7 +235,7 @@ function Row({
         <span className={cx("flex shrink-0", e.ignored && "opacity-50")}>
           {thumbs && !e.dir && thumbable(e.name, e.size) ? <ThumbGlyph mid={mid} cwd={cwd} path={r.path} entry={e} /> : <FileGlyph name={e.name} dir={e.dir} />}
         </span>
-        <span className={cx("truncate text-[13px]", e.ignored ? "text-ink-3" : hidden ? "text-ink-2" : "text-ink")}>{e.name}</span>
+        <FileName name={e.name} className={cx("truncate text-[13px]", e.ignored ? "text-ink-3" : hidden ? "text-ink-2" : "text-ink")} />
         {e.symlink && <Icon name="link" size={11} className="shrink-0 text-ink-3" />}
         <span className="flex-1" />
         {mark && (e.dir ? <GitDot letter={mark} /> : <GitBadge letter={mark} />)}

@@ -16,10 +16,10 @@ vi.mock("../../../lib/store", async (original) => {
 });
 vi.mock("../../../lib/file-ops", async (original) => {
   const real = await original<typeof import("../../../lib/file-ops")>();
-  return { ...real, uploadToDir: vi.fn(), trashEntries: vi.fn(), restoreEntries: vi.fn() };
+  return { ...real, uploadToDir: vi.fn(), renameEntry: vi.fn(), trashEntries: vi.fn(), restoreEntries: vi.fn() };
 });
 import { ApiError, setToken } from "../../../lib/api";
-import { restoreEntries, trashEntries, uploadToDir } from "../../../lib/file-ops";
+import { renameEntry, restoreEntries, trashEntries, uploadToDir } from "../../../lib/file-ops";
 import { useFileOps, type FileOps } from "./FileOps";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -46,6 +46,7 @@ beforeEach(async () => {
   setToken("example-file-ops-credential");
   features.list = ["upload_dir", "file_edit"];
   vi.mocked(uploadToDir).mockReset();
+  vi.mocked(renameEntry).mockReset();
   vi.mocked(trashEntries).mockReset();
   vi.mocked(restoreEntries).mockReset();
   changed.mockClear();
@@ -62,6 +63,13 @@ afterEach(() => {
 });
 
 describe("useFileOps", () => {
+  it("renames the selected path with its exact new name", async () => {
+    vi.mocked(renameEntry).mockResolvedValue("/home/me/x/new\u00a0");
+    const item = ops.rowItems({ path: "/home/me/x/old ", name: "old ", dir: false }, () => {}).find((row) => row.key === "rename")!;
+    expect(item.rename?.preserveWhitespace).toBe(true);
+    await act(async () => { await item.rename!.commit("new\u00a0"); });
+    expect(renameEntry).toHaveBeenCalledWith("m", "/home/me/x/old ", "/home/me/x", "new\u00a0", expect.objectContaining({ owner: expect.any(String), token: "example-file-ops-credential" }));
+  });
   it("asks before a delete, then offers 撤销, which puts it back", async () => {
     vi.mocked(trashEntries).mockResolvedValue([{ path: "/home/me/x/a.txt", trash_id: "t1" }]);
     vi.mocked(restoreEntries).mockResolvedValue(["/home/me/x/a.txt"]);

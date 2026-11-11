@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -93,6 +94,7 @@ func downloadHub(t *testing.T, f *downloadNode) http.Handler {
 	go nodePeer.Serve(ctx, toNode)
 	m := newMachine(h, MachineConfig{ID: "m1", Name: "box"})
 	m.peer = hubPeer
+	m.info.Capabilities = []string{nodeproto.ExactFilePaths}
 	h.byID["m1"] = m
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/machines/{mid}/file/download", h.withMachine(h.downloadFile))

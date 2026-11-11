@@ -31,6 +31,9 @@ func errReadOnly(path string) error {
 
 // writable says whether real (absolute, clean, links already followed) is a place a client may change.
 func (n *Node) writable(real string) error {
+	if err := checkNativePath(real); err != nil {
+		return err
+	}
 	if err := n.offLimitsResolved(real); err != nil {
 		return err
 	}
@@ -91,7 +94,7 @@ func isHome(p, home string) bool {
 // writableDir resolves a folder to write into like a listing does (~/, relative to cwd) and checks it is an
 // existing directory a client may change. shown is the path as the app knows it, real the one behind its links.
 func (n *Node) writableDir(path, cwd string) (shown, real string, err error) {
-	if strings.TrimSpace(path) == "" {
+	if path == "" {
 		return "", "", errors.New("empty path")
 	}
 	shown, real, err = n.resolveDir(path, cwd)

@@ -11,6 +11,8 @@ export interface MenuRename {
   /** What the input starts with (selected, so typing replaces it). */
   value: string;
   placeholder?: string;
+  /** Preserve whitespace for identities such as file names. */
+  preserveWhitespace?: boolean;
   /** Enter on a changed, non-empty name. A rejection is shown inline and the input stays. */
   commit: (name: string) => void | Promise<unknown>;
   /** Why what is typed can't be committed, "" when it can: said under the input as it is typed, and Enter waits for
@@ -187,7 +189,8 @@ export function accelLabel(it: MenuItem): string | undefined {
 }
 
 /** What a rename input does with Enter: nothing to commit (empty or unchanged: it just closes the input) or the name. */
-export function renameCommit(current: string, typed: string): string | null {
+export function renameCommit(current: string, typed: string, preserveWhitespace = false): string | null {
+  if (preserveWhitespace) return typed.trim() && typed !== current ? typed : null;
   const name = typed.trim();
   return name && name !== current.trim() ? name : null;
 }

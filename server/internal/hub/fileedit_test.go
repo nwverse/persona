@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -33,6 +34,7 @@ func fileEditHub(t *testing.T, answer func(method string, params map[string]any)
 	go nodePeer.Serve(ctx, toNode)
 	m := newMachine(h, MachineConfig{ID: "m1", Name: "box"})
 	m.peer = hubPeer
+	m.info.Capabilities = []string{nodeproto.ExactFilePaths}
 	h.byID["m1"] = m
 	mux := http.NewServeMux()
 	for _, op := range []string{"rename", "move", "trash", "restore"} {

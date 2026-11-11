@@ -23,6 +23,7 @@ import { Icon } from "../../ui/icons";
 import { scrollBehavior } from "../../ui/stream/motion";
 import { PanelHeader } from "../../ui/PanelHeader";
 import { FileView } from "./files/FileView";
+import { FileName } from "./files/FileName";
 import { DropHint, dragHasFiles, RowCheck, rowClick, rowFrameProps, RowMore, SelectionBar, useFileOps, type OpTarget, type RowOps } from "./files/FileOps";
 import { FilesTree } from "./files/FilesTree";
 import { Empty, FileGlyph, GitDot, GitBadge, useStoredFlag } from "./files/parts";
@@ -297,7 +298,7 @@ function Crumbs({ root, stack, go }: { root: string; stack: string[]; go: (level
                   current ? "bg-field font-semibold text-ink" : "text-ink-2 hover:bg-hover hover:text-ink",
                 )}
               >
-                {n}
+                <FileName name={n} />
               </button>
             </span>
           );
@@ -327,7 +328,7 @@ function EntryRow({ mid, e, full, mark, onOpen, ops }: { mid: string; e: FsEntry
         <FileGlyph name={e.name} dir={e.dir} />
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-1">
-            <span className={cx("truncate text-[13px]", e.ignored ? "text-ink-3" : hidden ? "text-ink-2" : "text-ink")}>{e.name}</span>
+            <FileName name={e.name} className={cx("truncate text-[13px]", e.ignored ? "text-ink-3" : hidden ? "text-ink-2" : "text-ink")} />
             {e.symlink && <Icon name="link" size={11} className="shrink-0 text-ink-3" />}
           </span>
           <span className="flex gap-2 text-[11.5px] whitespace-nowrap text-ink-3 tabular-nums">

@@ -42,12 +42,55 @@ struct FolderEditsTests {
         #expect(move["conflict"] == nil)
     }
 
+    @Test func renamePreservesTheSelectedAndEnteredNames() async throws {
+        let hub = FakeHub()
+        let route = "/api/v1/machines/m1/files/rename"
+        hub.on("POST", route, json: #"{"path":"~/proj/new "}"#)
+        let folder = FileManager.default.temporaryDirectory.appending(path: "folder-edits-\(UUID().uuidString)")
+        let model = AppModel(stateFolder: folder)
+        model.apiForTests = hub.client
+        let edits = FolderEdits()
+        edits.rename("~/proj/old ", to: "old ", cwd: "/project", machine: MachineRef(id: "m1"), model: model) {}
+        #expect(!edits.busy && hub.sent("POST", route).isEmpty)
+        edits.rename("~/proj/old ", to: "new ", cwd: "/project", machine: MachineRef(id: "m1"), model: model) {}
+        try await waitForRefreshTest { !edits.busy }
+        let request = try body(try #require(hub.sent("POST", route).first))
+        #expect(request["path"] as? String == "~/proj/old ")
+        #expect(request["name"] as? String == "new ")
+    }
+
     @Test func namesAreCheckedBeforeAsking() {
         #expect(FolderEdits.nameProblem("notes.txt") == nil)
         #expect(FolderEdits.nameProblem(".env") == nil)
         for bad in ["", "  ", ".", "..", "a/b"] {
             #expect(FolderEdits.nameProblem(bad) != nil, "\(bad)")
         }
+    }
+
+    @Test func whitespaceNamesHaveVisibleAndSpokenBoundaries() throws {
+        let space = String(localized: "space [File Name Whitespace]")
+        let nbsp = String(localized: "non-breaking space [File Name Whitespace]")
+        #expect(FileNameDisplay.label("report") == "report")
+        #expect(FileNameDisplay.spoken("report") == "report")
+        #expect(FileNameDisplay.label("report ") == "⟦\"report\"[\(space)]⟧")
+        #expect(FileNameDisplay.label("report\u{a0}") == "⟦\"report\"[\(nbsp)]⟧")
+        #expect(FileNameDisplay.label("  report\t") == "⟦[\(space) ×2]\"report\"[\(String(localized: "tab [File Name Whitespace]"))]⟧")
+        #expect(FileNameDisplay.label(" \u{a0}") == "⟦[\(space), \(nbsp)]\"\"⟧")
+        #expect(FileNameDisplay.label("report\u{200b}") == "⟦\"report\"[U+200B]⟧")
+        #expect(FileNameDisplay.label("a b") == "a b")
+        let markedParts = try #require(FileNameDisplay.parts(" report "))
+        #expect(markedParts.body == "report" && !markedParts.leading.isEmpty && !markedParts.trailing.isEmpty)
+        #expect(FileNameDisplay.spoken("report ") != FileNameDisplay.spoken("report\u{a0}"))
+        #expect(FileNameDisplay.spoken("report ") != FileNameDisplay.spoken("report"))
+        let marked = FileNameDisplay.label("report ")
+        #expect(marked != FileNameDisplay.label("report[space]"))
+        #expect(marked != FileNameDisplay.label(marked))
+        let spoken = FileNameDisplay.spoken("report ")
+        #expect(spoken != FileNameDisplay.spoken("report, trailing whitespace [space]"))
+        #expect(spoken != FileNameDisplay.spoken(spoken))
+        #expect(FileNameDisplay.hint("report") == "")
+        #expect(FileNameDisplay.hint("report ") == spoken)
+        #expect(FileNameDisplay.label(marked).contains(String(localized: "literal [File Name Whitespace]")))
     }
 
     @Test func refusalsInTheUsersWords() {

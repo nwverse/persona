@@ -1,0 +1,14 @@
+{
+  "space": "space",
+  "nbsp": "non-breaking space",
+  "tab": "tab",
+  "newline": "line break",
+  "return": "carriage return",
+  "marked_prefix": "Name with whitespace",
+  "literal_prefix": "Literal filename",
+  "literal_mark": "literal",
+  "leading": "{name}, leading whitespace {marks}",
+  "trailing": "{name}, trailing whitespace {marks}",
+  "both": "{name}, leading whitespace {leading}, trailing whitespace {trailing}",
+  "only": "Whitespace-only name {marks}"
+}

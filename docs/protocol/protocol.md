@@ -2114,6 +2114,12 @@ Off by default: each computer has a file transfer switch, `GET` / `PUT /api/v1/m
 
 The app's file browser (the session's Files pane, the machine page's Files row) and the web's Files panel can upload into a folder, rename, move, and move to the trash with Undo (#315; web #4883). There is no permanent delete.
 
+File paths and destination directories retain their whitespace: `report` and `report ` are distinct where the file system permits them, and an absent selected name is never retried under a trimmed name. An empty listing path still means `cwd`; a whitespace-only path instead names that entry relative to `cwd`. Existing whitespace-only names can be moved to the trash and restored. The rename controls still reject a new name made only of whitespace. Windows paths with a component ending in an ASCII space are refused before lookup because the platform may resolve them as another entry; non-breaking spaces are not stripped. File systems and operating systems can impose further naming restrictions.
+
+The Files lists, move pickers and confirmations make leading and trailing invisible whitespace visible with localized labels and describe its position to screen readers. The representation escapes literal names that could imitate it; the labels do not change the underlying name, the value in the rename field, or the path sent in any action.
+
+The node announces `exact_file_paths_v1`. An updated hub or manager refuses whitespace-sensitive file requests to a node without that capability with `node_outdated`, while ordinary paths remain usable. Upgrade the hub or manager and the node together: a hub and manager from before this guard cannot protect an older node from its path trimming.
+
 - **Where writes are allowed** (`node/writeguard.go`): inside the home only. A path first passes the read guard (`pathguard.go`: links followed component by component; iCloud, key folders such as `.ssh`,
   private key names and the hub's keys are refused); the real path after following links must still be in the home (the home itself is fine); `~/.persona`, `~/.persona`, `~/Library` and the data folder `PERSONA_HOME` names (unless it is the home itself) are entirely unwritable, and so is a manager's folder anywhere (one holding a manager's `manager.json`, unless it is the home itself); nor may a client write a file named `manager.json*`.
   `../` and links pointing outside the home are judged by where they end up. A refused write is 409 `code: read_only`. Everything outside the home stays read-only.

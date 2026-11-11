@@ -10,7 +10,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -94,7 +93,7 @@ func (d *Devices) setFileTransferOn(ctx context.Context, machine string, on bool
 func (m *Machine) fileTransferState(enabled bool) *proto.MachineFileTransfer {
 	st := &proto.MachineFileTransfer{Enabled: enabled}
 	if enabled {
-		st.Inbox = strings.TrimSpace(m.cfg.InboxDir)
+		st.Inbox = m.cfg.InboxDir
 		if st.Inbox == "" {
 			st.Inbox = proto.DefaultInboxDir
 		}

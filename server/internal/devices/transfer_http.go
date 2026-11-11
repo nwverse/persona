@@ -41,7 +41,7 @@ func (d *Devices) postTransfer(w http.ResponseWriter, r *http.Request) {
 	case strings.TrimSpace(req.From.Machine) == "" || strings.TrimSpace(req.To.Machine) == "":
 		writeErr(w, http.StatusBadRequest, errors.New("from.machine and to.machine are required"))
 		return
-	case strings.TrimSpace(req.From.Path) == "":
+	case req.From.Path == "":
 		writeErr(w, http.StatusBadRequest, errors.New("from.path is required"))
 		return
 	case req.To.Dest != "" && req.To.Dest != proto.UploadDestInbox:

@@ -1,0 +1,14 @@
+{
+  "space": "空格",
+  "nbsp": "不换行空格",
+  "tab": "制表符",
+  "newline": "换行",
+  "return": "回车",
+  "marked_prefix": "含空白的名称",
+  "literal_prefix": "字面文件名",
+  "literal_mark": "字面",
+  "leading": "{name}，开头空白 {marks}",
+  "trailing": "{name}，末尾空白 {marks}",
+  "both": "{name}，开头空白 {leading}，末尾空白 {trailing}",
+  "only": "仅含空白的名称 {marks}"
+}

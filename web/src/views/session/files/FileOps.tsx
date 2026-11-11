@@ -30,6 +30,7 @@ import { contextMenuProps } from "../../../ui/context-menu";
 import type { MenuAt, MenuItem } from "../../../ui/menu-model";
 import { Button, copyText, cx, Dialog, IconButton, Loading, type ToastAction } from "../../../ui/atoms";
 import { Icon } from "../../../ui/icons";
+import { displayFileName, displayFilePath, FileName, spokenFileName, spokenFilePath } from "./FileName";
 import { FileGlyph } from "./parts";
 
 /** A row the actions are about. */
@@ -388,13 +389,14 @@ export function useFileOps({ mid, cwd, path = cwd, workspace = cwd, onChanged }:
             onSelect: () => {},
             rename: {
               value: x.name,
+              preserveWhitespace: true,
               commit: async (name) => {
                 if (!currentOwner(mutationOwner) || renaming) throw new DOMException("aborted", "AbortError");
                 const problem = nameProblem(name);
                 if (problem) throw new Error(problem);
                 renaming = true;
                 try {
-                  await renameEntry(mutationOwner.mid, x.path, mutationOwner.cwd, name.trim(), { ...mutationOwner.credential, isAuthContextCurrent: () => currentOwner(mutationOwner) });
+                  await renameEntry(mutationOwner.mid, x.path, mutationOwner.cwd, name, { ...mutationOwner.credential, isAuthContextCurrent: () => currentOwner(mutationOwner) });
                   if (!currentOwner(mutationOwner)) throw new DOMException("aborted", "AbortError");
                   changed.current([parentOf(x.path)]);
                 } catch (e) {
@@ -488,7 +490,7 @@ function UploadTray({ uploads, onCancel, onRetry }: { uploads: Upload[]; onCance
               <span className="min-w-0 flex-1">
                 <span className="flex items-baseline gap-2">
                   <span className="truncate text-[12.5px] text-ink" title={joinPath(u.dir, u.file.name)}>
-                    {u.file.name}
+                    <FileName name={u.file.name} />
                   </span>
                   <span className="ml-auto shrink-0 text-[11px] text-ink-3 tabular-nums">
                     {u.state === "done" ? t("files-ops.upload_done") : u.state === "queued" ? t("files-ops.upload_waiting") : u.state === "failed" ? "" : `${pct}%`}
@@ -501,7 +503,7 @@ function UploadTray({ uploads, onCancel, onRetry }: { uploads: Upload[]; onCance
                 ) : (
                   <span
                     role="progressbar"
-                    aria-label={u.file.name}
+                    aria-label={spokenFileName(u.file.name)}
                     aria-valuemin={0}
                     aria-valuemax={100}
                     aria-valuenow={pct}
@@ -594,7 +596,10 @@ function NameDialog({ ask }: { ask: NameAsk | null }) {
         </>
       }
     >
-      <p className="text-[13px] leading-relaxed text-ink-2">{ask && t("files-ops.exists_body", { name: ask.name, dir: shortPath(ask.dir) })}</p>
+      <p className="text-[13px] leading-relaxed text-ink-2">{ask && dialogTitle(
+        t("files-ops.exists_body", { name: displayFileName(ask.name), dir: displayFilePath(shortPath(ask.dir)) }),
+        t("files-ops.exists_body", { name: spokenFileName(ask.name), dir: spokenFilePath(shortPath(ask.dir)) }),
+      )}</p>
       {ask && ask.more > 0 && (
         <label className="mt-3 flex items-center gap-2 text-[12.5px] text-ink-2">
           <input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} className="accent-[var(--accent)]" />
@@ -641,12 +646,13 @@ function MoveDialog({
   const sources = useMemo(() => new Set(targets.map((x) => parentOf(x.path))), [targets]);
   // not where they all are already, nor into one of the folders moved
   const blocked = targets.some((x) => x.dir && within(x.path, at)) || (sources.size === 1 && sources.has(at));
-  const title = targets.length === 1 ? t("files-ops.move_one_title", { name: targets[0].name }) : t("files-ops.move_title", { count: targets.length });
+  const title = targets.length === 1 ? t("files-ops.move_one_title", { name: displayFileName(targets[0].name) }) : t("files-ops.move_title", { count: targets.length });
+  const spokenTitle = targets.length === 1 ? t("files-ops.move_one_title", { name: spokenFileName(targets[0].name) }) : title;
   return (
     <Dialog
       open
       onClose={() => !busy && onClose()}
-      title={title}
+      title={dialogTitle(title, spokenTitle)}
       width={420}
       footer={
         <>
@@ -662,7 +668,7 @@ function MoveDialog({
       <div className="flex items-center gap-1 pb-2">
         <IconButton icon="chevronLeft" label={t("files-ops.up")} onClick={() => setAt(parentOf(at))} disabled={at === "/"} iconSize={16} />
         <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-ink" title={at} aria-live="polite">
-          {shortPath(at) || "/"}
+          {dialogTitle(displayFilePath(shortPath(at)) || "/", spokenFilePath(shortPath(at)) || "/")}
         </span>
       </div>
       <div aria-label={t("files-ops.folders")} role="group" className="h-56 overflow-y-auto rounded-[10px] border border-line">
@@ -687,7 +693,7 @@ function MoveDialog({
                 className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] text-ink transition-colors hover:bg-hover disabled:opacity-40"
               >
                 <FileGlyph name={name} dir />
-                <span className="min-w-0 flex-1 truncate">{name}</span>
+                <FileName name={name} className="min-w-0 flex-1 truncate" />
                 <Icon name="chevronRight" size={12} stroke={2.2} className="shrink-0 text-ink-3" />
               </button>
             );
@@ -706,11 +712,13 @@ function MoveDialog({
 /** "Move to trash?": what goes, and that it can be put back. */
 function TrashDialog({ targets, busy, onClose, onTrash }: { targets: OpTarget[] | null; busy: boolean; onClose: () => void; onTrash: () => void }) {
   const one = targets?.length === 1 ? targets[0] : null;
+  const title = one ? t("files-ops.trash_one_title", { name: displayFileName(one.name) }) : t("files-ops.trash_title", { count: targets?.length ?? 0 });
+  const spokenTitle = one ? t("files-ops.trash_one_title", { name: spokenFileName(one.name) }) : title;
   return (
     <Dialog
       open={Boolean(targets)}
       onClose={onClose}
-      title={one ? t("files-ops.trash_one_title", { name: one.name }) : t("files-ops.trash_title", { count: targets?.length ?? 0 })}
+      title={dialogTitle(title, spokenTitle)}
       width={400}
       footer={
         <>
@@ -729,13 +737,18 @@ function TrashDialog({ targets, busy, onClose, onTrash }: { targets: OpTarget[] 
           {targets.map((x) => (
             <li key={x.path} className="flex items-center gap-2 py-0.5">
               <FileGlyph name={x.name} dir={x.dir} />
-              <span className="truncate">{x.name}</span>
+              <FileName name={x.name} className="truncate" />
             </li>
           ))}
         </ul>
       )}
     </Dialog>
   );
+}
+
+function dialogTitle(visible: string, spoken: string): React.ReactNode {
+  if (visible === spoken) return visible;
+  return <><span aria-hidden="true">{visible}</span><span className="sr-only">{spoken}</span></>;
 }
 
 /** The bar a selection brings: how many, and what can be done to them all. */
@@ -760,7 +773,7 @@ export function DropHint({ dir }: { dir: string }) {
     <div aria-hidden className="pointer-events-none absolute inset-1 z-10 flex items-center justify-center rounded-[12px] border-2 border-dashed border-accent bg-accent-tint/50">
       <span className="flex items-center gap-1.5 rounded-full bg-surface px-3 py-1.5 text-[12.5px] font-medium text-ink shadow-btn">
         <Icon name="upload" size={14} />
-        {t("files-ops.drop_here", { dir: baseName(dir) || dir })}
+        {t("files-ops.drop_here", { dir: displayFileName(baseName(dir) || dir) })}
       </span>
     </div>
   );
@@ -795,7 +808,7 @@ export function RowCheck({ ops, x }: { ops: RowOps | undefined; x: OpTarget }) {
       type="checkbox"
       checked={ops.isSelected(x.path)}
       onChange={() => ops.toggle(x)}
-      aria-label={t("files-ops.select_row", { name: x.name })}
+      aria-label={t("files-ops.select_row", { name: spokenFileName(x.name) })}
       className="ml-3 size-3.5 shrink-0 accent-[var(--accent)]"
     />
   );
@@ -804,5 +817,5 @@ export function RowCheck({ ops, x }: { ops: RowOps | undefined; x: OpTarget }) {
 /** The ⋯ at a row's end (hover devices show it on hover, and on focus): the same menu as a right click. */
 export function RowMore({ ops, x, open }: { ops: RowOps | undefined; x: OpTarget; open: () => void }) {
   if (!ops) return null;
-  return <IconButton icon="more" label={t("files-ops.row_more", { name: x.name })} onClick={(e) => ops.menu(x, { anchor: e.currentTarget }, open)} size={26} iconSize={13} />;
+  return <IconButton icon="more" label={t("files-ops.row_more", { name: spokenFileName(x.name) })} onClick={(e) => ops.menu(x, { anchor: e.currentTarget }, open)} size={26} iconSize={13} />;
 }

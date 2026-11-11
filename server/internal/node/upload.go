@@ -216,7 +216,10 @@ func (n *Node) beginInto(dir, cwd, name, conflict string, size, limit int64) (st
 	if err != nil {
 		return "", err
 	}
-	clean := cleanName(name)
+	clean := sanitizeUploadName(name, false)
+	if err := checkNativePath(filepath.Join(real, clean)); err != nil {
+		return "", err
+	}
 	if _, err := os.Lstat(filepath.Join(real, clean)); errors.Is(err, syscall.ENAMETOOLONG) {
 		stem, ext := splitName(clean)
 		clean = stem + ext
@@ -249,10 +252,9 @@ func (n *Node) beginInto(dir, cwd, name, conflict string, size, limit int64) (st
 // the phone may write to (writeguard.go). It is made when missing. The file keeps its name; a taken one gets " 2",
 // " 3"… (conflict keep), so nothing there is ever replaced.
 func (n *Node) beginInbox(dir, name string, size int64) (string, error) {
-	if strings.TrimSpace(dir) == "" {
+	if dir == "" {
 		dir = proto.DefaultInboxDir
 	}
-	dir = strings.TrimSpace(dir)
 	if dir != "~" && !strings.HasPrefix(dir, "~/") && !filepath.IsAbs(dir) {
 		return "", fmt.Errorf("the receive folder must be absolute or start with ~/: %q", dir)
 	}
@@ -470,6 +472,10 @@ func reserveRandomName(dir, name string, _ time.Time) (string, error) {
 
 // cleanName keeps the phone's file name but nothing that would leave the directory or break a terminal.
 func cleanName(name string) string {
+	return sanitizeUploadName(name, true)
+}
+
+func sanitizeUploadName(name string, trim bool) string {
 	name = strings.ToValidUTF8(name, "_")
 	name = strings.Map(func(r rune) rune {
 		if r == '/' || r == '\\' || r < 0x20 || r == 0x7f {
@@ -477,7 +483,9 @@ func cleanName(name string) string {
 		}
 		return r
 	}, name)
-	name = strings.TrimSpace(name)
+	if trim {
+		name = strings.TrimSpace(name)
+	}
 	if name == "" || strings.Trim(name, ".") == "" {
 		return "file"
 	}

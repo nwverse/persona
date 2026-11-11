@@ -832,7 +832,7 @@ function RenameRow({ item, busy, onCommit, onCancel, refCb }: { item: MenuItem; 
           e.preventDefault();
           e.stopPropagation();
           if (problem) return;
-          const name = renameCommit(rename.value, text);
+          const name = renameCommit(rename.value, text, rename.preserveWhitespace);
           if (name === null) onCancel();
           else onCommit(name);
         } else if (e.key === "Escape") {

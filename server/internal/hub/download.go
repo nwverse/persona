@@ -18,7 +18,7 @@ import (
 func (h *Hub) downloadFile(w http.ResponseWriter, r *http.Request, m *Machine) {
 	q := r.URL.Query()
 	p := proto.FileChunkRequest{Path: q.Get("path"), Cwd: q.Get("cwd")}
-	if strings.TrimSpace(p.Path) == "" {
+	if p.Path == "" {
 		writeErr(w, http.StatusBadRequest, errors.New("path is required"))
 		return
 	}
@@ -79,7 +79,7 @@ func (h *Hub) fileThumb(w http.ResponseWriter, r *http.Request, m *Machine) {
 	q := r.URL.Query()
 	p := proto.FileThumbRequest{Path: q.Get("path"), Cwd: q.Get("cwd"), Size: atoi(q.Get("size")),
 		ETag: strings.Trim(r.Header.Get("If-None-Match"), `"`)}
-	if strings.TrimSpace(p.Path) == "" {
+	if p.Path == "" {
 		writeErr(w, http.StatusBadRequest, errors.New("path is required"))
 		return
 	}
@@ -172,7 +172,7 @@ func (f *remoteFileReader) Seek(offset int64, whence int) (int64, error) {
 func (h *Hub) fileConvert(w http.ResponseWriter, r *http.Request, m *Machine) {
 	q := r.URL.Query()
 	p := proto.FileConvertRequest{Path: q.Get("path"), Cwd: q.Get("cwd"), To: q.Get("to")}
-	if strings.TrimSpace(p.Path) == "" {
+	if p.Path == "" {
 		writeErr(w, http.StatusBadRequest, errors.New("path is required"))
 		return
 	}

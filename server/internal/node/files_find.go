@@ -67,7 +67,6 @@ func (n *Node) findFiles(ctx context.Context, dir string, limit int) (*FindResul
 	if limit <= 0 || limit > maxFindFiles {
 		limit = maxFindFiles
 	}
-	dir = strings.TrimSpace(dir)
 	switch {
 	case dir == "~" || strings.HasPrefix(dir, "~/"):
 		dir = filepath.Join(n.home, strings.TrimPrefix(dir, "~"))

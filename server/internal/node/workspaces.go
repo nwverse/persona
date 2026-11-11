@@ -30,7 +30,7 @@ type workspaceDirectoryCache struct {
 // transcripts and live sessions are listed every second, often sharing a cwd.
 func (n *Node) sessionWorkspaceCwd(cwd string) string {
 	path := n.resolvePath(cwd, "")
-	if path == "" || inICloud(path) {
+	if path == "" || checkNativePath(path) != nil || inICloud(path) {
 		return ""
 	}
 	c := &n.workspaceDirs
@@ -123,7 +123,7 @@ func (n *Node) listWorkspaces(ctx context.Context) (proto.WorkspacesResponse, er
 			}
 			seen[s.ID] = true
 			cwd := s.Cwd
-			if path := n.resolvePath(cwd, ""); path != "" && !inICloud(path) {
+			if path := n.resolvePath(cwd, ""); path != "" && checkNativePath(path) == nil && !inICloud(path) {
 				if real, err := filepath.EvalSymlinks(path); err == nil && !inICloud(real) {
 					cwd = real
 				}
@@ -148,6 +148,9 @@ func (n *Node) resolveWorkspace(asked string) (proto.Workspace, error) {
 	path := n.resolvePath(asked, "")
 	if path == "" {
 		return proto.Workspace{}, fmt.Errorf("workspace path must be an absolute directory or ~/ path")
+	}
+	if err := checkNativePath(path); err != nil {
+		return proto.Workspace{}, err
 	}
 	if inICloud(path) {
 		return proto.Workspace{}, fmt.Errorf("iCloud Drive files are not readable remotely")
