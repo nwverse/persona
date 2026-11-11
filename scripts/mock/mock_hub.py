@@ -15910,6 +15910,26 @@ CATALOG = [
     {"market": _MARKET_B, "id": "team-windows", "name": "Windows 工具", "version": "0.2.0", "description": "只有 Windows 版的包。",
      "publisher": "team", "tags": [], "contributes": {"assistant": ["tools"]}, "permissions": [_RUNS], "problem": "没有这台 hub（linux-amd64）能用的包"},
 ]
+# MOCK_EXTENSION_PACK=1 (with MOCK_EXTENSIONS): extension packs (#4072, #4122). Example 合集 is installed from the first
+# market with four members: Example Notes, Example 助手 and example-gateway installed, example-mail not (it keeps its id).
+# Uninstalling it with its members answers 409 partial_uninstall (one member uninstalled, one not, with the hub's reason,
+# one not tried) and changes nothing, so a run can repeat; the real hub tries every member, so its "not tried" is
+# rarely more than the failed ones. Example 套件 isn't installed: its preview names Example Notes as installed and installs
+# Example 日历 together with it.
+if PLUGINS_MODE and os.environ.get("MOCK_EXTENSION_PACK") == "1":
+    PLUGINS["example-pack"] = {
+        "id": "example-pack", "name": "Example 合集", "kind": "extension_pack", "status": "running", "version": "1.0.0",
+        "source": "installed", "enabled": True, "description": "Example 的几个扩展，一起装。", "contributes": {}, "publisher": "example",
+        "origin": "market:%s/example-pack" % _MARKET_A, "form": {"fields": []}, "config": {}, "secrets": [], "permissions": [],
+        "extension_pack": [{"id": "example-notes", "version": ">=1.0.0"}, {"id": "example-helper", "market": "github:example/team-plugins"},
+                           {"id": "example-gateway"}, {"id": "example-mail", "version": ">=0.3.0"}]}
+    CATALOG += [
+        {"market": _MARKET_A, "id": "example-pack", "name": "Example 合集", "version": "1.0.0", "description": "Example 的几个扩展，一起装。",
+         "publisher": "example", "tags": ["合集"], "contributes": {}, "permissions": [], "extension_pack": PLUGINS["example-pack"]["extension_pack"]},
+        {"market": _MARKET_A, "id": "example-suite", "name": "Example 套件", "version": "1.0.0", "description": "笔记和日历，一起装。",
+         "publisher": "example", "tags": ["合集"], "contributes": {}, "permissions": [],
+         "extension_pack": [{"id": "example-notes", "version": ">=1.0.0"}, {"id": "example-calendar", "market": MARKETS[_MARKET_A]["spec"]}]},
+    ]
 _PREVIEWS = {}
 _PREVIEW_BODIES = {}
 
@@ -15934,6 +15954,12 @@ def _ext_make_preview(c):
         if renamed:  # the hub's notice leads the warnings (extension.Preview.In)
             pv["rename_from"] = renamed["id"]
             pv["warnings"] = ["此次更新会将扩展 ID 从 %s 更改为 %s，需要明确确认。设置和数据仍属于同一个安装。" % (renamed["id"], c["id"])]  # i18n-ignore: the hub's words
+    if c.get("extension_pack"):  # a pack: its members, and the ones not installed yet installed together (the bundle)
+        pv["manifest"]["extension_pack"] = c["extension_pack"]
+        ids = {m["id"] for m in c["extension_pack"]}
+        pv["bundle"] = [{"preview_id": "%s-%s" % (pid, b["id"]), "permissions_digest": "d-" + b["id"], "market": b["market"],
+                         "manifest": {"id": b["id"], "name": b["name"], "version": b["version"]}, "permissions": b["permissions"]}
+                        for b in CATALOG if b["id"] in ids and b["id"] not in PLUGINS]
     _PREVIEWS[pid] = c
     _PREVIEW_BODIES[pid] = pv
     return pv
@@ -16410,6 +16436,10 @@ def markets_route(handler, p, body):
         if not PLUGINS[parts[4]].get("origin", "").startswith("market:"):
             handler.send_json({"error": "这个扩展只能在 hub 机器上（personad extension …）或 hub 的管理界面里装、升级和卸载；手机上只能装扩展市场里的",
                                "code": "this_machine_only"}, 403); return True
+        if parts[4] == "example-pack" and q.get("members") == "1":  # MOCK_EXTENSION_PACK: stopped part way, nothing changed
+            handler.send_json({"ok": False, "code": "partial_uninstall", "error": "卸载未完成。已卸载成员：example-notes；未卸载：example-helper。合集仍保留，可以重试。",  # i18n-ignore: the hub's words
+                               "removed_members": ["example-notes"], "failed_members": [{"id": "example-helper", "error": "扩展还在运行，停不下来"}],  # i18n-ignore: the hub's words
+                               "remaining_members": ["example-helper", "example-gateway"]}, 409); return True
         if EXT_OPS:
             # Recorded as an operation either way; async answers at once, else when it is done (as the hub does).
             ext = parts[4]
@@ -19644,9 +19674,12 @@ class H(BaseHTTPRequestHandler):
         # The live screen (#1184): macOS's Screen Sharing on this Mac's own 5900, for a Mac the plugin cua is on for.
         machine = next((m for m in MACHINES if m["id"] == mid), {})
         listed = listed or (port == 5900 and (machine.get("computer", {}).get("enabled") or machine.get("browser", {}).get("enabled")))  # cua or ego (#1507)
+        # MOCK_PREVIEW: a preview's running port is the made-up app's page server (scripts/mock/mock_preview.py).
+        preview_to = mock_preview.forward(port) if preview_route else None
+        listed = listed or preview_to is not None
         if not listed: return self.send_json({"error": "port %d is not an agent's and was not opened" % port}, 403)
         try:
-            to = FAKE_SCREEN["port"] if port == 5900 and FAKE_SCREEN["port"] else port
+            to = preview_to or (FAKE_SCREEN["port"] if port == 5900 and FAKE_SCREEN["port"] else port)
             tcp = socket.create_connection(("127.0.0.1", to), timeout=3)
             tcp.settimeout(None)
         except OSError:
