@@ -124,6 +124,7 @@ var Routes = []string{
 	"POST /api/v1/assistant/conversations/{id}/route",
 	"POST /api/v1/assistant/conversations/{id}/today",
 	"GET /api/v1/assistant/tasks",
+	"GET /api/v1/assistant/tasks/cron",
 	"POST /api/v1/assistant/tasks",
 	"PUT /api/v1/assistant/tasks/{id}",
 	"DELETE /api/v1/assistant/tasks/{id}",
