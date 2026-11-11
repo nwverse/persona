@@ -21,6 +21,7 @@ import { Icon } from "../../ui/icons";
 import { Markdown } from "../../ui/Markdown";
 import { Group, Pill, Row, settingsInputClass, Switch } from "../settings/SettingsParts";
 import { SkillsGroup } from "./Skills";
+import { StandingAuthorizations } from "./StandingAuthorizations";
 import { Tag, textareaClass } from "../assistant/parts";
 import { PersonaAvatar, usePersona } from "../assistant/Persona";
 
@@ -327,6 +328,8 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
           </select>
         </Row>
       </Group>
+
+      <StandingAuthorizations manager={manager} />
 
       {typeof info?.meeting_attendance_default === "string" && (
         <Group anchor="meetings" title={t("settings-assistantsettings.meetings_title")} footer={t("settings-assistantsettings.meeting_attendance_footer")}>

@@ -872,6 +872,19 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
   Both read Screen Sharing from the machine list, as the top bar does. On page open, query `GET …/computer` once, and every 2 seconds during installation / authorization. The hub has no actions such as reboot (`…/computer/reboot` is 404), and neither does this section.
   Screenshots use the `MOCK_COMPUTER=permissions|missing|ready` mock hub.
 
+### Standing authorizations
+
+**Settings › Persona › Standing authorizations** lists the current assistant's registered grants next to its default task permissions.
+Each grant shows its computer, repository/directory, actions, conditions, original user quote, grant time, source and whether the authorized actions can be undone.
+This last field describes the work, not whether the grant can be revoked: every grant has **Revoke…**.
+Known action and condition identifiers have localized labels; other values and user-authored conditions remain visible verbatim.
+
+The group reads `GET /api/v1/assistant/standing-authorizations` and sends `DELETE /api/v1/assistant/standing-authorizations/{id}` only after a confirmation naming the scope and effect.
+Both requests explicitly select the current assistant manager, and changing manager or credentials retires the old view's responses.
+Revocation removes the entry only after the server acknowledges success. Failed reads show a refresh action instead of an empty registry; failed revocations retain the grant and confirmation for safe retry.
+Revocation affects future tasks and approvals, not work or instructions already delivered. There is no web creation route; users request new grants in the main conversation through its existing approval flow.
+The interface requires the companion backend from #4443; an older server's missing route is shown as a load failure.
+
 ### Remembered conversation permissions (#5867)
 
 In a Persona conversation, **⋯ › Session info › Always allowed in this conversation** lists its saved permissions with the tool name and grant time. Each row has **Revoke**. The database stores hashed permission keys, so the list does not invent directory or command details for existing records. A failed read offers Retry; a failed revoke keeps the row. Revoking clears the saved grant and asks the node to stop the current response to remove process-local grants; the next message resumes the conversation. If that reset cannot be confirmed, the dialog keeps a restart warning, including after reopening or reloading the same browser tab.
