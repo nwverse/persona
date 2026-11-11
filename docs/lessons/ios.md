@@ -18,6 +18,13 @@ does not compile): read it where it is set from (`StyleSpec.current.fontDesign`)
 - UI tests of this feature share one mock hub for the whole run, and the hub keeps each recording's live log and asks. A test that reads `asks.first` passes alone and fails after another test asked about the same sample recording. Restart the mock hub (stop it by its port) before each run, or run the test alone.
 - `Text(timerInterval:)` has no text a UI test can read: its accessibility label is the caller's ("Recording time") and the time is the spoken value, so assert on the value. A `Label` carrying an accessibility identifier gives the identifier to its icon too; combine its children first, or the test finds the SF Symbol name as the label.
 
+## A file only tests read still counts as a blocking read (#4695)
+
+`AssistantPickStore` (#3413) reads its picks from UserDefaults in the app and from a file only in a test's own state
+folder, but it read that file with its own `Data(contentsOf:)`, which `scripts/test/test_apple_perf_patterns.py` counts
+(P1) wherever it runs. A model's state-folder files go through `StateCache.load` (one counted read); a write that a test
+reads back at once stays synchronous, since `StateCache.save` writes later.
+
 ## The first Photos query in a process loads the Photos database (#4250)
 
 `PHAsset.fetchAssets` looks cheap, but the first query in a process opens the Photos client database
