@@ -1,10 +1,10 @@
 // The legacy-preference copy (public/compatibility-bootstrap.js) goes into both HTML entry points' <head> as an inline
 // script when they are built, instead of the classic <script src> the source pages load it with. As its own file it
-// was a parser-blocking request on every page load: the service worker passes it through (lib/sw-routes.ts), the hub
-// sends root files with no Cache-Control, and the copy built into personad (embed.FS) has no modification time, so no
-// Last-Modified either: nothing a browser may keep. The page waited for the hub before its first paint, also when the
-// worker had answered with the kept shell because the hub was slow or unreachable. The file stays the one source of the
-// code (scripts/compatibility-identifiers.json lists it as the adapter) and is still copied for shells kept from before.
+// was a parser-blocking request on every page load: the service worker passes it through (lib/sw-routes.ts) and the
+// hub has root files checked again on every load (no-cache, a 304 at best). The page waited a round trip to the hub
+// before its first paint, also when the worker had answered with the kept shell because the hub was slow or
+// unreachable. The file stays the one source of the code (scripts/compatibility-identifiers.json lists it as the
+// adapter) and is still copied for shells kept from before.
 import { readFileSync } from "node:fs";
 import type { Plugin } from "vite";
 
