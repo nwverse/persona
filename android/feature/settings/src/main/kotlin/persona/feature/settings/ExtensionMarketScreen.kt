@@ -262,8 +262,10 @@ fun ExtensionCatalogPage(
         if (removing) packMembers = try { api.extension(extensionId).extensionPack.map { it.id } }
             catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled } catch (_: Exception) { emptyList() }
     }
+    // Read only for a pack: an extension with no members needs no names.
+    val names = rememberExtensionNames(api, removing && packMembers.isNotEmpty() || state.partial != null)
     if (removing && extension != null) UninstallDialog(extension.label, onDismiss = { removing = false }, installedVersion = extension.installed,
-        members = packMembers) { keep, members ->
+        members = names.named(packMembers)) { keep, members ->
         removing = false
         scope.launch { if (model.uninstall(keep, members = members)) feedback?.notice(ExtensionText.uninstalled(res, extension.label, members, model.removal)) }
     }
@@ -275,7 +277,7 @@ fun ExtensionCatalogPage(
                 scope.launch { if (model.confirmCascade()) feedback?.notice(ExtensionText.uninstalled(res, name, ask.members, model.removal)) }
             })
     }
-    state.partial?.let { PackPartialDialog(it, extension?.label ?: extensionId) { model.dismissPartial() } }
+    state.partial?.let { PackPartialDialog(it, extension?.label ?: extensionId, names) { model.dismissPartial() } }
 }
 
 private fun LazyListScope.catalogExtensionBody(
@@ -466,11 +468,28 @@ private fun UninstallChoice(checked: Boolean, onChange: (Boolean) -> Unit, title
 
 /** A pack's uninstall that stopped part way (#1154): what went, what didn't and why, what wasn't tried; nothing is put back. */
 @Composable
-internal fun PackPartialDialog(partial: PackPartial, name: String, onDismiss: () -> Unit) {
+internal fun PackPartialDialog(partial: PackPartial, name: String, names: Map<String, String> = emptyMap(), onDismiss: () -> Unit) {
     val res = LocalResources.current
-    JDialog(onDismiss, title = stringResource(R.string.settings_ext_partial_title), text = ExtensionText.partial(res, partial, name),
+    JDialog(onDismiss, title = stringResource(R.string.settings_ext_partial_title), text = ExtensionText.partial(res, partial, name, names),
         confirm = stringResource(persona.core.designsystem.R.string.designsystem_done) to onDismiss, dismiss = null)
 }
+
+/**
+ * The installed extensions' names by id, read while [active]: a pack's members show by name, as everything else in the
+ * app does (#1154); one not installed (or a list that couldn't be read) keeps its id.
+ */
+@Composable
+internal fun rememberExtensionNames(api: ExtensionManagement, active: Boolean): Map<String, String> {
+    var names by remember(api) { mutableStateOf(emptyMap<String, String>()) }
+    LaunchedEffect(api, active) {
+        if (active) names = try { api.extensions().associate { it.id to it.name.ifBlank { it.id } } }
+            catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled } catch (_: Exception) { names }
+    }
+    return names
+}
+
+/** [ids] by their names in this map, their ids when unknown. */
+internal fun Map<String, String>.named(ids: List<String>): List<String> = ids.map { this[it] ?: it }
 
 /** "Manage markets": the markets the hub reads; add (an address, a token if private), refresh, change the token, remove. */
 @Composable

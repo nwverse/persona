@@ -292,8 +292,10 @@ fun ExtensionPage(
             })
     }
     val current = detail
+    // Read only for a pack: an extension with no members needs no names.
+    val memberNames = rememberExtensionNames(api, removing && current?.extensionPack?.isNotEmpty() == true || state.partial != null)
     if (removing && current != null) UninstallDialog(current.extension.name.ifBlank { current.extension.id }, onDismiss = { removing = false },
-        installedVersion = current.extension.version, members = current.extensionPack.map { it.id }) { keep, members ->
+        installedVersion = current.extension.version, members = memberNames.named(current.extensionPack.map { it.id })) { keep, members ->
         removing = false
         scope.launch {
             if (model.uninstall(keep, members = members)) {
@@ -302,7 +304,7 @@ fun ExtensionPage(
             }
         }
     }
-    state.partial?.let { PackPartialDialog(it, detail?.extension?.name?.ifBlank { null } ?: extensionId) { model.dismissPartial() } }
+    state.partial?.let { PackPartialDialog(it, detail?.extension?.name?.ifBlank { null } ?: extensionId, memberNames) { model.dismissPartial() } }
     // Others depend on it (#5192): named, and switched off with it once agreed.
     state.cascade?.let { ask ->
         val name = detail?.extension?.name?.ifBlank { null } ?: extensionId

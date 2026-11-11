@@ -85,15 +85,19 @@ internal object ExtensionText {
         return res.getQuantityString(R.plurals.settings_ext_uninstalled_members, removed.size, name, removed.size)
     }
 
-    /** The partial-uninstall dialog's lines: what went, what didn't (with the hub's reason) and what wasn't tried. */
-    fun partial(res: Resources, partial: PackPartial, name: String): String {
+    /**
+     * The partial-uninstall dialog's lines: what went, what didn't (with the hub's reason) and what wasn't tried, each
+     * member by its name in [names] (its id when the name isn't known).
+     */
+    fun partial(res: Resources, partial: PackPartial, name: String, names: Map<String, String> = emptyMap()): String {
         val separator = res.getString(R.string.settings_ext_list_separator)
+        fun named(id: String) = names[id] ?: id
         return buildList {
             add(res.getString(R.string.settings_ext_partial_text, name))
-            if (partial.removed.isNotEmpty()) add(res.getString(R.string.settings_ext_partial_removed, partial.removed.joinToString(separator)))
+            if (partial.removed.isNotEmpty()) add(res.getString(R.string.settings_ext_partial_removed, partial.removed.joinToString(separator, transform = ::named)))
             if (partial.failed.isNotEmpty()) add(res.getString(R.string.settings_ext_partial_failed,
-                partial.failed.joinToString(separator) { f -> if (f.error.isBlank()) f.id else res.getString(R.string.settings_ext_partial_failed_item, f.id, f.error) }))
-            if (partial.remaining.isNotEmpty()) add(res.getString(R.string.settings_ext_partial_remaining, partial.remaining.joinToString(separator)))
+                partial.failed.joinToString(separator) { f -> if (f.error.isBlank()) named(f.id) else res.getString(R.string.settings_ext_partial_failed_item, named(f.id), f.error) }))
+            if (partial.remaining.isNotEmpty()) add(res.getString(R.string.settings_ext_partial_remaining, partial.remaining.joinToString(separator, transform = ::named)))
         }.joinToString("\n\n")
     }
 

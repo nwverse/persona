@@ -48,6 +48,8 @@ class ExtensionPackUninstallShotsTest {
         var scene by mutableStateOf("uninstall")
         var run by mutableIntStateOf(0)
         val chosen = mutableListOf<Pair<Boolean, Boolean>>()
+        // Members show by name; one not installed keeps its id.
+        val names = mapOf("example-notes" to "Example Notes", "example-ui" to "Example UI")
         val partial = PackPartial(listOf("example-notes"), listOf(ExtensionFailedMember("example-ui", "it is still running")), listOf("example-mail"))
         rule.setContent {
             PersonaTheme(darkTheme = dark, reduceMotion = true, style = look) {
@@ -55,8 +57,8 @@ class ExtensionPackUninstallShotsTest {
                     key(run) {
                         when (scene) {
                             "uninstall" -> UninstallDialog("Example Pack", onDismiss = {}, installedVersion = "1.2.0",
-                                members = listOf("example-notes", "example-ui", "example-mail")) { keep, members -> chosen += keep to members }
-                            "partial" -> PackPartialDialog(partial, "Example Pack") {}
+                                members = names.named(listOf("example-notes", "example-ui", "example-mail"))) { keep, members -> chosen += keep to members }
+                            "partial" -> PackPartialDialog(partial, "Example Pack", names) {}
                         }
                     }
                 }

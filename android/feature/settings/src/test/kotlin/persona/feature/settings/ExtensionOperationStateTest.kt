@@ -308,6 +308,9 @@ class ExtensionOperationStateTest {
             assertNull(model.state.value.actionError)
             assertEquals("Example Pack 还在。已经卸载的成员不会恢复，可以再试一次。\n\n已卸载：example-ui\n\n未能卸载：example-mail（仍在运行）\n\n未处理，仍已安装：example-docs",
                 ExtensionText.partial(res, partial, "Example Pack"))
+            // By name where the installed list has one.
+            assertEquals("Example Pack 还在。已经卸载的成员不会恢复，可以再试一次。\n\n已卸载：Example UI\n\n未能卸载：example-mail（仍在运行）\n\n未处理，仍已安装：Example Docs",
+                ExtensionText.partial(res, partial, "Example Pack", mapOf("example-ui" to "Example UI", "example-docs" to "Example Docs")))
             model.dismissPartial()
             assertNull(model.state.value.partial)
         }
