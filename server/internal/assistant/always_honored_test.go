@@ -145,7 +145,7 @@ func TestAlwaysHonoredIsTheManagersWord(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatal("the to-do card never showed")
 		}
-		time.Sleep(5 * time.Millisecond)
+		<-time.After(5 * time.Millisecond)
 	}
 	_ = s.resolve("ix_todo", proto.Resolution{Allow: &no})
 	<-done
