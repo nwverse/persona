@@ -387,22 +387,26 @@ struct TerminalPanel: View {
     /// as a message to it would, node `session.start` with `resume_session_id`). Over the page it drags down like
     /// the bar: there is no output under the finger to scroll.
     private var notRunning: some View {
-        Group {
-            if resuming {
-                ProgressView { Text("Resuming…").lineLimit(1) }
-                    .tint(Color(hex: side.foreground))
-            } else {
-                EmptyStateView(symbol: Theme.Icon.terminal, title: String(localized: "No Terminal"),
-                               message: canResume ? String(localized: "This session isn't running on its computer. Resume it to open its terminal.")
-                                   : String(localized: "This session isn't running on its computer. Send it a message to resume it."),
-                               action: canResume ? (title: String(localized: "Resume Session"), run: resumeSession) : nil)
-            }
+        notRunningContent
+            .padding(Theme.Space.page)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(.rect)
+            .modifier(TerminalGrabDrag(grab: grab))
+            .accessibilityIdentifier("terminal-not-running")
+    }
+
+    @ViewBuilder private var notRunningContent: some View {
+        if resuming {
+            ProgressView { Text("Resuming…").lineLimit(1) }
+                .tint(Color(hex: side.foreground))
+        } else if canResume {
+            EmptyStateView(symbol: Theme.Icon.terminal, title: String(localized: "No Terminal"),
+                           message: String(localized: "This session isn't running on its computer. Resume it to open its terminal."),
+                           action: (title: String(localized: "Resume Session"), run: resumeSession))
+        } else {
+            EmptyStateView(symbol: Theme.Icon.terminal, title: String(localized: "No Terminal"),
+                           message: String(localized: "This session isn't running on its computer. Send it a message to resume it."))
         }
-        .padding(Theme.Space.page)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .contentShape(.rect)
-        .gesture(grab.map { grabDrag($0) })
-        .accessibilityIdentifier("terminal-not-running")
     }
 
     /// A Claude Code session in a terminal engine that isn't being started: one Resume Session can bring back. Others
@@ -581,17 +585,9 @@ struct TerminalPanel: View {
         .padding(.trailing, Theme.Space.xs)
         .scaledFrame(height: Theme.Size.tapTarget)
         .contentShape(.rect)
-        .gesture(grabDrag(g))
+        .modifier(TerminalGrabDrag(grab: g))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("terminal-bar")
-    }
-
-    /// The bar's drag (and the no-terminal state's): the cover follows the finger down, and goes when let go far or
-    /// fast enough.
-    private func grabDrag(_ g: TerminalGrab) -> some Gesture {
-        DragGesture(minimumDistance: 4, coordinateSpace: .global)
-            .onChanged { g.dragged($0.translation.height) }
-            .onEnded { g.released($0.translation.height, $0.predictedEndTranslation.height) }
     }
 
     private var cardHeader: some View {
@@ -1644,5 +1640,21 @@ struct TerminalGrab {
     var dragged: (CGFloat) -> Void
     var released: (_ distance: CGFloat, _ predicted: CGFloat) -> Void
     var close: () -> Void
+}
+
+/// The cover's drag down, on its bar and on the no-terminal state (#4328): the terminal follows the finger, and goes
+/// when let go far or fast enough. Nothing where there is no cover to drag (the panel in place).
+private struct TerminalGrabDrag: ViewModifier {
+    var grab: TerminalGrab?
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if let grab {
+            content.gesture(DragGesture(minimumDistance: 4, coordinateSpace: .global)
+                .onChanged { grab.dragged($0.translation.height) }
+                .onEnded { grab.released($0.translation.height, $0.predictedEndTranslation.height) })
+        } else {
+            content
+        }
+    }
 }
 
