@@ -57,7 +57,7 @@ func TestHeldModelPutsTheWorkOff(t *testing.T) {
 	if n := e.DedupeProjects(ctx, 3); n != 0 {
 		t.Fatalf("merged %d", n)
 	}
-	if err := e.TagItems(ctx); !ai.IsPaused(err) {
+	if _, err := e.TagItems(ctx, 10); !ai.IsPaused(err) {
 		t.Fatalf("tag items: %v", err)
 	}
 	if m.calls != 4 || len(logs) != 0 {
@@ -92,7 +92,7 @@ func TestHeldModelPutsTheWorkOff(t *testing.T) {
 	if m.calls == before || len(st.dedupeVerdicts()) == 0 {
 		t.Fatal("the pairs were not asked about again")
 	}
-	if err := e.TagItems(ctx); err != nil {
+	if _, err := e.TagItems(ctx, 10); err != nil {
 		t.Fatal(err)
 	}
 	if c, _ := st.Chat("lark-f1"); c.Pending != 0 {
