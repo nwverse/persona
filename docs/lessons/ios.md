@@ -1433,6 +1433,28 @@ no initial Working row so the message shifted by one row, and pending local remo
   - Inspect keyboard UI at SE size; iOS 27.1 simulator has no SE, use 27.0.
   - Do not `swipeUp` for options in small regions: fast flings overshoot and header-start swipes do not scroll. Hold, slow-drag, pause at end (`press(forDuration:thenDragTo:withVelocity:thenHoldForDuration:)`), starting inside the scrolling area.
 
+## A view that places itself over the whole screen gets no keyboard avoidance (2026-11-10, #3004)
+
+- The + panel (`AttachSheet`) measures the screen in a `GeometryReader` (size plus safe-area insets, which with the keyboard
+  up include it) and places the sheet with `.position` under `ignoresSafeArea(.container)`. The keyboard only shrank the
+  space it was placed in, the sheet kept its full height, and the caption bar at its bottom sat under the keyboard.
+- Such a view ignores the keyboard's safe area (`.ignoresSafeArea(.keyboard)`) and follows the keyboard itself:
+  `keyboardWillChangeFrameNotification`'s end frame against the screen (`AttachSheetPhysics.keyboardReach`), as padding on
+  what must stay above it, animated with `Theme.Motion.keyboard`. Check it on an SE-size iPhone with the keyboard up.
+- Padding does not hold a `ScrollView` above the keyboard there: on iOS 27 the grid padded by the keyboard's height still
+  reached the screen's bottom (its frame in XCUITest too) and drew under the glass keyboard. The panel lets it, and a
+  drag of the grid puts the keyboard away; a test asserts on what must stay visible, not on the scroll view's frame.
+- `.scrollDismissesKeyboard(.immediately)` on the grid scrolled it and left the caption's keyboard up (the field is
+  outside the scroll view): call `Keyboard.dismiss()` on `.interacting` in `onScrollPhaseChange`, as the chat list does
+  (#1823). XCUITest's keyboard element is the keys alone: the suggestion bar sits above its `minY`.
+- XCUITest's `typeText` can hide the keyboard while it switches layouts (zh-Hans to English and back) and bring it back
+  a moment later. A swipe right after typing then lands with the keyboard down: in the panel the pull at the grid's top
+  was the sheet's, it dropped to rest and the still-focused caption brought the keyboard back. Wait until what rides
+  on the keyboard is back on it before dragging, and assert the keyboard stays down and the sheet stays put.
+- `swipeDown()` on an element starts at its middle. With the keyboard up on an SE at the largest text sizes, the grid's
+  middle was under the caption, so the swipe moved the text cursor and the keyboard stayed. Drag from a point in the
+  part that shows, between the header and the caption.
+
 ## Row `confirmationDialog` lacks Cancel (2026-11-05, #1830)
 
 - Enabling an extension for a computer used `confirmationDialog`; iPhone showed only Enable, no `role: .cancel` button, with a field-name title lacking computer identity.
