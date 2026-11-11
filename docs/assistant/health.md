@@ -101,10 +101,26 @@ Explicit reminders created with `phone_reminders_create` keep the user-requested
 
 Known limit: a gate proxy address does not know who calls it. A process in a health conversation could in principle learn the address of another conversation (another process of the same user has an environment that can be read), the same kind of gap as the Bash one under "How directories and memory are isolated": closing it needs the sandbox or OS-level isolation (see "Later").
 
+## Entering Health (#4329)
+
+Entering Health goes straight back to the latest health chat, with its context, as Codex does; **New** starts another. One rule on every client:
+
+- **Has history**: the sidebar's **Health** opens the open (not archived) health chat with the newest last activity (`updated_at`, the order the Health lists already use).
+  The list is `GET /api/v1/assistant?space=health` with the pushed sessions carrying `space: "health"` over it; no endpoint of its own.
+- **No history**: it opens the new health chat page (the Health home: input box, suggested questions, reports, memory, sources, privacy); the first message starts the chat, as **New Chat** does in the main space.
+  A list that cannot be read lands here too, where the list section says why.
+- **New**: a health chat's header has a **New** button that opens the new health chat page, whose **Health Chats** list has every past one; on the web a clock button next to it lists them as a menu as well.
+
+| Client | Where |
+| --- | --- |
+| Web | `/health` resumes and replaces itself (Back skips it); `/health/new` is the new chat page; `views/health/entry.ts` `healthEntry`, header buttons `HealthChatActions` in `views/health/Health.tsx`. Tests: `entry.test.ts`, `Health.conversation.test.tsx` |
+| iOS / Mac | the sidebar's **Health** runs `AssistantView.enterHealth` (`HealthModel.entry`); the top bar's **New Chat** in a health chat pushes the Health page (`HealthModel.newOpensHealth`). `-openAssistantPage health` / `-openShellPage health` still show the page itself. Tests: `HealthModelTests` |
+| Android | the assistant sidebar's **Health** (`HealthEntry.resolve`), see "Android entry point" below |
+
 ## Web entry point
 
-- A separate **Health** item in the sidebar opens `/health`.
-- Home: a one-line privacy note (chats and memory stay in the Health space, data is on your own hub, not a substitute for a doctor), data sources (Apple Health / Health Connect, via the phone's `phone_health_summary` / `phone_health_write_sample`; Persona must be open on the phone and authorized),
+- A separate **Health** item in the sidebar opens `/health`, which resumes the latest health chat ("Entering Health" above).
+- Home (`/health/new`, the new health chat page): a one-line privacy note (chats and memory stay in the Health space, data is on your own hub, not a substitute for a doctor), data sources (Apple Health / Health Connect, via the phone's `phone_health_summary` / `phone_health_write_sample`; Persona must be open on the phone and authorized),
   suggested questions (tap one to start a health chat with it), past health chats, health memory (view, delete).
 - Tapping a chat opens `/health/<id>`, the same chat page as other assistant chats.
 - Health chats no longer appear in the main chat's history list.
@@ -116,7 +132,7 @@ Verification image removed; see the associated PR.
 
 ## iOS and Mac entry points (#2901)
 
-- Entry: a **Health** row below **Knowledge** in the assistant sidebar (in the new shell's drawer it sits between **Knowledge** and **Machines**; in the Mac split-view list it is below **Scheduled Tasks**), pushing the Health page (`apple/Persona/Views/Assistant/HealthView.swift`, shared by iOS and Mac).
+- Entry: a **Health** row below **Knowledge** in the assistant sidebar (in the new shell's drawer it sits between **Knowledge** and **Machines**; in the Mac split-view list it is below **Scheduled Tasks**), opening the latest health chat, or the Health page when there is none ("Entering Health" above; `apple/Persona/Views/Assistant/HealthView.swift`, shared by iOS and Mac).
 - Health page: a one-line note, suggested questions (tap one to start a health chat with it), health chats (`GET /api/v1/assistant?space=health`, merged with pushed ones carrying `space: "health"`; swipe / right-click to archive),
   health memory (pushes the memory page `AssistantMemoryView(space: "health")`; view, edit and delete all carry `?space=health`), data sources, privacy. At the bottom is an input box; sending does `POST /api/v1/assistant/conversations` with `"space":"health"`, never set as the main chat.
 - Health chats that are started or tapped open in the Persona page's chat, the same chat page as other assistant chats; go back to the Health page via **Health** in the sidebar.

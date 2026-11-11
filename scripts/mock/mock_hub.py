@@ -1581,7 +1581,8 @@ def health_sess(sid, title, minutes, last):
     return {**assistant_sess(sid, title, minutes, last), "cwd": "/home/me/.persona/health", "space": "health"}
 
 
-ASSISTANT += [
+# MOCK_HEALTH_EMPTY=1: the health space has no conversations yet (entering Health opens its new conversation page, #4329).
+ASSISTANT += [] if os.environ.get("MOCK_HEALTH_EMPTY") else [
     health_sess("hlth0001-0000-4000-8000-000000000001", "这周的睡眠", 40, "这周平均每晚睡 6 小时 42 分，比上周少 18 分钟。"),
     health_sess("hlth0002-0000-4000-8000-000000000002", "体检报告：血脂", 60 * 26, "LDL 3.6 mmol/L，略高于参考范围，建议三个月后复查。"),
     health_sess("hlth0003-0000-4000-8000-000000000003", "步数目标", 60 * 70, "最近 7 天平均 7,860 步，离每天 8,000 步差一点。"),
