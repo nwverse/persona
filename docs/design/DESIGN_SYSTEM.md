@@ -426,6 +426,12 @@ Assistant avatar: a disc with the first character of the assistant's name. The d
 
 The web task stage strip (#3380) reuses `TodoStageBar` on the task detail, home card and briefing. `stage_kind: general` omits the strip: the existing task status already describes non-code progress. Code tasks keep the six steps and `aria-current="step"`; unknown kinds retain the legacy display. `plan` is current only for a pending plan-approval card before review, not guessed from prose or a running state. GitHub links retain `PR #N`; GitLab-style merge request paths on any host read `MR !N`, with the existing link behavior and tokens unchanged. No new setting, visual style or motion is introduced.
 
+Model configuration reuses settings `Group` / `Row` and neutral `Pill` components for execution-form groups and chips
+(`docs/assistant/model-config.md`, "Execution form"). Long explanatory pills opt into `wrap` on narrow rows; other
+pills keep their existing single-line layout. A separate, labelled 44 px **?** control expands help inline on
+hover, focus or click, with Escape/outside-click dismissal. Why inline: explanations include environment and configuration
+details that must remain readable on phones and at larger text sizes; a short tooltip or a nested button would not fit.
+
 Assistant In progress activity marks (#3588) reuse the existing Working spinner (`TaskMark` on web, `JSpinner` on
 Android) for active background commands, Monitor, workflows and subagents. A waiting parent is not an idle task.
 The subtitle, not another icon vocabulary, explains what is running and its counts/phase; only a real wait with no
