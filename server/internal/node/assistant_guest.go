@@ -182,14 +182,24 @@ func (n *Node) assistantGuestDelete(params json.RawMessage) (any, error) {
 	case transcript != "" && filepath.Base(filepath.Dir(transcript)) != claudeProjectName(dir):
 		return nil, errors.New("not this meeting's room")
 	}
-	n.stopAssistant(a.SessionID)
+	// Claude Code writes its last lines into the transcript as it exits (the last prompt, its costs): removed before
+	// then, the file came back with the owner's last question in it (#4665). One still running is asked again.
+	n.cancelAssistantRecovery(a.SessionID)
+	if p := n.takeAssistant(a.SessionID); p != nil && stopAndWait([]*assistantProc{p}) > 0 {
+		return nil, errors.New("the room's process is still running")
+	}
 	if transcript != "" {
 		if err := os.Remove(transcript); err != nil && !os.IsNotExist(err) {
 			return nil, err
 		}
-		// What Claude Code keeps beside it (tool results, subagents).
+		// What Claude Code keeps beside it (tool results, subagents), and its folder for the session in the profile.
 		if err := os.RemoveAll(strings.TrimSuffix(transcript, ".jsonl")); err != nil {
 			return nil, err
+		}
+		if projects := filepath.Dir(filepath.Dir(transcript)); filepath.Base(projects) == "projects" {
+			if err := os.RemoveAll(filepath.Join(filepath.Dir(projects), "session-env", a.SessionID)); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if err := os.RemoveAll(dir); err != nil {
