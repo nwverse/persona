@@ -421,6 +421,6 @@ private fun resourceOf(key: CoreText.Key): Int = when (key) {
     CoreText.Key.WorkflowFailed -> R.string.designsystem_core_workflow_failed
     CoreText.Key.WorkflowKilled -> R.string.designsystem_core_workflow_killed
     CoreText.Key.WorkflowStalled -> R.string.designsystem_core_workflow_stalled
-    CoreText.Key.WorkflowAgentsDone -> R.string.designsystem_core_workflow_agents_done
+    CoreText.Key.WorkflowAgentsDone -> -R.plurals.designsystem_core_workflow_agents_done
     CoreText.Key.Verbatim, CoreText.Key.Joined -> error("no resource")
 }
