@@ -155,6 +155,13 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
   The apps take only block lines starting with `/` or `~` as photos; reading `path:` lines as photos would show each picture twice next to the transcript's image item.
   The `path:` lines and the block's tags make a message with words more than the two line breaks Claude shows inline (2.1.316 folds a paste with more into `[Pasted text #n +k lines]`, or one over 800 characters),
   so its box shows `[Image #1][Pasted text #2 +3 lines]`: the stuck-prompt check (`ensureSubmitted`) takes that placeholder after image chips as the message (`pastePlaceholder`, `longPaste`).
+- Startup submission needs the same placeholder recognition as ordinary sends (#4794, Claude Code 2.1.322):
+  `stillPrompted` removes `[Image #n]` and `[Pasted text #n +k lines]`; a chip-only draft has no visible words left,
+  so using it alone both skips recovery Enter and reports the owned draft as someone else's. Use `pendingPrompt`
+  under the startup typing lock, keep checking during the confirmation window, and retry only Enter with a grace
+  between attempts. Once recovery Enter was attempted, an empty box without a transcript receipt is ambiguous,
+  not permission to paste again. A later follow-up's timestamp can show it was queued after work began; do not
+  attribute the original submission to that follow-up without a terminal-key receipt.
 - An image message once remained unsent in Claude's input box (2026-10-31, Claude Code 2.1.206: `[Image #1]` and text in the box, Agent `done`, Enter on the computer sent it).
   Forty-two later attempts in a separate herdr session (small PNG, 1.8 MB JPEG, saturated CPU) didn't reproduce it; cause unknown. On 11-01 a phone photo did it again. node fallback (`ensureSubmitted`): 2 seconds after sending,
   read the input box once; if it's still the just-sent text (strip `[Image #n]` / `[Pasted text #n]`, compare the first few words), press Enter once more. If empty or different, press nothing.

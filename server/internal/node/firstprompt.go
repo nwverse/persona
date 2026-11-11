@@ -33,7 +33,7 @@ const firstPromptTries = 3
 // a budget of its own), and messages sent to the session meanwhile wait for the check (the typing lock), so a
 // message typed again cannot mix with them. An error: the host refused the first message (nothing went in).
 func (n *Node) firstPrompt(ctx context.Context, pane, id, prompt string, a *host.Agent) error {
-	prompt = inertControls(prompt) // as hostPrompt pastes it: the box is matched against it
+	prompt = inertControls(keepImagePaths(prompt)) // the same image-path/paste form as other Claude sends
 	since := time.Now()
 	if a != nil && a.AgentStatus == proto.StatusBlocked {
 		n.lostFirst.set(id, lostDialog, since) // a dialog of Claude's own has the keyboard: the message would answer it
@@ -70,10 +70,19 @@ func (n *Node) firstPrompt(ctx context.Context, pane, id, prompt string, a *host
 func (n *Node) confirmFirst(ctx context.Context, pane, id, prompt string, since time.Time) string {
 	typedAt := since
 	for try := 1; ; try++ {
-		if n.firstPromptTaken(ctx, pane, id, prompt, since, typedAt) {
+		taken, entered := n.firstPromptTaken(ctx, pane, id, prompt, since, typedAt)
+		if taken {
 			return ""
 		}
 		if ctx.Err() != nil {
+			return lostTimeout
+		}
+		if entered {
+			// Enter may have submitted it even if the transcript is late. Never paste it again after that;
+			// the owned draft was retried in firstPromptTaken, and an empty box is not proof of a dropped prompt.
+			if why := n.readyForFirstPrompt(ctx, pane, prompt); why != "" {
+				return why
+			}
 			return lostTimeout
 		}
 		if try == firstPromptTries {
@@ -107,35 +116,43 @@ const (
 	lostUltracode = "ultracode 的开关命令可能还停在电脑上的输入框里，首条消息没有送进去，Agent 还没开始：看看电脑上的终端，再在这里把任务重发一遍。"
 )
 
-// firstPromptTaken waits for the transcript to show a message from since on, for firstPromptWait after it was typed
-// (typedAt). A message still in the box after submitGrace gets one Enter (as ensureSubmitted does for other sends).
-// Not in the transcript by then: taken only if Claude works on something now (typing it again would run it twice).
-func (n *Node) firstPromptTaken(ctx context.Context, pane, id, prompt string, since, typedAt time.Time) bool {
+// firstPromptTaken waits for the transcript to show a message from since on, for firstPromptWait after it was typed.
+// While the owned draft remains (including image/long-paste placeholders), retry only Enter, with submitGrace
+// between attempts: image decoding can swallow an early Enter. Never press keys on a dialog or another draft.
+// entered records any attempted Enter, even a failed RPC: its delivery is ambiguous, so the caller must not re-paste.
+// At the deadline, working also counts as taken: typing it again would run it twice.
+func (n *Node) firstPromptTaken(ctx context.Context, pane, id, prompt string, since, typedAt time.Time) (taken, entered bool) {
 	deadline := typedAt.Add(firstPromptWait)
-	entered := false
+	nextEnter := typedAt.Add(submitGrace)
 	for {
 		select {
 		case <-ctx.Done():
-			return false
+			return false, entered
 		case <-time.After(firstPromptPoll):
 		}
 		if n.promptedSince(id, since) {
-			return true
+			return true, entered
 		}
 		if time.Now().After(deadline) {
 			break
 		}
-		if !entered && time.Since(typedAt) >= submitGrace {
+		if !time.Now().Before(nextEnter) {
 			if s, err := n.readPaneANSI(ctx, pane, "visible", 60); err == nil {
-				if in := screen.ClaudeInput(s); in.Box && in.Draft && stillPrompted(in.Text, prompt) {
+				if code, in := screen.CheckClaude(s); code == screen.InputDraft && pendingPrompt(in.Text, prompt) {
+					// The transcript may have appeared during the screen read. Do not send another Enter then.
+					if n.promptedSince(id, since) {
+						return true, entered
+					}
 					entered = true
+					n.logf("start %s: first prompt still in the input box, pressing enter", id)
 					_ = n.sendKeys(ctx, pane, "enter")
+					nextEnter = time.Now().Add(submitGrace)
 				}
 			}
 		}
 	}
 	a, err := n.paneAgent(ctx, pane)
-	return err == nil && a.AgentStatus == proto.StatusWorking
+	return err == nil && a.AgentStatus == proto.StatusWorking, entered
 }
 
 // firstPromptPoll is how often firstPromptTaken looks at the transcript.
@@ -162,7 +179,7 @@ func (n *Node) readyForFirstPrompt(ctx context.Context, pane, prompt string) str
 	switch code, in := screen.CheckClaude(s); {
 	case code == screen.DialogOpen:
 		return lostDialog
-	case code == screen.InputDraft && stillPrompted(in.Text, prompt):
+	case code == screen.InputDraft && pendingPrompt(in.Text, prompt):
 		return lostDraft
 	case code == screen.InputDraft:
 		return lostOther
