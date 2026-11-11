@@ -313,9 +313,10 @@ nonisolated struct RepoTree {
             // A linked tree takes the name its host gave it (#4768, as the web's and Android's By Repository), its branch
             // staying on it and its id its path. The main checkout keeps its name: several workspaces can share it. So
             // does a tree with an Orca agent in it (every tree Orca places has one), which Orca names.
-            for i in repo.worktrees.indices
-            where !repo.worktrees[i].main && !repo.worktrees[i].sessions.contains(where: { $0.spaceKind == "orca" }) {
-                if let name = hostPlaceName(repo.worktrees[i].sessions) { repo.worktrees[i].name = name }
+            for i in repo.worktrees.indices {
+                let w = repo.worktrees[i]
+                guard !w.main, !w.sessions.contains(where: { $0.spaceKind == "orca" }), let name = hostPlaceName(w.sessions) else { continue }
+                repo.worktrees[i].name = name
             }
             repo.worktrees.sort { a, b in
                 if a.catalog && b.catalog, let ai = a.workspace?.index, let bi = b.workspace?.index, ai != bi { return ai < bi }
