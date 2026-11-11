@@ -55,7 +55,7 @@ internal fun LazyListScope.keyStep(
     }
     if (!state.hubNames) nameStepField(state, editable, onEdit)
     item("key") {
-        JTextField(draft.apiKey, { onEdit(draft.copy(apiKey = it)) }, Modifier.fillMaxWidth().padding(top = Tokens.Space.m), label = "API Key",
+        JTextField(draft.apiKey, { onEdit(draft.copy(apiKey = it)) }, Modifier.fillMaxWidth().padding(top = Tokens.Space.m), label = "API Key", // i18n-ignore: the field name providers' docs use, same on iOS / web
             placeholder = stringResource(R.string.settings_onb_key_paste), singleLine = true, enabled = editable,
             visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
             supportingText = preset.keyHint?.takeIf { it.isNotBlank() }?.let { stringResource(R.string.settings_onb_key_hint_with, it) }
