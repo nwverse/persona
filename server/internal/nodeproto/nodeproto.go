@@ -92,6 +92,11 @@ const (
 	ProgramPersonaNode = "persona-node"
 )
 
+// RestartExitCode is how a resident node on Windows, which has no exec, asks its supervisor to start the installed
+// program again at once: it exits with this code after an update or a rollback put another file in place
+// (nodeupdate.Restart), and persona-link's scheduled-task supervisor restarts it without its usual delay.
+const RestartExitCode = 75
+
 // Announced is what a node built from this code announces.
 var Announced = []string{ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, Sessions, ModelConfiguration, AssistantConfigDir, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv}
 

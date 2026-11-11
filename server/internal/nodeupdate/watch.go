@@ -37,6 +37,9 @@ type pending struct {
 
 func markerPath(exe string) string { return exe + ".node-update-pending.json" }
 
+// backupPath is where transaction id keeps the old program, which the watchdog runs from (hence exeSuffix).
+func backupPath(exe, id string) string { return exe + ".node-update-backup-" + id + exeSuffix }
+
 func savePending(p pending) error {
 	b, err := json.Marshal(p)
 	if err != nil {
@@ -88,7 +91,7 @@ func loadPending(path string) (pending, error) {
 		p.WatchPID, p.WatchStart, p.WatchPrecise = ready.PID, ready.Start, ready.Precise
 	}
 	id, idErr := hex.DecodeString(p.ID)
-	if idErr != nil || len(id) != 16 || filepath.Clean(p.Exe) != p.Exe || filepath.IsAbs(p.Exe) == false || markerPath(p.Exe) != path || p.Backup != p.Exe+".node-update-backup-"+p.ID || filepath.Dir(p.Stage) != filepath.Dir(p.Exe) || !strings.HasPrefix(filepath.Base(p.Stage), ".node-update-stage-") || p.PID < 2 || len(p.OldHash) != 64 || len(p.NewHash) != 64 || p.Deadline.IsZero() {
+	if idErr != nil || len(id) != 16 || filepath.Clean(p.Exe) != p.Exe || filepath.IsAbs(p.Exe) == false || markerPath(p.Exe) != path || p.Backup != backupPath(p.Exe, p.ID) || filepath.Dir(p.Stage) != filepath.Dir(p.Exe) || !strings.HasPrefix(filepath.Base(p.Stage), ".node-update-stage-") || p.PID < 2 || len(p.OldHash) != 64 || len(p.NewHash) != 64 || p.Deadline.IsZero() {
 		return p, errors.New("invalid node update transaction marker")
 	}
 	return p, nil
@@ -162,6 +165,7 @@ func (m *Manager) RestartRequired() bool { return m.needsRestart }
 func (m *Manager) Executable() string    { return m.exe }
 
 func (m *Manager) cleanStaleStages(keep string) error {
+	removeRetired(filepath.Dir(m.exe))
 	paths, err := filepath.Glob(filepath.Join(filepath.Dir(m.exe), ".node-update-stage-*"))
 	if err != nil {
 		return err
@@ -183,6 +187,9 @@ func (m *Manager) cleanStaleStages(keep string) error {
 func startWatchdog(backup, path, id string) error {
 	if runtime.GOOS == "linux" && os.Getenv("INVOCATION_ID") != "" {
 		return startSystemdWatchdog(backup, path, id)
+	}
+	if runtime.GOOS == "windows" {
+		return startDetachedManagedWatchdog(backup, path, id)
 	}
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -239,6 +246,36 @@ func startSystemdWatchdog(backup, path, id string) error {
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("start independent systemd watchdog: %w", err)
 	}
+	if err := waitManagedReady(ctx, path, id); err != nil {
+		return fmt.Errorf("systemd watchdog: %w", err)
+	}
+	return nil
+}
+
+// On Windows a child gets no inherited descriptor beyond stdin, stdout and stderr (exec.Cmd.ExtraFiles), so the
+// detached watchdog says it is ready through the transaction marker, as the systemd one does. It is detached from the
+// node's console and outlives the node; it does stay in the supervisor's job, so it ends with the supervisor, and the
+// next node's startup recovery starts another (recover).
+func startDetachedManagedWatchdog(backup, path, id string) error {
+	cmd := exec.Command(backup, "node-update-watch", path, id, "--managed-ready")
+	cmd.SysProcAttr = osproc.DetachedAttr()
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	if err := waitManagedReady(ctx, path, id); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return fmt.Errorf("watchdog did not become ready: %w", err)
+	}
+	go func() { _ = cmd.Wait() }() // releases the process handle once it exits
+	return nil
+}
+
+// waitManagedReady waits for the watchdog of transaction id to record itself in the marker (WatchManaged) and to be
+// running as the process it recorded.
+func waitManagedReady(ctx context.Context, path, id string) error {
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -254,7 +291,7 @@ func startSystemdWatchdog(backup, path, id string) error {
 		}
 		select {
 		case <-ctx.Done():
-			return errors.New("systemd watchdog did not become ready")
+			return errors.New("not ready in time")
 		case <-ticker.C:
 		}
 	}
@@ -411,8 +448,9 @@ func cleanup(p pending) error {
 	if err := os.Remove(markerPath(p.Exe)); err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	_ = os.Remove(p.Backup)
+	discard(p.Backup) // the watchdog may still run from it
 	_ = os.Remove(p.Stage)
+	removeRetired(filepath.Dir(p.Exe))
 	return syncDir(filepath.Dir(p.Exe))
 }
 
@@ -421,16 +459,8 @@ func cleanupPendingOnly(p pending) error {
 	if err := os.Remove(markerPath(p.Exe)); err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	_ = os.Remove(p.Backup)
+	discard(p.Backup)
 	return syncDir(filepath.Dir(p.Exe))
-}
-func processStart(pid int) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "ps", "-p", fmt.Sprint(pid), "-o", "lstart=")
-	cmd.Env = append(os.Environ(), "LC_ALL=C", "TZ=UTC")
-	out, err := cmd.Output()
-	return strings.TrimSpace(string(out)), err
 }
 
 // aliveIs says whether pid is still the exact recorded process instance. The

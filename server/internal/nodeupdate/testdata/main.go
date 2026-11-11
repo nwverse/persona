@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
-	"syscall"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/nodeupdate"
@@ -126,8 +125,11 @@ func main() {
 	}
 	mustExec(m.Executable())
 }
+
+// mustExec restarts onto the installed file as the resident node does: exec in place, or on Windows an exit its
+// supervisor answers with an immediate restart.
 func mustExec(path string) {
-	if err := syscall.Exec(path, os.Args, os.Environ()); err != nil {
+	if err := nodeupdate.Restart(path); err != nil {
 		panic(err)
 	}
 }

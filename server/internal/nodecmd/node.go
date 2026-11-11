@@ -118,7 +118,8 @@ func residentArgs(args []string) (supervised bool, err error) {
 
 // runResident is `personad node --attach`: relays over ssh, and the hub over tailcat when this machine is set up for
 // it. A new binary arriving over tailcat ends it (exit 0): its supervisor starts the new one. supervised: started with
-// --supervised, something other than systemd or launchd restarts it when it exits (nodeupdate.Options).
+// --supervised, something other than systemd or launchd restarts it when it exits (nodeupdate.Options): a container's
+// entry script, or persona-link's scheduled-task supervisor on Windows.
 func runResident(ctx context.Context, b Build, supervised bool) error {
 	// tailcat stops only after Attach has closed the hub's connection: torn down first, the close would never reach
 	// the hub, which would then take the dead connection for a live one until its pings went unanswered.
@@ -131,7 +132,7 @@ func runResident(ctx context.Context, b Build, supervised bool) error {
 	node.SetResident(b.Program, b.Version)
 	defer updater.Close()
 	if updater.RestartRequired() {
-		return syscall.Exec(updater.Executable(), os.Args, os.Environ())
+		return nodeupdate.Restart(updater.Executable())
 	}
 	logger := log.New(os.Stderr, "", log.LstdFlags)
 	conns, stopped, err := node.ServeTailcat(tctx, logger, func() {
@@ -178,10 +179,10 @@ func runResident(ctx context.Context, b Build, supervised bool) error {
 	<-stopped
 	select {
 	case <-restart:
-		return syscall.Exec(updater.Executable(), os.Args, os.Environ())
+		return nodeupdate.Restart(updater.Executable())
 	case <-restartIdle:
 		logger.Printf("restarting on %s", updater.Executable())
-		return syscall.Exec(updater.Executable(), os.Args, os.Environ())
+		return nodeupdate.Restart(updater.Executable())
 	default:
 		return err
 	}

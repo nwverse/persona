@@ -69,6 +69,11 @@ type Options struct {
 // (devices-deploy.node_ps_no_start).
 const psNoStart = "ps 读不出进程的启动时间，无法核对回滚进程身份"
 
+// windowsUnsupervised is the reason a Windows node gives when nothing declared it restarts the node: a persona-link
+// whose supervisor predates hub updates there, or a node run by hand. The hub translates it by this original text
+// (devices-deploy.node_windows_unsupervised).
+const windowsUnsupervised = "这台电脑的 Persona Link 后台服务不会替 node 接收更新：在这台电脑上重跑一次 persona-link install"
+
 // Manager must be shared by all of a resident's connection-scoped Nodes.
 type Manager struct {
 	mu           sync.Mutex
@@ -94,13 +99,18 @@ func New(version string, restart func(), opts Options) *Manager {
 	xpc := os.Getenv("XPC_SERVICE_NAME")
 	systemd := runtime.GOOS == "linux" && os.Getenv("INVOCATION_ID") != ""
 	launchd := runtime.GOOS == "darwin" && xpc != "" && xpc != "0"
-	// A declared supervisor counts only where the detached watchdog and the in-place exec work.
-	declared := opts.Supervised && (runtime.GOOS == "linux" || runtime.GOOS == "darwin")
+	// A declared supervisor counts only where the detached watchdog works and the node can restart onto the new file:
+	// in place (exec) on Linux and macOS, through the supervisor's restart on Windows (Restart).
+	declared := opts.Supervised && (runtime.GOOS == "linux" || runtime.GOOS == "darwin" || runtime.GOOS == "windows")
 	if !systemd && !launchd && !declared {
 		m.reason = "常驻 node 未由 launchd/systemd 管理，无法保证失败后恢复"
+		if runtime.GOOS == "windows" {
+			m.reason = windowsUnsupervised
+		}
 		return m
 	}
-	if _, err := exec.LookPath("ps"); err != nil {
+	// Windows has no ps: processStart reads the creation time through a process handle there.
+	if _, err := exec.LookPath("ps"); err != nil && runtime.GOOS != "windows" {
 		m.reason = "缺少 ps，无法核对回滚进程身份"
 		return m
 	}
@@ -201,7 +211,7 @@ func (m *Manager) Begin(p proto.NodeUpdateBeginParams) (proto.NodeUpdateBeginRes
 	if _, err := rand.Read(random[:]); err != nil {
 		return proto.NodeUpdateBeginResult{}, err
 	}
-	f, err := os.CreateTemp(filepath.Dir(m.exe), ".node-update-stage-*")
+	f, err := os.CreateTemp(filepath.Dir(m.exe), ".node-update-stage-*"+exeSuffix) // validate runs it
 	if err != nil {
 		return proto.NodeUpdateBeginResult{}, err
 	}
@@ -304,7 +314,7 @@ func (m *Manager) Commit(ctx context.Context, id string, idle func() error) (pro
 		if err != nil {
 			return err
 		}
-		backup := m.exe + ".node-update-backup-" + id
+		backup := backupPath(m.exe, id)
 		if err := copyFile(m.exe, backup); err != nil {
 			return err
 		}
@@ -419,8 +429,9 @@ func (m *Manager) Confirm(version string) error {
 		if err := os.Remove(markerPath(m.exe)); err != nil {
 			return err
 		}
-		_ = os.Remove(p.Backup)
+		discard(p.Backup) // the watchdog runs from it until it sees the marker gone
 		_ = os.Remove(p.Stage)
+		removeRetired(filepath.Dir(m.exe)) // the old program's file, moved aside on Windows: nothing runs it now
 		return syncDir(filepath.Dir(m.exe))
 	})
 }
@@ -529,14 +540,7 @@ func validate(ctx context.Context, path string, spec proto.NodeUpdateBeginParams
 	if check.Version != spec.Version || check.OS != runtime.GOOS || check.Arch != runtime.GOARCH {
 		return errors.New("node executable self-check version or platform mismatch")
 	}
-	// Reopening an already executed signed Mach-O file for writing can make
-	// macOS kill a subsequent self-check. Validation never needs write access.
-	f, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	return f.Sync()
+	return syncFile(path)
 }
 
 type limitedBuffer struct{ bytes.Buffer }
@@ -573,7 +577,8 @@ var errSuperseded = errors.New("node executable was replaced by another deployme
 // that renamed dst into place or rewrote it in place (cp never takes the
 // directory lock) between those points is detected, not overwritten. The
 // window that remains is the one between the last check and the rename, two
-// adjacent syscalls.
+// adjacent syscalls. The descriptor is closed before the rename: Windows will not
+// rename a file over one this process holds open.
 func renameStill(src, dst, want string) error {
 	f, err := os.Open(dst)
 	if err != nil {
@@ -598,6 +603,7 @@ func renameStill(src, dst, want string) error {
 	if !after.ModTime().Equal(before.ModTime()) || after.Size() != before.Size() {
 		return errSuperseded
 	}
+	_ = f.Close()
 	now, err := os.Stat(dst)
 	if err != nil {
 		return err
@@ -605,7 +611,7 @@ func renameStill(src, dst, want string) error {
 	if !os.SameFile(after, now) || !now.ModTime().Equal(after.ModTime()) || now.Size() != after.Size() {
 		return errSuperseded
 	}
-	return os.Rename(src, dst)
+	return replaceFile(src, dst)
 }
 func copyFile(src, dst string) (err error) {
 	in, err := os.Open(src)
@@ -634,14 +640,6 @@ func copyFile(src, dst string) (err error) {
 		return err
 	}
 	return out.Close()
-}
-func syncDir(dir string) error {
-	f, err := os.Open(dir)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	return f.Sync()
 }
 
 // locked runs fn holding the lock on the executable's directory (lockDir).
