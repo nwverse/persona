@@ -66,8 +66,8 @@ export interface CloseResult {
 
 // ── the hub ──────────────────────────────────────────────
 
-export function archiveSession(s: Pick<Session, "machine_id" | "session_id">, close = false): Promise<{ ok: boolean; close?: CloseResult }> {
-  return api(`${sessionPath(s.machine_id, s.session_id)}/archive${close ? "?close=1" : ""}`, { method: "POST", json: {} });
+export function archiveSession(s: Pick<Session, "machine_id" | "session_id">, close = false, force = false): Promise<{ ok: boolean; close?: CloseResult }> {
+  return api(`${sessionPath(s.machine_id, s.session_id)}/archive${force ? "?force=1" : close ? "?close=1" : ""}`, { method: "POST", json: {} });
 }
 
 export function unarchiveSession(s: Pick<Session, "machine_id" | "session_id">): Promise<unknown> {

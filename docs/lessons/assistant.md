@@ -272,3 +272,11 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   posts the card of a quiet end unless it was recalled (`end != channel.EndRecalled`), not only when it ended as done:
   gating the post on `EndDone` would have made every bad quiet ending silent instead. A branch that answers a run owes
   it the same ending fields as the normal path.
+
+## Cancel confirmation-blocked Agents without granting approval (#4277)
+
+Keep force archive separate from ordinary busy checks. A cancellation path must close the provider or terminal,
+reject or withdraw pending cards, and keep other work protected. A cached blocked inventory after close can undo
+a newly saved archive unless the closed timestamp fences that old snapshot. Paseo's CLI `archive --force` skips
+a client-side busy check; its archive request has no force field and closes the provider runtime. Check the actual
+archive receipt before removing the Agent from a bridge's local list.

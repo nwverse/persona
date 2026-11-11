@@ -42,3 +42,10 @@ it("does not offer close for a working Agent", () => {
  getState().sessions.m[0].status="working";getState().sessions.m[0].state="working";
  render();expect(button(t("chat-interactions.close_agent"))).toBeUndefined();
 });
+
+it("a read-only source cannot close from its terminal card", () => {
+ Object.assign(getState().sessions.m[0], { source_kind:"runtime",capabilities:{read:true,approve:false,close:false} });
+ render();const close=button(t("chat-interactions.close_agent"));
+ expect(!close || close.disabled || close.closest("fieldset[disabled]")).toBeTruthy();
+ expect(calls).toEqual([]);
+});

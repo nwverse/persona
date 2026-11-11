@@ -1491,6 +1491,16 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		}
 		return map[string]any{"sent": true}, nil
 	case "session.close":
+		var closeParams struct {
+			Force bool `json:"force"`
+		}
+		_ = json.Unmarshal(params, &closeParams)
+		if closeParams.Force {
+			a, ok := n.agent(p.SessionID)
+			if !ok || a.AgentStatus != proto.StatusBlocked || n.isAssistantSession(p.SessionID) || n.runtimeAssistant(p.SessionID) {
+				return nil, refusal("agent_busy", "the Agent is no longer waiting for confirmation", nil)
+			}
+		}
 		if n.runtimeAssistant(p.SessionID) { // the runtime keeps the conversation; a running turn stops, as a process would
 			if s, _, listed := n.runtimes.rowOf(p.SessionID); listed && s.Status == proto.StatusWorking {
 				_ = n.assistantInterruptRuntime(ctx, p.SessionID)
