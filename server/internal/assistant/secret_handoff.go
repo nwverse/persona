@@ -20,6 +20,7 @@ import (
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 // The hand-off of secret values to one Agent run (docs/extensions/secret-providers.md "The hand-off to one Agent run",
@@ -274,11 +275,17 @@ func (s *Service) handoffUserTurn(ctx context.Context, machine, self string) boo
 		return false
 	}
 	for _, it := range res.Items {
-		if it.Role != "user" || it.Kind == proto.KindToolResult {
+		if it.Role != "user" || it.Kind == proto.KindToolResult || it.ToolUseID != "" { // a tool's result (its pictures too)
 			continue
 		}
-		if !s.humanSent.has(self, it.ClientMsgID, it.Text) || it.Source != nil || it.Injected != nil || it.From != "" ||
-			it.Task != nil || it.Wake {
+		if it.Source != nil || it.Injected != nil || it.From != "" || it.Task != nil || it.Wake {
+			return false
+		}
+		words := it.Text
+		if it.Kind == proto.KindImage { // a picture of the user's message: tied to it by the id alone
+			words = ""
+		}
+		if !s.humanSent.has(self, it.ClientMsgID, words, it.Kind == proto.KindImage) {
 			return false
 		}
 	}
@@ -352,18 +359,24 @@ func (h *humanSends) note(session, id, text string) {
 		}
 		delete(ids, oldest)
 	}
+	// The words as the transcript shows the line: without the context blocks it drops from every user line.
+	text = transcript.ViewErrorsRe.ReplaceAllString(transcript.ContextRe.ReplaceAllString(text, ""), "")
 	ids[id] = humanSend{words: humanWords(text, humanWordsMost), at: now}
 }
 
-// has: id is a send the hub vouched for into session, and text (the line the node tied to it) holds its words.
-func (h *humanSends) has(session, id, text string) bool {
+// has: id is a send the hub vouched for into session, and text (the line the node tied to it) holds its words; a
+// picture of it (picture) is tied by the id alone.
+func (h *humanSends) has(session, id, text string, picture bool) bool {
 	if session == "" || id == "" {
 		return false
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	sent, ok := h.m[session][id]
-	return ok && time.Since(sent.at) <= humanSendsKeep && strings.Contains(humanWords(text, 1<<20), sent.words)
+	if !ok || time.Since(sent.at) > humanSendsKeep {
+		return false
+	}
+	return picture || strings.Contains(humanWords(text, 1<<20), sent.words)
 }
 
 // userOpened: conversation id is one the user opened, as noted when it was started (never a backfill's guess), and no

@@ -489,6 +489,10 @@ func TestHandoffRulesOnlyForTheUsersOwnTurn(t *testing.T) {
 		card   bool
 	}{
 		{"the user's own", nil, []proto.Item{app, {ID: "t1", Role: "user", Kind: proto.KindToolResult}}, false},
+		{"the user's own, with a picture and a tool's screenshot", nil, []proto.Item{app,
+			{ID: "u1i", Role: "user", Kind: proto.KindImage, ClientMsgID: "c1"},
+			{ID: "t2", Role: "user", Kind: proto.KindImage, ToolUseID: "toolu_1"}}, false},
+		{"a picture under another's id", nil, []proto.Item{app, {ID: "u2i", Role: "user", Kind: proto.KindImage, ClientMsgID: "c-other"}}, true},
 		{"an inbox conversation", func(r *handoffRig) { r.s.originSet(context.Background(), "server", "s1", OriginInbox, "item1", "") }, nil, true},
 		{"a channel's /new", func(r *handoffRig) { r.s.originSet(context.Background(), "server", "s1", OriginChannel, "feishu", "") }, nil, true},
 		{"a scheduled task", func(r *handoffRig) { r.s.originSet(context.Background(), "server", "s1", OriginTask, "task1", "") }, nil, true},
@@ -612,5 +616,17 @@ func TestHandoffSecretEnvMustBeStrings(t *testing.T) {
 	}
 	if got := string(withoutSecretEnv(json.RawMessage(`{"prompt":"x","secret_env":{"A":"op://a/b/c"}}`))); strings.Contains(got, "op://") {
 		t.Fatalf("the confirmation card's arguments: %s", got)
+	}
+}
+
+// A vouched send's words are kept as the transcript shows its line: without the context blocks every user line loses.
+func TestHumanSendWordsAsTheTranscriptShowsThem(t *testing.T) {
+	var h humanSends
+	h.note("s1", "c1", "deploy the fix <persona-context>\nhub snapshot\n</persona-context> please")
+	if !h.has("s1", "c1", "deploy the fix  please\n(attached: notes.md)", false) {
+		t.Fatal("the user's line, as the transcript shows it, was not the user's")
+	}
+	if h.has("s1", "c1", "deploy the", false) || h.has("s2", "c1", "deploy the fix please", false) || h.has("s1", "c2", "", true) {
+		t.Fatal("a line without the words, another conversation, or another id counted")
 	}
 }
