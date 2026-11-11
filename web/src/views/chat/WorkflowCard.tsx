@@ -19,7 +19,7 @@ import { memo, useState, useSyncExternalStore, type ReactNode } from "react";
 import { t } from "../../i18n";
 import { canOpenBackgroundDialog, openBackgroundDialog, subscribeBackgroundDialogs } from "../../lib/background-dialog";
 import { useStore } from "../../lib/store";
-import { formatTokens } from "../../lib/tokens";
+import { compactTokens } from "../../lib/tokens";
 import type { Workflow, WorkflowAgent } from "../../lib/types";
 import { workDuration, type ToolStep } from "../../lib/work-groups";
 import {
@@ -131,7 +131,7 @@ export const WorkflowCallCard = memo(function WorkflowCallCard({ step, mid, sid,
  *  say), and how long it ran ("Running for …", each second, while it runs). */
 function meta(run: Workflow): ReactNode[] {
   const parts: ReactNode[] = [<span key="harness">{t("chat-subagentcard.harness_workflow")}</span>];
-  if (run.tokens) parts.push(<span key="tokens" data-task-tokens>{t("chat-subagentcard.tokens", { count: formatTokens(run.tokens) })}</span>);
+  if (run.tokens) parts.push(<span key="tokens" data-task-tokens>{t("chat-subagentcard.tokens", { value: compactTokens(run.tokens) })}</span>);
   if (run.calls) parts.push(<span key="calls" data-task-calls>{t("chat-subagentcard.tool_uses", { count: run.calls })}</span>);
   const start = Date.parse(run.started_at ?? "");
   const took = workflowDurationMs(run);

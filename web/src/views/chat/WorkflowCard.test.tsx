@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-// A workflow run's cards. In the chat, in place of the Workflow call that launched it (and the call's row again when the
-// hub lists no such run): a task card (#5030, after cindy) with the status word, what it used, its progress line and a
+// A workflow run's cards. In the chat, in place of the Workflow call that launched it and never folded into the work
+// summary (the call's row again when the hub lists no such run): a task card (#5030, after cindy) with the status word, what it used, its progress line and a
 // strip of a square per agent, opening the chat's Background dialog at its run, or in place where the chat has no such
 // dialog. In the dialog (#3434): one block per phase with "done/started+", rows in start order folded past 12, only to
 // read; a bar in parts moved by transform. Things move only when a value changes: not on the first draw, not with
@@ -158,7 +158,7 @@ describe("the card in the chat", () => {
     expect(q("[data-task-status]")!.dataset.taskStatus).toBe("running");
     expect(text("[data-task-status]")).toBe("运行中");
     expect(q("[data-task-status] svg")).toBeNull(); // a spinner, not an outcome's icon
-    expect([...host.querySelectorAll("[data-task-meta] > *")].map((e) => e.textContent)).toEqual(["Workflow", "12.3K tokens", "37 次工具调用", "已运行 1 分 55 秒"]);
+    expect([...host.querySelectorAll("[data-task-meta] > *")].map((e) => e.textContent)).toEqual(["Workflow", "12.3k tokens", "37 次工具调用", "已运行 1 分 55 秒"]);
     act(() => vi.advanceTimersByTime(2000));
     expect(text("[data-task-elapsed]")).toBe("已运行 1 分 57 秒"); // ticks each second
     expect(text("[data-workflow-progress-line]")).toBe("Verify · 4/5 Agent");
@@ -475,36 +475,29 @@ describe("in the chat's flow", () => {
     );
   };
 
-  it("keeps a running workflow inside the summary until manual expansion", () => {
+  it("keeps a running run's card out of the work summary, where its call was", () => {
     draw([running()]);
-    expect(q("[data-workflow-call]")).toBeNull();
-    act(() => q("[data-work-group] > button")!.click());
-    const card = q("[data-workflow-call]")!;
-    expect(card.closest("[data-work-group]")).not.toBeNull();
+    const card = q('[data-workflow-call="running"]')!;
+    expect(card.closest("[data-work-group]")).toBeNull();
     expect(q("[data-work-group]")).not.toBeNull(); // the Grep before it folded
   });
 
-  it("keeps an ended workflow inspectable inside the folded execution summary", () => {
+  it("keeps an ended run's card out of the summary too", () => {
     draw([running({ running: false, status: "completed", ended_at: at(100) })]);
-    expect(q("[data-workflow-call]")).toBeNull();
-    act(() => q("[data-work-group] > button")!.click());
     const card = q('[data-workflow-call="completed"]')!;
-    expect(card.closest("[data-work-group]")).not.toBeNull();
-    expect(card.querySelector("button[aria-expanded]")!.getAttribute("aria-expanded")).toBe("false");
+    expect(card.closest("[data-work-group]")).toBeNull();
     expect(card.querySelector("[data-task-status]")!.textContent).toBe("已完成");
     expect(q("[data-work-group]")!.textContent).toContain("已工作"); // the Grep before it folded
   });
 
   it("ends in place: the same card turns its status word, nothing leaves the chat", () => {
     draw([running()]);
-    expect(q("[data-workflow-call]")).toBeNull();
-    act(() => q("[data-work-group] > button")!.click());
     const card = q("[data-workflow-call]")!;
     push([running({ running: false, status: "completed", ended_at: at(100), agents_running: 0, agents_done: 5 })]);
     expect(q("[data-workflow-call]")).toBe(card); // not unmounted and drawn again elsewhere
     expect(card.dataset.workflowCall).toBe("completed");
     expect(card.querySelector("[data-task-status]")!.textContent).toBe("已完成");
-    expect(card.querySelector("button[aria-expanded]")!.getAttribute("aria-expanded")).toBe("false");
+    expect(card.querySelector("button[aria-expanded]")!.getAttribute("aria-expanded")).toBe("false"); // no dialog here: in place, closed
   });
 
   const foldedExchange = (): Item[] => [
