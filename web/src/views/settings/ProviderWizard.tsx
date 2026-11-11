@@ -3,8 +3,9 @@
 // A preset needs only ② the key: it is tested on its own (POST /launchers/test with the preset) and saved with
 // assign, and (3) says what now runs on it. The gateway goes (2) "Connect" (address, auth, key; once they are in it fetches the models
 // and tests one by itself, and "Test connection" and "Fetch models" stay for doing it by hand) (3) "Choose models"
-// (context window, thinking levels, the default), the rest under "Advanced". Editing opens at "Connect" with the same form. The logic
-// is lib/providers.ts and lib/launcher-presets.ts. It reads the main conversation's readiness (4.3 B.3 / B.4): with a
+// (context window, thinking levels, the default; an ID typed by hand is looked up in the hub's catalog) and, for Claude Code, its tiers
+// (#4975: filled in from the checked models, a summary with Adjust), the rest under "Advanced". Editing opens at "Connect" with the
+// same form. The logic is lib/providers.ts, lib/provider-tiers.ts and lib/launcher-presets.ts. It reads the main conversation's readiness (4.3 B.3 / B.4): with a
 // Claude Code that already answers, "Use it for the main conversation and new Agents" starts off; a key saved for a computer with no Claude Code
 // says so (the main conversation still starts claude there) with how to install it.
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -34,6 +35,7 @@ import {
 import {
   autoCheckable,
   EFFORT_LEVELS,
+  fillFromCatalog,
   formFromView,
   formModel,
   formProblems,
@@ -50,6 +52,7 @@ import {
   type ProviderView,
   type TestResult,
 } from "../../lib/providers";
+import { applyTiers, hasTiers, setTier, tierAdvice, tierLines, withAutoTiers, type TierRow, type Tiers, type TierSlot } from "../../lib/provider-tiers";
 import { formScope, newScope, scopeBody, scopeFromView, scopeProblem, scopeShown, scopeSummary, type ScopeForm } from "../../lib/provider-scope";
 import { claudeMissing, claudeWorks, currentReadiness, readinessChanged, readinessSettled, useReadiness, type Readiness } from "../../lib/readiness";
 import { effortLabel } from "../../lib/routines";
@@ -99,6 +102,7 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [advanced, setAdvanced] = useState(false);
+  const [tiersOpen, setTiersOpen] = useState(false);
   const [clearLegacyChat, setClearLegacyChat] = useState(false);
   const [testing, setTesting] = useState(false);
   const [test, setTest] = useState<TestResult | null>(null);
@@ -173,6 +177,7 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
     if (existing === null) return;
     setError("");
     setAdvanced(false);
+    setTiersOpen(false);
     setClearLegacyChat(false);
     setTest(null);
     setFound(null);
@@ -222,6 +227,9 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
   };
 
   const set = <K extends keyof ProviderForm>(k: K) => (v: ProviderForm[K]) => setF((x) => ({ ...x, [k]: v }));
+  // A new Claude Code provider's tiers follow the checked models and the default until the user picks one (#4975); a
+  // saved provider's are its own and never change by themselves.
+  useEffect(() => setF((x) => withAutoTiers(x)), [f.models, f.model, f.kind, f.agent]);
   const problems = formProblems(f, isNew, !!old?.has_key);
   // models were found for this connection: choosing them is what comes next
   const foundModels = !!found && !found.error && found.n > 0;
@@ -553,7 +561,9 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
         {step === "models" && (
           <div className="flex flex-col gap-3">
             <ModelList f={f} setF={setF} />
-            <Disclosure title={t("settings-providerwizard.advanced")} open={advanced} onToggle={() => setAdvanced((o) => !o)} badge={advanced ? undefined : t("settings-providerwizard.advanced_badge")}>
+            {hasTiers(f) && <ClaudeTiers f={f} setF={setF} saved={!!old} open={tiersOpen} onToggle={() => setTiersOpen((o) => !o)} />}
+            <Disclosure title={t("settings-providerwizard.advanced")} open={advanced} onToggle={() => setAdvanced((o) => !o)}
+              badge={advanced ? undefined : hasTiers(f) ? t("settings-providerwizard.advanced_badge_claude") : t("settings-providerwizard.advanced_badge")}>
               <Advanced f={f} setF={setF} set={set} hadHeaders={!!old?.has_headers} hadEnv={!!old?.has_env} />
             </Disclosure>
           </div>
@@ -863,8 +873,20 @@ function ModelList({ f, setF }: { f: ProviderForm; setF: React.Dispatch<React.Se
   const add = () => {
     const id = adding.trim();
     if (!id) return;
+    const known = f.models.some((m) => m.id === id);
     setF((x) => (x.models.some((m) => m.id === id) ? { ...x, models: x.models.map((m) => (m.id === id ? { ...m, checked: true } : m)) } : { ...x, models: [...x.models, formModel({ id })], model: x.model || id }));
     setAdding("");
+    if (!known) void lookUp(id);
+  };
+  // What the hub's catalog knows of a typed ID (#4975), as discovery fills a listed one: only what is still empty.
+  const lookUp = async (id: string) => {
+    try {
+      const r = await api<{ models?: ProviderModel[] }>("/launchers/catalog", { method: "POST", json: { ids: [id] } });
+      const found = r.models ?? [];
+      if (found.length) setF((x) => ({ ...x, models: fillFromCatalog(x.models, found, x.kind === "api" && x.api === "chat") }));
+    } catch {
+      // an older hub has no catalog: the row keeps what was typed
+    }
   };
   const checked = f.models.filter((m) => m.checked).length;
   const chat = f.kind === "api" && f.api === "chat";
@@ -976,7 +998,20 @@ function Advanced({ f, setF, set, hadHeaders, hadEnv }: {
           <option key={id} value={id} />
         ))}
       </datalist>
-      {launcher && (
+      {launcher && hasTiers(f) && (
+        // the tiers people change most are in "Claude Code tiers" above (#4975); Fable and forcing stay here
+        <div className="grid items-start gap-3 sm:grid-cols-2">
+          <TierSelect label={t("settings-providerwizard.tier_model", { tier: "Fable" })} value={f.fable_model} ids={ids} def={f.model.trim()} auto={f.tier_source.fable === "auto"} onChange={(v) => setF((x) => setTier(x, "fable", v))} />
+          <div className="flex items-center gap-3 sm:pt-5">
+            <span className="min-w-0 flex-1">
+              <span className="block text-[12px] font-medium text-ink-2">{t("settings-providerwizard.force_subagent")}</span>
+              <span className="mt-0.5 block text-[11px] leading-relaxed text-ink-3">{t("settings-providerwizard.force_subagent_hint")}</span>
+            </span>
+            <Switch on={f.subagent_force} onChange={set("subagent_force")} label={t("settings-providerwizard.force_subagent")} />
+          </div>
+        </div>
+      )}
+      {launcher && !hasTiers(f) && (
         <>
           <div className="grid gap-3 sm:grid-cols-2">
             {tier("opus_model", t("settings-providerwizard.tier_model", { tier: "Opus" }))}
@@ -1062,5 +1097,120 @@ function Advanced({ f, setF, set, hadHeaders, hadEnv }: {
         </>
       )}
     </>
+  );
+}
+
+/** A tier's model: the default model (left empty) or one of the checked models; a stored one that is not checked stays
+ *  on the list. "Auto" when it was filled in by itself (#4975). */
+function TierSelect({ label, hint, value, ids, def, auto, onChange }: { label: string; hint?: string; value: string; ids: string[]; def: string; auto: boolean; onChange: (v: string) => void }) {
+  const id = useId();
+  const options = value && !ids.includes(value) ? [...ids, value] : ids;
+  return (
+    <Labelled htmlFor={id} hint={hint} label={
+      <span className="inline-flex items-center gap-1.5">
+        {label}
+        {auto && <Pill>{t("settings-providerwizard.tier_auto")}</Pill>}
+      </span>
+    }>
+      <select id={id} value={value} onChange={(e) => onChange(e.target.value)} aria-label={label} className={cx(INPUT, "font-mono")}>
+        <option value="">{def ? t("settings-providerwizard.same_as_default_named", { model: def }) : t("settings-providerwizard.same_as_default")}</option>
+        {options.map((m) => (
+          <option key={m} value={m}>
+            {m}
+          </option>
+        ))}
+      </select>
+    </Labelled>
+  );
+}
+
+const TIER_NAME: Record<TierSlot, () => string> = {
+  opus: () => "Opus",
+  sonnet: () => "Sonnet",
+  light: () => t("settings-providerwizard.tier_light"),
+  fable: () => "Fable",
+};
+const ROW_NAME: Record<TierRow, () => string> = {
+  opus: TIER_NAME.opus,
+  sonnet: TIER_NAME.sonnet,
+  light: TIER_NAME.light,
+  haiku: () => "Haiku",
+  small: () => t("settings-providerwizard.small_model"),
+  subagent: () => t("settings-providerwizard.tier_subagents"),
+};
+const ROW_HINT: Partial<Record<TierRow, () => string>> = {
+  light: () => t("settings-providerwizard.tier_light_hint"),
+  small: () => t("settings-providerwizard.small_model_hint"),
+  subagent: () => t("settings-providerwizard.subagent_hint"),
+};
+
+/** "Sonnet → x, Haiku / small model → y": what taking a suggestion sets. */
+const tierList = (tiers: Tiers) =>
+  (Object.keys(TIER_NAME) as TierSlot[])
+    .filter((s) => tiers[s])
+    .map((s) => t("settings-providerwizard.tier_pair", { tier: TIER_NAME[s](), model: tiers[s]! }))
+    .join(t("settings-providerwizard.tier_separator"));
+
+/** ③ for a Claude Code provider (#4975): the model each tier, the background requests and subagents run, under the
+ *  models, with "Auto" on what filled itself in; Adjust opens the editor in place. Below it, when the Haiku tier lands
+ *  on the Opus model while a lighter one is checked, or a saved provider's empty tiers could use a checked model, one
+ *  line says so and Apply takes it. Fable and forcing the subagent model stay under Advanced. */
+function ClaudeTiers({ f, setF, saved, open, onToggle }: { f: ProviderForm; setF: React.Dispatch<React.SetStateAction<ProviderForm>>; saved: boolean; open: boolean; onToggle: () => void }) {
+  const titleId = useId();
+  const bodyId = useId();
+  const ids = useMemo(() => f.models.filter((m) => m.checked && m.id.trim()).map((m) => m.id.trim()), [f.models]);
+  const def = f.model.trim();
+  const lines = tierLines(f);
+  const advice = tierAdvice(f, saved);
+  const value = (row: TierRow) => ({ opus: f.opus_model, sonnet: f.sonnet_model, light: f.small_model, haiku: f.haiku_model, small: f.small_model, subagent: f.subagent_model })[row];
+  const change = (row: TierRow) => (v: string) =>
+    setF((x) => (row === "haiku" ? { ...x, haiku_model: v } : row === "subagent" ? { ...x, subagent_model: v } : setTier(x, row === "small" ? "light" : row, v)));
+  return (
+    <section aria-labelledby={titleId} className="flex flex-col gap-2.5 rounded-card bg-inset p-3 shadow-hairline">
+      <div className="flex items-start gap-3">
+        <span className="min-w-0 flex-1">
+          <span id={titleId} className="block text-[12.5px] font-medium text-ink-2">{t("settings-providerwizard.tiers_title")}</span>
+          <span className="mt-0.5 block text-[11px] leading-relaxed text-ink-3">{t("settings-providerwizard.tiers_intro")}</span>
+        </span>
+        <button type="button" onClick={onToggle} aria-expanded={open} aria-controls={bodyId}
+          className="touch-hit inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[12px] font-medium text-accent hover:underline">
+          {open ? t("settings-providerwizard.tiers_close") : t("settings-providerwizard.tiers_adjust")}
+          <Icon name="chevron" size={10} stroke={2.4} className="transition-transform duration-150" style={{ transform: open ? "rotate(180deg)" : "none" }} />
+        </button>
+      </div>
+      <div id={bodyId}>
+        {open ? (
+          <div className="grid gap-3 sm:grid-cols-2">
+            {lines.map((l) => (
+              <TierSelect key={l.row} label={ROW_NAME[l.row]()} hint={ROW_HINT[l.row]?.()} value={value(l.row)} ids={ids} def={def} auto={l.auto} onChange={change(l.row)} />
+            ))}
+          </div>
+        ) : (
+          <dl className="grid grid-cols-[max-content_minmax(0,1fr)] items-baseline gap-x-3 gap-y-1.5">
+            {lines.map((l) => (
+              <div key={l.row} className="contents">
+                <dt className="text-[11.5px] text-ink-3">{ROW_NAME[l.row]()}</dt>
+                <dd className="flex min-w-0 items-center gap-1.5">
+                  <span className={cx("truncate font-mono text-[12px]", l.model ? "text-ink" : "text-ink-3")}>{l.model || t("settings-providerwizard.same_as_default")}</span>
+                  {l.auto ? <Pill>{t("settings-providerwizard.tier_auto")}</Pill> : l.fallback && l.model ? <span className="shrink-0 whitespace-nowrap text-[11px] text-ink-3">{t("settings-providerwizard.tier_is_default")}</span> : null}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        )}
+      </div>
+      {lines.some((l) => l.auto) && <p className="text-[11px] leading-relaxed text-ink-3">{t("settings-providerwizard.tiers_auto_note")}</p>}
+      {advice && (
+        <div role="status" className={cx("flex items-start gap-1.5 text-[12px] leading-relaxed", advice.sameAsOpus ? "text-orange" : "text-ink-2")}>
+          <Icon name={advice.sameAsOpus ? "warning" : "sparkles"} size={12} stroke={2.2} className="mt-1 shrink-0" />
+          <span className="min-w-0 flex-1 break-words">
+            {advice.sameAsOpus
+              ? t("settings-providerwizard.tiers_same_as_opus", { model: advice.sameAsOpus, list: tierList(advice.tiers) })
+              : t("settings-providerwizard.tiers_suggested", { list: tierList(advice.tiers) })}
+          </span>
+          <LineAction onClick={() => setF((x) => applyTiers(x, advice.tiers))}>{t("settings-providerwizard.tiers_apply")}</LineAction>
+        </div>
+      )}
+    </section>
   );
 }
