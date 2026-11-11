@@ -90,10 +90,12 @@ async function resolve(request: Pending, value: unknown) {
 function leave(el: HTMLInputElement) {
   act(() => { el.focus(); el.blur(); });
 }
-/** Pastes `value` over the field's text: the paste event, then the change it makes. */
+/** Pastes `value` over the field's text: the change a paste makes (its input event says so). */
 function paste(el: HTMLInputElement, value: string) {
-  act(() => { el.dispatchEvent(new Event("paste", { bubbles: true })); });
-  type(el, value);
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(el, value);
+    el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertFromPaste" }));
+  });
 }
 async function newGateway(url = "https://a.example.com", key = "example-key-a") {
   await draw("new");
@@ -478,12 +480,50 @@ describe("the Connect step's own check (#4881)", () => {
     expect(pending[0]).toMatchObject({ path: "/api/v1/launchers/discover", body: { base_url: "https://b.example.com" } });
   });
 
-  it("still tests a model it already knows when the gateway lists none", async () => {
+  it("still tests a model it already knows when the gateway lists none, and does not test it again on Retry", async () => {
     await draw({ ...a, model: "known-model", models: [{ id: "known-model" }] });
     type(keyInput(), "example-key-b");
     await advance(AUTO);
-    await resolve(pending[0]!, { models: [], error: "The gateway has no model list" });
+    await resolve(pending[0]!, { models: [], error: "The gateway has no model list", code: "not_found" });
     expect(pending[1]).toMatchObject({ path: "/api/v1/launchers/test", body: { name: "provider-a", api_key: "example-key-b", model: "known-model" } });
+    await resolve(pending[1]!, { ok: true, ms: 412, model: "known-model" });
+    // Retry is the list's: the test that passed is not paid for again
+    click("settings-providerwizard.retry");
+    await resolve(pending[2]!, { models: [], error: "The gateway has no model list", code: "not_found" });
+    expect(pending.map((r) => r.path)).toEqual(["/api/v1/launchers/discover", "/api/v1/launchers/test", "/api/v1/launchers/discover"]);
+    expect(text()).toContain(t("lib-providers.test_ok", { ms: 412 }));
+  });
+
+  it.each([
+    ["a refused key", { models: [], error: "The gateway refused this key", code: "auth" }],
+    ["an unreachable host", { models: [], error: "Couldn't reach the gateway" }],
+  ] as const)("does not test the same connection again after %s", async (_, answer) => {
+    await draw({ ...a, model: "known-model", models: [{ id: "known-model" }] });
+    type(keyInput(), "example-key-b");
+    await advance(AUTO);
+    await resolve(pending[0]!, answer);
+    await advance(AUTO * 3);
+    expect(pending.map((r) => r.path)).toEqual(["/api/v1/launchers/discover"]);
+  });
+
+  it("keeps waiting while the window, not the field, loses focus, and says leaving the field starts the check", async () => {
+    await draw(a);
+    const url = urlInput();
+    act(() => url.focus());
+    type(url, "https://b.example.co");
+    expect(text()).toContain(t("settings-providerwizard.check_leave_url"));
+    // switching to another app blurs the field but leaves it the page's focused element
+    act(() => { url.dispatchEvent(new FocusEvent("focusout", { bubbles: true })); });
+    await advance(AUTO * 3);
+    expect(pending).toHaveLength(0);
+    // typing after a paste is typing again
+    paste(url, "https://b.example.com");
+    type(url, "https://b.example.com/x");
+    await advance(AUTO * 3);
+    expect(pending).toHaveLength(0);
+    leave(url);
+    await advance(AUTO);
+    expect(pending).toHaveLength(1);
   });
 
   it("does not repeat a test pressed by hand while the check is fetching", async () => {

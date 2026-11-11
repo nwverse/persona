@@ -10116,14 +10116,11 @@ def providers_route(h, method, p, q, body):
     if not MOCK_PROVIDERS and not probe: return False
     if p == "/mock/providers/log":
         h.send_json(PROVIDER_LOG); return True
-    if MOCK_PROVIDERS:
+    try:  # a body that is not one of these routes' goes on to the routes after this one
         b = json.loads(body or b"{}") if method != "GET" else {}
-    else:  # a body that is not this wizard's goes on to the routes after this one
-        try:
-            b = json.loads(body or b"{}")
-        except ValueError:
-            return False
-        if not isinstance(b, dict) or b.get("preset"): return False
+    except ValueError:
+        return False
+    if not isinstance(b, dict) or (not MOCK_PROVIDERS and b.get("preset")): return False
     if p == "/api/v1/launchers/import":
         machine = (q.get("machine") or [""])[0] if method == "GET" else b.get("machine", "")
         if machine == "studio":
@@ -10161,7 +10158,7 @@ def providers_route(h, method, p, q, body):
     if p == "/api/v1/launchers/discover" and method == "POST":
         PROVIDER_LOG["discover"].append(_provider_redacted(b))
         if "bad" in (b.get("base_url") or ""):
-            h.send_json({"models": [], "error": "网关没有 /v1/models"}); return True
+            h.send_json({"models": [], "error": "网关没有 /v1/models", "code": "not_found"}); return True
         h.send_json({"models": PROVIDER_DISCOVERED}); return True
     if p == "/api/v1/launchers" and method == "POST" and not b.get("preset"):
         PROVIDER_LOG["post"] = _provider_redacted(b)

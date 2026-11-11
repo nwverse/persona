@@ -24,25 +24,26 @@ export function Labelled({ label, hint, error, children, htmlFor, describedById 
   );
 }
 
-export function TextField({ label, value, onChange, hint, error, placeholder, mono, disabled, inputMode, onPaste, onBlur }: {
+const wholeInput = (e: Event) => "inputType" in e && (e.inputType === "insertFromPaste" || e.inputType === "insertFromDrop");
+
+export function TextField({ label, value, onChange, hint, error, placeholder, mono, disabled, inputMode, onBlur }: {
   label: React.ReactNode;
   value: string;
-  onChange: (v: string) => void;
+  /** `pasted`: the change was a paste or a drop, so it came whole (the provider wizard's address counts as entered then). */
+  onChange: (v: string, pasted: boolean) => void;
   hint?: React.ReactNode;
   error?: string;
   placeholder?: string;
   mono?: boolean;
   disabled?: boolean;
   inputMode?: "numeric" | "url";
-  /** Fires before the change a paste makes (the provider wizard's address counts as entered once pasted). */
-  onPaste?: () => void;
-  onBlur?: () => void;
+  onBlur?: (e: React.FocusEvent<HTMLInputElement>) => void;
 }) {
   const id = useId();
   const noteId = useId();
   return (
     <Labelled label={label} hint={hint} error={error} htmlFor={id} describedById={noteId}>
-      <input id={id} aria-invalid={error ? true : undefined} aria-describedby={error || hint ? noteId : undefined} value={value} onChange={(e) => onChange(e.target.value)} onPaste={onPaste} onBlur={onBlur} disabled={disabled} placeholder={placeholder} inputMode={inputMode} autoComplete="off" spellCheck={false} className={cx(INPUT, mono && "font-mono")} />
+      <input id={id} aria-invalid={error ? true : undefined} aria-describedby={error || hint ? noteId : undefined} value={value} onChange={(e) => onChange(e.target.value, wholeInput(e.nativeEvent))} onBlur={onBlur} disabled={disabled} placeholder={placeholder} inputMode={inputMode} autoComplete="off" spellCheck={false} className={cx(INPUT, mono && "font-mono")} />
     </Labelled>
   );
 }
