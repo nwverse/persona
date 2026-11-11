@@ -177,7 +177,11 @@ func (n *Node) userSettingsEnv(env map[string]any, configDir ...string) map[stri
 // userNoProxy is the bypass lists the user's settings env sets for l's claude, by spelling (userSettingsEnv): what
 // Claude Code applies over the environment it starts with, so they come before the shell's or the node's (#6238).
 func (n *Node) userNoProxy(l proto.ManagedLauncher, configDir ...string) map[string]string {
-	user := n.userSettingsEnv(map[string]any{"CLAUDE_CONFIG_DIR": providerEnv(l, "", "", false)["CLAUDE_CONFIG_DIR"]}, configDir...)
+	env := map[string]any{}
+	if len(configDir) == 0 {
+		env["CLAUDE_CONFIG_DIR"] = providerEnv(l, "", "", false)["CLAUDE_CONFIG_DIR"]
+	}
+	user := n.userSettingsEnv(env, configDir...)
 	out := map[string]string{}
 	for _, k := range []string{"NO_PROXY", "no_proxy"} {
 		if v, _ := user[k].(string); v != "" {

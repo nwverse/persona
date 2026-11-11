@@ -138,6 +138,11 @@ func (n *Node) mergeManagedSettings(launcher string, l proto.ManagedLauncher, ou
 	}
 	// A proxy the user's settings give every claude that no longer answers would hold this launcher's requests until
 	// they time out; one the launcher does not set itself is taken away (deadproxy.go, #5953).
+	if len(configDir) > 0 {
+		// Config selection precedes settings load. The caller supplies the real
+		// profile; do not turn that selection into a settings.env override.
+		delete(env, "CLAUDE_CONFIG_DIR")
+	}
 	for _, k := range n.deadSettingsProxies(env, l.BaseURL, configDir...) {
 		env[k] = ""
 		n.logf("launcher %s: the proxy in Claude's settings.json (%s) does not answer; it runs without it", launcher, k)
