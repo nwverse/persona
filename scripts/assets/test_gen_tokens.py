@@ -357,10 +357,10 @@ class RepositoryTests(unittest.TestCase):
         self.assertEqual(code, 0, output.getvalue())
 
     # iOS values the JSON doesn't carry yet, or carries differently, as (iOS, JSON); None is a missing side. Each phase 1 step
-    # of #4209 that aligns a group empties its entry: T2 spacing, T3 motion. A Swift change outside this table fails.
+    # of #4209 that aligns a group empties its entry (T2 did spacing; T3 does motion). A Swift change outside this table fails.
     KNOWN_DRIFT = {
         "radius": {"thumbnail": (3, None), "page": (55, None)},
-        "space": {"flush": (0, None), "sm": (6, None), "xl": (24, 20), "xxl": (32, 24), "xxxl": (None, 32)},
+        "space": {},
         "motion": {"expand": (400, None), "reveal": (280, None), "conceal": (200, None), "reduced": (None, 0)},
     }
     # The shared motions (phase 1 R3); the rest of Theme.Motion belongs to single components (the composer, attaching, blinks).
@@ -378,11 +378,20 @@ class RepositoryTests(unittest.TestCase):
         self.assertEqual(drift, self.KNOWN_DRIFT[group], f"Theme.swift and spec/tokens differ in {group}")
 
     def test_ios_radius_and_spacing_match(self):
-        number = r'static let (\w+): CGFloat = ([0-9.]+)\n'
+        # A number, or another value of the same enum (Theme.Space.lines = xs).
+        value = r'static let (\w+): CGFloat = ([0-9.]+|[a-z]\w*)$'
         for group, enum in (("radius", "Radius"), ("space", "Space")):
-            ios = {name: float(value) for name, value in re.findall(number, self.swift_enum(enum))}
+            found = dict(re.findall(value, self.swift_enum(enum), re.M))
+            ios = {name: float(found.get(v, v)) for name, v in found.items()}
             self.assertTrue(ios, f"no Theme.{enum} values found")
             self.assert_drift(group, ios)
+
+    def test_ios_sizes_match(self):
+        # spec/tokens carries the sizes Android uses, each as Theme.Size has it; the rest of Theme.Size isn't ported.
+        ios = {name: float(value) for name, value in re.findall(r'static let (\w+): CGFloat = ([0-9.]+)$', self.swift_enum("Size"), re.M)}
+        tokens = {key.removeprefix("size."): value["value"] for key, value in self.catalog.values.items() if key.startswith("size.")}
+        self.assertTrue(tokens)
+        self.assertEqual({name: ios.get(name) for name in tokens}, tokens, "a size in spec/tokens differs from Theme.Size")
 
     def test_ios_motion_durations_match(self):
         motion = self.swift_enum("Motion")

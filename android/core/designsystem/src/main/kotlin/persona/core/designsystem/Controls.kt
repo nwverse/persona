@@ -67,7 +67,7 @@ import persona.core.designsystem.icons.PhIcons
 // ------------------------------------------------------------------ icons
 
 /** A [JIcon]'s size when the caller gives none. */
-internal val JIconDefaultSize: Dp = 22.dp
+internal val JIconDefaultSize: Dp = Tokens.Size.iconS
 
 /**
  * A Phosphor icon in the weight the style uses: regular in glass and brief, bold on the board, filled when
