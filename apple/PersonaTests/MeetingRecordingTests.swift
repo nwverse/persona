@@ -159,7 +159,9 @@ import Testing
         let locale = Locale(identifier: id), zone = try #require(TimeZone(identifier: "Asia/Shanghai"))
         let start = try date("2027-01-15T17:00:00+08:00"), end = try date("2027-01-15T17:02:00+08:00")
         let same = RecordingFormat.span(start, end, locale: locale, timeZone: zone)
-        #expect(same.contains("1月15日") && same.contains("17:00") && same.contains("17:02"), "\(same)")
+        // The hour and minute in the locale's own way: "17:00" in Chinese, 「17時00分」 in Japanese (as in the header).
+        let times = [#"17\D00"#, #"17\D02"#].allSatisfy { same.range(of: $0, options: .regularExpression) != nil }
+        #expect(same.contains("1月15日") && times, "\(same)")
         #expect(same.components(separatedBy: "15日").count == 2 && !same.contains("2027"), "\(same)")
         let lateStart = try date("2027-01-15T23:30:00+08:00"), lateEnd = try date("2027-01-16T00:30:00+08:00")
         let late = RecordingFormat.span(lateStart, lateEnd, locale: locale, timeZone: zone)
