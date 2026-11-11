@@ -399,9 +399,19 @@ final class ScrollToBottomTests: XCTestCase {
         for _ in 0..<2 { drag(from: 0.25, to: 0.8, rest: 0.4) }
         sleep(1)
         let screen = Int(app.frame.height)
-        let head = try XCTUnwrap(app.buttons.matching(identifier: "work-head").allElementsBoundByIndex.first {
-            $0.isHittable && $0.frame.midY > app.frame.height * 0.25 && $0.frame.midY < app.frame.height * 0.7
-        }, "a work line on screen to open")
+        // Rows of very different heights: a little further up until a work line's header is well inside the screen.
+        func workHead() -> XCUIElement? {
+            app.buttons.matching(identifier: "work-head").allElementsBoundByIndex.first {
+                $0.isHittable && $0.frame.midY > app.frame.height * 0.2 && $0.frame.midY < app.frame.height * 0.7
+            }
+        }
+        var found = workHead()
+        for _ in 0..<6 where found == nil {
+            drag(from: 0.3, to: 0.55, rest: 0.4)
+            sleep(1)
+            found = workHead()
+        }
+        let head = try XCTUnwrap(found, "a work line on screen to open")
         // By the screen, not the element: the header stays under the finger while what it opens comes in (`ChatPin`).
         let at = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: head.frame.midX, dy: head.frame.midY))
         at.tap()
