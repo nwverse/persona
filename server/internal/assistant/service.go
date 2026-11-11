@@ -93,6 +93,9 @@ type Service struct {
 	standingJudgeModel jsonModel  // nil: the configured agent.delegate model; tests can supply a deterministic model.
 	standingMu         sync.Mutex // standing_authorizations.go: revocation and automatic answers serialize
 
+	// rules: the answers to suggested rules, and the last count of what earns one (rule_suggest.go).
+	rules ruleSuggestState
+
 	// prepared is what this hub last gave a machine's node for a directory (key: machine id NUL directory), the
 	// CLAUDE.md and the plugin skills, by prepareSpaceIf; refreshInstructions gives again what differs.
 	preparedMu sync.Mutex
@@ -225,6 +228,7 @@ func New(o Options) *Service {
 	s.agentArchiveRoutes()
 	s.alwaysRoutes()
 	s.standingAuthorizationRoutes()
+	s.ruleSuggestionRoutes()
 	s.northStarRoutes()
 	s.reporterRoutes()
 	s.directionRoutes()
