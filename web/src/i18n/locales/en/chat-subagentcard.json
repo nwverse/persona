@@ -11,7 +11,7 @@
   "status_completed": "Completed",
   "status_failed": "Failed",
   "status_stopped": "Stopped",
-  "tokens": "{count} tokens",
+  "tokens": "{value} tokens",
   "tool_uses_one": "{count} tool use",
   "tool_uses_other": "{count} tool uses",
   "last_tool": "Last tool: {tool}",

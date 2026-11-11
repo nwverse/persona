@@ -351,6 +351,21 @@ export function agentSummary(result: Item | undefined, meta: Subagent | undefine
   return text || meta?.last_text?.trim() || "";
 }
 
+/** A subagent's model as its card's chip says it (#5030): a Claude id as its family and version ("claude-haiku-4-5-20251001"
+ *  → "Haiku 4.5", "claude-opus-4-8[1m]" → "Opus 4.8"), a GPT id as OpenAI writes it ("gpt-5.4-mini" → "GPT-5.4 Mini"),
+ *  anything else in title case. A gateway's "<provider>/<model>" and a cloud route's "anthropic." prefix are dropped. */
+export function modelChipLabel(model: string | undefined): string {
+  let id = (model ?? "").trim().split("/").pop() ?? "";
+  id = id.replace(/\[1m\]$/i, "").replace(/-\d{8}$/, "").replace(/^(?:[a-z]{2}\.)?anthropic\./i, "");
+  if (!id) return "";
+  const word = (w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+  const claude = /^claude-([a-z]+)-(\d+)(?:-(\d+))?$/i.exec(id);
+  if (claude) return `${word(claude[1])} ${claude[3] ? `${claude[2]}.${claude[3]}` : claude[2]}`;
+  const gpt = /^gpt-([\d.]+)(?:-(mini|nano))?$/i.exec(id);
+  if (gpt) return `GPT-${gpt[1]}${gpt[2] ? ` ${word(gpt[2])}` : ""}`;
+  return id.split("-").filter(Boolean).map(word).join(" ");
+}
+
 /** The subagents a subagent launched, and theirs, one level deeper each (`depth` 0: launched by `id`). */
 export function nestedSubagents(all: Subagent[] | undefined, id: string): SubagentRow[] {
   const rows = subagentTree(all);

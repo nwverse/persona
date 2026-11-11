@@ -11,7 +11,7 @@
   "status_completed": "完了",
   "status_failed": "失敗",
   "status_stopped": "停止済み",
-  "tokens": "{count} tokens",
+  "tokens": "{value} tokens",
   "tool_uses_other": "{count} 回のツール使用",
   "last_tool": "直近のツール: {tool}",
   "output_file": "出力: {path}",

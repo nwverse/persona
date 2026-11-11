@@ -11,7 +11,7 @@
   "status_completed": "已完成",
   "status_failed": "失败",
   "status_stopped": "已停止",
-  "tokens": "{count} tokens",
+  "tokens": "{value} tokens",
   "tool_uses_other": "{count} 次工具调用",
   "last_tool": "最近工具：{tool}",
   "output_file": "输出：{path}",
