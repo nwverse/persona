@@ -18,6 +18,15 @@ does not compile): read it where it is set from (`StyleSpec.current.fontDesign`)
 - UI tests of this feature share one mock hub for the whole run, and the hub keeps each recording's live log and asks. A test that reads `asks.first` passes alone and fails after another test asked about the same sample recording. Restart the mock hub (stop it by its port) before each run, or run the test alone.
 - `Text(timerInterval:)` has no text a UI test can read: its accessibility label is the caller's ("Recording time") and the time is the spoken value, so assert on the value. A `Label` carrying an accessibility identifier gives the identifier to its icon too; combine its children first, or the test finds the SF Symbol name as the label.
 
+## A file only tests read still counts as a blocking read (#4695)
+
+`AssistantPickStore` (#3413) reads its picks from UserDefaults in the app and from a file only in a test's own state
+folder, but it read that file with its own `Data(contentsOf:)`, which `scripts/test/test_apple_perf_patterns.py` counts
+(P1) wherever it runs. A model's state-folder files go through `StateCache.load` (one counted read); a write that a test
+reads back at once stays synchronous, since `StateCache.save` writes later. The same issue's other half: `ManagersModel`, a
+`@State` initial value in the switcher's header, read its clock in `init`; the time it last read is now optional and
+`now` reads the clock while nothing has set it, so the `init` only assigns (P3).
+
 ## The first Photos query in a process loads the Photos database (#4250)
 
 `PHAsset.fetchAssets` looks cheap, but the first query in a process opens the Photos client database
@@ -838,6 +847,11 @@ Use an invalidation revision as the task key and handle the flag after completio
   `fetchReminders`, `PHImageManager`, `WCSession.sendMessage` reply / error…) without SDK `Sendable` annotation compile without warnings but inherit main isolation,
   crashing when runtime isolation checks fail (`dispatch_assert_queue_fail`, every image save on 2026-10-31). Always write `{ @Sendable … in`; `BackgroundCallbackTests` checks source.
   SDK `NS_SWIFT_SENDABLE` callbacks (HealthKit, URLSession) and main-thread delegates need no change. Actual system-feature UI tests (`PhotoSaveTests`) expose it.
+- `{ @Sendable … in` is not enough for a new thread's body. In some batch builds (Xcode 26.3, `MainThreadWatchdog.swift` batched with
+  `LinkSheet.swift`) `Thread(block:)` is imported as taking a `@MainActor @Sendable` block, and a closure literal passed to it takes that isolation,
+  so the watchdog loop trapped on its own thread about a second after every DEBUG launch (`dispatch_assert_queue_fail`, #4703). The same file
+  compiled alone was fine, so single-file experiments hid it. Bind the body to a typed `let body: @Sendable () -> Void = { … }` and pass
+  `Thread(block: body)`; `BackgroundCallbackTests` rejects closure literals handed to `Thread` / `detachNewThread`.
 - For custom concurrency helpers delivering results to main, mark the function `@MainActor` and use `withTaskGroup(…, isolation: MainActor.shared)`.
   An `isolation: isolated (any Actor)? = #isolation` parameter alone did not reliably keep task groups on caller actor: `HubFanOut.run`
   callbacks ran in background, and reading `AppModel` triggered isolation checks, crashing every launch (`dispatch_assert_queue_fail`,

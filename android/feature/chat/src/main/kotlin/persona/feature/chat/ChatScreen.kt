@@ -944,6 +944,8 @@ private fun ChatPage(
                             }
                             if (!historyOnly && !readOnly) ChatStartingNote(session)
                             // The host's own word on it: why it waits for you, or what stopped it, with a retry.
+                            // ultracode went off when it resumed (#582, iOS UltracodeLostNote): one line to turn it back on or dismiss.
+                            if (!historyOnly && !readOnly && session != null) UltracodeLostNote(session, controls, canSend)
                             if (!historyOnly && !readOnly) ChatHostNote(session, hostRetried, canRetry = canSend,
                                 retryEnabled = !sending && submittedDraft == null,
                                 onRetry = { reason ->
