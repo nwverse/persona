@@ -6466,8 +6466,10 @@ if os.environ.get("MOCK_SCREEN_DIALOG"):
 
 # MOCK_SCREEN_MULTI=1: a multi-select AskUserQuestion read off the terminal (Claude Code 2.1.316), the second of
 # three questions: two boxes already ticked at the computer, a few words in its free-text field, "Next" to send it.
+# /mock/reset puts it back unanswered (MultiSelectCardTests: each case starts from the card).
+SCREEN_MULTI_INTERACTIONS = []
 if os.environ.get("MOCK_SCREEN_MULTI"):
-    INTERACTIONS.append(
+    SCREEN_MULTI_INTERACTIONS.append(
         {"id": "scr_macbook_review_5c1d2e3f4a5b", "machine_id": "macbook", "session_id": REVIEW, "session_title": "检查 PR #42 的改动",
          "cwd": "/Users/me/code/weather", "kind": "screen", "created_at": ago(minutes=1), "expires_at": later(hours=24),
          "screen": "←  ☒ 环境  ☐ 平台  ☐ 通知  ✔ Submit  →\n哪些平台要一起发？\n❯ 1. [✔] 手机\n     iPhone 版本。\n"
@@ -6482,6 +6484,7 @@ if os.environ.get("MOCK_SCREEN_MULTI"):
                         {"key": "4", "label": "Type something", "kind": "type_something", "keys": ["4"], "checked": True,
                          "text": "平板也看一眼"},
                         {"key": "5", "label": "Chat about this", "kind": "chat", "keys": ["5"]}]}})
+    INTERACTIONS.extend(copy.deepcopy(SCREEN_MULTI_INTERACTIONS))
 # MOCK_SCREEN_STEPS=1: a terminal AskUserQuestion of three questions read off the screen (Claude Code 2.1.316) that
 # answers as the terminal does (#2970): ← and → move between the tabs, an answer moves on to the next one, and after an
 # answer that names its option the node submits the review tab once every question has one (keys alone never do).
@@ -17935,10 +17938,11 @@ class H(BaseHTTPRequestHandler):
             BUMPED.pop("blocked", None)
             TODOS[:] = copy.deepcopy(TODOS_INIT)
             TODO_DECISIONS[:] = copy.deepcopy(TODO_DECISIONS_INIT)
-            codex = {x["id"] for x in CODEX_INTERACTIONS}
-            INTERACTIONS[:] = [x for x in INTERACTIONS if x["id"] not in codex] + copy.deepcopy(CODEX_INTERACTIONS)
-            RESOLVED[:] = [r for r in RESOLVED if r["id"] not in codex]
-            INTERACTION_HISTORY[:] = [x for x in INTERACTION_HISTORY if x["id"] not in codex]
+            again = CODEX_INTERACTIONS + SCREEN_MULTI_INTERACTIONS  # the cards back, unanswered
+            ids = {x["id"] for x in again}
+            INTERACTIONS[:] = [x for x in INTERACTIONS if x["id"] not in ids] + copy.deepcopy(again)
+            RESOLVED[:] = [r for r in RESOLVED if r["id"] not in ids]
+            INTERACTION_HISTORY[:] = [x for x in INTERACTION_HISTORY if x["id"] not in ids]
             return self.send_json({"ok": True})
         if p == "/mock/session_close":
             if "fail" in q: SESSION_CLOSE["fail"] = q["fail"][0] == "1"

@@ -19645,6 +19645,28 @@
       },
       "extractionState": "manual"
     },
+    "Answer Question %lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Answer Question %lld"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "質問 %lld に回答"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回答第 %lld 题"
+          }
+        }
+      }
+    },
     "Answer for You": {
       "localizations": {
         "en": {
