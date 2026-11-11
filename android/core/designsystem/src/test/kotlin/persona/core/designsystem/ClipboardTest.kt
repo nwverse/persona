@@ -80,4 +80,12 @@ class ClipboardTest {
         assertEquals("Copied!", noticeShown)
         assertEquals(MAX_CLIPBOARD_TEXT_CHARS, clipboard.primaryClip?.getItemAt(0)?.text?.length)
     }
+
+    @Test
+    fun pureLengthCheckValidatesThresholdBoundary() {
+        assertTrue(isClipboardTextUnderLimit(""))
+        assertTrue(isClipboardTextUnderLimit("Hello"))
+        assertTrue(isClipboardTextUnderLimit("A".repeat(MAX_CLIPBOARD_TEXT_CHARS)))
+        assertFalse(isClipboardTextUnderLimit("A".repeat(MAX_CLIPBOARD_TEXT_CHARS + 1)))
+    }
 }

@@ -74,10 +74,11 @@ fun JSectionHeader(
     open: Boolean? = null,
     /** The [count] in a capsule of this state's tone (the To-dos list's sections, #3712, as iOS `CountBadge`); none: quiet digits. */
     countTone: Status? = null,
-    action: (@Composable RowScope.() -> Unit)? = null,
     /** [trailing] is the fold's own action word ("Expand" / "Collapse"): while the header folds ([onClick] and [open]),
      *  TalkBack hears it from the state and click label, so the visible word is not read a second time (#4120). */
     trailingIsFoldAction: Boolean = false,
+    // Last, so a caller can pass it as a trailing lambda: `JSectionHeader(title) { … }`.
+    action: (@Composable RowScope.() -> Unit)? = null,
 ) {
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style

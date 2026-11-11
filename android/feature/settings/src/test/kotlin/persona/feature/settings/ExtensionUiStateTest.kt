@@ -93,6 +93,21 @@ class ExtensionUiStateTest {
         }
     }
 
+    @Test fun anImagesViewerFollowsThePictureNotItsPlace() {
+        val picture = ExtensionImageSource(url = "https://example.com/a.png", path = "/api/v1/extensions/x/files/a")
+        // the extension's key first, then the hub's path, the address, the ref
+        assertEquals("key:hero", ExtensionViewText.imageIdentity(ExtensionViewItem("image", key = "hero", src = picture)))
+        assertEquals("path:/api/v1/extensions/x/files/a", ExtensionViewText.imageIdentity(ExtensionViewItem("image", key = " ", src = picture)))
+        assertEquals("url:https://example.com/b.png", ExtensionViewText.imageIdentity(ExtensionViewItem("image", src = ExtensionImageSource(url = "https://example.com/b.png"))))
+        assertEquals("ref:cover", ExtensionViewText.imageIdentity(ExtensionViewItem("image", src = ExtensionImageSource(ref = "cover"))))
+        // two unkeyed pictures that swap places are told apart
+        assertNotEquals(ExtensionViewText.imageIdentity(ExtensionViewItem("image", src = ExtensionImageSource(url = "https://example.com/a.png"))),
+            ExtensionViewText.imageIdentity(ExtensionViewItem("image", src = ExtensionImageSource(url = "https://example.com/b.png"))))
+        // nothing to go by: the viewer stays with its place, as before
+        assertNull(ExtensionViewText.imageIdentity(ExtensionViewItem("image", src = ExtensionImageSource())))
+        assertNull(ExtensionViewText.imageIdentity(ExtensionViewItem("image")))
+    }
+
     @Test fun tonesLinksAndItemsTheAppDraws() {
         assertEquals(Tone.Positive, ExtensionViewText.tone("positive"))
         assertEquals(Tone.Danger, ExtensionViewText.tone("danger"))
@@ -261,6 +276,13 @@ class ExtensionUiStateTest {
         assertFalse(ExtensionViewText.drawable(chart.copy(kind = "future-chart")))
         assertFalse(ExtensionViewText.drawable(chart.copy(series = listOf(ExtensionChartSeries("空")))))
         assertEquals(JChartKind.Line, ExtensionViewText.chart(chart.copy(kind = "line"))!!.kind)
+        // In Chinese the values and the scale count in ten-thousands; the extension's own words stay as they are (#4149).
+        val chinese = ExtensionViewText.chart(chart, java.util.Locale.SIMPLIFIED_CHINESE)!!
+        assertEquals(listOf("1.2M", "80万 tokens"), chinese.series[0].displays)
+        assertEquals("12亿", chinese.axis(1_200_000_000.0))
+        assertEquals("1.2B", data.axis(1_200_000_000.0))
+        assertEquals("12億", ExtensionViewText.price(1_200_000_000.0, java.util.Locale.JAPANESE))
+        assertEquals("182.35", ExtensionViewText.price(182.35, java.util.Locale.JAPANESE))
 
         val grid = ExtensionViewItem("stat_grid", stats = listOf(ExtensionStat("今天", "1.2M", "+12%", "caution"), ExtensionStat("费用", "¥36.20", tone = "lilac")))
         assertTrue(ExtensionViewText.drawable(grid))

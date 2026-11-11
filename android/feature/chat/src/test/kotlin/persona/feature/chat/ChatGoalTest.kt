@@ -31,5 +31,6 @@ class ChatGoalTest {
     @Config(qualifiers = "en")
     @Test fun usageCountsTokensInEnglishUnits() {
         assertEquals("12.3K / 500K tokens", goalUsage(res, GoalInfo(objective = "x", tokensUsed = 12345, tokenBudget = 500_000)))
+        assertEquals("1.2M / 5M tokens", goalUsage(res, GoalInfo(objective = "x", tokensUsed = 1_200_000, tokenBudget = 5_000_000)))
     }
 }

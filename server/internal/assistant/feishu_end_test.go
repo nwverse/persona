@@ -9,6 +9,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 // endHub is the Feishu fake with a run that already shows its progress card, and the fake hub to set its
@@ -144,5 +145,102 @@ func TestFeishuHeldRunGivesUpWithoutItsCard(t *testing.T) {
 	card, _ := (*posts)[0]["card"].(string)
 	if (*posts)[0]["update"] == true || !strings.Contains(card, "已超时，去 App 里看") || !strings.Contains(card, "先不等了") {
 		t.Fatalf("card %v", (*posts)[0])
+	}
+}
+
+// A held run's ending can also be quiet: its background work reported back in a turn that said nothing. The run has no
+// card left to rewrite, but the chat was told it would answer again — so its ending line goes out as a card of its own,
+// rather than nowhere.
+func TestFeishuHeldRunQuietEndWithoutItsCard(t *testing.T) {
+	s, f, r, posts := endHub(t)
+	s.finishChannelRun(r, &channel.Result{Answer: "先答一部分", Held: true})
+	s.chans.mu.Lock()
+	left := r.Ext["card"]
+	r.Started = time.Now().Add(-channel.HeldIdleMost - time.Minute)
+	s.chans.mu.Unlock()
+	if left != "" {
+		t.Fatalf("the held run kept its card: %q", left)
+	}
+	*posts = nil
+	sess := proto.Session{Status: proto.StatusDone, State: proto.StateIdle, MachineID: "server", SessionID: "c1"}
+	f.setSessions("server", sess)
+	f.setItems()
+	s.checkChannelRun(r.ID)
+	if run, _ := s.channelRunByID(r.ID); run != nil {
+		t.Fatalf("the run did not end")
+	}
+	if len(*posts) != 1 {
+		t.Fatalf("the run ended without telling the owner: %v", *posts)
+	}
+	post := (*posts)[0]
+	card, _ := post["card"].(string)
+	if post["update"] == true || post["reply_to"] != "om_m1" || !strings.Contains(card, "完成 · Persona · 用时") {
+		t.Fatalf("post %v", post)
+	}
+}
+
+// heldRunWithoutCard is a run answered once (held) whose card went back with its message, and whose background wait is
+// older than HeldIdleMost: its next end is a quiet one.
+func heldRunWithoutCard(t *testing.T) (*Service, *fakeHub, *channel.Run, *[]map[string]any) {
+	t.Helper()
+	s, f, r, posts := endHub(t)
+	s.finishChannelRun(r, &channel.Result{Answer: "先答一部分", Held: true})
+	s.chans.mu.Lock()
+	left := r.Ext["card"]
+	r.Started = time.Now().Add(-channel.HeldIdleMost - time.Minute)
+	s.chans.mu.Unlock()
+	if left != "" {
+		t.Fatalf("the held run kept its card: %q", left)
+	}
+	*posts = nil
+	return s, f, r, posts
+}
+
+// A held run's quiet ending says how it ended. Its background work's turn can be interrupted, hit a model API error or
+// lose its computer: the chat hears that instead of "Done", as a card of its own (the run has none left) (#4228).
+func TestFeishuHeldRunQuietEndSaysHowItEnded(t *testing.T) {
+	interrupted := []proto.Item{{Seq: 5, Kind: proto.KindNotice, Role: "system", Text: transcript.InterruptedNotice}}
+	for _, tc := range []struct {
+		name  string
+		sess  proto.Session
+		items []proto.Item
+		want  string
+	}{
+		{"stopped", proto.Session{Status: proto.StatusDone, State: proto.StateIdle}, interrupted, "已中断"},
+		{"failed", proto.Session{Status: proto.StatusDone, State: proto.StateIdle, TurnError: "unexpected status 503"}, nil, "出错了"},
+		{"offline", proto.Session{Status: proto.StatusOffline, State: proto.StateIdle}, nil, "电脑离线"},
+	} {
+		s, f, r, posts := heldRunWithoutCard(t)
+		sess := tc.sess
+		sess.MachineID, sess.SessionID = "server", "c1"
+		f.setSessions("server", sess)
+		f.setItems(tc.items...)
+		s.checkChannelRun(r.ID)
+		if run, _ := s.channelRunByID(r.ID); run != nil {
+			t.Fatalf("%s: the run did not end", tc.name)
+		}
+		if len(*posts) != 1 {
+			t.Fatalf("%s: the run ended without telling the owner: %v", tc.name, *posts)
+		}
+		post := (*posts)[0]
+		card, _ := post["card"].(string)
+		if post["update"] == true || !strings.Contains(card, tc.want) || !strings.Contains(card, "· Persona · 用时") ||
+			strings.Contains(card, "完成 ·") {
+			t.Fatalf("%s: post %v", tc.name, post)
+		}
+	}
+}
+
+// A quiet ending is not always one to report: a message the owner recalled says nothing, with a card or without one.
+func TestFeishuRecalledEndWithoutItsCardSaysNothing(t *testing.T) {
+	s, _, r, posts := endHub(t)
+	s.chans.mu.Lock()
+	delete(r.Ext, "card") // recalled before its first progress card
+	r.Recalled = true
+	s.chans.mu.Unlock()
+	*posts = nil
+	s.finishChannelRun(r, recalledResult())
+	if len(*posts) != 0 {
+		t.Fatalf("a recalled message said something: %v", *posts)
 	}
 }
