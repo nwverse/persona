@@ -92,8 +92,9 @@ export const WorkflowCallCard = memo(function WorkflowCallCard({ step, mid, sid,
     return session?.workflows?.find((w) => w.tool_use_id === call);
   });
   const task = run?.task_id;
-  const listed = () => Boolean(task) && canOpenBackgroundDialog(mid, sid, task);
-  const inDialog = useSyncExternalStore(subscribeBackgroundDialogs, listed, listed);
+  // the same read on the server: a page drawn to markup has no dialog yet, and opens in place
+  const reach = () => Boolean(task) && canOpenBackgroundDialog(mid, sid, task);
+  const inDialog = useSyncExternalStore(subscribeBackgroundDialogs, reach, reach);
   const [open, setOpen] = useExpanded(`${scope}workflow:${call}`);
   // the agents' clocks go each second only while their rows show
   const now = useNow(1000, Boolean(run?.running) && open && !inDialog);

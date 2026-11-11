@@ -7,6 +7,7 @@
 // reduced motion. Frames are driven by hand.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.hoisted(() => {
   globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
@@ -205,6 +206,13 @@ describe("the card in the chat", () => {
     expect(cells[0].title).toBe("已完成");
     expect(text("[data-strip-more]")).toBe("+145");
     expect(text("[data-workflow-progress-line]")).toBe("Audit · 169/185 Agent");
+  });
+
+  it("draws to static markup (no getServerSnapshot error), opening in place there", () => {
+    act(() => upsertSession({ machine_id: "m", session_id: "s", status: "working", state: "working", workflows: [running()] } as Session));
+    const html = renderToStaticMarkup(<WorkflowCallCard step={call()} mid="m" sid="s" scope="static:" />);
+    expect(html).toContain('data-workflow-call="running"');
+    expect(html).toContain('data-workflow-opens="inline"');
   });
 
   it("is the call's row again when the hub lists no such run", () => {
