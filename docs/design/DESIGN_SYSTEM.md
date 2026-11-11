@@ -458,6 +458,12 @@ This is a requested status correction, not a new style or setting; the existing 
 Workflow phase text may ellipsize, but the done/started count stays visible; simultaneous command/subagent counts
 use another subtitle line rather than pushing the workflow count out of the row.
 
+The web main conversation has one compact header line on the welcome page and in the open main chat (#4572).
+It uses the same neutral text in both places and reveals the full line on hover, focus or tap when space is tight.
+The summary describes the observed harness and execution environment. The new conversation's launcher remains a
+separate composer setting. A missing execution report, a proxy node and the last known location each have distinct
+copy; none is presented as the current location.
+
 ### 3.9 Empty states
 
 `EmptyStateView` (`apple/Persona/DesignSystem/Components.swift:385`): symbol, title, one-sentence message, optional prominent action. 92 uses. System `ContentUnavailableView` is used in about 22 other places and looks different (DS-15). Search results may use `ContentUnavailableView.search`. Web has no shared empty state outside admin; Android has `JEmptyState`. An offline current assistant (several assistants) takes the place of a merged list's empty state with its own: the assistant avatar faded with its offline mark, "<name> is offline" and when it last synced (web `OfflineState` in `web/src/views/ManagerParts.tsx`; Android `JAssistantOffline`, a `JEmptyState` whose `leading` slot holds `JManagerAvatar`; `docs/assistant/managers.md` "Clients").

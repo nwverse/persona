@@ -487,7 +487,7 @@ func (s *Service) mainSessionRep(machine, session string) bool {
 	r.mu.RLock()
 	p := r.profile
 	r.mu.RUnlock()
-	return p != nil && p.Main == session && p.MachineID == machine
+	return p != nil && p.Main == session && p.MainRouteMachine() == machine
 }
 
 // taskSessionRep says whether session is a scheduled task's own conversation as the last snapshot has it, whatever

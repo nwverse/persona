@@ -88,6 +88,7 @@ import { lineOfItem, loadEarlierForSearch, untilStill, type ChatSearchHit, type 
 import { chatFiles } from "../../lib/mentions";
 import { sameMessage } from "../../lib/queue";
 import { OutboxBubbles } from "./OutboxBubbles";
+import { MainRuntimeSlot } from "../assistant/MainRuntimeSlot";
 import { AssistantFace, AssistantLauncherChip, CompactionStrip, useAssistantMenu } from "../assistant/AssistantChat";
 import { Segmented } from "../assistant/parts";
 import { PageBoundary } from "../PageBoundary";
@@ -1379,6 +1380,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           actions={headerActions}
         />
       )}
+      {!readOnly && !panel && isMain && <MainRuntimeSlot sid={sid} />}
       {banner}
       {/* a known session keeps its chat: a failed background read is retried quietly (runtime-session.ts) */}
       {archivedHere ? <ArchivedNotice session={archivedHere} /> : noDetails && <SessionDetailNotice error={detail.error} retry={retryDetail} />}
