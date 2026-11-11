@@ -137,7 +137,7 @@ The theme (the title), when and where, attendees and speakers only when known, t
 
 ## Privacy
 
-Transcription stays on device, only text is uploaded, audio never leaves the phone, and recordings still expire after `recording_days` (default 14). A meeting recorded in hub mode (#3862, chosen per meeting) is the exception: "Privacy per mode" below. In a meeting call, what is said while the user holds Talk goes to the realtime voice service in either mode (#3862, "Decided").
+Transcription stays on device, only text is uploaded, audio never leaves the phone, and recordings still expire after `recording_days` (default 14). A meeting recorded in hub mode (#3862, chosen per meeting) is the exception: "Privacy per mode" below. In a meeting call, what is said while the user holds Talk goes to the realtime voice service in either mode (#3862, "Decided"). In a participant meeting, the text of an answer said aloud goes from the hub's voice extension to the realtime voice service the owner set up, to be said in its voice (#5004); without that service it is said by the phone's on-device voice.
 
 Minutes are kept longer than their transcript (#3780). Past `recording_days` the hub **trims** a recording that has minutes instead of deleting it: its transcript (`segments.json`, `transcript.md`), the summary made from it, the live log and any undo journal are deleted, and only `meta.json` (now with `trimmed_at`), `minutes.json` and `minutes.md` stay, according to the assistant setting `minutes_days`: **forever by default** (unset or `0`), otherwise 1–3650 days after the meeting (#3862). A recording without minutes, or one past a finite `minutes_days`, is deleted entirely as before. With forever, retention never deletes trimmed minutes; the user’s delete still removes everything. `GET /api/v1/assistant` returns `0` for forever, otherwise `max(minutes_days, recording_days)`. `PUT` accepts `0` or an integer from 1–3650 (`400` otherwise). `assistant.minutes_days` in `persona_settings` accepts `0` or `"forever"`, shows the value in words, and confirms changes before applying them. A positive value below `recording_days` is saved as asked for, by both, and counts once `recording_days` is shorter. Transcripts still default to 14 days, configurable through `recording_days`. The trim writes `meta.json` first; files a trim cut short leaves (a crash, a failed removal) go on the next sweep, also once a longer `recording_days` covers the recording again.
 
@@ -282,7 +282,7 @@ All of it is optional and additive. A phone that sends none of it, and a hub wit
 ```
 
 - `answer` is plain text, at most 400 characters, a few short sentences that read well aloud: no Markdown, no links. When the material does not hold the answer it says so instead of guessing. `answer` is `""` and `sources` `[]` unless `state` is `answered`.
-- `lang` is the recording's `language`, else the request's language. The phone speaks the answer with an on-device voice for it.
+- `lang` is the recording's `language`, else the request's language. The phone says the answer in the realtime voice when the hub offers it (the voice extension's `speak`, #5004, [voice.md](./voice.md)), with `lang` as its hint, else with an on-device voice for `lang`.
 - `speak` is fixed when the ask is made, from the role then. The phone says an answer aloud at most once, only for an ask it made in this run, only while the recording runs and only when the answer arrives within 60 seconds of the tap; otherwise it only shows it.
 - `sources` are the earlier meetings (`kind: "recordings"`) and projects (`kind: "projects"`) the answer drew on; each opens with `GET /api/v1/kb/{kind}/{id}`. `when`, `start` and `end` are the earlier meeting's minutes' (clients format `start` / `end` and show `when` only without them, as for the minutes); absent for projects, and `start` / `end` absent in answers from before #4713.
 - `asked_at` / `answered_at` are RFC 3339 in UTC.
@@ -321,14 +321,14 @@ The system prompt is one fixed template that takes only the owner's name, today'
 - Lists as attending sessions: the main chat (sent by omitting `attending_session`, never by its id); the other conversations of `GET /api/v1/assistant` that are not archived; and the Agent sessions of `GET /api/v1/sessions` that take messages; in each case only those that pass "Sessions that never attend" below.
 - Uploads an attending recording at once, ahead of other pending uploads and outside the save debounce, then streams finished sentences with `…/live`, resuming from `next` after a reconnect or a `409 live_gap`.
 - Shows that an AI is attending, on the recording screen and in the Live Activity, for as long as the role is not `off`.
-- Asks with a tap: typed on the recording screen, or with no text from the Live Activity. Shows the answer (on the recording screen, and the latest one in the Live Activity; the hub posts no notification for answers), and in a participant meeting says it aloud through the voice route (headset, else the loudspeaker).
+- Asks with a tap: typed on the recording screen, or with no text from the Live Activity. Shows the answer (on the recording screen, and the latest one in the Live Activity; the hub posts no notification for answers), and in a participant meeting says it aloud through the voice route (headset, else the loudspeaker): in the realtime voice of voice chats, with the model and voice the owner uses, when the hub's voice extension lists `speak` (#5004); in the phone's on-device voice when it doesn't, fails or hasn't started within 8 seconds.
 - Keeps Persona's own voice out of the transcript and the live log: a sentence at least half inside a span when the phone was speaking is dropped (required). Echo cancellation is optional, set only when a recording starts as `participant` and never switched mid-recording. Persona's answers stay on the hub as `asks`, not as transcript lines.
 
 ### Not yet
 
 - Minutes that use the attending session's running notes or the asks.
 - Marking a meeting as private, so it is never material for answers.
-- Spoken answers through the realtime voice stack (the phone speaks the text answer today), a wake phrase, and attending from the watch, the Mac, the web or Android.
+- A wake phrase, and attending from the watch, the Mac, the web or Android. (Spoken answers in the realtime voice came with #5004: the voice extension's `speak`.)
 
 ## Meeting conversation (#3862)
 
@@ -635,7 +635,7 @@ Its row in protocol.md's WebSocket table and the hub's list of manager message t
 - **One capture.** The recorder holds the microphone for the whole meeting, and the call never claims it ([recording.md](../apple/recording.md), `apple/Shared/Recording/RecordingMicrophone.swift`). The recorder's single input tap, already converted to 16 kHz, feeds the segment writer, the hub uplink (phase 5) and, during Talk, the call (PCM16 at the call's `input_rate`). The call's audio plays through a player on the recorder's engine, so the system's echo cancellation can remove it.
 - **A meeting call is not a phone call.** It does not end in the background, after 10 idle minutes or on an interruption (it pauses and resumes with the recording), and it does not keep the screen on. It runs while the role is `participant`, from the start or from a later change, until Stop or another role. It reconnects as protocol 2 does (`resume`); after three failed attempts the phone tries again every 30 seconds while the meeting records, and Talk is transcribed on the phone meanwhile.
 - **Echo.** A meeting that starts as `participant` asks for the system's echo-cancelled input when recording starts and never switches it mid-recording; `start.echo_cancellation` says whether it is on. Either way a transcript sentence at least half inside a span when Persona spoke (plus half a second) is dropped: by the phone from its transcript and live log, as #2981 requires, and by the hub in hub mode, from the spans the phone reports ("Audio from the phone").
-- **Talk without a call** (a listener, no voice extension, or the call down): the phone cuts its segment at the span's start and end, transcribes the span on device and asks with `…/ask` (`question`, `spoken: true`); a participant hears the answer in the phone's on-device voice, as #3746 does.
+- **Talk without a call** (a listener, no voice extension, or the call down): the phone cuts its segment at the span's start and end, transcribes the span on device and asks with `…/ask` (`question`, `spoken: true`); a participant hears the answer as #3746 does: in the realtime voice through the voice extension's `speak` when it can, else in the phone's on-device voice (#5004).
 - **Typed questions** go as `text` frames while the call is live (the fast layer hands them to the room and says the answer), otherwise through `…/ask`.
 
 ### Phase 5: hub transcription
@@ -864,7 +864,7 @@ What leaves the iPhone:
 | The transcript | Made on the iPhone; text to the hub | Made by the service; the iPhone's text fills gaps |
 | Questions and Just me | Text (and Just me's images) to the hub, and to the room's or the main chat's model | The same |
 | Photos | To the hub and the room's model | The same |
-| Spoken answers | The realtime voice during a meeting call, else the iPhone's on-device voice | The same |
+| Spoken answers | The realtime voice: the meeting call's, else the voice extension's `speak` (#5004, the answer's text goes to the realtime voice service); the iPhone's on-device voice when neither can | The same |
 
 Where things are kept, and for how long:
 
