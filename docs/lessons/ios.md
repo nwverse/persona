@@ -1599,6 +1599,16 @@ A worktree's display name and its Agents' conversation names are different comma
   next to a black / white chevron that read as a navigation link. Use a borderless button with the expand / collapse icon
   in `.secondary`, as `ReadinessCard`'s Details does.
 
+## A `Menu` draws no section header over an inline picker (2026-11-11, #3719)
+
+- The Agents header's mode menu wanted "Permission Mode: …" over its modes, as the web and Android have. Inside a `Menu`,
+  neither `Section(title) { Picker … .pickerStyle(.inline) }` nor `Picker { Section { … } header: { Text } }` drew it (iOS 27
+  simulator; the UI test found no element with the words, and the shot showed the bare list). The section titles above
+  were in a picker's own menu (a `Picker` in a `Form`), not an inline picker inside a `Menu`.
+- The modes became `Toggle`s, the current one on, in a `Section { … } header: { Text }`: a menu draws that header, as the
+  composer's ultracode section does, and a check mark beside the switch that is on, as a picker does. The Agents menu's
+  Display note (#3182) is the second shape above; look at it in a shot before counting on it.
+
 ## A menu inside a menu keeps the items it was first built with (2026-11-09, #1644)
 
 - **What went wrong**: the Persona chat's avatar menu nests "Launcher" › each launcher › its models. The models are read a moment after the bar comes up. An `.id` on the innermost menu (built from the list) was not enough: the "Launcher" menu around it had none, kept the launchers' submenus it was built with before the lists came in, and the claude submenu showed only Default and "Other Model…" for as long as the app ran, although the state had all ten models. Whether a run saw it depended on when the outer menu happened to be built first, so a passing UI test proved little.

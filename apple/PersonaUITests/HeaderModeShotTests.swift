@@ -183,11 +183,11 @@ final class HeaderModeShotTests: XCTestCase {
         }
     }
 
+    /// A menu row by its first words: the modes are switches, which the system may list as buttons, switches or menu items.
     @MainActor private func menuItem(_ labels: [String]) -> XCUIElement {
         let match = NSPredicate(format: labels.map { _ in "label BEGINSWITH %@" }.joined(separator: " OR "), argumentArray: labels)
-        let button = app.buttons.matching(match).firstMatch
-        if button.waitForExistence(timeout: 3) { return button }
-        let item = app.menuItems.matching(match).firstMatch // where the system lists a menu's rows as menu items
+        let kinds = NSPredicate(format: "elementType IN %@", [XCUIElement.ElementType.button, .switch, .menuItem].map(\.rawValue))
+        let item = app.descendants(matching: .any).matching(match).matching(kinds).firstMatch
         XCTAssertTrue(item.waitForExistence(timeout: 3), "the menu's \(labels[0])")
         return item
     }

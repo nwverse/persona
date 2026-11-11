@@ -491,25 +491,25 @@ struct HeaderModeButton: View, Equatable {
         let mode = session.permissionMode
         let words = String(localized: "Permission Mode: \(SessionModes.modeLabel(mode) ?? SessionModes.unknown)")
         Menu {
-            Picker("Permission Mode", selection: Binding(get: { mode ?? "" }, set: { new in if new != mode { pick(new) } })) {
-                // "Permission Mode: …" heads the list, as on the web and Android. The title goes on a section inside the
-                // picker: a `Section` around an inline picker draws none (the Agents menu's Display does it so, #3182).
-                Section {
-                    ForEach(SessionModes.listed(SessionModes.switchableModes(session), current: mode)) { o in
-                        Label { Text(o.title); Text(o.detail) } icon: { ThemedIcon(o.symbol) }.tag(o.id)
+            // "Permission Mode: …" heads the list, as on the web and Android. The modes are switches, the current one on:
+            // an iOS menu draws no section header over an inline picker's options, whether the section is around the
+            // picker or inside it (docs/lessons/ios.md), and does over switches (the composer's ultracode section).
+            Section {
+                ForEach(SessionModes.listed(SessionModes.switchableModes(session), current: mode)) { o in
+                    Toggle(isOn: Binding(get: { o.id == mode }, set: { on in if on, o.id != mode { pick(o.id) } })) {
+                        Label { Text(o.title); Text(o.detail) } icon: { ThemedIcon(o.symbol) }
                     }
-                } header: {
-                    Text(words)
                 }
+                .disabled(!session.canChangeModes)
+                // Allow Everything where this agent cannot take it while it runs: there, and why under it (a menu draws
+                // no footers; it keeps an item's second `Text`, not a `Label`'s).
+                if let o = SessionModes.bypassUnavailable(session) {
+                    Button {} label: { Text(o.title); Text(o.detail); Theme.Icon.image(o.symbol) }.disabled(true)
+                }
+            } header: {
+                // Why nothing can be picked goes under the title: words, not a grayed item.
+                Text(!session.canChangeModes && !session.status.isLive ? words + "\n" + StateName.notRunning.text : words)
             }
-            .pickerStyle(.inline)
-            .disabled(!session.canChangeModes)
-            // Allow Everything where this agent cannot take it while it runs: there, and why (a menu draws no footers).
-            if let o = SessionModes.bypassUnavailable(session) {
-                Button {} label: { Label { Text(o.title); Text(o.detail) } icon: { ThemedIcon(o.symbol) } }
-                    .disabled(true)
-            }
-            if !session.canChangeModes, !session.status.isLive { Text(StateName.notRunning.text) }
         } label: {
             HeaderModeCapsule(look: SessionModes.headerLook(mode), changing: changing)
         }
