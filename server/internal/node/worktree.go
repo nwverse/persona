@@ -26,13 +26,13 @@ import (
 // maxBranch bounds a branch name (git's own limit on a ref name is far above anything typed).
 const maxBranch = 255
 
-// canWorktree: the host can make worktrees: its own way, or herdr's fallback (git, then a new workspace).
+// canWorktree: the host can make worktrees: its own way, or the herdr/herdr-core fallback (git, then a new workspace).
 func canWorktree(h host.Host) bool {
 	if w, ok := h.(host.Worktreer); ok && w.CanWorktree() {
 		return true
 	}
 	_, launcher := h.(host.Launcher)
-	return launcher && h.Kind() == host.Herdr
+	return launcher && (h.Kind() == host.Herdr || h.Kind() == host.HerdrCore)
 }
 
 // worktreeUnsupported: the engine of kind has no checkouts. The code survives the wire, where errors.Is does not, so

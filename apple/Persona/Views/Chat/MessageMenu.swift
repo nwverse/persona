@@ -5,7 +5,8 @@ import UIKit.UIGestureRecognizerSubclass
 #endif
 
 /// Message actions: long-press a message and it is lifted over the dimmed chat with the bar of Copy / Select Text / Quote /
-/// Share (and Edit for your own messages) next to it, as Telegram does (#603, `MessageLift`). Tapping outside closes it.
+/// Forward (and Edit for your own messages) next to it, as Telegram does (#603, `MessageLift`). Tapping outside closes it.
+/// Forward (#3807) takes Share's place on iPhone and iPad where the chat forwards; Share as Image is in its picker.
 @Observable
 final class MessageMenu {
     var selected: String?
@@ -20,6 +21,11 @@ final class MessageMenu {
     var inPlace: InPlaceSelect?
     /// The message being shared as a card.
     var sharing: ShareMessage?
+    /// Forward (#3807): the chat makes the pressed message a forward and opens its picker (`forwarding`). nil: the bar
+    /// keeps Share (the Mac, a chat that cannot forward).
+    @ObservationIgnored var forward: ((MessageBarInfo) -> Void)?
+    /// The message whose Forward was tapped: the chat shows the picker (`ForwardSheet`).
+    var forwarding: ForwardDraft?
     /// Where the chat's messages come from ("app › leader"), printed on share cards (read when sharing: the
     /// session may not be loaded yet when the chat binds the menu).
     @ObservationIgnored var source: () -> String = { "" }
@@ -259,10 +265,12 @@ extension View {
     /// The whole row of a message: hosts the action bar above the press point and lifts the row above its neighbours.
     /// pending: your message not in the transcript yet (`PendingBubble`, #6427): Copy, Select Text and Share only, no
     /// quote (it may never reach the agent) and no Edit (a waiting one would still go out besides the edited one).
+    /// from: who wrote it when that is not the chat's Agent or Persona (a relayed or scheduled message's source, another
+    /// session's Claude), for a forward's author.
     /// delete: one only on this phone ends in Delete (#4626), on the bar and in the plain context menu alike.
-    func messageActionBar(id: String, text: String, isUser: Bool, date: Date? = nil, pending: Bool = false,
+    func messageActionBar(id: String, text: String, isUser: Bool, date: Date? = nil, pending: Bool = false, from: String? = nil,
                           delete: MessageBarDelete? = nil) -> some View {
-        modifier(MessageActionBarHost(id: id, text: text, isUser: isUser, date: date, pending: pending, delete: delete))
+        modifier(MessageActionBarHost(id: id, text: text, isUser: isUser, date: date, pending: pending, from: from, delete: delete))
     }
     /// Messages shown with the bar outside the chat's list (the background tasks' drawer): a tap or a drag there closes
     /// it, as on the list, and it closes with the sheet (#1388: it stayed until one of its buttons was used).
@@ -352,6 +360,7 @@ private struct MessageActionBarHost: ViewModifier {
     let isUser: Bool
     let date: Date?
     let pending: Bool
+    let from: String?
     let delete: MessageBarDelete?
     @State private var drag: CGFloat = 0
     @State private var armed = false
@@ -359,7 +368,8 @@ private struct MessageActionBarHost: ViewModifier {
     func body(content: Content) -> some View {
         if let menu {
             swipeable(content, menu)
-                .environment(\.messageBar, MessageBarInfo(id: id, text: text, isUser: isUser, date: date, pending: pending, delete: delete))
+                .environment(\.messageBar, MessageBarInfo(id: id, text: text, isUser: isUser, date: date, pending: pending, from: from,
+                                                            delete: delete))
                 .coordinateSpace(.named(MessageMenu.row))
                 .zIndex(menu.selected == id ? 1 : 0)
         } else {
@@ -427,6 +437,8 @@ struct MessageActionBar: View {
     var menu: MessageMenu
     /// Not in the transcript yet (`messageActionBar(pending:)`): Copy, Select Text and Share.
     var pending = false
+    /// Who wrote it, when not the chat's Agent or Persona (`messageActionBar(from:)`).
+    var from: String? = nil
     /// Only on this phone (`messageActionBar(delete:)`): Delete last, in the danger color.
     var delete: MessageBarDelete?
     var itemWidth: CGFloat = Self.item
@@ -447,6 +459,15 @@ struct MessageActionBar: View {
     static func rewinds(id: String, isUser: Bool, menu: MessageMenu) -> Bool {
         isUser && menu.rewind != nil && menu.rewindBlock() != nil && Rewind.entry(of: id) != nil
     }
+    /// Forward in Share's place (#3807): on iPhone and iPad, for a message in the transcript of a chat that forwards.
+    static func forwards(menu: MessageMenu, pending: Bool) -> Bool {
+        #if os(iOS)
+        return !pending && menu.forward != nil
+        #else
+        return false
+        #endif
+    }
+
     /// A reply ends in ⋯ with Branch to New Chat when the session can fork and the reply is a Claude transcript line of its
     /// own (`<uuid>#<n>`).
     static func forks(id: String, isUser: Bool, menu: MessageMenu) -> Bool {
@@ -474,8 +495,14 @@ struct MessageActionBar: View {
             if !pending {
                 action(String(localized: "Quote"), "quote.opening") { menu.quote?(text, id, isUser, nil) }
             }
-            action(String(localized: "Share"), Theme.Icon.share) {
-                menu.sharing = ShareMessage(text: text, isUser: isUser, source: menu.source(), date: date, agent: menu.agent())
+            if Self.forwards(menu: menu, pending: pending) {
+                action(String(localized: "Forward [Message Menu]"), Theme.Icon.forwardMessage) {
+                    menu.forward?(MessageBarInfo(id: id, text: text, isUser: isUser, date: date, pending: pending, from: from))
+                }
+            } else {
+                action(String(localized: "Share"), Theme.Icon.share) {
+                    menu.sharing = ShareMessage(text: text, isUser: isUser, source: menu.source(), date: date, agent: menu.agent())
+                }
             }
             if isUser && !pending {
                 action(String(localized: "Edit [Message Menu 051836]"), "pencil") { menu.edit?(text) }
