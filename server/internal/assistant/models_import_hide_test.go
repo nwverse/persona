@@ -390,6 +390,27 @@ func TestImportPreviewSaysTheNameItCreates(t *testing.T) {
 	}
 }
 
+// Every name a group may take (its own, its variants') is taken for the groups after it, whichever the user picks:
+// the preview and the import name alike. A name sent twice is imported once.
+func TestImportNamesCountEveryPossibleName(t *testing.T) {
+	gw := func(alias, base string) zshrcAlias {
+		return zshrcAlias{Alias: alias, Command: "claude", Env: map[string]string{"ANTHROPIC_BASE_URL": base, "ANTHROPIC_API_KEY": importKeyA,
+			"ANTHROPIC_MODEL": alias + "-model"}}
+	}
+	// p and q.r share a gateway (merged as p, or split as p and q-r); q-r is another gateway's alias. None is listed.
+	aliases := []zshrcAlias{gw("p", "https://one.example.com"), gw("q.r", "https://one.example.com"), gw("q-r", "https://two.example.com")}
+	_, mux := hideTestHub(t, aliases, map[string][]proto.Launcher{})
+	got := previewProviders(t, mux)
+	if len(got) != 2 || got[0].CreateAs != "" || got[0].Variants[0].CreateAs != "" || got[0].Variants[1].CreateAs != "" ||
+		got[1].Name != "q-r" || got[1].CreateAs != "q-r-2" {
+		t.Fatalf("%+v", got)
+	}
+	// Only the later group, named twice: it still takes the name the preview said.
+	if res := importAnswer(t, mux, `{"machine":"m1","providers":["q-r","q-r"]}`); !slices.Equal(res.Created, []string{"q-r-2"}) {
+		t.Fatalf("%+v", res)
+	}
+}
+
 // split names a group that is not imported: refused like an unknown name, nothing saved.
 func TestImportSplitMustBeImported(t *testing.T) {
 	s, mux := importTestHub(t, importAliases, nil)

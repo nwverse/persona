@@ -373,7 +373,7 @@ func (s *Service) importTaken(ctx context.Context, rc []zshrcLaunchers, stored [
 }
 
 // claimImportName is the name a new provider called name is saved under: the first of name, name-2, name-3… not
-// taken, which is taken from then on. The preview (importNames) and the import (importLaunchers) both name with it.
+// taken, which is taken from then on.
 func claimImportName(taken map[string]bool, name string) string {
 	out := name
 	for n := 2; taken[out]; n++ {
@@ -383,28 +383,28 @@ func claimImportName(taken map[string]bool, name string) string {
 	return out
 }
 
-// importNames fills create_as of the groups and variants the preview would create, naming them in its order as the
-// import does when every group is picked: a group whose aliases differ (Differs) as its variants, as the web offers
-// by default, any other merged.
+// importNames names what an import of groups would create (CreateAs, when it is not Name), the one rule of the preview
+// and the import: groups in the preview's order, against taken (importTaken); a group and its variants each against
+// what earlier groups may take (the user picks merged or split later), and every name a group may take is taken for
+// the groups after it. What lands in an existing provider is named nothing.
 func importNames(groups []importGroup, taken map[string]bool) {
-	createAs := func(taken map[string]bool, g *importGroup) {
+	name := func(taken map[string]bool, g *importGroup) {
+		g.CreateAs = ""
 		if g.Existing == "" {
-			if name := claimImportName(taken, g.Name); name != g.Name {
-				g.CreateAs = name
+			if n := claimImportName(taken, g.Name); n != g.Name {
+				g.CreateAs = n
 			}
 		}
 	}
 	for i := range groups {
 		g := &groups[i]
 		merged, split := maps.Clone(taken), maps.Clone(taken)
-		createAs(merged, g)
+		name(merged, g)
 		for j := range g.variants {
-			createAs(split, &g.variants[j])
+			name(split, &g.variants[j])
 		}
-		taken = merged
-		if len(g.variants) > 0 && len(g.Differs) > 0 {
-			taken = split
-		}
+		maps.Copy(taken, merged)
+		maps.Copy(taken, split)
 	}
 }
 
@@ -474,25 +474,31 @@ func (s *Service) importLaunchers(ctx context.Context, groups []importGroup, in 
 	if err != nil {
 		return res, err
 	}
-	taken := s.importTaken(ctx, s.zshrcLaunchers(ctx, false), list)
+	// The preview may precede another mutation: where each lands and the names it takes are worked out again against
+	// today's checked snapshot, by the preview's rules.
+	for i := range groups {
+		groups[i].Existing = existingFor(known, groups[i].BaseURL, groups[i].key, "")
+		for j := range groups[i].variants {
+			v := &groups[i].variants[j]
+			v.Existing = existingFor(known, v.BaseURL, v.key, v.Aliases[0])
+		}
+	}
+	importNames(groups, s.importTaken(ctx, s.zshrcLaunchers(ctx, false), list))
 	now := time.Now().UTC()
 	var landed [][2]string // alias, the provider it landed in
-	for _, name := range in.Providers {
+	for k, name := range in.Providers {
 		i := slices.IndexFunc(groups, func(g importGroup) bool { return g.Name == name })
 		if i < 0 {
 			return res, i18n.Err("assistant-models_import.err_nothing_named", i18n.Args{"name": name})
+		}
+		if slices.Contains(in.Providers[:k], name) {
+			continue // named twice: imported once
 		}
 		items, split := []importGroup{groups[i]}, slices.Contains(in.Split, name) && len(groups[i].variants) > 0
 		if split {
 			items = groups[i].variants
 		}
 		for _, g := range items {
-			// The preview may precede another mutation; match against today's checked snapshot.
-			alias := ""
-			if split {
-				alias = g.Aliases[0]
-			}
-			g.Existing = existingFor(known, g.BaseURL, g.key, alias)
 			target := g.Existing
 			if target != "" {
 				j := slices.IndexFunc(list, func(l storedLauncher) bool { return l.Name == g.Existing })
@@ -503,7 +509,7 @@ func (s *Service) importLaunchers(ctx context.Context, groups []importGroup, in 
 					res.Updated = append(res.Updated, target)
 				}
 			} else {
-				g.Name = claimImportName(taken, g.Name)
+				g.Name = cmp.Or(g.CreateAs, g.Name)
 				l, err := s.sealImported(g, now)
 				if err != nil {
 					return res, err
