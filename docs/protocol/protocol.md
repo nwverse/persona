@@ -1715,7 +1715,7 @@ Any of `limit`, `cursor`, `since`, `summary`, `state`, `project`, `group`, or `c
 | `pane_source` | Runtime only: exactly `terminal`, `feishu`, `desktop`, or `unknown`. Requires the independently advertised `sessions_pane_source` capability. See pane/host origins below. |
 | `manager` | Runtime only: a manager's id; only the sessions on its computers. Requires the independently advertised `sessions_manager` capability, and does not opt into the bounded API by itself. See "One manager's sessions" below. |
 | `provider` | Runtime `agent` or personal-agent `provider`. Empty values on older runtime nodes stay empty; no agent name is guessed. |
-| `q` | Case-insensitive substring, at most 256 Unicode characters. Runtime title, cwd, repository, space/slot/agent names and last preview; personal-agent title/provider/account id. With an opt-in parameter this is **row search**, never remote transcript/message search. |
+| `q` | Case-insensitive substring, at most 256 Unicode characters. Runtime title, cwd, repository, branch, space/slot/agent names and last preview; personal-agent title/provider/account id. With an opt-in parameter this is **row search**, never remote transcript/message search. |
 | `counts` | `1`/`true` returns aggregates instead of rows. `0`/`false` selects a normal page. The same filters apply. |
 | `since` | Opaque `revision` from the completed baseline/previous delta. Returns only changed rows and removals, including state/title-only changes when `updated_at` did not advance. Keep the same filters; changing a filter requires a new first-page baseline. |
 
