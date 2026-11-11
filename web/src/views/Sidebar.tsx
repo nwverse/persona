@@ -340,7 +340,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
           >
             {directions.length > 0 && <SubHeading label={t("sidebar.directions")} />}
             {/* each 常驻 row folds open to its tasks (#4352) */}
-            {directions.map((c) => <SidebarDirectionRow key={c.session_id} id={c.session_id} name={directionLabel(directionNames, c.session_id, conversationTitle(c))} row={directionRow(c)} reg={reg} hover={hover} activeKey={activeKey} go={go} onNavigate={onNavigate} />)}
+            {directions.map((c) => <SidebarDirectionRow key={c.session_id} id={c.session_id} name={directionLabel(directionNames, c.session_id, conversationTitle(c))} row={directionRow(c)} reg={reg} hover={hover} go={go} onNavigate={onNavigate} />)}
             {assistant && <NavRow k="history" reg={reg} hover={hover} active={activeKey === "history"} to={{ name: "history" }} go={go} icon="list" label={t("sidebar.all_chats")} hint={assistant.conversations.length > 0 ? String(assistant.conversations.length) : undefined} />}
           </Section>
         )}

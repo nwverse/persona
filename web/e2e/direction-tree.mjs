@@ -86,15 +86,21 @@ try {
     }
     if (await page.locator('aside [data-direction="secretary"]').count()) fail(`${where}: the sidebar has a 书记官 row`);
     if ((await disclosure(page, first.id).getAttribute("aria-expanded")) !== "false") fail(`${where}: a 常驻 row does not start folded`);
-    const box = await disclosure(page, first.id).boundingBox();
-    if (width <= 600 && (!box || box.width < 44 || box.height < 44)) fail(`${where}: the disclosure is ${box?.width}x${box?.height}, under 44`);
-    ok(`${where}: ${leaders.length} 常驻 rows folded with their counts, no 书记官 row${width <= 600 ? `, disclosure ${box.width}x${box.height}` : ""}`);
+    // the chevron is small (the name keeps its width); on a touch screen its hit area (touch-hit) is 44×44: each point 21px
+    // from its centre lands on it
+    const hit = width <= 600 ? await disclosure(page, first.id).evaluate((b) => {
+      const r = b.getBoundingClientRect();
+      const x = r.left + r.width / 2, y = r.top + r.height / 2;
+      return [[-21, 0], [21, 0], [0, -21], [0, 21]].filter(([dx, dy]) => !b.contains(document.elementFromPoint(x + dx, y + dy))).map((d) => d.join(","));
+    }) : [];
+    if (hit.length) fail(`${where}: the disclosure's hit area misses ${hit.join(" ")} (under 44×44)`);
+    ok(`${where}: ${leaders.length} 常驻 rows folded with their counts, no 书记官 row${width <= 600 ? ", disclosure hit area 44×44" : ""}`);
     if (shots) await page.screenshot({ path: join(shots, `web-sidebar-folded-${width > 600 ? "wide" : "narrow"}-${theme}.png`) });
     await disclosure(page, first.id).click();
     await page.locator(`aside [data-direction="${first.id}"] a[href="/todos?id=${task.id}"]`).waitFor({ state: "visible", timeout: 5000 }).catch(() => fail(`${where}: the task ${task.title} does not show`));
     const words = await row(page, first.id).locator("[data-task-state]").allTextContents();
     if (words.length !== first.tasks.length) fail(`${where}: ${words.length} state words for ${first.tasks.length} tasks`);
-    const taskButton = row(page, first.id).locator(`button[aria-label="${task.title}"]`);
+    const taskButton = row(page, first.id).locator(`button[aria-label="${task.title}的 Agent"]`);
     if ((await taskButton.getAttribute("aria-expanded")) !== "false") fail(`${where}: a task does not start folded`);
     await taskButton.click();
     const agent = task.agents[0];

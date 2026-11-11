@@ -5,15 +5,15 @@
 // #4610's own. A leader the tree does not list (an older hub, a leader made a moment ago) keeps the plain row.
 import { memo, useMemo } from "react";
 import { t } from "../i18n";
-import { agentRef, taskAgents, useDirectionTree, type Direction } from "../lib/direction-tree";
+import { useDirectionTree, type Direction } from "../lib/direction-tree";
 import { directionTaskNode } from "../lib/direction-agent-tree";
 import { useAgentSessions } from "../lib/sessions";
 import { useStore } from "../lib/store";
 import { useFolded } from "../lib/use-folded";
-import { Collapse, sidebarFoldMotion } from "../ui/atoms";
+import { Collapse, cx, sidebarFoldMotion } from "../ui/atoms";
 import { Icon } from "../ui/icons";
 import type { GoFn, RegFn } from "./SidebarParts";
-import { TreeTodoRows, useMachineLabel, within } from "./SidebarTree";
+import { TreeTodoRows, useMachineLabel } from "./SidebarTree";
 
 type Props = {
   /** The leader conversation's id (its direction's id in the tree). */
@@ -24,7 +24,6 @@ type Props = {
   row: React.ReactNode;
   reg: RegFn;
   hover: (k: string | null) => void;
-  activeKey: string;
   go: GoFn;
   onNavigate?: () => void;
 };
@@ -37,40 +36,40 @@ export function SidebarDirectionRow({ id, row, ...p }: Props) {
   return <DirectionTasks key={id} id={id} row={row} node={node} {...p} />;
 }
 
-const DirectionTasks = memo(function DirectionTasks({ id, name, row, node, reg, hover, activeKey, go, onNavigate }: Props & { node: Direction }) {
+const DirectionTasks = memo(function DirectionTasks({ id, name, row, node, reg, hover, go, onNavigate }: Props & { node: Direction }) {
   const all = useAgentSessions();
   const machines = useStore((s) => s.machines);
   const machineLabel = useMachineLabel(machines);
-  // what is open inside it unfolds it: one of its tasks' agents
-  const refs = useMemo(() => (node.tasks ?? []).flatMap((td) => taskAgents(td).map((a) => `s:${agentRef(a)}`)), [node]);
-  const [folded, toggle] = useFolded(`direction:${id}`, true, { holds: refs.includes(activeKey) });
+  // only the saved fold (or folded): an open agent under it does not unfold it. Its rows are copies of the Agents list's,
+  // which owns the open row (highlight, scroll to it): these register under their own keys and are never the open one
+  const [folded, toggle] = useFolded(`direction:${id}`, true);
   const todos = useMemo(() => {
     const sessions = new Map(all.map((s) => [`${s.machine_id}/${s.session_id}`, s]));
     const placed = new Set<string>();
     return (node.tasks ?? []).map((td) => directionTaskNode(td, sessions, placed, { keyPrefix: "direction:task:", folded: true, standIns: true }));
   }, [all, node]);
   const tasks = todos.length;
+  // leading, as every fold in the tree under it; small, so the row keeps #4610's width for its name, with a finger's
+  // 44 on a touch screen (touch-hit) from a wider box that keeps that area inside the sidebar
+  const chevron = "touch-hit relative z-20 -mr-1 flex size-4 shrink-0 items-center justify-center [@media(pointer:coarse)]:w-7";
   return (
     <div data-direction={id}>
       <div className="flex items-center">
+        {tasks > 0 ? (
+          <button type="button" aria-expanded={!folded} aria-label={t("sidebar.direction_tasks", { name })} title={t("sidebar.direction_tasks", { name })} onClick={toggle} className={cx(chevron, "rounded-chip text-ink-3 hover:text-ink-2")}>
+            <Icon name="chevron" size={9} stroke={2.4} className="opacity-60 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
+          </button>
+        ) : (
+          // nothing to open: the name stays in the column of the others
+          <span aria-hidden className={cx(chevron, "invisible")} />
+        )}
         <div className="min-w-0 flex-1">{row}</div>
-        <button
-          type="button"
-          aria-expanded={!folded}
-          aria-label={t("sidebar.direction_tasks", { name })}
-          title={t("sidebar.direction_tasks", { name })}
-          disabled={tasks === 0}
-          onClick={toggle}
-          className="relative z-10 flex size-5 shrink-0 items-center justify-center rounded-chip text-ink-3 hover:bg-hover hover:text-ink-2 disabled:opacity-40 disabled:hover:bg-transparent [@media(pointer:coarse)]:size-11"
-        >
-          <Icon name="chevron" size={10} stroke={2.4} className="transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
-        </button>
       </div>
       {tasks > 0 && (
         <Collapse open={!folded} sidebarFold>
           <div className="flex flex-col gap-px pl-3" inert={folded || undefined}>
             {todos.map((td) => (
-              <TreeTodoRows key={td.key} td={td} machineLabel={machineLabel} noContext reg={reg} hover={hover} activeKey={within(td.sessions, activeKey)} go={go} onNavigate={onNavigate} />
+              <TreeTodoRows key={td.key} td={td} machineLabel={machineLabel} noContext keyPrefix={`d:${id}:`} reg={reg} hover={hover} activeKey="" go={go} onNavigate={onNavigate} />
             ))}
           </div>
         </Collapse>

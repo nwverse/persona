@@ -95,8 +95,9 @@ describe("the 常驻 rows' disclosure", () => {
     expect(host.textContent).not.toContain("书记官");
     expect(disclosure("lead-a").getAttribute("aria-expanded")).toBe("false");
     expect(disclosure("lead-a").getAttribute("aria-label")).toBe(t("sidebar.direction_tasks", { name: "Product" }));
-    // a direction with no task has nothing to open
-    expect(disclosure("lead-b").disabled).toBe(true);
+    // a direction with no task has nothing to open, and says nothing of a fold: an invisible spacer keeps the column
+    expect(direction("lead-b")!.querySelector("button[aria-expanded]")).toBeNull();
+    expect(direction("lead-b")!.querySelector("span[aria-hidden].invisible")).not.toBeNull();
     expect(host.querySelector("[data-direction] [inert] a[href^='/todos']")).not.toBeNull();
   });
 
@@ -109,7 +110,8 @@ describe("the 常驻 rows' disclosure", () => {
     const open = direction("lead-a")!;
     expect([...open.querySelectorAll('a[href^="/todos?id="]')].map((a) => a.getAttribute("href"))).toEqual(["/todos?id=t-ask", "/todos?id=t-run"]);
     expect([...open.querySelectorAll("[data-task-state]")].map((el) => el.textContent)).toEqual(["等你", "在做"]);
-    const task = open.querySelector<HTMLButtonElement>('button[aria-label="Pick the icon"]')!;
+    // the task's fold says it opens the agents, apart from the link to the to-do of the same name
+    const task = open.querySelector<HTMLButtonElement>(`button[aria-label="${t("sidebar.task_agents", { name: "Pick the icon" })}"]`)!;
     expect(task.getAttribute("aria-expanded")).toBe("false");
     act(() => task.click());
     await flush();
@@ -117,6 +119,28 @@ describe("the 常驻 rows' disclosure", () => {
     const sub = open.querySelector<HTMLButtonElement>(`button[aria-label="${t("lib-todo-tree.spawned_agents", { count: 1 })}"]`)!;
     expect(sub.getAttribute("aria-expanded")).not.toBeNull();
     expect(open.querySelector('a[href="/s/mac/s2"]')).not.toBeNull();
+  });
+
+  it("stays folded while one of its agents is open, and leaves that agent's row, its highlight and its fold to the Agents list", async () => {
+    history.replaceState(null, "", "/s/mac/s1");
+    await act(() => refresh());
+    act(() => root.render(<Sidebar route={{ name: "session", mid: "mac", sid: "s1" }} onSearch={() => {}} onNewAgent={() => {}} />));
+    await flush();
+    expect(disclosure("lead-a").getAttribute("aria-expanded")).toBe("false");
+    expect(localStorage.getItem("fold:direction:lead-a")).toBeNull();
+    act(() => disclosure("lead-a").click());
+    await flush();
+    const open = direction("lead-a")!;
+    const task = open.querySelector<HTMLButtonElement>(`button[aria-label="${t("sidebar.task_agents", { name: "Pick the icon" })}"]`)!;
+    expect(task.getAttribute("aria-expanded")).toBe("false");
+    // the copy inside is never the open row
+    expect(open.querySelector('[aria-current="page"]')).toBeNull();
+    // and its sub-agents' fold is its own key, not the Agents list's
+    act(() => task.click());
+    await flush();
+    act(() => open.querySelector<HTMLButtonElement>(`button[aria-label="${t("lib-todo-tree.spawned_agents", { count: 1 })}"]`)!.click());
+    await flush();
+    expect(Object.keys(localStorage).filter((k) => k.endsWith(":children"))).toEqual(["fold:d:lead-a:s:mac/s1:children"]);
   });
 
   it("is not there on a hub without the tree: the plain rows of #4610", async () => {

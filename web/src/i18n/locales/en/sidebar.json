@@ -27,6 +27,7 @@
   "pinned_section": "Pinned",
   "directions": "Pinned",
   "direction_tasks": "Tasks of {name}",
+  "task_agents": "Agents of {name}",
   "launching": "Starting",
   "launch_untitled": "New agent",
   "launch_failed": "Couldn't start",
