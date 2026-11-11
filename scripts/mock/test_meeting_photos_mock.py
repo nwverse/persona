@@ -132,6 +132,9 @@ class MeetingPhotosMockTests(Photos, unittest.TestCase):
         self.assertEqual(second["n"], 2)
         self.assertEqual(self.call("DELETE", f"/api/v1/recordings/{rid}/photos/2"), (200, {"deleted": True}))
         self.assertEqual(self.post(rid, photo())[1]["photo"]["n"], 3)
+        # A retry of a photo the owner deleted never brings it back.
+        status, out = self.post(rid, {k: v for k, v in body.items()} | {"id": second["id"]})
+        self.assertEqual((status, out["code"]), (410, "photo_deleted"))
 
     def test_bad_bodies_are_400_and_a_big_one_413(self):
         rid = str(uuid.uuid4())
@@ -266,6 +269,7 @@ class MeetingPhotosMockTests(Photos, unittest.TestCase):
         self.post(rid, photo(at=120, text="Export: 4 MB cap\nOwner: Bo"))
         self.post(rid, photo(at=240))  # no words: nothing to cite
         self.upload(rid, segments=lines, ended_at="2026-11-10T15:00:00+08:00", complete=True)
+        self.assertGreaterEqual(self.live(rid)["revs"]["photos"], 3)  # two photos, then the minutes citing one
         minutes = self.meta_minutes(rid)
         cites = [x for x in minutes["points"] if "photo" in x]
         self.assertEqual(cites, [{"text": "Export: 4 MB cap", "at": 120, "photo": 1}])

@@ -3869,7 +3869,8 @@ def meeting_conversation_reset():
 # note_seconds later (a meeting_photo_note call in the room); a deleted one that went there is withdrawn with a line;
 # minutes cite photos with text (`"photo": n`) and are made again when one is added or deleted; the trim keeps only the
 # cited ones; the follow-up's seed lists the photos still there; `photos` in meeting_live and in GET …/live's revs.
-# Photo adds `forwarded` (it went into the room) to the contract's fields. MOCK_NO_MEETING_PHOTOS=1 is a manager without
+# Photo adds `forwarded` (it went into the room) to the contract's fields; an id of a photo the owner deleted is 410
+# photo_deleted. MOCK_NO_MEETING_PHOTOS=1 is a manager without
 # it (no feature, the routes a 404 without a code). POST /mock/meeting_photos {"note": "ok"|"none", "note_seconds": 1,
 # "on": true} switches (only the keys sent): none leaves every photo without a note; GET reads them back with every
 # recording's photos (no image data).
@@ -3913,7 +3914,7 @@ def photo_size(mime, raw):
 
 def photos_of(rid, make=False):
     p = PHOTO_STORE.get(rid)
-    if p is None and make: p = PHOTO_STORE[rid] = {"next": 1, "photos": [], "deleted": []}
+    if p is None and make: p = PHOTO_STORE[rid] = {"next": 1, "photos": [], "deleted": [], "deleted_ids": []}
     return p
 
 
@@ -4133,6 +4134,7 @@ def photos_route(h, method, p):
         if x is None: return h.send_json({"deleted": False}) or True  # deleted before: a repeat of a lost answer
         ph["photos"].remove(x)
         ph["deleted"].append(n)
+        ph.setdefault("deleted_ids", []).append(x["id"])
         photos_minutes_again(rid)  # under the lock: minutes made from these photos are never overwritten by older ones
         photo_withdraw(rid, x)
     meeting_changed(rid, ["photos"])
@@ -4156,6 +4158,8 @@ def photo_post(h, rid, raw):
             if same["_digest"] != got["digest"]:
                 return h.send_json({"error": "This photo id was already used for another photo.", "code": "op_id_reused"}, 409) or True
             return h.send_json({"photo": photo_view(rid, same)}) or True
+        if got["id"] in ph.get("deleted_ids", []):  # a retry never brings back a photo the owner deleted
+            return h.send_json({"error": "This photo was deleted.", "code": "photo_deleted"}, 410) or True
         if MEETING_MODE["kb_read_only"]: return h.send_json({"error": "知识库是只读的", "code": "kb_read_only"}, 403) or True
         if recording_kind(rec) != "meeting": return h.send_json({"error": "This recording is not a meeting.", "code": "not_meeting"}, 409) or True
         if rid in RECORDINGS_TRIMMED:
@@ -4304,8 +4308,11 @@ def recordings_route(h, method, p):
         out["attendance"] = role
         if problem: out["attendance_problem"] = problem
     with PHOTO_LOCK:  # a photo added or deleted meanwhile is in these minutes, or makes them again after
+        cited = photos_cited(rid)
         if "minutes" in detail: detail["minutes"] = recording_minutes(body, rid)
         KB_DETAIL[("recordings", rid)] = detail
+        cited_moved = photos_of(rid) is not None and photos_cited(rid) != cited
+    if cited_moved and meeting_conversation_on(): meeting_changed(rid, ["photos"])  # each photo's `cited` follows the minutes
     if room is not None:
         room_after_put(rid, body)
         out["room"] = room_view(MEETING_CONV[rid])
