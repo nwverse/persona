@@ -2215,7 +2215,7 @@ struct ChatView: View {
                                            near: follow.near, mode: "\(follow.mode)", arrow: arrowShows, gap: Int(scratch.newestGap.rounded()),
                                            dragging: scratch.userDragging, held: pin.holding, blank: scratch.blankLandings,
                                            glideTaps: scratch.glideTaps, jumpMs: scratch.jumpMs, slips: scratch.jumpSlips,
-                                           listGap: listGap, lastShown: lastShown))
+                                           listGap: listGap, lastShown: lastShown, storedRow: position.viewID(type: String.self) != nil))
         }
     }
 
@@ -6731,5 +6731,8 @@ nonisolated struct ChatRowsShown: Encodable, Equatable {
     var listGap: Int
     /// The newest line has some part on screen.
     var lastShown: Bool
+    /// SwiftUI's stored scroll position names a row: once a row was opened (`ChatPin.letGo`), the user's own scrolling
+    /// stores the row it leaves on screen, and SwiftUI scrolls back to it when the content changes (#4788).
+    var storedRow: Bool
 }
 #endif
