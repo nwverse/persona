@@ -128,7 +128,7 @@ const (
 // minEvery: an interval task runs at most this often (each run is a whole claude turn).
 const minEvery = 5
 
-// A leader with open supervised todos gets a follow-up every 10 minutes, whatever longer interval the task has.
+// A leader with active supervised agents gets a follow-up every 10 minutes, whatever longer interval the task has.
 const (
 	leaderOpenEveryMinutes = 10
 	leaderOpenEvery        = leaderOpenEveryMinutes * time.Minute
@@ -177,7 +177,7 @@ func (t Task) next(after time.Time, loc *time.Location) time.Time {
 	return t.At
 }
 
-// shortForLeader reports whether open supervised work shortens this interval follow-up to 10 minutes.
+// shortForLeader reports whether active supervised work shortens this interval follow-up to 10 minutes.
 func shortForLeader(t Task, open map[string]bool) bool {
 	return t.Enabled && t.Repeat == repeatInterval && t.SessionID != "" && t.EveryMinutes > leaderOpenEveryMinutes && open[t.SessionID]
 }
@@ -206,8 +206,8 @@ func (t Task) nextWithLeaderCadence(now time.Time, loc *time.Location, open map[
 	return next
 }
 
-// leaderOpenWork returns current leaders with at least one open todo they supervise. Callers take this
-// snapshot before schedule.mu: it reads settings and todos, which must not be read under the schedule lock.
+// leaderOpenWork returns leaders with an open supervised todo whose agents are working or waiting automatically.
+// Read agent sessions outside todos.mu, and take this snapshot before schedule.mu.
 func (s *Service) leaderOpenWork(ctx context.Context) map[string]bool {
 	cfg := s.settings(ctx)
 	leaders := map[string]bool{}
@@ -222,17 +222,26 @@ func (s *Service) leaderOpenWork(ctx context.Context) map[string]bool {
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return nil // a read failure leaves the task's own interval in place for this pass
 	}
-	var open map[string]bool
+	var todos []Todo
 	s.todos.mu.RLock()
-	defer s.todos.mu.RUnlock()
 	for _, t := range s.todos.todos {
 		if t.DoneAt != nil || t.Supervision == nil || !leaders[t.Supervision.Supervisor] {
 			continue
 		}
-		if open == nil {
-			open = map[string]bool{}
+		todos = append(todos, copyTodoLocked(t))
+	}
+	s.todos.mu.RUnlock()
+	open := map[string]bool{}
+	for _, t := range todos {
+		if open[t.Supervision.Supervisor] {
+			continue
 		}
-		open[t.Supervision.Supervisor] = true
+		for _, c := range s.taskAgents(ctx, t) {
+			if c.State == proto.StateWorking || c.Work != nil && managerWaits(c.Work) {
+				open[t.Supervision.Supervisor] = true
+				break
+			}
+		}
 	}
 	return open
 }
@@ -1547,7 +1556,7 @@ func taskMessageSource(t Task) *proto.MessageSource {
 	if t.Repeat == repeatOnce {
 		kind = proto.SourceFollowup
 	}
-	return &proto.MessageSource{Kind: kind, ConversationID: t.SessionID, Title: t.label()}
+	return &proto.MessageSource{Kind: kind, ConversationID: t.SessionID, Title: t.label(), Push: t.Push}
 }
 
 func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (proto.Session, error) {
@@ -1592,20 +1601,9 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 			// conversation's launcher like a message from the phone does. On the task's category launcher (Agents
 			// then) it moved the main conversation onto another one (plain claude, not logged in there) for good (#1518).
 			params := map[string]any{"session_id": t.SessionID, "text": taskPrompt(t, due, now, loc, manual, kb, false), "message_source": taskMessageSource(t), "permission_mode": t.PermissionMode}
-			// A quiet task's run there holds the conversation's pushes, as a supervision message does, until the
-			// user or anything else speaks there (schedule_push.go). Not while another turn is on there (one the user
-			// started): that turn's finish would go unpushed with it; then this run is pushed as ever.
-			hold := t.pushesOnlyAsked() && (s.supervising(t.SessionID) || !s.sessionBusy(ctx, m.ID, t.SessionID))
-			if hold {
-				params[holdPushesParam] = true
-				s.holdPushes(ctx, t.SessionID) // before the send: a quick turn can end before the call returns
-			}
 			err := s.sendModel(ctx, t.MachineID, t.SessionID, params)
 			if err == nil {
 				err = s.call(ctx, m.ID, DeviceAssistantSend, params, nil)
-			}
-			if err != nil && hold {
-				s.releasePushes(ctx, t.SessionID)
 			}
 			if err == nil {
 				run.MachineID, run.SessionID = t.MachineID, t.SessionID

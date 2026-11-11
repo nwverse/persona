@@ -8,7 +8,7 @@ import { interactionKicker } from "../lib/row-line";
 import { answerLines, type Resolution } from "../lib/answered";
 import { quickAnswers, withHeld, type HeldRow, type QuickChoice } from "../lib/quick-answers";
 import { optionDisplay, permissionDetail } from "../lib/tool-detail";
-import { toolDisplayName } from "../lib/turns";
+import { cardToolName } from "../lib/turns";
 import { plainMarkdown } from "../lib/plain-markdown";
 import { homeOverview, paneRoute, type TabGroup } from "../lib/herdr-tree";
 import { agentLabel } from "../lib/mentions";
@@ -124,7 +124,7 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
                 const quick = interactionCanAnswer(ix, s ?? getSession(ix.machine_id, ix.session_id)) ? quickAnswers(ix) : null;
                 // allowed in one tap, a permission says the tool and what it runs or touches (iOS: "Bash: swift test"),
                 // not the agent's description of it
-                const tool = quick && ix.kind === "permission" ? toolDisplayName(ix.tool_name) : "";
+                const tool = quick && ix.kind === "permission" ? cardToolName(ix) : "";
                 // and a terminal dialog what it is about (the command under its question), as iOS's card does. Both
                 // as they are: read as Markdown, `ls **/*.ts` lost its stars and `a <in >out` its redirections
                 const about = quick && ix.kind === "screen" ? [ix.dialog?.question, ix.dialog?.detail].filter(Boolean).join(" · ") : "";

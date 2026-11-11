@@ -92,6 +92,8 @@ type Options struct {
 	AssistantMachine func() string
 	// AssistantTools are the assistant's tools now (a connector's tool may not shadow one).
 	AssistantTools func() []proto.Tool
+	// LauncherReferences are the model providers' keys that hold references, for their providers' details (nil: none).
+	LauncherReferences func(ctx context.Context) []LauncherReference
 	// Lang and Timezone are the user's language and zone ("" when not known).
 	Lang     func() i18n.Lang
 	Timezone func() string
@@ -101,6 +103,8 @@ type Options struct {
 type Manager struct {
 	// errReports: the error reports' pipeline (error_reports.go).
 	errReports errorReports
+	// iphoneTurns: one iphone_do at a time per iPhone, across conversations (iphone.go, iphoneTurn).
+	iphoneTurns sync.Map
 	// serving: the requests the hub relayed to the extensions being served now, a WebSocket (a voice call, an
 	// extension's live view) for as long as it is open (Serving).
 	serving atomic.Int64
