@@ -13,7 +13,8 @@ On computers with **botmux**, its sessions appear alongside the selected engine 
 ## Host sets (#2576)
 
 A computer can **enable several engines at once**, any combination of herdr, Herdr App, Orca, Tern, Paseo and Cindy, or none at all, plus a **default engine**:
-where sessions started from the phone, and sessions continued from there, go. Each single choice above is a special case of a set: herdr is `{herdr}`, and
+where new sessions started from the phone go. A retired session resumes in its previous terminal host while that host remains enabled;
+an explicit host selection overrides it. Other offline sessions use the default host. Each single choice above is a special case of a set: herdr is `{herdr}`, and
 "herdr + Herdr App" is `{herdr, herdr-core}` with herdr the default. API and storage: `docs/protocol/protocol.md` "Engines" ("Host sets").
 The web is wired: the machine page's Engine section is a checklist with "Make default", New Agent has "Open in", and a session live in
 two hosts shows "Also open in …" above the composer. iOS and Android still pick one engine, and the single engine picked keeps working;
@@ -24,11 +25,13 @@ iOS also offers "No Terminal Engine", the empty set, last in Choose Engine when 
 - **Hosts do not hold each other up.** Each host refreshes in parallel with its own timeout, and its events refresh only itself. A host that is down
   (unreachable, `not_running`) clears only its own sessions; the others are listed and driven as usual. This is the same mechanism as herdr-both
   (`docs/plans/plan-orca-support.md` "Side-by-side engines").
-- **Default engine**: new sessions, continuing a session that is not running and the mode menus go to the default engine; renaming a space goes to the
+- **Default engine**: new sessions, offline sessions without a remembered terminal host and the mode menus go to the default engine; renaming a space goes to the
   enabled host that lists it, the default one first (`spaceOrganizer` in `node/rename.go`: space ids carry no host kind). Per-pane
   operations (reading the screen, sending, keys, closing) still go to the host the pane belongs to. Changing only the default resets nothing; changing
-  the set itself works like switching engines did (live terminal views end, the session list is rebuilt). With Orca the default, a Claude session that is not
-  running is continued in Orca, any other agent's is refused (`orca_resume`); with Paseo the default, new and continued sessions go to Paseo.
+  the set itself works like switching engines did (live terminal views end, the session list is rebuilt). A session without a remembered terminal host
+  continues in the default engine: Orca continues only Claude sessions (`orca_resume`); Paseo takes over sessions it can resume.
+  Retirement checks the session's own host under any default: it stops the agent and keeps its terminal,
+  unless the user requests closing it. Runtime-owned sessions remain protected.
 - **The empty set**: no terminal host. Agents shows transcripts, runtimes (DSH, pi, opencode) and botmux sessions only; starting or continuing a
   session from the phone is refused with "这台电脑没启用终端引擎" (`engine_missing`) and nothing is sent. This is the choice for a computer
   whose sessions are only the desktop apps' (Claude's and Codex's, `docs/integrations/claude-integration.md`, `docs/integrations/codex.md`):
@@ -313,7 +316,7 @@ After reboot, launchd / systemd starts node, but no terminal has started classic
   `GET …/herdr` therefore asks `herdr.server.status` live (one socket connection, `{running, known}`), reused for 3 seconds;
   successful `herdr/start` also records result. Old nodes without the method retain `node.info` values and avoid reasking within 3 seconds.
   Android Agents has the notice / Start button (#1916), shown when online and known stopped; tap explicitly starts.
-  iOS / Mac too (`HerdrNotice.swift`): poll every 10 seconds while Agents is foregrounded and not covered by chat. One notice per machine atop list, respecting machine filters / hub groups.
+  iOS / Mac too (`HerdrNotice.swift`): poll every 60 seconds while Agents is foregrounded and not covered by chat, and at once when a watched machine comes online or changes engine (#4685). One notice per machine atop list, respecting machine filters / hub groups.
   One read failure does not remove existing notices; endpoint 404 stops polling that machine. Start shows "Starting…"; failures show localized known reasons inline (immediate exit / killed, missing, no response, old node, offline, timeout, `HerdrFailure.says`; unknown reasons remain raw). Keep button; raw hub text, status, request ID under long-press / context-menu Copy details, not body.
   After success, use POST result for that machine during this run until hub also reports running (GET may still use connection-time value). Web same (`web/src/lib/herdr-notice.ts`, `views/agents/HerdrNotices.tsx`), below filters in sidebar / mobile Agents section, polling every 10 seconds while visible,
   same rules / localized failures, with raw hub text, status, request ID (`X-Request-Id`) in Copy details button / context menu.

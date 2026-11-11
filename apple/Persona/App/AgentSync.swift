@@ -42,6 +42,7 @@ final class AgentSync {
 
     private init() {
         synced = StateCache.load(Self.stateName) ?? [:]
+        saved = synced
         // Where it was kept before 2026-11-01: the recent chats are pulled once more.
         UserDefaults.standard.removeObject(forKey: "agentSync.revs")
     }
@@ -251,8 +252,14 @@ final class AgentSync {
         }
     }
 
+    /// What the file holds once the write waiting in `saver` is done: every plan saves, and most plans change nothing
+    /// (#4684).
+    private var saved: [String: Int64]?
+
     private func save() {
+        guard synced != saved else { return }
         let snapshot = synced
+        saved = snapshot
         saver.run { StateCache.save(Self.stateName, snapshot) }
     }
 
