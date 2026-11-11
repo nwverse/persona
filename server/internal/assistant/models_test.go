@@ -511,7 +511,7 @@ func TestModelUsesAreReadOnlyAndIgnoreDeprecatedOverrides(t *testing.T) {
 		"assistant":    {Provider: "launcher.conversation", Model: "conversation", Effort: "high"},
 		"agent.new":    {Provider: "launcher.agent", Model: "agent", Effort: "xhigh"},
 		"kb":           {Provider: "legacy.kb", Model: "processing"},
-		"inbox.triage": {Provider: "legacy.triage", Model: "screening"},
+		"inbox.triage": {Provider: "legacy.triage", Model: "screening", Effort: "off"},
 	}
 	for id, binding := range bindings {
 		setModel(t, s, id, binding)
