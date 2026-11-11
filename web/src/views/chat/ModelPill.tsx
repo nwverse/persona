@@ -5,10 +5,10 @@
 // 600 px the pill is 148 px wide, under 520 px its text and marks are a step smaller, under 420 px it keeps only the
 // provider's tile and the chevron (64 px). An agent that can switch neither its model nor its effort gets the same
 // words as a label, not a button.
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type Ref } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type Ref } from "react";
 import { t } from "../../i18n";
 import { api, errorText, sessionPath } from "../../lib/api";
-import { agentLetter, agentName } from "../../lib/agent-kind";
+import { agentName } from "../../lib/agent-kind";
 import type { PanelConfig } from "../../lib/model-panel";
 import { onModelPicker, sessionLauncher } from "../../lib/model-switch";
 import { effortTitle } from "../../lib/session-actions";
@@ -21,29 +21,13 @@ import type { Session } from "../../lib/types";
 import { AgentMark } from "../../ui/AgentMark";
 import { cx, Spinner, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
+import { ProviderMark } from "../../ui/model-panel/ProviderMark";
 import { lazyOverlay } from "../LazyOverlay";
 import { useModeSet } from "./SessionDialogs";
 import { UltracodeSwitchRow, UltraMark } from "./Ultracode";
 
 // the panel loads on the pill's first tap, not with every chat's composer
 const ModelPanel = lazyOverlay(() => import("../../ui/model-panel/ModelPanel").then((m) => m.ModelPanel));
-
-/**
- * The provider's mark: its first letter on a 15 px tile outlined in the text colour (Persona has no vendor logos).
- * Placeholder until ui/model-panel/ProviderMark.tsx is in (same props and look): the integration swaps the import.
- */
-function ProviderMark({ name, size, className, label }: { name: string; size?: number; className?: string; label?: string }) {
-  const a11y = label ? { role: "img" as const, "aria-label": label } : { "aria-hidden": true as const };
-  return (
-    <span
-      {...a11y}
-      className={cx("inline-flex size-[var(--provider-mark,15px)] shrink-0 items-center justify-center rounded-[4px] border border-current text-[length:calc(var(--provider-mark,15px)*2/3)] leading-none font-semibold", className)}
-      style={size ? ({ "--provider-mark": `${size}px` } as CSSProperties) : undefined}
-    >
-      {agentLetter(name)}
-    </span>
-  );
-}
 
 /** One setup as the pill draws it. */
 export interface PillSetup {
