@@ -86,6 +86,7 @@ func (n *Node) scanOffline() []proto.Session {
 	forked := maps.Clone(n.forked) // "Branch to New Chat"'s copies (fork.go)
 	n.mu.Unlock()
 	own := n.assistantProject()
+	persona := n.personaProjectDirs()
 	for _, p := range files {
 		id := strings.TrimSuffix(filepath.Base(p), ".jsonl")
 		if !validID(id) {
@@ -107,8 +108,11 @@ func (n *Node) scanOffline() []proto.Session {
 			continue
 		}
 		// Another platform's runs (agentfilters.go) go before the newest are counted: hundreds a day would crowd out
-		// the user's own.
+		// the user's own. So do a program's one-shot runs (`claude -p`, claude_oneshot.go).
 		if !forked[id] && n.agentFiltered("claude", p) {
+			continue
+		}
+		if !forked[id] && n.oneShotRun(id, filepath.Base(filepath.Dir(p)), p, st, persona) {
 			continue
 		}
 		cands = append(cands, cand{p, st, others})
