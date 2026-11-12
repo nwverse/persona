@@ -81,6 +81,47 @@ class HttpChatActionsTest {
         }
     }
 
+    /**
+     * #5055: a pick on another launcher records a switch (`launcher` with `from`, the model and effort for it), verified by
+     * the row's `pending_switch`; the session's own launcher drops one; a model switches alone on its own launcher.
+     */
+    @Test fun aLauncherSwitchIsRecordedWithWhereTheAppSawItAndVerified() = runBlocking {
+        MockWebServer().use { server ->
+            val actions = actions(server)
+            val agent = Session("m", "s1", launcher = "example")
+            server.enqueue(MockResponse().setBody("{}"))
+            assertEquals(ChatActionResult.Done, actions.execute(agent, ChatAction.Modes(launcher = "work", from = "example", model = "glm-5.3", effort = "high")))
+            assertEquals(buildJsonObject { put("launcher", "work"); put("from", "example"); put("model", "glm-5.3"); put("effort", "high") },
+                JsonCodec.parseToJsonElement(server.takeRequest().body.readUtf8()))
+            server.enqueue(MockResponse().setBody("{}"))
+            assertEquals(ChatActionResult.Done, actions.execute(agent, ChatAction.Modes(model = "sonnet")))
+            assertEquals(buildJsonObject { put("model", "sonnet") }, JsonCodec.parseToJsonElement(server.takeRequest().body.readUtf8()))
+        }
+        val waiting = JsonCodec.decodeFromString<Session>("""{"machine_id":"m","session_id":"s1","launcher":"example","effort":"low",
+            "pending_switch":{"launcher":"work","model":"glm-5.3","effort":"high","at":"2026-11-12T10:00:00Z"}}""")
+        assertTrue("the switch waits: its model and effort are the switch's", modesApplied(waiting, ChatAction.Modes(launcher = "work", from = "example", model = "glm-5.3", effort = "high")))
+        assertFalse(modesApplied(waiting, ChatAction.Modes(launcher = "other", from = "example")))
+        assertTrue("carried out by now", modesApplied(waiting.copy(launcher = "work", pendingSwitch = null), ChatAction.Modes(launcher = "work", from = "example")))
+        assertFalse("its own launcher drops it", modesApplied(waiting, ChatAction.Modes(launcher = "example", from = "example")))
+        assertTrue(modesApplied(waiting.copy(pendingSwitch = null), ChatAction.Modes(launcher = "example", from = "example")))
+        assertTrue(modesApplied(waiting.copy(model = "SONNET"), ChatAction.Modes(model = "sonnet")))
+    }
+
+    /** The complete row a summary leaves out (`sessions_lookup`): one exact lookup, its machine kept. */
+    @Test fun theCompleteRowIsOneExactLookup() = runBlocking {
+        MockWebServer().use { server ->
+            val actions = actions(server)
+            server.enqueue(MockResponse().setBody("""{"sessions":[{"session_id":"s/1","launcher":"example","pending_switch":{"launcher":"work"}}],"total":1}"""))
+            val row = actions.completeRow(Session("m", "s/1"))
+            val request = server.takeRequest()
+            assertEquals("/api/v1/sessions?summary=0&limit=1&machine_id=m&session_id=s%2F1", request.path)
+            assertEquals(SessionKey("m", "s/1"), row?.key)
+            assertEquals("work", row?.pendingSwitch?.launcher)
+            server.enqueue(MockResponse().setBody("""{"sessions":[]}"""))
+            assertNull(actions.completeRow(Session("m", "gone")))
+        }
+    }
+
     /** #582: the after-resume notice is dismissed with `ultracode_dismiss_lost` and verified by the notice being gone. */
     @Test fun theAfterResumeNoticeIsDismissed() = runBlocking {
         MockWebServer().use { server ->
@@ -240,6 +281,35 @@ class HttpChatActionsTest {
             assertEquals("/api/v1/sessions/m/s/info", (request.path).zhAny())
             server.enqueue(MockResponse().setResponseCode(404).setBody("""{"error":"session not found"}"""))
             assertEquals(404, (runCatching { actions.info(Session(machineId = "m", sessionId = "gone")) }.exceptionOrNull() as HubFailure).status)
+        }
+    }
+
+    /** Session info's questions the assistant answered (iOS `DelegatedHistoryModel`): the session's cards, a row it can't read left out. */
+    @Test fun interactionHistoryReadsTheSessionsCards() = runBlocking {
+        MockWebServer().use { server ->
+            val actions = actions(server)
+            server.enqueue(MockResponse().setBody("""{"interactions":[
+                {"interaction":{"id":"q1","machine_id":"m","session_id":"s","kind":"question",
+                  "questions":[{"question":"Which branch?","options":[{"label":"main"},{"label":"dev"}]}]},
+                 "status":"resolved","resolution":{"answers":{"Which branch?":"main"},"answered_by":"assistant","reason":"main is what CI builds"},
+                 "resolved_at":"2026-11-12T01:02:03Z","future":1},
+                {"status":"resolved"},
+                {"interaction":{"id":"p1","kind":"permission"},"status":"resolved","resolution":{"allow":true}}
+            ]}"""))
+            val rows = actions.interactionHistory(Session(machineId = "m", sessionId = "s", manager = "work"))
+            assertEquals(listOf("q1", "p1"), rows.map { it.interaction.id })
+            assertEquals("assistant", rows[0].resolution?.answeredBy)
+            assertEquals("main is what CI builds", rows[0].resolution?.reason)
+            assertEquals("2026-11-12T01:02:03Z", rows[0].resolvedAt)
+            val request = server.takeRequest()
+            assertEquals("/api/v1/interactions/history?machine_id=m&session_id=s&limit=500&manager=work", request.path)
+            // A hub that keeps the history from this device, or has none, gives none rather than an error.
+            server.enqueue(MockResponse().setResponseCode(403).setBody("""{"error":"forbidden"}"""))
+            assertEquals(emptyList<InteractionRecord>(), actions.interactionHistory(Session(machineId = "m", sessionId = "s")))
+            server.enqueue(MockResponse().setResponseCode(404).setBody("404 page not found"))
+            assertEquals(emptyList<InteractionRecord>(), actions.interactionHistory(Session(machineId = "m", sessionId = "s")))
+            server.enqueue(MockResponse().setResponseCode(503).setBody("""{"error":"assistant offline","code":"assistant_offline"}"""))
+            assertEquals(503, (runCatching { actions.interactionHistory(Session(machineId = "m", sessionId = "s")) }.exceptionOrNull() as HubFailure).status)
         }
     }
 }

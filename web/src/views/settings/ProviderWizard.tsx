@@ -12,7 +12,7 @@
 // says so (the main conversation still starts claude there) with how to install it. On a hub that reads pasted settings
 // (#5193), ① also offers "Paste a configuration" (ProviderPaste: a draft fills in this form, or opens a stored provider
 // on the same address with its models or key) and lists the rc-file aliases found on the computers, each opening the
-// import for itself.
+// import for itself. Opened from a provider import link (#5420), Add starts on that paste view with the link in it.
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, enc, errorText } from "../../lib/api";
 import {
@@ -127,12 +127,14 @@ type KeyTest = { running: true } | { running: false; result: TestResult };
  *  (which goes on to test), `seq` the request it answers. */
 type Found = { n: number; error?: string; check: boolean; seq: number };
 
-export function ProviderWizard({ existing, onClose, onSaved, draft = null, found: aliases = [], onImportAlias, onEditWith }: {
+export function ProviderWizard({ existing, onClose, onSaved, draft = null, link = null, found: aliases = [], onImportAlias, onEditWith }: {
   existing: ProviderView | "new" | null;
   onClose: () => void;
   onSaved: () => void;
   /** What a stored provider opens with, from a paste (#5193): applied once, as it opens. */
   draft?: EditDraft | null;
+  /** An import link the page was opened with (#5420): Add opens on the paste view reading it. */
+  link?: string | null;
   /** The rc-file aliases ① lists under "Found on your computers". */
   found?: FoundAlias[];
   /** One of `found` picked: the wizard closes and the import opens for it. */
@@ -246,6 +248,7 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, found
     return () => { ++connectionTestSeq.current; };
   }, [modelToTest]);
 
+  // Each opening starts afresh: a link opened while Add is open (#5420) is another opening, on that link.
   useEffect(() => {
     if (existing === null) return;
     ++opening.current;
@@ -262,8 +265,10 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, found
     setScope(scopeFromView(old) ?? newScope());
     setDevicesOpen(false);
     setMore(false);
-    setPasting(false);
-    setPaste(newPaste());
+    // a link opens Add on the paste view, read at once (ProviderPaste)
+    const fromLink = isNew && !!link;
+    setPasting(fromLink);
+    setPaste(fromLink ? { ...newPaste(), text: link!, link: true } : newPaste());
     pasteFilled.current = false;
     setStep(old ? draft?.step ?? "connect" : "pick");
     if (!isNew) return;
@@ -279,7 +284,7 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, found
       .then((list) => live && setPresets(list))
       .catch((e) => live && (setPresets([]), setPresetsError(errorText(e))));
     return () => void (live = false);
-  }, [existing]);
+  }, [existing, link]);
 
   // A preset's key is tested by itself once it stops changing: the hub fills in the address and the default model.
   useEffect(() => {

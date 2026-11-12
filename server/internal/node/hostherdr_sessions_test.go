@@ -259,7 +259,9 @@ func TestHerdrHostRoutesEachCallToItsSession(t *testing.T) {
 		"tab.rename label=tab", "workspace.rename workspace_id=w4", "workspace.rename label=renamed", "pane.list workspace_id=w4",
 		"tab.close tab_id=w4:t1", "tab.close tab_id=w4:t1", "pane.clear_agent_authority pane_id=w4:p1",
 		"pane.report_agent_session pane_id=w4:p1", "pane.focus pane_id=w4:p1", "pane.report_metadata pane_id=w4:p1",
-		"pane.process_info pane_id=w4:p1", "pane.layout pane_id=w4:p1", "worktree.create workspace_id=w4",
+		// PaneForeground; then PaneSize: the pane's terminal first (its shell, #5409), the layout when that says nothing.
+		"pane.process_info pane_id=w4:p1", "pane.process_info pane_id=w4:p1", "pane.layout pane_id=w4:p1",
+		"worktree.create workspace_id=w4",
 	}
 
 	drive("build")

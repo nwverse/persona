@@ -4,6 +4,7 @@
     <string name="settings_style_transparency">透明效果</string>
     <string name="settings_style_glass_auto">Android 13 以上用折射玻璃，更早的系统用模糊玻璃；省电模式下，或者滑动明显掉帧时，自动换成不透明的面板。</string>
     <string name="settings_style_glass_reduced">所有浮层都用不透明的面板，最省电，文字也最清楚。</string>
+    <string name="settings_agents_layout">Agents 列表布局</string>
     <string name="settings_default">默认</string>
     <string name="settings_preview_row1_title">补齐网络层的单元测试</string>
     <string name="settings_preview_row1_preview">网络层的测试用哪个框架？</string>

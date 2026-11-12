@@ -5,7 +5,7 @@ extension SettingsPage {
         switch self {
         case .models, .agents, .assistant, .claude, .codex, .modelConfiguration, .triage, .connectors, .plugins, .channels,
              .mail, .feishu, .feishuBot, .sent, .skills,
-             .knowledgeSelection, .pluginMarket, .marketExtension, .pluginMarkets, .subscriptions, .computers:
+             .knowledgeSelection, .pluginMarket, .marketExtension, .pluginMarkets, .subscriptions, .inboxSources, .computers:
             true
         case .connector(_, let manager), .plugin(_, let manager), .pluginPage(_, _, _, let manager), .channel(_, let manager):
             manager == nil
@@ -44,6 +44,8 @@ enum SettingsCatalog {
                   aliases: String(localized: "settings.search.channels")),
             .init(id: "connectors", title: String(localized: "Connectors"), symbol: Theme.Icon.connectors, group: .assistant, page: .connectors,
                   aliases: String(localized: "settings.search.connectors")),
+            .init(id: "inbox-sources", title: String(localized: "Inbox Sources"), symbol: Theme.Icon.subscriptions, group: .assistant,
+                  page: .inboxSources, aliases: String(localized: "settings.search.inbox_sources")),
             .init(id: "plugins", title: String(localized: "Extensions"), symbol: Theme.Icon.plugins, group: .assistant, page: .plugins,
                   aliases: String(localized: "settings.search.extensions")),
             .init(id: "agents", title: String(localized: "Agent"), symbol: Theme.Icon.options, group: .assistant, page: .agents,
