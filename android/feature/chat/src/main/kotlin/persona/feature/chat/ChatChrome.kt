@@ -81,7 +81,9 @@ internal fun ChatHeader(
         statusText = linkTitle ?: when (line?.kind) {
             StatusLineKind.Ended -> stringResource(if (statusState.replaced) R.string.chat_chrome_status_replaced else R.string.chat_chrome_status_ended)
             StatusLineKind.MachineOffline -> stringResource(R.string.chat_chrome_status_machine_offline)
-            StatusLineKind.Submitting -> stringResource(R.string.chat_chrome_status_submitting)
+            StatusLineKind.Submitting -> if (statusState.answering) stringResource(R.string.chat_chrome_status_submitting)
+                else stringResource(persona.core.designsystem.R.string.designsystem_message_sending)
+            StatusLineKind.Processing -> stringResource(persona.core.designsystem.R.string.designsystem_message_processing)
             StatusLineKind.Unconfirmed -> stringResource(R.string.chat_chrome_status_unconfirmed)
             StatusLineKind.NeedsYou -> stringResource(R.string.chat_chrome_status_needs_you)
             StatusLineKind.Stopping -> stringResource(R.string.chat_chrome_status_stopping)

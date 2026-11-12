@@ -99,6 +99,7 @@ object AssistantSendingModule {
     ): MainConversationSender =
         object : MainConversationSender {
             override val outbox = messages.outbox
+            override val sendReceipts = messages.sendReceipts
 
             override suspend fun sendToMain(text: String, clientMessageId: String, draft: DraftSnapshot?) {
                 val pairing = checkNotNull(data.restore()) { context.getString(R.string.assistant_pair_first) }
