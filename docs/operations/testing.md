@@ -742,6 +742,8 @@ Long-scroll uses `XCTOSSignpostMetric`; simulator reports duration, not dropped 
   no computer name repeated in group headers, computer title collapses whole section, machine filter removes headers. Repository/worktree inference: `AgentRepoTreeTests`.
   `MOCK_WORKTREES=1`: weather widget Agent in `.worktrees/widget` (idle peer),
   idle in `.claude/worktrees/fix-crash`, all-idle notes repo on MacBook. Both groupings, light/dark, all three renderings (default, `-ui.style beautiful`, compact).
+  `MOCK_SHARED_FOLDER=1` (#5715): Mac Studio's `atlas` folder is claimed by two repositories, its own three Agents' and a
+  Codex App chat's that names `/Users/me/code`; each worktree line's count matches the Agents under it.
   `-openWelcome YES` removes prior pairing (Keychain hub beats demo); `-demo.on YES` enters demo.
   All `launchPersona()` / `launchPinned()` launches auto-add `-openWelcome YES` when demo on without `-pairURL`, never reuse previous mock pairing.
 
