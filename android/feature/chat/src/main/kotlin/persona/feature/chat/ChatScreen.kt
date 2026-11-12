@@ -388,11 +388,13 @@ private fun ChatPage(
     // The message a hub link named (`?at=`, #2194) while it is being landed on: like a search hit, its drawer opens.
     var jumpItem by remember { mutableStateOf<String?>(null) }
     val backgroundFolding = if (foldsBackground) persona.core.domain.tasks.BackgroundFolding(openWork, search.selected?.itemId ?: jumpItem) else null
-    val assistantPresentation = remember(projection, snapshot.items, feed, renderStyle, backgroundFolding) {
+    // Glass draws the hub's task records among the lines, as iOS does (#4339 C13); Brief and Board keep them behind the trays.
+    val inlineRecords = PersonaTheme.style == AppStyle.Glass
+    val assistantPresentation = remember(projection, snapshot.items, feed, renderStyle, backgroundFolding, inlineRecords) {
         if (renderStyle.compactToolSummary) {
             val presentation = persona.core.domain.tasks.AssistantConversation.project(projection.lines, snapshot.items, backgroundFolding)
             presentation.copy(background = persona.core.domain.tasks.AssistantLines.lines(presentation.background,
-                persona.core.domain.tasks.AssistantTaskCards.backgroundFeed(feed)))
+                persona.core.domain.tasks.AssistantTaskCards.backgroundFeed(feed, inlineRecords)))
         } else persona.core.domain.tasks.AssistantConversation(projection.lines, emptyList())
     }
     LaunchedEffect(key, tasks) { tasks?.load(key.sessionId); tasks?.loadTodayIfMain(key.sessionId) }
@@ -400,13 +402,13 @@ private fun ChatPage(
     // (#5045, DESIGN_SYSTEM.md 4.7 "Task cards"); Brief and Board do not.
     val subagentCards = PersonaTheme.style == AppStyle.Glass
     val nestedSubagents = if (subagentCards) session?.subagents.orEmpty() else emptyList()
-    val lines = remember(assistantPresentation, search.selected, jumpItem, feed, tasks, taskPlans, taskTodos, taskCardProjection, renderStyle, nestedSubagents) {
+    val lines = remember(assistantPresentation, search.selected, jumpItem, feed, tasks, taskPlans, taskTodos, taskCardProjection, renderStyle, inlineRecords, nestedSubagents) {
         searchVisibleLines(assistantPresentation.foreground, search.selected?.itemId ?: jumpItem)
             .let {
                 when {
                     tasks == null -> it
                     renderStyle.compactToolSummary -> persona.core.domain.tasks.AssistantTaskCards.lines(it, feed, taskPlans,
-                        taskTodos, taskCardProjection[key.sessionId].orEmpty())
+                        taskTodos, taskCardProjection[key.sessionId].orEmpty(), inline = inlineRecords)
                     else -> persona.core.domain.tasks.AssistantLines.lines(it,
                         persona.core.domain.tasks.SentToAgents.shown(feed))
                 }

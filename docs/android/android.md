@@ -95,6 +95,14 @@ Housekeeping notices (compaction, restarts, schedule setup) are hidden while dat
 metadata identifies supervision/patrol/follow-up turns; normal user messages are never hidden by their title or emoji.
 Original events and background records remain inspectable rather than being deleted from history.
 
+On Glass the conversation draws the hub's task records as iOS does ([chats](../plans/android-ios-alignment/chats.md) C13):
+`AssistantTaskCards.isBackgroundEvent(inline = true)` keeps only plans, task cards (the dispatched line stands for them) and
+message cards behind, and `FeedLine` draws the receipt (its PR button and **View**), the review line, the report as
+"task → @Persona" and Persona's hand-off as "Persona → @task" (both in Persona's box, the first three lines and **Expand**,
+`ExchangeHeader` / `ExchangeText` in `feature/chat/AgentExchange.kt`), the user's own word to a task as "Me → @task" in the
+user's bubble, and the hub's `notice` line, centered. Brief and Board keep the records behind the trays as above. Tests:
+`TaskRecordsTest` (core/domain), `TaskRecordsShotsTest`.
+
 #### Background rounds fold into one line (#4314)
 
 The main conversation folds the rounds it did not start, as web and iOS do (rules in
@@ -224,6 +232,49 @@ without opening sockets. JVM Native-rendered component captures are separate evi
 - **What this computer can do**: after the computer card and the engine, the machine page reads the node self-check (`GET /machines/{id}/doctor`) and shows each feature as **Ready** / **Partly working** / **Broken** / **Off**, with **Check again**; when files Persona generated are stale or missing there is **Fix** (after confirming, `POST …/doctor/fix`); "See all checks" expands every item. Node too old, hub too old, offline and insufficient device permission each get one sentence; when the node is too old and can be redeployed there is **Redeploy**. The logic is in `NodeHealth.kt`, with the same rules as the web's `lib/node-health.ts`.
 - **Browser (ego lite)**: when the hub's ego plugin is on (the machine has `browser`), a Mac's machine page has the **Let the assistant use this browser** toggle, install / uninstall, the first-time setup steps (open ego lite, import data from other browsers, finish setup, check again) and, once ready, its status (imports, usage stats), same as iOS `BrowserSection`. While a task is running or first-time setup is in progress it reads every 2 seconds. The phone has no live view of that Mac (the iOS "VNC" button); first-time setup is done on the Mac.
 - **Not done yet**: "Control computer" (Cua) and "Browser sign-in" (importing cookies) on the machine page, attachments in a new Agent's first message, "New worktree…".
+
+## Settings navigation and search (#5233)
+
+Settings keeps three scopes: the current assistant, this device, and Hub. This is a navigation reorganization;
+model choices, notification defaults, permissions, pairing, update installation and assistant ownership do not change.
+Search filters entry names and localized common aliases (including complete former labels from the existing
+localization resources), case-insensitively with
+Unicode width normalization. It never indexes credentials, account values or addresses. Clearing it restores the
+three groups; a query with no matches shows an empty state. Extension-contributed navigation stays in its original
+assistant scope and is shown when the search is empty.
+
+| Previous home entry | New home entry and location |
+| --- | --- |
+| Model providers; Model configuration | Models; uses first, then Advanced › Model providers and Add provider |
+| Assistant profile | Assistant profile (unchanged, current assistant) |
+| Claude Code; Codex; Session triage | Agent › Claude Code settings, Codex settings, Session triage |
+| Connectors; Extensions; Channels | Same current-assistant entries; plain home subtitles |
+| Notifications; Floating capsule; Background keep-alive; desktop presence/muting | Notifications and background; notification preferences, capsule entry, one complete phone-check list, desktop-muting details |
+| About; Check for updates | About and updates; version, manual check, recovery and verified APK installation |
+| Hub status card; hub address; Connection diagnostics; Pairing | Connection; status, selectable wrapping address, pairing and existing diagnostics |
+| Appearance; Language; Translation; Storage; native Inbox chats | This device, unchanged behavior |
+| Hubs; Hub version; Assistants; Avatar; Devices | Hub, unchanged behavior |
+
+The legacy `notify` and `ready` Settings destinations open the same Notifications and background page. `capsule`,
+`desktops`, `providers`, `models`, `claude`, `codex`, `triage`, `diag`, `pair`, `about` and connector routes retain their
+names and remain directly accessible. In-place navigation records the parent, so Back returns to the group page;
+the navigation shell keeps its existing stack. Switching assistants closes the new Agent group as it does the
+existing assistant-owned pages.
+
+The device page reuses `ReadinessScreen(backgroundOnly = true)` without assistant or computer setup, checklist
+completion/dismissal actions, or implicit writes to first-run pending state. System notification checks have one home;
+notification channels, manufacturer battery/autostart controls, lock-screen and cellular tests remain there.
+First-run onboarding still uses the original checklist behavior. When an older hub cannot supply phone-muting
+preferences, its online-computer detail entry remains visible in this page rather than disappearing with the switch.
+
+Android currently has knowledge-base browsing, searching and tagging, but no knowledge-base **selection** settings
+(priorities, context-source toggles or per-chat selection). No misleading selection entry is added; that capability
+remains separate work tracked by #2217.
+
+Verification: `SettingsSearchTest` pins alias matching and stable destinations; `SettingsGroupsShotsTest` checks scope
+order, assistant switching, real-page phone home/search/empty states in every style and light/dark; model tests check
+Advanced folding and owner-aware selection. Captures produced by these tests are **Native JVM Compose renders**,
+not emulator/handset screenshots, and do not prove system dialogs, background survival or live hub transport.
 
 ## Notifications (no push service)
 
