@@ -32,9 +32,9 @@ struct NewChatView: View {
     /// A todo handed to a new Agent (TodoHandoffSheet): the todo's context block goes ahead of the first message, the
     /// session is named after the todo, and only the todo's hub's machines are offered.
     var contextBlock: String? = nil
-    /// A message forwarded to a new Agent (#3807): its card over the first message, which carries it as `contextBlock`,
-    /// and the pictures it had, attached.
-    var forwarded: ContextRef? = nil
+    /// A message forwarded to a new Agent (#3807), or several together (#3838): its card over the first message, which
+    /// carries it as `contextBlock`, and the pictures it had, attached.
+    var forwarded: [ContextRef] = []
     var forwardedImages: [UIImage] = []
     var nameHint: String? = nil
     var onlyGroup: String? = nil
@@ -375,9 +375,14 @@ struct NewChatView: View {
                 }
 
                 Section {
-                    if let forwarded {
-                        QuoteCard(heading: forwarded.quoteHeading, icon: Theme.Icon.forwardMessage, meta: ForwardMessage.meta(forwarded),
-                                  summary: forwarded.forwardSummary, lines: QuoteBlock.forwardLines, tint: Theme.accent, ink: .secondary) {}
+                    if forwarded.count == 1, let one = forwarded.first {
+                        QuoteCard(heading: one.quoteHeading, icon: Theme.Icon.forwardMessage, meta: ForwardMessage.meta(one),
+                                  summary: one.forwardSummary, lines: QuoteBlock.forwardLines, tint: Theme.accent, ink: .secondary) {}
+                            .accessibilityIdentifier("newChat.forward")
+                    } else if !forwarded.isEmpty {
+                        QuoteCard(heading: ForwardMessage.groupHeading(forwarded), icon: Theme.Icon.forwardMessage,
+                                  meta: forwarded[0].extra?["machine"], summary: forwarded.map(ForwardMessage.line).joined(separator: "\n"),
+                                  lines: QuoteBlock.forwardLines, tint: Theme.accent, ink: .secondary) {}
                             .accessibilityIdentifier("newChat.forward")
                     }
                     promptField

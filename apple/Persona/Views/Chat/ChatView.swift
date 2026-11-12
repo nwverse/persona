@@ -81,6 +81,10 @@ struct ChatView: View {
     /// A forward on its way to a new Agent: New Chat with it over the first message.
     @State private var forwardNewAgent: ForwardNewAgent?
     #if os(iOS)
+    /// Select Messages (#3838): the messages picked to forward together, while selecting.
+    @State private var pick = MessagePick()
+    #endif
+    #if os(iOS)
     /// Full Page in this chat's system screenshot (#1609).
     @State private var fullPage = ChatFullPage()
     #endif
@@ -2020,7 +2024,7 @@ struct ChatView: View {
             // and a half of it, cut at its top (#3703, the open iPhone Duo on its side with the keyboard up). Priority on
             // the region alone did not do it. Not the classic composer's island, which takes what it is offered until it
             // has measured itself.
-            ChatRegion(name: "ChatFooter.body") { VStack(spacing: 0) { footer } }
+            ChatRegion(name: "ChatFooter.body") { VStack(spacing: 0) { pickOrFooter } }
                 .layoutPriority(usesShellComposer ? 1 : 0)
                 // What the footer takes of the page: the pending cards grow into the rest while the keyboard is up.
                 // Exact, like the cards' own height inside it (`PendingCards.shown`): the cards take one from the other for
@@ -2622,6 +2626,9 @@ struct ChatView: View {
                 Group {
                     if let openRecap, openRecap.line == line.id { recapInFlow(openRecap) } else { lineView(line) }
                 }
+                    #if os(iOS)
+                    .pickable(Self.pickBar(line), pick: pick, selecting: pick.on, refused: pickRefused)
+                    #endif
                     .background { if quoteFlash?.line == line.id { QuoteFlash().id(quoteFlash?.id) } }
                     .flippedBack()
                     .debugLineY(line.id, scratch)
@@ -2853,7 +2860,8 @@ struct ChatView: View {
         #if os(iOS)
         .sheet(item: $menu.forwarding, onDismiss: forwardDone) { d in ForwardSheet(draft: d) { forwardPicked = $0 } }
         .sheet(item: $forwardNewAgent) { f in
-            NewChatView(contextBlock: f.ref.xml, forwarded: f.ref, forwardedImages: f.images, onlyGroup: key.group) { s in
+            NewChatView(contextBlock: f.refs.map(\.xml).joined(separator: "\n"), forwarded: f.refs, forwardedImages: f.images,
+                        onlyGroup: key.group) { s in
                 forwardNewAgent = nil
                 model.open(s.key)
             }
@@ -4175,7 +4183,9 @@ struct ChatView: View {
         // Forward (#3807): the pressed message as a forward, to the picker.
         menu.forward = { [model, key, weak menu = menu] bar in
             guard let menu else { return }
-            menu.forwarding = Self.forwardDraft(bar, key: key, model: model, menu: menu)
+            var draft = Self.forwardDraft(bar, key: key, model: model, menu: menu)
+            draft.selects = true
+            menu.forwarding = draft
         }
         #endif
     }
@@ -4223,10 +4233,55 @@ struct ChatView: View {
         forwardPicked = nil
         switch picked {
         case .share(let m): menu.sharing = m
-        case .newAgent(let ref, let images): forwardNewAgent = ForwardNewAgent(ref: ref, images: images)
-        case .target(let ref, let images, let target): model.forward(ref, images: images, to: target, group: key.group)
+        case .select(let id):
+            #if os(iOS)
+            Keyboard.dismiss()
+            withAnimation(Theme.Motion.standard) { pick.start(id) }
+            #endif
+        case .newAgent(let refs, let images): forwardNewAgent = ForwardNewAgent(refs: refs, images: images)
+        case .target(let refs, let images, let target): model.forward(refs, images: images, to: target, group: key.group)
+        }
+        #if os(iOS)
+        // Forwarded: selecting is over. Forward To cancelled (nothing picked) comes back to the selection as it was.
+        if case .select = picked {} else if pick.on { pick.end() }
+        #endif
+    }
+
+    #if os(iOS)
+    /// The message a line stands for while selecting (#3838); nil for lines that are not messages.
+    private static func pickBar(_ line: ChatLine) -> MessageBarInfo? {
+        if case .row(let r) = line.content { return r.pickBar }
+        return nil
+    }
+
+    /// The footer, or while selecting the bar with Cancel and Forward (N) in its place. The composer's words, quotes and
+    /// pictures are the model's, so it comes back as it was.
+    @ViewBuilder private var pickOrFooter: some View {
+        if pick.on {
+            PickBar(pick: pick, cancel: { withAnimation(Theme.Motion.standard) { pick.end() } }, forward: forwardPicks)
+        } else {
+            footer
         }
     }
+
+    private func pickRefused() {
+        Haptics.error()
+        model.toast = Toast(String(localized: "Up to \(ForwardMessage.most) messages at a time"), style: .error)
+    }
+
+    /// Forward (N): the picked messages in the chat's order, to Forward To. Selecting ends once a target is picked
+    /// (`forwardDone`); Cancel there comes back to the selection.
+    private func forwardPicks() {
+        let shown = Dictionary(currentLines().compactMap { Self.pickBar($0) }.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let bars = model.chat(key).items.compactMap { pick.ids.contains($0.id) ? shown[$0.id] : nil }
+        guard !bars.isEmpty else { return }
+        let drafts = bars.map { Self.forwardDraft($0, key: key, model: model, menu: menu) }
+        menu.forwarding = ForwardDraft(pieces: drafts.flatMap(\.pieces), loadImage: drafts[0].loadImage,
+                                       share: drafts.count == 1 ? drafts[0].share : nil)
+    }
+    #else
+    private var pickOrFooter: some View { footer }
+    #endif
 
     private func closedAgent(_ closed: SessionKey, order: [SessionKey]) {
         guard closed == key else { return }
@@ -5316,10 +5371,12 @@ struct Composer: View, Equatable {
         // after them (the web's order), videos as <persona-file> after the text. Comments alone need no words.
         let alone = t.isEmpty && images.isEmpty && files.isEmpty && !comments.isEmpty
         // A forward with no note (#3807) says so, rather than pointing at "the context".
-        let lone = ctx.contains(where: \.isForward) ? String(localized: "Please look at the forwarded message above.") : String(localized: "See the context above.")
+        let forwards = ctx.filter(\.isForward).count
+        let lone = forwards > 1 ? String(localized: "Please look at the forwarded messages above.")
+            : forwards == 1 ? String(localized: "Please look at the forwarded message above.") : String(localized: "See the context above.")
         let typed = alone ? "" : t.isEmpty ? (images.isEmpty ? (files.isEmpty ? lone : String(localized: "Please look at the image [Assistant View a3e0a0]")) : String(localized: "Please look at the image [Assistant View 5ad878]")) : t
         let body = MessageComments.message(comments, text: AttachedFile.message(typed, files: files))
-        let message = ctx.isEmpty ? body : ctx.map(\.xml).joined(separator: "\n") + "\n\n" + body
+        let message = ContextRef.message(ctx, body: body)
         // Routed to a task ("Tell “xx”"): straight to its agent, not to Persona (docs/assistant/unified-entry.md「指向谁」).
         // Not with videos: they are on this conversation's machine, the task's agent may be on another.
         if images.isEmpty, files.isEmpty, key.group == (model.hub?.group ?? ""), TasksStore.shared.sendRouted(key.sessionID, text: message) {
