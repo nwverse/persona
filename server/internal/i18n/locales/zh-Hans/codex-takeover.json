@@ -8,5 +8,6 @@
   "unavailable": "无法确认原进程的状态，请另开新会话继续。",
   "shared_unavailable": "无法启动 Codex 共享入口，原进程保持不动。",
   "user_only": "只有已登录的客户端可以确认接管 Codex 会话。",
-  "token_required": "需要接管确认凭据。"
+  "token_required": "需要接管确认凭据。",
+  "not_ready": "Codex 已在新标签页打开，但共享连接尚未就绪。请先检查该终端，再发送消息。"
 }

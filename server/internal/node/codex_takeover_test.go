@@ -21,6 +21,11 @@ func takeoverNode(t *testing.T, running bool) (*Node, func() codexStartFile, *[]
 	listSessions(t, n)
 	file := resumeFile(f, cwd)
 	f.setScreen("w1:p2", cxReady)
+	f.after(func(c herdrCall) {
+		if c.Method == "pane.send_input" && strings.Contains(str(c.Params["text"]), "codex-start") {
+			takeoverTestOwner(n)
+		}
+	})
 	var calls []string
 	var writers []codexWriter
 	if running {
@@ -52,6 +57,11 @@ func TestCodexTakeoverWaitsForTheNewTerminalsTrustDialog(t *testing.T) {
 		f.screenSteps("w1:p2", isKeys("enter"), dialog, cxReady)
 		break
 	}
+	f.after(func(c herdrCall) {
+		if c.Method == "pane.send_keys" && slices.Equal(keysOf(c), []string{"enter"}) {
+			takeoverTestOwner(n)
+		}
+	})
 	plan, err := n.prepareCodexTakeover(context.Background(), startThread)
 	if err != nil {
 		t.Fatal(err)
@@ -66,6 +76,61 @@ func TestCodexTakeoverWaitsForTheNewTerminalsTrustDialog(t *testing.T) {
 	keys := f.trace("pane.send_keys")
 	if len(keys) != 1 || !strings.Contains(keys[0], `"w1:p2"`) || !strings.Contains(keys[0], `["enter"]`) {
 		t.Fatalf("only the new terminal's trust dialog should be answered: %v", keys)
+	}
+}
+
+func takeoverTestOwner(n *Node) {
+	src, _ := n.codexSource(startThread)
+	n.codices.mu.Lock()
+	defer n.codices.mu.Unlock()
+	n.codices.remotes["takeover-test"] = &codexRemote{n: n, ready: true,
+		spec:    proto.CodexServer{ID: "takeover-test", Home: src.home},
+		threads: map[string]remoteThread{startThread: {id: startThread, publicID: startThread, joined: true}}}
+}
+
+func TestCodexTakeoverDoesNotAcceptAComposerWithoutSharedOwnership(t *testing.T) {
+	withCodexWaits(t)
+	n, f, _ := codexHistoryNode(t)
+	listSessions(t, n)
+	f.setScreen("w1:p2", cxReady)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if err := n.waitCodexTakeover(ctx, startThread, "w1:p2"); refusalCode(err) != "codex_takeover_not_ready" {
+		t.Fatalf("a transient composer was reported as a successful takeover: %v", err)
+	}
+}
+
+func TestCodexTakeoverHandlesTrustAfterATransientComposer(t *testing.T) {
+	withCodexWaits(t)
+	n, f, _ := codexHistoryNode(t)
+	listSessions(t, n)
+	f.setScreen("w1:p2", cxReady)
+	first := true
+	var dialog string
+	for _, text := range codexTrustDialogs(t) {
+		dialog = text
+		break
+	}
+	f.after(func(c herdrCall) {
+		switch {
+		case c.Method == "pane.read" && first:
+			first = false
+			f.setScreen("w1:p2", dialog)
+		case c.Method == "pane.send_keys" && slices.Equal(keysOf(c), []string{"enter"}):
+			f.setScreen("w1:p2", cxReady)
+			takeoverTestOwner(n)
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := n.waitCodexTakeover(ctx, startThread, "w1:p2"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.trace("pane.send_keys")) != 1 {
+		t.Fatalf("late trust dialog was not handled once: %v", f.trace("pane.send_keys"))
+	}
+	if route, _ := n.codexRoute(startThread); route != codexRouteAppServer {
+		t.Fatalf("takeover returned without the shared route: %s", route)
 	}
 }
 

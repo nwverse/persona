@@ -8,5 +8,6 @@
   "unavailable": "The original writer could not be verified. Continue in a new session instead.",
   "shared_unavailable": "A shared Codex app-server could not be started. The original process was left untouched.",
   "user_only": "Only a signed-in device can confirm a Codex takeover.",
-  "token_required": "A takeover confirmation token is required."
+  "token_required": "A takeover confirmation token is required.",
+  "not_ready": "Codex opened in the new terminal, but its shared connection is not ready. Check that terminal before sending."
 }

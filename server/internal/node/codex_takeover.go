@@ -268,12 +268,42 @@ func (n *Node) commitCodexTakeover(ctx context.Context, id, token string, confir
 	}
 	// A running TUI is not yet a usable resumed thread: the requested folder may
 	// still need its trust dialog answered before the remote app-server loads it.
-	if err := n.waitCodexBox(ctx, a.PaneID); err != nil {
+	if err := n.waitCodexTakeover(ctx, id, a.PaneID); err != nil {
 		return nil, err
 	}
 	st.Pane = a.PaneID
 	n.state.put(id, st)
 	return n.sessionFor(id, a), nil
+}
+
+func (n *Node) waitCodexTakeover(ctx context.Context, id, pane string) error {
+	wait, cancel := context.WithTimeout(ctx, codexStartWait)
+	defer cancel()
+	for {
+		if err := n.waitCodexBox(wait, pane); err != nil {
+			if wait.Err() != nil {
+				return takeoverRefusal("not_ready")
+			}
+			return err
+		}
+		// The TUI can briefly draw an empty composer before its trust dialog.
+		// Only the original thread loaded and joined on the shared server proves readiness.
+		if c, thread, err := n.codexOwner(id); err == nil {
+			if !thread.joined {
+				if err := c.join(wait, id, false); err != nil {
+					return err
+				}
+			}
+			if route, _ := n.codexRoute(id); route == codexRouteAppServer {
+				return nil
+			}
+		} else if !errors.Is(err, errCodexNoOwner) {
+			return err
+		}
+		if !sleepCtx(wait, codexStartPoll) {
+			return takeoverRefusal("not_ready")
+		}
+	}
 }
 
 func (n *Node) takeoverWriters(src codexSource) ([]codexWriter, error) {
