@@ -73,6 +73,11 @@ final class ExtensionCodeReviewUITests: XCTestCase {
             let whitespace = app.buttons["忽略空白"].exists ? app.buttons["忽略空白"] : app.switches["忽略空白"]
             XCTAssertTrue(whitespace.waitForExistence(timeout: 5), app.debugDescription)
             shot(app, "options-" + look)
+            // On and off again: the steps below read client.go's diff with whitespace shown (ignoring it redraws its
+            // re-indented lines as unchanged; ExtensionCodeReviewTests checks that).
+            whitespace.tap()
+            app.buttons["code-review-options"].tap()
+            XCTAssertTrue(whitespace.waitForExistence(timeout: 5), app.debugDescription)
             whitespace.tap()
 
             // client.go's 19 lines over its first hunk, asked of the extension (`context`) and shown.
@@ -103,13 +108,9 @@ final class ExtensionCodeReviewUITests: XCTestCase {
             for _ in 0..<6 where !limits.exists { app.swipeUp() }
             XCTAssertTrue(limits.exists, app.debugDescription)
             shot(app, "renamed-" + look)
-            // Back as it was for the next run: client.go not viewed (its box is back up the page), whitespace shown.
+            // Back as it was for the next run: client.go not viewed (its box is back up the page).
             for _ in 0..<12 where !box.isHittable { app.swipeDown() }
             box.tap()
-            let options = app.buttons["code-review-options"]
-            for _ in 0..<4 where !options.isHittable { app.swipeDown() }
-            options.tap()
-            whitespace.tap()
             app.terminate()
         } }
     }
