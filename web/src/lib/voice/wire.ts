@@ -126,6 +126,10 @@ export interface VoiceFailure {
   fatal: boolean;
 }
 
+/** The extension sends anyway what its user-speech gate held back (a resend of a run refused `unprompted`), and its
+ *  `start` takes `speech_gate` (#5904, docs/assistant/voice.md 3.1). */
+export const SPEECH_GATE_FEATURE = "speech_gate";
+
 /** The `ready` frame: the extension is connected upstream and the rates are known. */
 export interface VoiceReady {
   /** 1 when the frame does not say (an extension from before protocol 2). */

@@ -251,6 +251,23 @@ describe("a voice call", () => {
     expect(call.resend("voice-2")).toBe(false);
   });
 
+  it("sends anyway what the user-speech gate held back, only with an extension that keeps it (#5904)", async () => {
+    const held = { type: "run", id: "voice-3", task: "跑一下测试", state: "refused", code: "unprompted", msg_ids: ["voice-3"], base_seq: 1 };
+    const old = await connected();
+    old.last().frame(held);
+    expect(old.call.getSnapshot().resendable).toEqual([]);
+    expect(old.call.canResend("voice-3")).toBe(false);
+    expect(old.call.resend("voice-3")).toBe(false);
+    const t = setup();
+    await t.call.begin();
+    t.last().open();
+    t.last().frame({ ...READY, features: [...READY.features, "speak", "speech_gate"] });
+    t.last().frame(held);
+    expect(t.call.getSnapshot().resendable).toEqual(["voice-3"]);
+    expect(t.call.resend("voice-3")).toBe(true);
+    expect(t.last().texts().at(-1)).toEqual({ type: "resend", id: "voice-3" });
+  });
+
   it("reconnects 1, 4 and 10 seconds after a drop, with history and the open runs", async () => {
     const { call, sockets, last, clock, audio } = await connected();
     last().frame({ type: "transcript", id: "u1", role: "user", text: "fix the tests", final: true });
