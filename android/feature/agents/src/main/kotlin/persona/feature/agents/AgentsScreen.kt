@@ -876,7 +876,8 @@ internal fun SlotRow(
         facts = buildList {
             // Where its closeout stands on merged and deployed (#3612), first: the facts' line is cut at its end.
             session.closeoutFacts.forEach { add(RowFact(it.text.text(), caution = it.contradicted)) }
-            // Glass says where it runs, its model and its to-do on its third line ([place]).
+            // Glass says where it runs, its source, model and to-do on its third line ([place]); view only stays a fact.
+            if (glass && source?.readOnly == true) add(RowFact(stringResource(R.string.agents_row_view_only), caution = true))
             if (!glass) {
                 // Where a Codex thread or a runtime's session comes from, and when the phone can only read it.
                 source?.let { add(RowFact(listOfNotNull(it.label, it.agentName).joinToString(" / "))) }

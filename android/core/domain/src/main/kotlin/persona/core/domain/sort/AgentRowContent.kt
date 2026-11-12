@@ -18,8 +18,10 @@ data class AgentRowContent(
     /** Where it was opened, the tag line 3 starts with (iOS `sourceLabel`): a Lark group's topic or a terminal pane. */
     val source: AgentSource?,
     /**
-     * Where it runs, joined with " · " (iOS `placeText`): the tab (its name in a tab of several, else a source's
-     * subtitle; never the agent's kind, which its mark shows), Started it, the host, space › tab, the computer.
+     * Where it runs, joined with " · " (iOS `placeText`): the tab (its name in a tab of several, else a source and the
+     * agent's name there; never the agent's kind, which its mark shows), Started it, the host, space › tab, the computer.
+     * Unlike iOS's subtitle it leaves out why a source is view only: Android's row keeps that among its critical facts,
+     * which never give way to the rest of the line.
      */
     val place: List<CoreText>,
     /** The model it runs on (iOS `modelShortName`). */
@@ -65,7 +67,8 @@ fun AgentSession.rowContent(context: AgentRowContext = AgentRowContext(), muted:
     val s = session
     val place = mutableListOf<CoreText>()
     val pane = context.pane
-    (pane?.name?.let(CoreText::plain) ?: s.sourceSubtitle)?.let {
+    val source = s.source?.let { CoreText.joined(" · ", listOfNotNull(it.label, it.agentName?.let(CoreText::plain))) }
+    (pane?.name?.let(CoreText::plain) ?: source)?.let {
         place += it
         if (pane?.launcher == true) place += CoreText.of(Key.AgentsStartedTab)
     }

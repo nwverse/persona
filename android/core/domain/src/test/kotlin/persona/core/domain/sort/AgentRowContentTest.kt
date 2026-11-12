@@ -44,9 +44,10 @@ class AgentRowContentTest {
         assertEquals("Codex 2", s.rowContent(AgentRowContext(pane = AgentPane("Codex 2", false))).words())
     }
 
-    @Test fun aSourceIsSaidFirstWithWhyItIsViewOnly() {
+    @Test fun aSourceIsSaidFirstWithItsAgentsName() {
+        // iOS adds why it is view only; Android keeps that among the row's critical facts, which never give way.
         val codex = row { copy(sourceKind = "codex_history", agentName = "Reviewer", capabilities = SessionCapabilities(read = true), slotIndex = 1) }
-        assertEquals("Codex history · Reviewer · View only: This source can’t send yet · #1", codex.rowContent().words())
+        assertEquals("Codex history · Reviewer · #1", codex.rowContent().words())
         val live = row { copy(sourceKind = "codex_app_server", capabilities = SessionCapabilities(read = true, send = true)) }
         assertEquals("Codex live", live.rowContent().words())
         // A pane's name wins over the source's (iOS `pane?.name ?? sourceSubtitle`).

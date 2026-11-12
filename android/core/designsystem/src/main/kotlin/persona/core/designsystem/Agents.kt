@@ -20,11 +20,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.layout.layoutId
@@ -435,7 +435,8 @@ fun AgentRow(
                     JIcon(flag.icon, flag.label, size = Caret, tint = when { flag.caution -> palette.cautionText; flag.ai -> palette.ai; else -> palette.ink3 })
                 }
             }
-            agent?.let { Spacer(Modifier.width(Tokens.Space.s)); Text(it, style = type.micro, color = palette.ink2, maxLines = 1) }
+            // The well's mark names the agent (iOS's Avatar row writes no kind beside the title).
+            agent?.takeIf { !avatar }?.let { Spacer(Modifier.width(Tokens.Space.s)); Text(it, style = type.micro, color = palette.ink2, maxLines = 1) }
             // one line only: the tag goes before the time
             if (compact || boardMetadata) source?.let { Spacer(Modifier.width(Tokens.Space.s)); SourceTag(it) }
             time?.takeIf { it.isNotEmpty() }?.let { Spacer(Modifier.width(Tokens.Space.s)); Text(it, style = type.micro, color = palette.ink3, maxLines = 1) }

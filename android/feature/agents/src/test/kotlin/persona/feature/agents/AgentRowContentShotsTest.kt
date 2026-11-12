@@ -43,7 +43,7 @@ import java.io.File
  * JSON. PNGs in `build/row-content-shots/` (or `-Dpersona.shots=<dir>`).
  */
 @RunWith(AndroidJUnit4::class)
-@Config(sdk = [35], qualifiers = "en-w400dp-h1400dp-xhdpi")
+@Config(sdk = [35], qualifiers = "en-w400dp-h1700dp-xhdpi")
 @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
 class AgentRowContentShotsTest {
     @get:Rule val rule = createAndroidComposeRule<ComponentActivity>()
