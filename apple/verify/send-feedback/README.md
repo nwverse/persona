@@ -23,10 +23,19 @@ failed-message bubble and translations are reused. Only the feedback wording and
 in 150 ms but withholds transcript echo for ten seconds; `Slow` sends take two seconds and `Fail` sends return a refusal.
 `GET /mock/send-feedback` reports receipt and response timestamps without real accounts or messages.
 
-Run the actual optimized simulator app with `SendFeedbackUITests`. The suite records tap-to-visible Processing,
-asserts it is below one second, and keeps screenshots as result-bundle attachments. The app's DEBUG
+Run the actual optimized simulator app with `SendFeedbackUITests`. The suite records the send command's duration,
+asserts that the status exists with a laid-out frame, and keeps screenshots as result-bundle attachments.
+`check_timing.py` enforces the one-second budget from XCTest's **Synthesize event** timestamp to the successful
+accessibility observation. The raw test duration also includes button lookup and idle waits before input; it is not
+physical tap latency. The checker preserves that raw duration, fails closed if timestamps are missing, and adds a
+20 ms conservative margin for rounded step logs. `test_check_timing.py` covers fast input with slow automation,
+actual slow presentation, missing timestamps and failed observations.
+The app's DEBUG
 `SEND_FEEDBACK_DRAW` trace records send-attempt-to-status-view appearance separately from UI automation overhead.
 Use the same simulator and build settings for baseline and fixed runs, then inspect light and dark screenshots.
+For host-side captures, set `FEEDBACK_SIM` and `FEEDBACK_SHOTS` on the fixture and `TEST_RUNNER_PERSONA_SHOTS` on the UI run.
+The test requests `xcrun simctl io <assigned simulator> screenshot` while Processing is visible. Capturing only after
+XCTest ends captures Springboard instead; those images are not UI evidence.
 
 `ChatSendFeedbackTests` covers acknowledgement-before-output, echo-before-acknowledgement, late acknowledgements,
 request correlation, failure/offline recovery, stale snapshots and the acceptance deadline.

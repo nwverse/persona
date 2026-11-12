@@ -7,8 +7,10 @@ import json
 import os
 from pathlib import Path
 import sys
+import subprocess
 import threading
 import time
+from urllib.parse import urlparse, parse_qs
 from http.server import ThreadingHTTPServer
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -34,6 +36,25 @@ for session in hub.SESSIONS + hub.ASSISTANT:
 
 class Handler(hub.H):
     def do_GET(self):
+        parsed = urlparse(self.path)
+        if parsed.path == "/mock/send-feedback-shot":
+            name = parse_qs(parsed.query).get("name", [""])[0]
+            allowed = [f"{chat}-{look}{size}" for chat in ("agent", "assistant")
+                       for look in ("light", "dark") for size in ("", "-ax")]
+            sim, directory = os.environ.get("FEEDBACK_SIM"), os.environ.get("FEEDBACK_SHOTS")
+            if name not in allowed or not sim or not directory:
+                return self.send_json({"error": "Configure the assigned simulator and screenshot directory"}, 400)
+            folder = Path(directory).resolve()
+            if not str(folder).startswith(("/tmp/", "/private/tmp/")):
+                return self.send_json({"error": "Screenshots must use a task temporary directory"}, 400)
+            folder.mkdir(parents=True, exist_ok=True)
+            target = folder / ("simctl-" + name + ".png")
+            try:
+                subprocess.run(["/usr/bin/xcrun", "simctl", "io", sim, "screenshot", str(target)],
+                               check=True, timeout=20, capture_output=True)
+            except (OSError, subprocess.SubprocessError):
+                return self.send_json({"error": "Simulator screenshot failed"}, 500)
+            return self.send_json({"ok": True, "file": target.name})
         if self.path == "/mock/send-feedback":
             with LOCK:
                 return self.send_json({"receipts": list(RECEIPTS)})

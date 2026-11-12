@@ -59,7 +59,9 @@ final class SendFeedbackUITests: XCTestCase {
         let seconds = Date.now.timeIntervalSince(start)
         print(String(format: "SEND_FEEDBACK %@ processing_visible=%@ seconds=%.3f", name, String(visible), seconds))
         XCTAssertTrue(visible, "acceptance must be visible before any model output")
-        XCTAssertLessThan(seconds, 1, "tap to visible Processing must be below one second")
+        XCTAssertFalse(processing.frame.isEmpty, "the status must have a laid-out frame")
+        // The host timing checker enforces one second from XCTest's synthesized input event.
+        // tap() also waits for idle and resolves the button before generating that event.
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = "\(name)-processing"
         attachment.lifetime = .keepAlways
@@ -67,6 +69,11 @@ final class SendFeedbackUITests: XCTestCase {
         if let dir = ProcessInfo.processInfo.environment["PERSONA_SHOTS"] {
             let appearance = ProcessInfo.processInfo.environment["PERSONA_SHOTS_APPEARANCE"] ?? "light"
             try? app.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: dir).appendingPathComponent("\(name)-\(appearance).png"))
+            // Capture on the host while the app is foreground, not Springboard after XCTest cleanup.
+            let url = URL(string: hub + "/mock/send-feedback-shot?name=\(name)-\(appearance)")!
+            let data = try? Data(contentsOf: url)
+            let response = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            XCTAssertEqual(response?["ok"] as? Bool, true, "the assigned simulator screenshot was not captured")
         }
     }
 
