@@ -1348,11 +1348,11 @@ private fun ChatPage(
                 onNotice = { notice = it }, onFork = onFork, rewind = rewindMenu,
                 onDelete = { target -> messages.firstOrNull { it.clientMessageId == target.id }?.let { message ->
                     deliveryAction(message, if (message.state.allows(DeliveryAction.Cancel)) DeliveryAction.Cancel else DeliveryAction.Delete)
-                } })
+                } }, share = shareCardSource(session, LocalPersonaName.current))
             viewer?.let { request ->
                 ChatImageViewer(request.images, request.index, onDismiss = { viewer = null },
                     onEdited = if (readOnly) null else ({ attachment -> composer.beginEdit(); composer.attachments += attachment }),
-                    photoLimitReached = composer.attachments.count { it.image } >= 4)
+                    photoLimitReached = composer.attachments.count { it.media } >= MAX_COMPOSER_MEDIA)
             }
         }
     }

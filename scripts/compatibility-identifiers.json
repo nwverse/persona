@@ -1180,6 +1180,14 @@
       "path_tokens": [],
       "external_refs": []
     },
+    "web/src/lib/provider-link.test.ts": {
+      "reason": "Regression assertion for the historical managed-provider source accepted by the exact compatibility adapter.",
+      "tokens": [
+        "jarvis"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
     "web/src/lib/compatibility.ts": {
       "reason": "Dedicated adapter for a versioned runtime, protocol or persisted identity.",
       "tokens": [

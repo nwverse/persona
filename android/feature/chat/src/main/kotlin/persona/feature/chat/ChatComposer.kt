@@ -88,7 +88,8 @@ fun ChatComposer(
     val context = LocalContext.current
     val resources = LocalResources.current
     val photosOnly = stringResource(R.string.chat_composer_photos_only)
-    SideEffect { state.photosOnlyText = photosOnly }
+    val videosOnly = stringResource(R.string.chat_composer_videos_only)
+    SideEffect { state.photosOnlyText = photosOnly; state.videosOnlyText = videosOnly }
     val hasContent = state.hasContent || extraContent
     val scope = rememberCoroutineScope()
     var menu by remember { mutableStateOf(false) }
@@ -119,14 +120,18 @@ fun ChatComposer(
         }
     }
 
-    fun select(uris: List<Uri>, image: Boolean, capture: Boolean = false) {
+    // [media]: from the photo picker, the camera or the clipboard, photos and videos sharing four places (iOS).
+    fun select(uris: List<Uri>, media: Boolean, capture: Boolean = false) {
         scope.launch {
-            val allowed = if (image) (4 - state.attachments.count { it.image }).coerceAtLeast(0) else uris.size
+            val allowed = if (media) (MAX_COMPOSER_MEDIA - state.attachments.count { it.media }).coerceAtLeast(0) else uris.size
             if (uris.size > allowed) onNotice(resources.getString(R.string.chat_composer_photo_limit))
             if (capture) withContext(Dispatchers.IO) { uris.drop(allowed).forEach { deleteCapture(context, it.toString()) } }
             for (uri in uris.take(allowed)) {
                 try {
-                    val attachment = withContext(Dispatchers.IO) { selectAttachment(context, uri, image) }
+                    val attachment = withContext(Dispatchers.IO) {
+                        val video = media && isVideo(context, uri)
+                        selectAttachment(context, uri, image = media && !video, video = video)
+                    }
                     state.beginEdit()
                     state.attachments += attachment
                     attachment.error?.let(onNotice)
@@ -138,7 +143,7 @@ fun ChatComposer(
             }
         }
     }
-    val photos = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(4)) { select(it, true) }
+    val photos = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(MAX_COMPOSER_MEDIA)) { select(it, true) }
     val files = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { select(it, false) }
     val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
         cameraUri?.let { value ->
@@ -170,6 +175,19 @@ fun ChatComposer(
     fun launchPicker(action: () -> Unit) {
         menu = false
         try { action() } catch (_: Exception) { onNotice(resources.getString(R.string.chat_composer_picker_failed)) }
+    }
+
+    // A picture on the clipboard, offered over the focused composer on Glass (iOS PasteImageChip): Paste copies it in as a photo.
+    val clipboardImages = rememberClipboardImages(state.focused)
+    fun pasteImages() {
+        val clip = runCatching { clipboardImages.clipboard?.primaryClip }.getOrNull()
+        clipboardImages.dismiss()
+        if (clip == null) return
+        scope.launch {
+            val pasted = withContext(Dispatchers.IO) { pastedImages(context, clip, MAX_COMPOSER_MEDIA) }
+            if (pasted.isEmpty()) onNotice(resources.getString(R.string.chat_composer_attachment_unreadable))
+            else select(pasted, media = true, capture = true)
+        }
     }
 
     // A tap on a photo that is on the computer: the editor opens on it, and "Done" puts the marked-up copy in its place.
@@ -372,6 +390,8 @@ fun ChatComposer(
         accessory = {
             if (state.oldVersion) Text(stringResource(R.string.chat_composer_old_version), style = PersonaTheme.type.caption,
                 color = PersonaTheme.palette.cautionText)
+            if (PersonaTheme.style == AppStyle.Glass && enabled && !sending && service != null && state.focused && clipboardImages.offered)
+                PasteImageChip(onPaste = ::pasteImages, onDismiss = clipboardImages::dismiss)
             ComposerAttachmentPreviews(state, service, sending, enabled, onEdit = ::editPhoto)
             if (fullToolbar) accessory?.invoke(this)
             if (fullToolbar) modeHint?.let { JChip(it, icon = PhIcons.SlidersHorizontal) }
@@ -414,10 +434,12 @@ fun ChatComposer(
         SendButton(onClick = { expandedEditor = false; onSend() }, enabled = canSend && hasContent && blockedLabel == null, loading = sending)
     }
     if (menu) ChatActionsSheet(onDismiss = { menu = false }, title = stringResource(R.string.chat_composer_menu_title), actions = buildList {
-        add(JAction(stringResource(R.string.chat_composer_photos), enabled = service != null && state.attachments.count { it.image } < 4) {
-            launchPicker { photos.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+        // Photos picks pictures and videos (iOS mediaPicker), four together at most.
+        val roomForMedia = state.attachments.count { it.media } < MAX_COMPOSER_MEDIA
+        add(JAction(stringResource(R.string.chat_composer_photos), enabled = service != null && roomForMedia) {
+            launchPicker { photos.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) }
         })
-        add(JAction(stringResource(R.string.chat_composer_take_photo), enabled = service != null && state.attachments.count { it.image } < 4) { takePhoto() })
+        add(JAction(stringResource(R.string.chat_composer_take_photo), enabled = service != null && roomForMedia) { takePhoto() })
         add(JAction(stringResource(R.string.chat_composer_files), enabled = service != null) { launchPicker { files.launch(arrayOf("*/*")) } })
         // Quick messages go out at once; /clear asks first, and only while nothing is running or being cleared.
         extensionPrompts.forEach { prompt -> add(JAction(prompt.title) { menu = false; state.fillQuickPrompt(prompt) }) }
