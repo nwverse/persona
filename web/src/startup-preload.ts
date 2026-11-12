@@ -217,11 +217,11 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * the refusal line's one sentence with the model's short name and its closed Details, the fallback card's one-line
  * title, its Details and the short name while going back, their words). Raise it on purpose, in the change that needs
  * it.
- */
  * From #5760 on, firstScreenBytes also normalizes local bindings (placeholderLocalNames): a minifier renaming a chunk's
- * locals no longer moves the count. The budget is rebased to that measurement below, with no new room for first-screen code.
+ * locals no longer moves the count. On this main, that is 470,502 B en / 474,216 B ja / 471,480 B zh-Hans; the budget
+ * is rebased to the new ja baseline, with 0 B of room. That is a rebase of the measurement, not new room for first-screen code.
  */
-export const FIRST_SCREEN_BUDGET = 593_345;
+export const FIRST_SCREEN_BUDGET = 474_216;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
