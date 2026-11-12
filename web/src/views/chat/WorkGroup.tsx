@@ -20,11 +20,13 @@ import { PlanCard } from "./PlanCard";
 import { Answer } from "./SegmentView";
 import { NoticeRow, Thumb } from "./Steps";
 import { WorkflowCallCard } from "./WorkflowCard";
-import { LiveThinking as LiveThinkingLine, ThinkingRow } from "./ThinkingCard";
+import { LiveThinking as LiveThinkingLine } from "./ThinkingCard";
 import { t } from "../../i18n";
 
 // Subagent cards sit inside the folded work (super rule 2), drawn only once a reader opens it: off the first screen.
 const SubagentCard = lazy(() => import("./SubagentCard").then((m) => ({ default: m.SubagentCard })));
+// Thought rows too (#5155), with their emphasis parser: only an opened summary draws them.
+const ThinkingRow = lazy(() => import("./ThinkingRow").then((m) => ({ default: m.ThinkingRow })));
 // A child session's card (#5120) the same way: drawn only once the work summary it sits in is opened.
 const ChildSessionCard = lazy(() => import("./ChildSessionCard").then((m) => ({ default: m.ChildSessionCard })));
 
@@ -208,7 +210,8 @@ export const StepView = memo(function StepView({ step, p, live, fade }: { step: 
       if (workflowCard(step, p)) return <WorkflowCallCard step={step} mid={p.mid} sid={p.sid} scope={p.scope} />;
       return <ActionRow step={step} running={live && !step.result} mid={p.mid} sid={p.sid} />;
     case "thinking":
-      return <ThinkingRow item={step.item} scope={p.scope} />;
+      // a thought without words is no row: not worth a chunk
+      return step.item.text?.trim() ? <Suspense fallback={null}><ThinkingRow item={step.item} scope={p.scope} /></Suspense> : null;
     case "text":
       return fade ? <FreshAnswer item={step.item} mid={p.mid} sid={p.sid} /> : <Answer item={step.item} mid={p.mid} sid={p.sid} />;
     case "notice":

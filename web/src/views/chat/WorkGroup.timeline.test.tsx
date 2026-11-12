@@ -58,17 +58,20 @@ const title = (g: HTMLElement) => head(g).textContent ?? "";
 const outer = () => groupsShown()[0];
 const inner = () => groupsShown().slice(1);
 const tap = (b: HTMLElement) => act(() => b.click());
+// thought rows come in their own chunk (WorkGroup.tsx lazy): wait for it once something opened
+const loaded = () => act(async () => { await vi.dynamicImportSettled(); });
 const rows = () => [...host.querySelectorAll("[data-action-row]")].map((r) => r.textContent ?? "");
 const thoughtRows = () => [...host.querySelectorAll<HTMLButtonElement>('[data-thinking="words"] > button')];
 
 describe.each(["agents", "assistant"] as const)("%s: the timeline", (style) => {
-  it("a finished turn is one folded line; opened, its narration and inner summaries, each open with every row", () => {
+  it("a finished turn is one folded line; opened, its narration and inner summaries, each open with every row", async () => {
     draw(seg(finished), false, style);
     expect(groupsShown()).toHaveLength(1);
     expect(head(outer()).getAttribute("aria-expanded")).toBe("false");
     expect(host.querySelector("[data-latest-text]")?.textContent).toContain("Final result.");
     expect(host.textContent).not.toContain("Found the setting.");
     tap(head(outer()));
+    await loaded();
     expect(inner()).toHaveLength(2);
     expect(inner().map(title)).toEqual(["已工作 5s", "已工作 7s"]);
     expect(inner().map((g) => head(g).getAttribute("aria-expanded"))).toEqual(["true", "true"]);
@@ -100,9 +103,10 @@ describe.each(["agents", "assistant"] as const)("%s: the timeline", (style) => {
     expect(inner().map((g) => head(g).getAttribute("aria-expanded"))).toEqual(["false", "true"]);
   });
 
-  it("a thought with a line break opens in place to its whole text and stays open after a remount", () => {
+  it("a thought with a line break opens in place to its whole text and stays open after a remount", async () => {
     draw(seg(finished), false, style);
     tap(head(outer()));
+    await loaded();
     const long = thoughtRows()[1];
     expect(long.getAttribute("aria-expanded")).toBe("false");
     tap(long);
@@ -113,16 +117,18 @@ describe.each(["agents", "assistant"] as const)("%s: the timeline", (style) => {
     act(() => root.unmount());
     root = createRoot(host);
     draw(seg(finished), false, style);
+    await loaded();
     expect(thoughtRows()[1].getAttribute("aria-expanded")).toBe("true");
   });
 
-  it("live: the last run is Working… with its own clock, earlier runs are done; nothing opens by itself", () => {
+  it("live: the last run is Working… with its own clock, earlier runs are done; nothing opens by itself", async () => {
     draw(seg(running), true, style);
     expect(groupsShown()).toHaveLength(1);
     expect(title(outer())).toContain("正在工作…");
     expect(head(outer()).getAttribute("aria-expanded")).toBe("false");
     expect(host.querySelector("[data-latest-text]")?.textContent).toContain("Checking once more.");
     tap(head(outer()));
+    await loaded();
     const [done, going] = inner();
     expect(title(done)).toBe("已工作 5s");
     expect(going.dataset.workGroup).toBe("live");
@@ -143,9 +149,11 @@ describe.each(["agents", "assistant"] as const)("%s: the timeline", (style) => {
     expect(host.querySelectorAll('[data-thinking="live"]')).toHaveLength(1);
   });
 
-  it("a search hit in a thought opens the summary, its inner group and the row; Back closes them again", () => {
+  it("a search hit in a thought opens the summary, its inner group and the row; Back closes them again", async () => {
     draw(seg(finished), false, style);
     act(() => revealItem("x:", "th8#0"));
+    // the row's chunk comes in after the summary opened: the hit is still asked for, so it opens on arrival
+    await loaded();
     expect(head(outer()).getAttribute("aria-expanded")).toBe("true");
     expect(head(inner()[1]).getAttribute("aria-expanded")).toBe("true");
     expect(thoughtRows()[1].getAttribute("aria-expanded")).toBe("true");

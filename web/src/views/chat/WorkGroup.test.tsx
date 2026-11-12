@@ -7,7 +7,8 @@ import { ActionRow, argumentLines, DIFF_FOLD_LINES, diffStats, editDiffs, foldDi
 import { latestPlan, PlanCard, PlanList, PlanPill, planSummary } from "./PlanCard";
 import { Answer, bubbleLines, SegmentView, UserBubble } from "./SegmentView";
 import { SubagentCard } from "./SubagentCard";
-import { LiveThinking, ThinkingRow } from "./ThinkingCard";
+import { LiveThinking } from "./ThinkingCard";
+import { ThinkingRow } from "./ThinkingRow";
 import { WorkGroup, type WorkProps } from "./WorkGroup";
 
 const T0 = Date.parse("2026-11-04T10:00:00Z");

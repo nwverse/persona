@@ -10,7 +10,7 @@ import { ActionRow } from "./ActionRow";
 import { ChatContext } from "./chat-context";
 import { ChatSearch } from "./ChatSearch";
 import { revealItem, undoReveals } from "./search-reveal";
-import { ThinkingRow } from "./ThinkingCard";
+import { ThinkingRow } from "./ThinkingRow";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
