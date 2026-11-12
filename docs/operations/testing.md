@@ -1065,12 +1065,14 @@ Cases toggle work at latest/middle, thinking/tools/BeautifulUI tool capsules ins
 At 6 s after launch also measures untapped `idle` control. Mock `MOCK_LONG_HISTORY=1 MOCK_AGENTS=1`.
 Each measurement also has the list's content height per frame (`heights`): the frame what opened or closed went in or out.
 `ToolFoldTests` (#3005, mock `MOCK_TOOL_TURN=1`, `GET /mock/tool_turn?step=call|result|answer|next|reset` pushes one step of a running agent's turn
-at a time) opens the last turn's tool rows and checks they stay open as a step, the answer and the next turn arrive, never going down or past the
-top bar (at the newest end they rise with what comes in, #3757), and that a closed row's space goes within two frames of the tap.
+at a time; twelve finished exchanges, each with a work line, before it) opens the last turn's tool rows and checks they stay open as a step, the
+answer and the next turn arrive, the row tapped last never going down or past the top bar (at the newest end it rises with what comes in, #3757),
+and that a closed row's space goes within two frames of the tap.
 Each measurement also says where the row was at the tap (`from`), the list's distance from its newest end when it ended (`gap`) and how high a
 row there may rise (`top`, `ChatPin.riseTop`). `KeepTappedRowTests` (#3757, docs/design/DESIGN_SYSTEM.md 4.7.1) checks the rule in Persona's chat
 (`PERSONA_FOLDS_HUB`: `MOCK_LONG_ASSISTANT=1 MOCK_FOLD_DELAY=0.8`, its work folded by the hub and fetched late when opened) and an Agent's
-(`PERSONA_MOCK_HUB`, as `UnfoldTests`): in the middle and at the oldest end the tapped row stays within 2 pt; at the newest end one opened only
+(`PERSONA_MOCK_HUB` at the newest end, as `UnfoldTests`; `PERSONA_TOOL_TURN_HUB` in the middle and at the oldest end, where the long history has
+no work line): in the middle and at the oldest end the tapped row stays within 2 pt; at the newest end one opened only
 rises, at most to the top bar, the newest end on screen until it gets there, and one closed takes the list back to the newest end.
 
 - Don't query App during measurement: each XCUITest accessibility snapshot occupies main thread; polling 0.1 s makes taps "drop" 15–20 frames, quiet 2.2 s then reading gives 0–3.

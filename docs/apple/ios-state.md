@@ -401,6 +401,10 @@ Why it works this way:
   newest end pushed the newest end off below the composer, and the chat seemed to stop following. Now it rises with what opened, as a work line opened there
   always has (#1173), and with what comes in after, until it is under the top bar; only then does the newest end leave the screen and ↓ show. A run of tool
   chips does the same, and a work line follows the same rule closed (`changeWork`). Closed at the newest end while following, a row leaves the chat following: the pin glides the list back to the newest end.
+- **At the oldest end the list goes past its old length at once** (`ChatPin.known`, #3757): the scroll view's content size follows the rows a pass
+  late, and the pin bounded where the list may go by the held header's far edge only. At the oldest end that kept the list a frame or two short of
+  where the header needed it, which showed the header 116–150 pt up as a work line opened there and again as its steps came in. The bound is now the
+  header's far edge plus whatever lay beyond it when the hold began: what opens or closes lies between the header and the newest end.
 - **The hold waits for what comes from the hub** (`ChatPin.awaiting`, #3757): a work line the hub folded fetches its steps when opened, and on a phone's network
   they arrived a second after the tap, after the pin had stopped watching the content (0.72 s) and nearly at the end of its hold. Inserted under the header in one
   pass, they pushed it past the top of the screen, out of the lazy list; nothing put it back and the list fell onto a later message. `FoldedWorkRow`'s fetch

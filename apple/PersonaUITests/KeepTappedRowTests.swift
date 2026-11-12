@@ -8,13 +8,16 @@ import XCTest
 ///   Persona's main conversation: PORT=… MOCK_LONG_ASSISTANT=1 MOCK_FOLD_DELAY=0.8 python3 scripts/mock/mock_hub.py
 ///   (`PERSONA_FOLDS_HUB`, else `PERSONA_MOCK_HUB`): sixty finished turns, each one's work folded by the hub and its
 ///   steps fetched when it is opened, a moment later.
-///   An Agent's chat: PORT=… MOCK_LONG_HISTORY=1 MOCK_AGENTS=1 python3 scripts/mock/mock_hub.py (`PERSONA_MOCK_HUB`),
-///   as `UnfoldTests`.
+///   An Agent's chat at its newest end: PORT=… MOCK_LONG_HISTORY=1 MOCK_AGENTS=1 python3 scripts/mock/mock_hub.py
+///   (`PERSONA_MOCK_HUB`), as `UnfoldTests`; in the middle and at its oldest end, where that one has no work line:
+///   PORT=… MOCK_TOOL_TURN=1 python3 scripts/mock/mock_hub.py (`PERSONA_TOOL_TURN_HUB`, as `ToolFoldTests`), twelve
+///   finished exchanges with a work line each before a running turn.
 final class KeepTappedRowTests: XCTestCase {
     private var app: XCUIApplication!
     private var page = "assistant"
     private static let main = "server/b2e4d6f8-0000-4000-8000-000000000001"
     private static let widget = "macbook/a1f3c2d4-0000-4000-8000-000000000001" // long history, a work line in the last turn
+    private static let toolTurn = "macbook/a1f3c2d4-0000-4000-8000-0000000000f5" // a work line in every turn
 
     private struct Result: Decodable {
         var what: String
@@ -73,6 +76,16 @@ final class KeepTappedRowTests: XCTestCase {
         }
         app = XCUIApplication()
         launch(["-pairURL", pair(hub), "-openChatsFresh", "YES", "-app.tab", "chats", "-tab", "dev", "-dev.openChat", Self.widget],
+               page: "agents")
+    }
+
+    /// An Agent's chat with a work line in every turn (`MOCK_TOOL_TURN=1`), the turns before the running one finished.
+    private func launchAgentTurns() throws {
+        guard let hub = ProcessInfo.processInfo.environment["PERSONA_TOOL_TURN_HUB"] else {
+            throw XCTSkip("needs MOCK_TOOL_TURN=1 (PERSONA_TOOL_TURN_HUB)")
+        }
+        app = XCUIApplication()
+        launch(["-pairURL", pair(hub), "-openChatsFresh", "YES", "-app.tab", "chats", "-tab", "dev", "-dev.openChat", Self.toolTurn],
                page: "agents")
     }
 
@@ -157,14 +170,17 @@ final class KeepTappedRowTests: XCTestCase {
         sleep(1)
     }
 
-    /// Back to the oldest end: swiped until the headers on screen stop moving (each swipe may load an older page).
-    /// Twice in a row unchanged: a page still loading leaves it unchanged once.
+    /// Back to the oldest end: swiped until what is on screen stops moving (each swipe may load an older page): the work
+    /// line headers, and the first texts, since a screen there may hold no header. Twice in a row unchanged: a page still
+    /// loading leaves it unchanged once.
     private func toOldest() {
         var was: [Int] = [], same = 0
         for _ in 0..<80 {
             app.swipeDown(velocity: .fast)
             sleep(1)
-            let now = app.buttons.matching(identifier: "work-head").allElementsBoundByIndex.map { Int($0.frame.minY) }.sorted()
+            let on = app.buttons.matching(identifier: "work-head").allElementsBoundByIndex
+                + app.staticTexts.allElementsBoundByIndex.prefix(6)
+            let now = on.map { Int($0.frame.minY) }.sorted()
             same = !now.isEmpty && now == was ? same + 1 : 0
             if same >= 2 { return }
             was = now
@@ -207,7 +223,7 @@ final class KeepTappedRowTests: XCTestCase {
     // MARK: An Agent's chat
 
     @MainActor func testAgentInTheMiddle() throws {
-        try launchAgent()
+        try launchAgentTurns()
         for _ in 0..<2 { app.swipeDown() }
         sleep(3)
         guard let work = middleHeader() else { return XCTFail("no work line on screen after scrolling back") }
@@ -224,7 +240,7 @@ final class KeepTappedRowTests: XCTestCase {
     }
 
     @MainActor func testAgentAtTheOldestEnd() throws {
-        try launchAgent()
+        try launchAgentTurns()
         toOldest()
         sleep(2)
         guard let work = highestHeader() else { return XCTFail("no work line on screen at the oldest end") }

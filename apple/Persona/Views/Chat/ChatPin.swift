@@ -214,7 +214,7 @@ import SwiftUI
         // its plan back as the pill over the composer, the list's bottom edge 40 pt up a pass after the fold started the
         // glide: the glide kept its way, and the header showed 40 pt up for a frame before it glided down.
         path.from -= d
-        path.to = Self.within(list, want, content: reach)
+        path.to = Self.within(list, want, content: known(reach))
         glidePath = path
         glideTo(list, at: CACurrentMediaTime())
     }
@@ -286,7 +286,7 @@ import SwiftUI
         if let g = gliding, Date.now < g { want = goal; return }
         // Folded at the newest end, the list cannot keep the header where it was: it stays for this frame and the list
         // glides to where it can be. In one frame it went 400–470 pt down (#1123).
-        let still = h.base + grown, target = Self.within(list, goal, content: spot.content)
+        let still = h.base + grown, target = Self.within(list, goal, content: known(spot.content))
         if !h.glided, target - still >= 0.5, !Theme.Motion.reduced {
             var h = h
             h.glided = true
@@ -423,7 +423,7 @@ import SwiftUI
     private func keepHeld() {
         guard let h = held, h.reported, h.until == .distantFuture, glidePath == nil, gliding == nil, let list,
               !list.isTracking, !list.isDecelerating, let spot = last[h.key] else { return }
-        let target = Self.within(list, wanted(h, grown: spot.content - h.at.content), content: max(reach, spot.content))
+        let target = Self.within(list, wanted(h, grown: spot.content - h.at.content), content: known(max(reach, spot.content)))
         if abs(list.contentOffset.y - target) >= 0.5 { list.contentOffset.y = target }
     }
 
@@ -462,9 +462,19 @@ import SwiftUI
     /// The list goes as near `want` as it can now.
     private func put(_ list: UIScrollView) {
         guard let want else { return }
-        let target = Self.within(list, want, content: reach)
+        let target = Self.within(list, want, content: known(reach))
         if abs(target - list.contentOffset.y) >= 0.5 { list.contentOffset.y = target }
         if abs(target - want) < 0.5 { self.want = nil }
+    }
+
+    /// How long the content is known to be, the held header's far edge at `edge` in it (`within`): beyond that edge, as
+    /// long as when the hold began, since what opens or closes lies between the header and the newest end. Bounded by the
+    /// edge alone, the list at the oldest end could not go as far as the header needed until the content size followed a
+    /// pass later: the header showed 116–150 pt up for a frame or two as a work line opened there, and again as its steps
+    /// came in from the hub (#3757).
+    private func known(_ edge: CGFloat) -> CGFloat {
+        guard let h = held else { return edge }
+        return edge + max(h.height - h.at.content, 0)
     }
 
     /// The list's content size follows its rows a pass late: just after a work line's steps came in, the list could not
@@ -485,9 +495,9 @@ import SwiftUI
         }
     }
 
-    /// An offset the list can be at. `content`: how long the content is known to be (the header's far edge in it): the
-    /// rows are laid out a pass before the scroll view's content size follows, and capped by the old size the list
-    /// stayed at the newest end for a frame, on steps still fading in: blank (#754).
+    /// An offset the list can be at. `content`: how long the content is known to be (`known`): the rows are laid out a
+    /// pass before the scroll view's content size follows, and capped by the old size the list stayed at the newest end
+    /// for a frame, on steps still fading in: blank (#754).
     private static func within(_ list: UIScrollView, _ y: CGFloat, content: CGFloat = 0) -> CGFloat {
         let inset = list.adjustedContentInset
         let height = max(list.contentSize.height, content)

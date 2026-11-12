@@ -1,9 +1,9 @@
 import XCTest
 
 /// The last turn's tool rows in an agent's chat, opened and closed while the agent keeps working (#3005): what is open
-/// stays open as steps arrive, as the turn ends and as the next one starts; the rows the user reads never go down or
-/// off the screen (at the newest end they rise with what comes in, up to the top bar, #3757); a row closes at once,
-/// leaving no blank space and no fading copy of what it showed.
+/// stays open as steps arrive, as the turn ends and as the next one starts; the row tapped last never goes down or off
+/// the screen (at the newest end it rises with what comes in, up to the top bar, #3757); a row closes at once, leaving
+/// no blank space and no fading copy of what it showed.
 ///   PORT=18951 MOCK_TOOL_TURN=1 python3 scripts/mock/mock_hub.py
 ///   TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:18951 xcodebuild test … -only-testing:PersonaUITests/ToolFoldTests
 /// `PERSONA_TOOL_TURN_HUB` comes first, so one run can take these tests and others with a mock of their own.
@@ -144,32 +144,34 @@ final class ToolFoldTests: XCTestCase {
         XCTAssertTrue(text(readOutput).exists, "still open after the step's result came in")
         assertKept(read, from: y, top: open?.top, "a result came in")
 
-        // A second row opened: both stay open.
+        // A second row opened: both stay open. From here the row tapped last is the one kept: at the newest end it rises
+        // with what comes in, up to the top bar, the first one above it going up with it (#3757).
         _ = tap(find)
         XCTAssertTrue(text(findOutput).exists, "the second row shows its output")
         XCTAssertTrue(text(readOutput).exists, "the first one still does")
-        var y2 = read.frame.minY
+        var y2 = find.frame.minY
 
         // The turn ends with the answer, then the queued message starts the next one.
         mock("answer")
         XCTAssertTrue(text("静音开关（#2036）还没开始").waitForExistence(timeout: 5), "the answer shows")
         sleep(2)
         XCTAssertTrue(text(readOutput).exists && text(findOutput).exists, "both rows still open after the turn ended")
-        assertKept(read, from: y2, top: open?.top, "the turn ended")
-        y2 = read.frame.minY
+        assertKept(find, from: y2, top: open?.top, "the turn ended")
+        y2 = find.frame.minY
         mock("next")
         sleep(3)
         XCTAssertTrue(text(readOutput).exists && text(findOutput).exists, "both rows still open after the next turn started")
-        assertKept(read, from: y2, top: open?.top, "the next turn started")
+        assertKept(find, from: y2, top: open?.top, "the next turn started")
 
-        // Closed: gone at once with its space (no blank, no fading copy): the rows under it come up, or, at the newest
-        // end, the closed row comes down to them (#3757); the row under it never goes down.
-        let yFind = find.frame.minY
-        let closed = tap(read)
-        XCTAssertFalse(text(readOutput).exists, "the closed row's output is gone")
-        XCTAssertTrue(text(findOutput).exists, "the other row stays open")
-        XCTAssertLessThanOrEqual(find.frame.minY, yFind + 2, "the row under it did not go down")
-        assertAtOnce(closed, "close read after the next turn")
+        // Closed, the row tapped last: gone at once with its space (no blank, no fading copy): the rows under it come
+        // up, or, at the newest end, the closed row comes down to them (#3757); the row under it never goes down.
+        let under = row("Ask the lane for its status")
+        let yUnder = under.frame.minY
+        let closed = tap(find)
+        XCTAssertFalse(text(findOutput).exists, "the closed row's output is gone")
+        XCTAssertTrue(text(readOutput).exists, "the other row stays open")
+        XCTAssertLessThanOrEqual(under.frame.minY, yUnder + 2, "the row under it did not go down")
+        assertAtOnce(closed, "close find after the next turn")
     }
 
     /// The list's height changed within two frames of the tap: what closed (or opened) went with its space at once,
