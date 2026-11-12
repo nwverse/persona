@@ -24,8 +24,10 @@ That evening it briefly became view-only (abc18a9: removed key bar, typing and c
 - Each frame uses synchronized output (`ESC[?2026h … ESC[?2026l`), ending with cursor position and visibility (`ESC[45;16H ESC[?25h`): **there is a cursor**, with live typing echo.
 - Few sequences: CUP, ED(2J), SGR (full forms such as `0;1;38;5;N;49m`), DECTCEM, 2026, OSC 8 links (`ESC]8;;url ESC\`, passed through unchanged).
 - **`--cols/--rows` must equal pane dimensions**: smaller crops the top-left (not reflow); larger adds blank space. Without flags, uses the caller's terminal size.
-  Pane size comes from `rect` in `pane.layout`; resizing a pane makes herdr send another `full` frame, but still at the dimensions specified when observing, so after `layout.updated` the node
-  must reopen observe at the new size.
+  The node takes the size from the pane's terminal (`herdr.Client.TermSize`: `pane.process_info`'s shell → its tty's window size; macOS through `sysctl kern.proc.pid`, Linux through `/proc`, no process started),
+  with `rect` in `pane.layout` as the fallback. The layout alone is right only while a herdr client is attached: with none it reports herdr's headless default (120×40) while the pane keeps the last client's size,
+  and observing at 120×40 a pane that is really 193×59 lost the right edge and the bottom rows (measured, herdr 0.9.3, #5409). Resizing a pane makes herdr send another `full` frame, but still at the dimensions
+  specified when observing, so the node checks the size every 2 s and reopens observe at the new size.
 - Observers see the screen currently displayed in the pane: if someone scrolls up on the computer (herdr scroll offset), observers see that scrolled content too; same for alternate screen (whatever herdr displays).
 - OSC 52 (clipboard write) and bells from the program are handled by herdr and **never appear in the stream**; title comes from `terminal_title` in `pane.get`.
   Tested on herdr 0.9.5 on 2026-11-04 for observe, control and `terminal attach`; see section 18.
