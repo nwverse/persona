@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run internal/node's tests in concurrent `go test -run` partitions (docs/operations/testing.md, "Server tests").
+"""Run internal/node's tests in concurrent `go test -run` partitions (docs/operations/testing.md, "Hosted CI").
 
 internal/node runs about 2,400 top-level tests one after another (almost none call t.Parallel), so its serial run
 outgrew Go's ten-minute -timeout and CI's ten-minute step. CI's node shard (scripts/ci/server-shards.py) and the release

@@ -123,6 +123,7 @@ export const Composer = memo(function Composer({
   onFocusChange,
   blocked,
   voice,
+  top,
 }: {
   draftKey: string;
   placeholder: string;
@@ -163,6 +164,9 @@ export const Composer = memo(function Composer({
   /** Voice chat (docs/web/web.md "Voice"): with an empty box and an idle agent it takes the send button's place, round;
    *  otherwise it is a plain icon before send / stop. "explain": its click says why a call cannot start here. */
   voice?: VoiceOffer;
+  /** First in the card, flush with its top and edges, a hairline under it: the chat's queued messages (QueuePanel.tsx,
+   *  cindy's pending queue, #5327). Keep it the same object while nothing in it changes, as `footer`. */
+  top?: React.ReactNode;
 }) {
   const [draft, setDraft] = useState(() => storedValue(`draft:${draftKey}`) ?? "");
   const [atts, setAtts] = useState<Attachment[]>([]);
@@ -727,6 +731,8 @@ export const Composer = memo(function Composer({
           dragging ? "border-accent shadow-[0_0_0_3px_var(--accent-tint)]" : "border-line",
         )}
       >
+        {/* out to the card's border over its padding; nothing drawn yet (its chunk on the way), no gap either */}
+        {top && <div data-composer-top className="-mx-1.5 -mt-1.5 empty:hidden">{top}</div>}
         {editingLast && (
           <div role="status" data-testid="composer-editing" className="flex min-w-0 items-center gap-1.5 pt-0.5 pr-0.5 pl-2 text-[11.5px] whitespace-nowrap" style={{ animation: "fade-in 160ms ease-out both" }}>
             <Icon name="pencil" size={12} stroke={2.2} className="shrink-0 text-accent-ink" />
