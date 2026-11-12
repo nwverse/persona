@@ -29,6 +29,8 @@ data class OutboxEntry(
     val mainTarget: Boolean = false,
     /** The operation id of the next attempt when it is no longer [clientMessageId] (the hub said none was delivered). */
     val opId: String? = null,
+    /** It carries out the session's waiting launcher switch ([persona.core.contracts.api.MessageSender.sendApplyingSwitch]). */
+    val applySwitch: Boolean = false,
 ) {
     val operationId: String get() = opId ?: clientMessageId
 }

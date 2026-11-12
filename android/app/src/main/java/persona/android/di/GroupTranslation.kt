@@ -169,6 +169,7 @@ internal fun ChatActions.inGroup(names: GroupNames): ChatActions {
         override suspend fun editQueue(session: Session, keep: List<Int>) = source.editQueue(names.rawSession(session), keep)
         override suspend fun sendQueuedNow(session: Session) = source.sendQueuedNow(names.rawSession(session))
         override suspend fun info(session: Session) = source.info(names.rawSession(session))
+        override suspend fun completeRow(session: Session) = source.completeRow(names.rawSession(session))?.let(names::session)
         override suspend fun interactionHistory(session: Session) = source.interactionHistory(names.rawSession(session))
             .map { it.copy(interaction = names.interaction(it.interaction)) }
         override suspend fun restoreModel(session: Session) = source.restoreModel(names.rawSession(session))
@@ -256,6 +257,9 @@ internal fun AssistantManagement.inGroup(names: GroupNames): AssistantManagement
             source.updateConfig(update.copy(machineId = update.machineId?.let(names::rawMachine)))
                 .let { it.copy(machineId = names.machineId(it.machineId)) }
         override suspend fun launchers(machineId: String) = source.launchers(names.rawMachine(machineId))
+        override suspend fun assistantLaunchers(machineId: String) = source.assistantLaunchers(names.rawMachine(machineId))
+        override suspend fun setModelPick(session: SessionKey, pick: persona.core.contracts.ModelPick) = source.setModelPick(names.raw(session), pick)
+        override suspend fun clearModelPick(session: SessionKey) = source.clearModelPick(names.raw(session))
         override suspend fun endConversation(session: SessionKey) = source.endConversation(names.raw(session))
         override suspend fun compactConversation(session: SessionKey) = source.compactConversation(names.raw(session))
         override suspend fun archiveConversation(session: SessionKey) = source.archiveConversation(names.raw(session))
@@ -311,6 +315,7 @@ internal fun AssistantConversations.inGroup(names: GroupNames, scope: CoroutineS
         override suspend fun refresh() = source.refresh()
         override suspend fun startConversation() = names.key(source.startConversation())
         override suspend fun startConversation(launcher: String) = names.key(source.startConversation(launcher))
+        override suspend fun startConversation(pick: persona.core.contracts.ModelPick) = names.key(source.startConversation(pick))
         // another manager's main conversation (docs/assistant/managers.md step 4), in this group's merged ids
         override suspend fun mainConversationOf(manager: String) = names.key(source.mainConversationOf(manager))
         override suspend fun spaceConversations(space: String) = source.spaceConversations(space).map(names::session)

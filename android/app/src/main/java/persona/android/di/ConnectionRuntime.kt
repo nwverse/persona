@@ -201,6 +201,12 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
                 checkNotNull(group.data) { AppText.get(R.string.app_error_pair_first) }.messages.send(GroupKeys.rawKey(session), text, clientMessageId, clearDraft)
             }
         }
+        override suspend fun sendApplyingSwitch(session: SessionKey, text: String, clientMessageId: String) {
+            gate.withLock {
+                val group = groupOf(session.machineId) ?: throw IllegalStateException(AppText.get(R.string.app_error_pair_first))
+                checkNotNull(group.data) { AppText.get(R.string.app_error_pair_first) }.messages.sendApplyingSwitch(GroupKeys.rawKey(session), text, clientMessageId)
+            }
+        }
         override suspend fun cancel(clientMessageId: String) = gate.withLock {
             owner(clientMessageId)?.messages?.cancel(clientMessageId) ?: false
         }

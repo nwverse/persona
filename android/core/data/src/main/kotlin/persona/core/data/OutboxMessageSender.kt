@@ -141,11 +141,17 @@ class OutboxMessageSender(
     /** Tells the outbox which sessions are at work (the pairing's session list). */
     fun connectActivity(busy: (SessionKey) -> Boolean) { this.busy = busy }
 
-    override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?) = lifecycle.withLock {
+    override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?) =
+        enqueue(OutboxEntry(clientMessageId, session, text, clearDraft, createdAt = now()))
+
+    override suspend fun sendApplyingSwitch(session: SessionKey, text: String, clientMessageId: String) =
+        enqueue(OutboxEntry(clientMessageId, session, text, createdAt = now(), applySwitch = true))
+
+    private suspend fun enqueue(entry: OutboxEntry) = lifecycle.withLock {
         check(job.isActive) { "Pairing scope is closed" }
-        require(text.isNotBlank() && clientMessageId.isNotBlank())
-        require(session.machineId.isNotBlank() && session.sessionId.isNotBlank())
-        store.enqueue(OutboxEntry(clientMessageId, session, text, clearDraft, createdAt = now()))
+        require(entry.text.isNotBlank() && entry.clientMessageId.isNotBlank())
+        require(entry.session.machineId.isNotBlank() && entry.session.sessionId.isNotBlank())
+        store.enqueue(entry)
         wake.trySend(Unit)
         Unit
     }
@@ -458,7 +464,8 @@ class OutboxMessageSender(
     private class Stall(val giveUp: Job, var code: String?)
 
     private fun request(entry: OutboxEntry) =
-        MessageRequest(hubScope, entry.session, entry.text, entry.clientMessageId, entry.clearDraft, opId = entry.operationId)
+        MessageRequest(hubScope, entry.session, entry.text, entry.clientMessageId, entry.clearDraft, opId = entry.operationId,
+            applySwitch = entry.applySwitch)
 
     private sealed interface MainTarget {
         data class Found(val session: SessionKey) : MainTarget

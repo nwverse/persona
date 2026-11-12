@@ -18,6 +18,8 @@ data class MessageRequest(
      * until the hub answered an attempt as not delivered, then a new one (the hub replays the first answer for an id).
      */
     val opId: String = clientMessageId,
+    /** The user's message that carries out the session's waiting launcher switch first (`apply_switch`, #5035). */
+    val applySwitch: Boolean = false,
 ) {
     val headers: Map<String, String> get() = ProtocolCompatibility.operationHeaders(opId)
 }

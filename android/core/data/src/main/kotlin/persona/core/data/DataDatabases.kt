@@ -35,6 +35,8 @@ data class OutboxRow(
     @ColumnInfo(defaultValue = "0") val main_target: Boolean = false,
     /** Null: the next attempt goes under client_msg_id. */
     val op_id: String? = null,
+    /** The message carries out the session's waiting launcher switch (`apply_switch`, #5035). */
+    @ColumnInfo(defaultValue = "0") val apply_switch: Boolean = false,
 )
 
 @Entity(tableName = "drafts", primaryKeys = ["scope", "machine", "session"])
@@ -110,8 +112,9 @@ interface PersistentDao {
     suspend fun adoptMessage(row: OutboxRow): Long
 }
 
-@Database(entities = [OutboxRow::class, DraftRow::class, MainConversationRow::class], version = 4,
-    autoMigrations = [AutoMigration(from = 1, to = 2), AutoMigration(from = 2, to = 3), AutoMigration(from = 3, to = 4)],
+@Database(entities = [OutboxRow::class, DraftRow::class, MainConversationRow::class], version = 5,
+    autoMigrations = [AutoMigration(from = 1, to = 2), AutoMigration(from = 2, to = 3), AutoMigration(from = 3, to = 4),
+        AutoMigration(from = 4, to = 5)],
     exportSchema = true)
 abstract class PersistentDatabase : RoomDatabase() {
     abstract fun records(): PersistentDao
@@ -121,7 +124,8 @@ class RoomOutboxStore(private val database: PersistentDatabase, private val scop
     private val dao = database.records()
     override val entries = dao.observeOutbox(scope.path).map { rows -> rows.map { row ->
         OutboxEntry(row.client_msg_id, SessionKey(row.machine, row.session), row.text, row.clear_draft,
-            OutboxState.entries.single { it.wire == row.state }, row.error, row.created_at, row.main_target, row.op_id)
+            OutboxState.entries.single { it.wire == row.state }, row.error, row.created_at, row.main_target, row.op_id,
+            applySwitch = row.apply_switch)
     } }
 
     override suspend fun enqueue(entry: OutboxEntry) = enqueueDraft(entry, null)
@@ -145,7 +149,7 @@ class RoomOutboxStore(private val database: PersistentDatabase, private val scop
             dao.insertMessage(OutboxRow(scope = scope.path, machine = target.machineId,
                 session = target.sessionId, client_msg_id = entry.clientMessageId, text = entry.text,
                 clear_draft = entry.clearDraft, state = OutboxState.Queued.wire, error = null,
-                created_at = entry.createdAt, main_target = entry.mainTarget))
+                created_at = entry.createdAt, main_target = entry.mainTarget, apply_switch = entry.applySwitch))
         }
     }
 
