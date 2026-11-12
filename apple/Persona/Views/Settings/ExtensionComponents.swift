@@ -46,7 +46,7 @@ struct ExtensionComponentRowLabel<Trailing: View>: View {
         if let v = row.value, !v.isEmpty { ExtensionChangingText(v).font(Theme.Font.body.monospacedDigit()).foregroundStyle(.secondary).lineLimit(lines) }
         if let b = row.badge {
             // Drawn again with another tone, its colors change; with other words, they fade in (#37).
-            Chip(text: b.text, look: b.tone == nil || b.tone == "neutral" ? .neutral : .tint(ExtensionUIStyle.tone(b.tone)))
+            Chip(text: b.text, look: ExtensionUIStyle.badge(b))
                 .contentTransition(.opacity)
                 .animation(reduceMotion ? nil : Theme.Motion.state, value: b)
         }
@@ -70,6 +70,9 @@ struct ExtensionComponentRowLabel<Trailing: View>: View {
             .scaledFrame(width: Theme.Size.wellL, height: Theme.Size.wellL)
             .clipShape(.circle)
             .accessibilityHidden(true)
+        } else if let i = row.icon, !i.isEmpty, let hue = ExtensionUIStyle.color(row.iconColor) {
+            // UI version 6: its named color on the app's tile.
+            IconTile(ExtensionUIStyle.icon(i), tint: hue).accessibilityHidden(true)
         } else if let i = row.icon, !i.isEmpty {
             // The icon and its column stop growing at the largest standard size, where the glyph still fits: past it the
             // glyph followed the text to 3 × while the column stopped at `sizeScale`'s 1.6 ×, and spilled into the
@@ -237,7 +240,7 @@ struct ExtensionEmpty: View {
 
     var body: some View {
         EmptyStateView(symbol: ExtensionUIStyle.icon(empty.icon), title: empty.title, message: empty.detail ?? "",
-                       action: button)
+                       action: button, tint: ExtensionUIStyle.color(empty.iconColor))
             .frame(maxWidth: .infinity)
             .listRowBackground(Color.clear)
             .accessibilityIdentifier("plugin-ui-empty")

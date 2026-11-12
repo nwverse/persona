@@ -108,6 +108,7 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
                     worktrees = wiring?.worktrees,
                     assistantManagement = assistantManagement,
                     onOpenSession = { navigator.navigate(ChatRoute(it.machineId, it.sessionId)) },
+                    onFollowSession = { onGroupGone(route, route.copy(machineId = it.machineId, sessionId = it.sessionId)) },
                     waiting = waiting,
                     onOpenRequest = { chat, request ->
                         val target = waitingRoute(chat, request)

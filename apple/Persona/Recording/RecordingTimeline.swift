@@ -82,12 +82,12 @@ nonisolated enum RecordingTimeline {
 
     private struct SentenceKey: Hashable { var segment: Int; var millis: Int }
 
-    /// The sentences of `segments` in order, each with the segment it came from; a line Persona's own voice put on the
-    /// recording (`RecordingAttendance.spokenBy`) is left out, as everywhere else.
+    /// The sentences of `segments` in order, each with the segment it came from; Persona's echo
+    /// (`RecordingAttendance.echo`) is left out, as everywhere the transcript is shown.
     static func sentences(of entry: RecordingEntry) -> [Sentence] {
         entry.segments.sorted { $0.index < $1.index }.flatMap { segment in
             (segment.sentences ?? []).compactMap { line -> Sentence? in
-                if let attendance = entry.attendance, !attendance.spoken.isEmpty, attendance.spokenBy(line) { return nil }
+                if let attendance = entry.attendance, !attendance.spoken.isEmpty, attendance.echo(line) { return nil }
                 return Sentence(segment: segment.index, start: line.start, text: line.text)
             }
         }

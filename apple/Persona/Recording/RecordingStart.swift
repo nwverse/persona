@@ -1,32 +1,6 @@
 #if os(iOS)
 import SwiftUI
 
-/// Meeting or Note (#5243, docs/apple/recording.md「Meeting recordings」): what Record makes. A meeting gets minutes and
-/// Persona can attend it (`kind: meeting`); a note gets neither (`kind: note`). Record is always a meeting unless Note is
-/// picked for that one start on the Recordings page, and the live sheet's page menu switches a running recording either way
-/// (`MeetingRecorder.setMeeting`). Never a stored setting: every one-tap start elsewhere is a meeting.
-enum RecordingKindChoice: String, CaseIterable, Hashable {
-    case meeting
-    case note
-
-    init(_ entry: RecordingEntry) { self = entry.isMeeting ? .meeting : .note }
-
-    var title: String {
-        switch self {
-        case .meeting: String(localized: "Meeting")
-        case .note: String(localized: "Note [Recording Kind]")
-        }
-    }
-
-    /// The mark the recording's row carries for it (`RecordingRow`).
-    var symbol: String {
-        switch self {
-        case .meeting: Theme.Icon.meeting
-        case .note: Theme.Icon.recording
-        }
-    }
-}
-
 /// What one tap of Record starts on the Recordings page (`RecordingCaptureControls`).
 enum RecordingStart: Equatable {
     /// `MeetingRecorder.startMeeting` with Persona's part; nil when the hub doesn't offer attending (the one-tap default).

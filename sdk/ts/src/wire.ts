@@ -4864,6 +4864,12 @@ export interface KBRecordingSegment {
    * absent on other recordings.
    */
   n?: number;
+  /**
+   * The line is Persona's own answer as the meeting's microphone heard it (docs/assistant/meeting-minutes.md
+   * "Persona's echo"): kept in the transcript but not what the meeting said, so leave it out of anything read as the
+   * meeting's words; absent (false) on every other line.
+   */
+  echo?: boolean;
 }
 
 /**
