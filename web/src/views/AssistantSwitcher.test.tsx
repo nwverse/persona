@@ -214,9 +214,9 @@ describe("the sidebar's assistant switcher", () => {
   });
 
   it("shows a renamed sole assistant's identity even when it is not built in and is offline", async () => {
-    setRoster({ default: "m-only", managers: [{ id: "m-only", name: "Personal assistant name", online: false }] });
+    setRoster({ default: "m-only", managers: [{ id: "m-only", name: "Home helper", online: false }] });
     await render();
-    expect(head().textContent).toContain("Personal assistant name");
+    expect(head().textContent).toContain("Home helper");
     expect(head().textContent).toContain("离线");
     expect(head().textContent).not.toContain("Persona");
     expect(head().getAttribute("data-assistant-switcher")).toBe("m-only");
@@ -224,7 +224,7 @@ describe("the sidebar's assistant switcher", () => {
     expect(head().querySelector("[data-avatar-status=grey]")).not.toBeNull();
     await open();
     expect(document.body.querySelectorAll("[role=menuitemradio]")).toHaveLength(1);
-    expect(row("Personal assistant name").textContent).toContain("离线");
+    expect(row("Home helper").textContent).toContain("离线");
   });
 
   it("shows one installed and one installing assistant in the roster, still without counts", async () => {
