@@ -69,6 +69,12 @@ The web production build typechecks test files. A JSON fixture imported from `sp
 whole checkout and can pass while the Docker build fails with TS2307. The Docker entrypoint suite now checks
 shared JSON imports, including globs, against both files, catching new fixture groups before an image build.
 
+Checking was not enough (2026-11-12, #5197): PRs run no hosted CI, so #4968 merged a test reading
+`spec/fixtures/forward/` with neither line, and every image build from `main` failed, the fourth time after #2666,
+#2517 and #4260. The image now carries all of `spec/fixtures/` (about 2 MB, web stage only) with one exception and one
+`COPY`, and the guard checks that no per-folder lines come back. A fixture-only change now rebuilds the web stage; that
+cost is smaller than a broken image. When something has to be listed by hand in two files, prefer a rule that needs no list.
+
 ## Sharing frontiers and migration lanes (#3604)
 
 - Migration numbers are global across the hub and manager sets, even though their
@@ -1924,3 +1930,9 @@ computer every 2 s): the manager allocated 555 MB and used about 2.1 s of CPU a 
   `ConnState`, and move the gaps with `synctest.Sleep`. The transport's idle timer and pings then run on the fake clock
   (`TestRelayPushesKeepOneConnection`, `TestSendsKeepOneConnection`). Register the server's and transport's shutdown
   with `t.Cleanup`, or a failed assertion ends in a synctest deadlock panic.
+
+## `exec.CommandContext` cancels only while the process runs (2026-11-11, #4363)
+
+- `cmd.Cancel` runs only when the context ends before the process exits. A shell that exits at once and leaves a background child holding its stdout or stderr (`sleep 4 & echo $!`) keeps `Wait` reading the pipe until that child exits or `WaitDelay`, counted from the shell's exit, closes it: the deadline passes unnoticed. `secret.run` held a 1-second run for 4 seconds, and the next command, which could no longer start, came back as timed out.
+- Watch the context for as long as `Wait` runs and stop the group at the deadline, sharing one "stopped" flag with `Cancel` so the group gets one SIGTERM (`runSecretCommand`). Classify the result by that flag, not the exit status: the shell exited 0.
+- A command that never started because the time was used up gets no result. A timed-out result for it reads as a command that ran and was stopped, and makes the Agent check the computer for one that never ran.

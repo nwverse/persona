@@ -129,6 +129,47 @@ The main conversation folds the rounds it did not start, as web and iOS do (rule
 - **Tests**: `BackgroundRoundsTest` (core/domain), `AssistantSettingsStateTest.backgroundFoldSwitchSavesAndComesBackOnFailure`,
   `HttpSettingsParityWireTest.mainBackgroundFoldedIsSentOnlyWhenSetAndOnWhenMissing`.
 
+#### The background supervisor (#5084)
+
+Where the built-in background supervisor shows (what it is:
+[unified-entry.md](../assistant/unified-entry.md#background-supervisor-4927)). Everything here follows fields of
+`GET /api/v1/assistant` and is absent against a hub that does not send them.
+
+- **Its conversation**: `AssistantSnapshot.backgroundSupervisor` (`background_supervisor`, `backgroundSupervisorOf`).
+  This app's drawer has no group of its own for scheduled tasks' conversations: they wait under **All chats** with
+  every other conversation Persona opened itself, and so does this one. It is never listed under 常驻 or Recent
+  (`conversationGroups`, `recentConversations`), is named by the app (`assistant_background_supervisor`, in the app's
+  language whatever language the hub titled it in; a search finds it by that name), and its row's menu only copies
+  its session ID: no Pin, Archive or End chat (`AssistantDrawer`). The hub refuses the first two as well.
+  The hub makes the conversation on first use, long after the list was read, and only `GET /api/v1/assistant` says
+  which one it is: when a conversation that may be it arrives over the session stream (an assistant conversation with
+  `origin: "task"` and no `origin_ref`, new or just retitled, `mayBeNewBackgroundSupervisor`), the repository reads
+  the assistant again. Until that answer is in, the row is an ordinary chat's.
+- **Switch**: Settings › Assistant › Task follow-up › **Main chat supervises its own tasks**
+  (`main_supervises_own_tasks`, `AssistantSettingsState.setMainSupervisesOwnTasks`, as the fold switch: it moves at
+  once and comes back on a failure), with one sentence under it. Shown when the hub sends the field.
+- **Model**: the same section has **Background supervisor model**, which opens
+  `ModelPurposeRoute("assistant.supervise")` (`BackgroundSupervisor.PURPOSE`); the row is there whichever way the
+  switch is, as the use is in Model configuration, and the value is on the page it opens. The hub's catalog leaves
+  that use out, so Settings › Model configuration asks for it by its ID after the catalog (`ModelCatalogModel`,
+  `modelPurposesWith`) and lists it after the last use of its group; a hub without it, or one that fails that one
+  request, lists the catalog as it is.
+- **Its reviews in the conversation**: a review it writes takes no turn of the conversation that handed the task
+  out, so the hub marks the `review` feed entry `by: "background"` and the app draws exactly those entries in the
+  conversation as the existing one-line `ReviewLine` (task · verdict · note), instead of leaving them in the
+  background record (`AssistantTaskCards.isBackgroundSupervisorReview`, read by `isBackgroundEvent`). The mark is on
+  the entry, so a line stays where it is whatever the switch says later and whichever conversation is the background
+  supervisor then. Every other review, and every review from a hub without the mark, stays in the record as before.
+  The whole line opens the task while the to-do list has it; the name is the list's, else the entry's own `title`.
+- **Tests**: `BackgroundReviewsTest` (core/domain), `AssistantTest.theBackgroundSupervisorIsListedUnderAllChatsOnly`,
+  `AssistantSettingsStateTest.superviseOwnTasksSwitchSavesAndComesBackOnFailure`,
+  `HttpSettingsParityWireTest.mainSupervisesOwnTasksIsSentOnlyWhenSetAndTheBackgroundSupervisorIsReadOnly`,
+  `DirectionNamesTest.theBackgroundSupervisorIsReadWhenTheHubNamesOne` and
+  `.aConversationThatMayBeTheBackgroundSupervisorIsAskedAboutOnceItAppearsOrIsRetitled`,
+  `ModelConfigurationStateTest.theBackgroundSupervisorsUseIsListedWhenTheHubHasIt`; `AssistantSettingsShotsTest`,
+  `AssistantDrawerShotsTest` and `ReviewShotsTest` draw the section, the drawer row and the line in the three styles,
+  light and dark.
+
 #### Shared data contract
 
 The only hub API addition is `task_cards` on the existing `GET /api/v1/assistant/conversations/{id}/feed?since=` response:
@@ -1076,7 +1117,8 @@ The and-inbox batch of #2919; iOS is the reference throughout.
 - **Messages (iMessage)** (G137, `MessagesConnector.kt`): `connector/imessage` no longer uses the generic connector page: status line (which Mac, readable or not), step-by-step permission guidance and **Check again**, **Hand to Persona** toggle (`PUT /imessage/settings`), **Delete messages stored on the hub** (toggle must be off; confirmation explains what is deleted and that the Mac is unaffected), explanation based on toggle state; **Chats** (`/imessage/chats`, search name or number, page at bottom) and chat detail (`/imessage/chats/{id}/messages`, **Earlier messages**, timestamps after an hour's gap or day change, sender shown in groups, iMessage / SMS marked when service changes).
 - **Mark all read** (G215, `feature:agents`): under the Unread filter the row shows "N unread" at right; tapping confirms "Mark N unread sessions as read?". Both count and targets use list `unreadShown` (like iOS, regardless of grouping); the space menu's **Mark all read** also confirms first.
 - **Tests**: `ParityInboxTest` (one each in `feature:inbox`, `feature:settings`), `ParityInboxTransportTest` in `core:hub` (MockWebServer path and request-body checks); screenshots `ParityInboxShotsTest` (both modules) and `MarkAllReadShotsTest`, three styles × light / dark, PNGs in each module's `build/parity-shots/`.
-- **Not done**: sending Lark images / files (G121) and group @mentions (G122) require changing the reply outbox (persistent request and `reply` API); one card per topic in topic groups (G134) requires reordering the chat timeline. See #3045.
+- **Topic groups** (G134, #576, iOS `LarkTopicCard`): a chat the inbox row marks `is_topic`, or whose page the hub answers with `topic: true`, is read as its topics (`InboxAssistantTransport.topics`, `…/messages?topic=1`, backward paging only). Each topic is its own card (`LarkTopicCard.kt`): avatar, name (Bot tag), day and time, the topic folded past 320 dp behind Expand / Collapse, the newest two replies under "View N earlier replies" (read from its thread a moment after the card is drawn, again when its reply count changes; "Couldn't load replies" with Retry), reactions, React and Reply; a tap or Reply opens the thread sheet, a long press the chat's menu. System lines stay lines and my messages still on their way stay bubbles. A recalled reply is left out of the preview. Tests `LarkTopicCardTest`, `LarkConversationTest.aTopicGroupIsReadAsItsTopics`, shots `LarkTopicCardShotsTest` (`build/lark-topic-shots/`); mock `MOCK_LARK_TOPIC=1` (版本发布).
+- **Not done**: sending Lark images / files (G121) and group @mentions (G122) require changing the reply outbox (persistent request and `reply` API).
 
 ## Lark through extensions: display by hub features (#1530)
 
@@ -1358,7 +1400,7 @@ Same design as iOS/web ([unified-entry.md](../assistant/unified-entry.md)); code
 | Hooks: `ChatChromeBindings.tasks` (only assistant chats in `ChatDestination`), row merge in `ChatPage`, task-Agent questions merged into existing `requests` panel, routing checked before sending, bottom task dock | `feature/chat/ChatScreen.kt`, `ChatEntries.kt`, `app/di/ChatWiringModule.kt` |
 
 - A scheduled **Brief** keeps its `brief` kind through the Wire decoder and draws waiting, done/failed, acceptance, later questions and progress in the same feed position. Open follows the row's own chat or to-do; Accept / Got It / Take Recommendation sends the displayed `asked_at`, Complete Directly completes only that still-current decision round and shares the ordinary task completion's local Todo/cache merge, and Handled posts to `/api/v1/later/{id}/handled`. All writes retain the conversation's manager. Known code stages use the localized `StepProgress`; general tasks omit the code-stage bar and unknown stage names retain the hub's words. Missing optional sections stay empty and one malformed row does not discard the rest. `BriefCardShotsTest` covers the real feed, actions, three styles in light/dark and 200% text; the fake hub's `feed_brief` supplies the emulator fixture.
-- Task details (#3034, aligned with iOS `TaskDetailSheet` / web `TaskPanel`): task cards/rows/dock, receipt View, tasks in Today/message cards all raise details from bottom (`feature/chat/AssistantTaskSheets.kt`) instead of leaving main chat: title, state, Remove task in ⋯ when not running, close. Multiple Agents have top chips. Agent section shows computer · directory · type, current work, sub-Agents, then Open chat (full Agent page) and Say something (route to it). Before Agent exists: Starting Agent; failure shows reason, Retry, Remove. Difference: iOS embeds full Agent chat and underlying chat stays usable at 0.6 height; Android uses modal `JSheet`, with chat behind Open chat. Details render at chat-page level (`ChatScreen`, independent of composer), so read-only assistant chats can open them too; failed-start Remove confirms first.
+- Task details (#3034, aligned with iOS `TaskDetailSheet`; the web has none since #5096 and opens the Agent's page): task cards/rows/dock, receipt View, tasks in Today/message cards all raise details from bottom (`feature/chat/AssistantTaskSheets.kt`) instead of leaving main chat: title, state, Remove task in ⋯ when not running, close. Multiple Agents have top chips. Agent section shows computer · directory · type, current work, sub-Agents, then Open chat (full Agent page) and Say something (route to it). Before Agent exists: Starting Agent; failure shows reason, Retry, Remove. Difference: iOS embeds full Agent chat and underlying chat stays usable at 0.6 height; Android uses modal `JSheet`, with chat behind Open chat. Details render at chat-page level (`ChatScreen`, independent of composer), so read-only assistant chats can open them too; failed-start Remove confirms first.
 - A receipt's **Look** opens task details from elsewhere. Inside that same task's sheet it dismisses the sheet and opens the task's lead Agent chat; Back returns to the Assistant without reopening details. The durable task binding remains navigable when its computer is offline or its session is outside the current list. Without a valid Agent binding, an inline notice stays visible in the sheet. This navigation does not retry, complete or dismiss a task. `TaskReceiptNavigationTest` covers the receipt separately from the footer's **Open chat**, including interrupted receipts, invalid bindings, multiple Agents and read-only state.
 - Task dock (iOS `TaskDock`): fixed left **All N** opens Tasks sheet (Needs you / Working / Finished / Stopped / Completed / Failed to start sections, long-press removes), then horizontally scrolling task capsules; non-running tasks removable by long press (`JChip.onLongClick`). Main chat also shows manually opened working/needs-you Agent capsules (`dockAgents` in `core/domain`, iOS `DockAgent.shown`: not an Agent of any incomplete task; hub-tagged to-dos qualify only if manually created; no subtask while the dock shows the agent above it, see **Subtasks** in "Aligning the Agents list and the Machines page (#3038)"), opening Agent sheet ("Agent · Not opened from chat"). `TasksStore.mainConversation` records main id; if opened chat differs, requery hub to follow new main, computer changes or another device's change (#4690). Tasks sheet task rows show computer · directory · Agent · current work (failure reason instead if start failed); Agent rows show computer · directory · Agent · latest line, like iOS `TaskBoardSheet`.
 - Plan **Edit** (iOS `PlanEditSheet`): before start each task can edit title, computer (hub computer chips), directory, model (empty default), permissions (Ask every step / Allow file edits / Plan first / Allow all), first message. Start sends `tasks` via `POST /api/v1/task-plans/{id}/start` (`TasksApi.startPlan(id, remember, tasks)`). With edits, pulling down, outside tap or Back asks "Discard these changes?" (`JSheet.onBlockedDismiss`), like iOS `.sheetCancel(unsaved:)`. The sheet closes only once the start succeeds; while it is on its way Start spins, and a failed start (e.g. `task_no_machine`) keeps the sheet and its edits (#5312); test `PlanEditSheetTest`.
