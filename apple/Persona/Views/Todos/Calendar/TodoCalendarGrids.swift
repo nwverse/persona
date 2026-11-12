@@ -464,8 +464,7 @@ struct TodoCalendarTimeline: View {
                 let column = (geo.size.width - gutter) / CGFloat(max(days.count, 1))
                 ForEach(Array(days.enumerated()), id: \.offset) { i, day in
                     dayColumn(day, width: column, now: now)
-                        .calendarPlaced(at: CGPoint(x: gutter + column * CGFloat(i), y: .zero),
-                                        size: CGSize(width: column, height: hour * 24))
+                        .calendarPlaced(CGRect(x: gutter + column * CGFloat(i), y: .zero, width: column, height: hour * 24))
                 }
             }
         }
@@ -530,52 +529,55 @@ struct TodoCalendarTimeline: View {
 
     private func y(_ minutes: Double) -> CGFloat { CGFloat(minutes / 60) * hour }
 
+    /// A block's place in its day's column: its top edge at the time it is due.
+    private func blockFrame(_ start: Date, in day: Date, x: CGFloat, width: CGFloat) -> CGRect {
+        CGRect(x: x, y: y(TodoCalendar.minutes(start, in: day, calendar: calendar)) + pixel,
+               width: width, height: Theme.Size.tapTarget - Theme.Space.xxs)
+    }
+
+    /// A phone's week: the ones that would overlap share one block, the column wide.
+    private func groupFrame(_ group: [CalendarEntry], in day: Date, width: CGFloat) -> CGRect {
+        blockFrame(group[0].start, in: day, x: Theme.Space.xxs, width: width - Theme.Space.xs)
+    }
+
+    /// A wider column: the ones that would overlap side by side.
+    private func laneFrame(_ placed: TodoCalendar.Placed, in day: Date, width: CGFloat) -> CGRect {
+        let lane = (width - Theme.Space.xs) / CGFloat(placed.lanes)
+        return blockFrame(placed.entry.start, in: day, x: Theme.Space.xxs + lane * CGFloat(placed.lane), width: lane - Theme.Space.xxs)
+    }
+
     @ViewBuilder private func dayColumn(_ day: Date, width: CGFloat, now: Date) -> some View {
         let mine = TodoCalendar.on(day, timed, calendar: calendar)
+        let groups = narrow ? TodoCalendar.clusters(mine, minutes: blockMinutes) : []
+        let lanes = narrow ? [] : TodoCalendar.lanes(mine, minutes: blockMinutes)
+        let blocks = groups.map { groupFrame($0, in: day, width: width) } + lanes.map { laneFrame($0, in: day, width: width) }
         ZStack(alignment: .topLeading) {
             Color.clear
-                .contentShape(.rect)
-                .gesture(SpatialTapGesture().onEnded { tap in
-                    #if DEBUG
-                    CalendarDragTrace.shared.note("axis tap \(CalendarDragTrace.point(tap.location))") // i18n-ignore: DEBUG trace
-                    #endif
-                    let minutes = Double(tap.location.y / hour) * 60
-                    add(TodoCalendarSlot(day: day, time: TodoCalendar.slot(day: day, minutes: minutes, snap: Theme.CalendarGrid.snapMinutes, calendar: calendar)))
-                })
                 .accessibilityIdentifier("todo.calendar.axis")
             if days.count > 1 {
                 Rectangle().fill(Theme.CalendarGrid.line).frame(width: pixel)
             }
-            if narrow {
-                ForEach(TodoCalendar.clusters(mine, minutes: blockMinutes), id: \.first?.id) { group in
-                    let start = TodoCalendar.minutes(group[0].start, in: day, calendar: calendar)
-                    Group {
-                        if group.count == 1 {
-                            // one to-do can be moved; several sharing a block open their day
-                            carried(CalendarEntryBlock(entry: group[0], narrow: true), group[0])
-                        } else {
-                            Button { pickDay(day) } label: { CalendarGroupBlock(entries: group) }
-                                .buttonStyle(.plain)
-                        }
+            ForEach(groups, id: \.first?.id) { group in
+                Group {
+                    if group.count == 1 {
+                        // one to-do can be moved; several sharing a block open their day
+                        carried(CalendarEntryBlock(entry: group[0], narrow: true), group[0])
+                    } else {
+                        Button { pickDay(day) } label: { CalendarGroupBlock(entries: group) }
+                            .buttonStyle(.plain)
                     }
-                    .calendarPlaced(at: CGPoint(x: Theme.Space.xxs, y: y(start) + pixel),
-                                    size: CGSize(width: width - Theme.Space.xs, height: Theme.Size.tapTarget - Theme.Space.xxs))
                 }
-            } else {
-                ForEach(TodoCalendar.lanes(mine, minutes: blockMinutes)) { placed in
-                    let lane = (width - Theme.Space.xs) / CGFloat(placed.lanes)
-                    let start = TodoCalendar.minutes(placed.entry.start, in: day, calendar: calendar)
-                    carried(CalendarEntryBlock(entry: placed.entry), placed.entry)
-                        .calendarPlaced(at: CGPoint(x: Theme.Space.xxs + lane * CGFloat(placed.lane), y: y(start) + pixel),
-                                        size: CGSize(width: lane - Theme.Space.xxs, height: Theme.Size.tapTarget - Theme.Space.xxs))
-                }
+                .calendarPlaced(groupFrame(group, in: day, width: width))
+            }
+            ForEach(lanes) { placed in
+                carried(CalendarEntryBlock(entry: placed.entry), placed.entry)
+                    .calendarPlaced(laneFrame(placed, in: day, width: width))
             }
             // where a dragged to-do would land, over what is there, the whole column wide
             if let landed, !landed.allDay, calendar.isDate(landed.start, inSameDayAs: day) {
                 CalendarEntryBlock(entry: landed, narrow: narrow)
                     .calendarLanding()
-                    .frame(width: width - Theme.Space.xs, height: Theme.Size.tapTarget - Theme.Space.xxs)
-                    .offset(x: Theme.Space.xxs, y: y(TodoCalendar.minutes(landed.start, in: day, calendar: calendar)) + pixel)
+                    .calendarPlaced(blockFrame(landed.start, in: day, x: Theme.Space.xxs, width: width - Theme.Space.xs))
             }
             if calendar.isDate(now, inSameDayAs: day) {
                 let at = y(TodoCalendar.minutes(now, in: day, calendar: calendar))
@@ -589,6 +591,18 @@ struct TodoCalendarTimeline: View {
                     .allowsHitTesting(false)
             }
         }
+        // A tap where no to-do is adds one due then. The column's, around its blocks, as a month's day is around its
+        // chips: on a view beside the blocks it took an iPad's finger from them (#2045). Simultaneous, so a tap on a
+        // block is the block's whichever gesture ends first.
+        .contentShape(.rect)
+        .simultaneousGesture(SpatialTapGesture().onEnded { tap in
+            #if DEBUG
+            CalendarDragTrace.shared.note("axis tap \(CalendarDragTrace.point(tap.location))") // i18n-ignore: DEBUG trace
+            #endif
+            guard !blocks.contains(where: { $0.contains(tap.location) }) else { return }
+            let minutes = Double(tap.location.y / hour) * 60
+            add(TodoCalendarSlot(day: day, time: TodoCalendar.slot(day: day, minutes: minutes, snap: Theme.CalendarGrid.snapMinutes, calendar: calendar)))
+        })
     }
 }
 
