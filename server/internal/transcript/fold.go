@@ -45,6 +45,8 @@ func FoldWork(items []proto.Item) []proto.Item {
 		switch it.Kind {
 		case proto.KindThinking:
 			return true
+		case proto.KindText:
+			return it.Narration
 		case proto.KindToolUse, proto.KindToolResult, proto.KindImage: // a tool's image goes with its call
 			// a subagent's call stays on the page: the chat draws it as a card, which never folds (#5602)
 			return it.ToolUseID != "" && uses[it.ToolUseID] && results[it.ToolUseID] && !agents[it.ToolUseID]

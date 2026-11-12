@@ -52,7 +52,7 @@ func longCodexRollout(t testing.TB, commands, notes, replies int) string {
 
 func foldable(it proto.Item) bool {
 	return it.Kind == proto.KindToolUse || it.Kind == proto.KindToolResult || it.Kind == proto.KindThinking ||
-		(it.Kind == proto.KindImage && it.ToolUseID != "")
+		(it.Kind == proto.KindText && it.Narration) || (it.Kind == proto.KindImage && it.ToolUseID != "")
 }
 
 // The phone's first page of a long session carries the prompts, the replies and one fold per run of work (tools,
