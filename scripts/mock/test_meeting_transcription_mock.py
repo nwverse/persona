@@ -1,0 +1,394 @@
+"""Scripted meeting PCM uplink, bilingual transcript, gap repair and final minutes; no upstream required."""
+import unittest
+import uuid
+
+from test_meeting_attendance_mock import start
+from test_meeting_conversation_mock import Conversation, websocket
+
+
+class Transcription(Conversation):
+    def mode(self, **fields):
+        return self.call("POST", "/mock/meeting_transcription", fields)
+
+    def detail(self, rid):
+        return self.call("GET", f"/api/v1/kb/recordings/{rid}")[1]["detail"]
+
+    def observed(self, rid):
+        return self.call("GET", "/mock/meeting_transcription")[1]["recordings"][rid]
+
+    def recording(self, **fields):
+        rid = str(uuid.uuid4())
+        status, out = self.upload(rid, transcription="hub", room={"attendance": "participant"}, **fields)
+        self.assertEqual((status, out["transcription"]), (200, "hub"))
+        return rid
+
+    def socket(self, rid, begin=True, timeline=None, **kw):
+        ws = websocket(self, f"/api/v1/recordings/{rid}/audio", **kw)
+        if begin:
+            ws.send({"type": "start", "at": 0, "timeline": timeline or {}})
+            self.assertIsNotNone(ws("ready"))
+        return ws
+
+    def pcm(self, ws, seconds):
+        size = round(seconds * 16000) * 2
+        while size:
+            n = min(size, 32000)
+            ws.send(bytes(n))
+            size -= n
+
+    def end(self, ws, at):
+        ws.send({"type": "end", "at": at})
+        self.assertEqual(ws("ack")["at"], at)
+        self.assertEqual(ws("close")["code"], 1000)
+
+
+class MeetingTranscriptionMockTests(Transcription, unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.base, stop = start({"MOCK_EXTENSIONS": "1"})
+        cls.addClassCleanup(stop)
+
+    def setUp(self):
+        self.call("POST", "/mock/recording_minutes", {"mode": "pending"})
+        self.call("POST", "/mock/meeting_attendance", {"on": True, "kb_read_only": False})
+        self.call("POST", "/mock/meeting_conversation", {"on": True, "room": "ok"})
+        self.call("POST", "/mock/meeting_live_view", {"on": True})
+        self.mode(on=True, ready=True, upstream="ok", fatal="", line_seconds=4, final_seconds=0.1)
+        self.call("PUT", "/api/v1/assistant", {"meeting_transcription_default": "device", "meeting_glossary": [], "meeting_transcription_extension": ""})
+
+    def test_features_settings_and_validation_are_atomic(self):
+        self.assertIn("meeting_transcription", self.call("GET", "/api/v1/health")[1]["features"])
+        cfg = self.call("GET", "/api/v1/assistant")[1]
+        self.assertEqual((cfg["meeting_transcription_default"], cfg["meeting_glossary"], cfg["meeting_transcription_extension"], cfg["meeting_transcription_ready"]),
+                         ("device", [], "", True))
+        cfg = self.call("PUT", "/api/v1/assistant", {"meeting_transcription_default": "hub", "meeting_glossary": [" Alice\n Bo ", "alice bo", "", "导出"],
+                                                       "meeting_transcription_extension": "voice/gpt-live", "meeting_transcription_ready": False})[1]
+        self.assertEqual((cfg["meeting_glossary"], cfg["meeting_transcription_ready"]), (["Alice Bo", "导出"], True))
+        for key, value, code in [("meeting_transcription_default", None, "bad_transcription_mode"),
+                                 ("meeting_transcription_default", [], "bad_transcription_mode"),
+                                 ("meeting_glossary", ["文" * 41], "bad_glossary"),
+                                 ("meeting_glossary", [str(n) for n in range(201)], "bad_glossary"),
+                                 ("meeting_glossary", None, "bad_glossary"),
+                                 ("meeting_glossary", [3], "bad_glossary"),
+                                 ("meeting_transcription_extension", "voice/voice", "bad_transcription_extension"),
+                                 ("meeting_transcription_extension", [], "bad_transcription_extension")]:
+            status, out = self.call("PUT", "/api/v1/assistant", {"meeting_transcription_default": "device", key: value})
+            self.assertEqual((status, out["code"]), (400, code))
+            self.assertEqual(self.call("GET", "/api/v1/assistant")[1]["meeting_transcription_default"], "hub")
+        for key in ("meeting_transcription_default", "meeting_glossary", "meeting_transcription_extension"):
+            self.assertEqual(self.call("PUT", "/api/v1/assistant", {key: cfg[key]}, {"X-Mock-Role": "answer"})[0], 403)
+        self.mode(ready=False)
+        self.assertFalse(self.call("GET", "/api/v1/assistant")[1]["meeting_transcription_ready"])
+        self.call("POST", "/mock/meeting_live_view", {"on": False})
+        self.assertNotIn("meeting_transcription", self.call("GET", "/api/v1/health")[1]["features"])
+        self.assertNotIn("meeting_transcription_default", self.call("GET", "/api/v1/assistant")[1])
+
+    def test_upload_mode_first_named_wins_and_timeline_is_union(self):
+        rid = str(uuid.uuid4())
+        for mode in (None, 3, [], "other"):
+            self.assertEqual(self.upload(rid, transcription=mode)[1]["transcription"], "device")
+        self.mode(ready=False)
+        out = self.upload(rid, transcription="hub")[1]
+        self.assertEqual((out["transcription"], out["transcription_problem"]), ("device", "unavailable"))
+        self.mode(ready=True)
+        self.assertEqual(self.upload(rid, transcription="hub")[1]["transcription"], "device")
+        self.assertEqual(self.meta(rid)["transcription"], {"mode": "device"})
+        note = self.upload(str(uuid.uuid4()), kind="note", transcription="hub")[1]
+        self.assertEqual((note["transcription"], note["transcription_problem"]), ("device", "not_meeting"))
+        rid = self.recording(timeline={"roles": [{"at": 0, "attendance": "listener"}], "speaking": [[2, 3]]})
+        rev = self.live(rid)["revs"]["transcription"]
+        out = self.upload(rid, transcription="device", timeline={"roles": [{"at": 0, "attendance": "participant"}], "speaking": [[3, 4]]})[1]
+        self.assertEqual(out["transcription"], "hub")
+        self.assertEqual(self.observed(rid)["timeline"], {"roles": [{"at": 0, "attendance": "participant"}], "speaking": [[2, 4]]})
+        self.assertEqual(self.live(rid)["revs"]["transcription"], rev)
+        for bad in ({"roles": [{"at": -1, "attendance": "off"}]}, {"speaking": [[4, 2]]}, {"speaking": [[0, 1]] * 1001}):
+            self.upload(rid, timeline=bad)
+            self.assertEqual(self.observed(rid)["timeline"]["speaking"], [[2, 4]])
+        self.assertEqual(self.upload(rid, revision=1, transcription="device")[1]["transcription"], "hub")
+
+    def test_bilingual_lines_interim_revisions_and_final_minutes(self):
+        rid = self.recording(language="ja")
+        events = websocket(self)
+        ws = self.socket(rid)
+        self.pcm(ws, 1)
+        cap = ws("interim")
+        live = self.live(rid, "?parts=interim")
+        self.assertEqual(live["interim"], {"start": 0, "text": cap["text"]})
+        self.assertGreater(live["revs"]["interim"], 0)
+        self.pcm(ws, 3)
+        first = ws("line")
+        self.assertEqual((first["n"], first["start"], first["end"], first["text"]), (0, 0, 4, "我们先把 export cap 保持在 4 MB。"))
+        self.pcm(ws, 1)
+        self.assertEqual(ws("ack")["at"], 5)
+        self.pcm(ws, 3)
+        self.assertEqual(ws("line")["text"], "Let's revisit pricing next week.")
+        live = self.live(rid, "?from=0")
+        self.assertEqual([s["source"] for s in live["lines"]], ["hub", "hub"])
+        self.assertEqual(live["revs"]["lines"], 2)
+        event = events("meeting_live", where=lambda f: f["recording_id"] == rid and "lines" in f["changed"])
+        self.assertIn("lines", event["revs"])
+        self.assertEqual(self.call("POST", f"/api/v1/recordings/{rid}/live", {"from": 0, "segments": []})[1]["code"], "hub_transcribes")
+        self.end(ws, 8)
+        self.upload(rid, transcription="hub", complete=True, duration=8, segments=[{"start": 0, "end": 8, "text": "weaker device text", "source": "hub"}])
+        self.assertEqual(self.meta(rid)["transcription"]["state"], "finishing")
+        final = self.wait(lambda: (d := self.detail(rid))["meta"]["transcription"]["state"] == "final" and d, "final minutes")
+        self.assertEqual([s["source"] for s in final["segments"]], ["hub", "hub"])
+        self.assertEqual(final["minutes"]["points"][1]["text"], "Let's revisit pricing next week.")
+        self.assertGreater(final["meta"]["chars"], 0)
+        self.assertEqual(self.observed(rid)["held"], [])
+        self.assertEqual(self.socket(rid, begin=False)("error")["code"], "transcription_final")
+        only = self.live(rid, "?parts=transcription")
+        self.assertEqual(set(only), {"transcription", "revs"})
+        self.assertGreater(only["revs"]["transcription"], 1)
+
+    def test_echo_hold_back_off_role_and_replacement(self):
+        rid = self.recording()
+        ws = self.socket(rid)
+        ws.send({"type": "speaking", "at": 0, "on": True})
+        self.pcm(ws, 4)
+        self.assertIsNone(ws("line", wait=0.1))
+        self.assertNotIn("interim", self.live(rid))
+        ws.send({"type": "speaking", "at": 4, "on": False})
+        ws.send({"type": "role", "at": 4, "attendance": "off"})
+        self.pcm(ws, 1)
+        self.assertIsNotNone(ws("interim"))
+        self.assertNotIn("interim", self.live(rid))
+        self.pcm(ws, 3)
+        self.wait(lambda: self.observed(rid)["bytes"] == 8 * 32000, "stored off-role audio")
+        self.assertEqual(self.live(rid)["next"], 0)
+        self.assertEqual([s["text"] for s in self.detail(rid)["segments"]], ["Let's revisit pricing next week."])
+        replacement = self.socket(rid, begin=False)
+        self.assertEqual(ws("error")["code"], "replaced")
+        replacement.send({"type": "start", "at": 0, "timeline": {"roles": [{"at": 8, "attendance": "participant"}]}})
+        self.assertEqual(replacement("ready"), {"type": "ready", "from": 8, "gaps": [], "next": 0})
+        self.pcm(replacement, 4)
+        self.assertEqual(replacement("line")["n"], 0)
+        self.end(replacement, 12)
+        self.upload(rid, complete=True, duration=12)
+        final = self.wait(lambda: (d := self.detail(rid))["meta"]["transcription"]["state"] == "final" and d, "echo-free final")
+        self.assertEqual(len(final["segments"]), 2)
+        self.assertNotIn("我们先把", final["summary"])
+
+    def test_gap_upload_before_final_and_duplicate_audio(self):
+        rid = self.recording()
+        ws = self.socket(rid)
+        ws.send({"type": "seek", "at": 4})
+        self.pcm(ws, 4)
+        self.assertEqual(ws("line")["start"], 4)
+        ws.send({"type": "seek", "at": 4})
+        self.pcm(ws, 1)
+        self.assertEqual(ws("ack")["at"], 8)
+        self.assertEqual(self.live(rid)["next"], 1)
+        self.end(ws, 8)
+        self.upload(rid, complete=True, duration=8)
+        self.assertEqual(self.meta(rid)["transcription"], {"mode": "hub", "state": "finishing", "gaps": [[0, 4]]})
+        status, out = self.call("PUT", f"/api/v1/recordings/{rid}/audio?at=0", bytes(4 * 32000))
+        self.assertEqual((status, out), (200, {"gaps": []}))
+        self.wait(lambda: self.meta(rid)["transcription"]["state"] == "final", "repaired final")
+        self.assertEqual(len(self.detail(rid)["segments"]), 2)
+        self.assertEqual(self.call("PUT", f"/api/v1/recordings/{rid}/audio?at=0", b"\0\0")[1]["code"], "transcription_final")
+        self.assertEqual(self.call("POST", "/mock/recording_trim", {"id": rid})[0], 200)
+        self.assertEqual(self.meta(rid)["transcription"], {"mode": "hub", "state": "final", "gaps": []})
+        self.assertEqual(self.socket(rid, begin=False)("error")["code"], "transcript_expired")
+
+    def test_problem_recovery_fatal_and_no_interim(self):
+        rid = self.recording()
+        self.mode(upstream="unavailable")
+        ws = self.socket(rid)
+        self.assertEqual(ws("problem")["code"], "upstream_unavailable")
+        self.pcm(ws, 5)
+        self.assertEqual(ws("ack")["at"], 5)
+        self.assertEqual(self.live(rid)["next"], 0)
+        self.mode(upstream="no_interim")
+        self.assertEqual(ws("problem")["code"], "no_interim")
+        self.pcm(ws, 4)
+        self.assertIsNotNone(ws("line"))
+        self.assertNotIn("interim", self.live(rid))
+        self.mode(upstream="ok")
+        self.assertIsNone(ws("problem")["code"])
+        self.mode(fatal="upstream_failed")
+        self.assertEqual(ws("error"), {"type": "error", "code": "upstream_failed", "fatal": True})
+        self.assertEqual(ws("close")["code"], 1008)
+
+    def test_transcription_and_interim_events_are_content_free(self):
+        rid = self.recording()
+        events = websocket(self)
+        ws = self.socket(rid)
+        self.pcm(ws, 1)
+        self.assertIsNotNone(ws("interim"))
+        interim = events("meeting_live", where=lambda f: f["recording_id"] == rid and "interim" in f["changed"])
+        self.assertEqual(set(interim), {"type", "recording_id", "changed", "revs"})
+        self.assertEqual(interim["revs"]["interim"], self.live(rid)["revs"]["interim"])
+        self.mode(upstream="failed")
+        changed = events("meeting_live", where=lambda f: f["recording_id"] == rid and "transcription" in f["changed"])
+        self.assertEqual(changed["revs"]["transcription"], self.live(rid)["revs"]["transcription"])
+        self.assertEqual(self.meta(rid)["transcription"]["problem"], "upstream_failed")
+
+    def test_complete_timeline_repairs_final_echo_filter_and_day_ignores_mode(self):
+        rid = self.recording()
+        ws = self.socket(rid)
+        self.pcm(ws, 4)
+        self.assertIsNotNone(ws("line"))
+        self.end(ws, 4)
+        self.upload(rid, complete=True, duration=4, timeline={"speaking": [[0, 4]]})
+        self.wait(lambda: self.meta(rid)["transcription"]["state"] == "failed", "late echo filter")
+        self.assertEqual(self.detail(rid)["segments"], [])
+        day = str(uuid.uuid4())
+        out = self.upload(day, kind="day", day="2026-11-10", transcription="hub", timeline={"roles": [{"at": 0, "attendance": "participant"}]})[1]
+        self.assertEqual((out["transcription"], out["transcription_problem"]), ("device", "not_meeting"))
+        stored = self.call("GET", "/mock/recordings")[1]["recordings"][day]
+        self.assertNotIn("timeline", stored)
+        self.assertNotIn("transcription", stored)
+
+    def test_recording_refusals_after_upgrade_and_invalid_frames(self):
+        missing = str(uuid.uuid4())
+        websocket(self, f"/api/v1/recordings/{missing}/audio", headers={"X-Mock-Role": "extension"}, status=403)
+        self.assertEqual(self.socket(missing, begin=False)("error")["code"], "recording_not_found")
+        self.upload(missing)
+        self.assertEqual(self.socket(missing, begin=False)("error")["code"], "not_hub")
+        self.call("POST", "/mock/meeting_attendance", {"kb_read_only": True})
+        self.assertEqual(self.socket(missing, begin=False)("error")["code"], "kb_read_only")
+        self.call("DELETE", f"/api/v1/recordings/{missing}")
+        self.assertEqual(self.socket(missing, begin=False)("error")["code"], "recording_deleted")
+        self.call("POST", "/mock/meeting_attendance", {"kb_read_only": False})
+        for payload, op, begin in [(b"\0\0", 2, False), (b"{", 1, True), (b"x", 2, True), (bytes(65538), 2, True), (b" " * (256 * 1024 + 1), 1, True)]:
+            rid = self.recording()
+            ws = self.socket(rid, begin=begin)
+            ws.send(payload, op=op)
+            self.assertEqual(ws("error")["code"], "bad_frame")
+        rid = self.recording()
+        ws = self.socket(rid)
+        ws.send({"type": "future_type"})
+        ws.send({"type": "seek", "at": 43200})
+        ws.send(b"\0\0")
+        self.assertEqual(ws("error")["code"], "audio_full")
+
+    def test_partial_tail_reconnect_and_duplicate_audio_do_not_repeat_lines(self):
+        rid = self.recording()
+        ws = self.socket(rid)
+        self.pcm(ws, 4)
+        self.assertEqual(ws("line")["n"], 0)
+        ws.send({"type": "seek", "at": 0})
+        self.pcm(ws, 8)
+        self.assertEqual(ws("line")["n"], 1)
+        self.assertEqual(self.live(rid)["next"], 2)
+        replacement = self.socket(rid, begin=False)
+        self.assertEqual(ws("error")["code"], "replaced")
+        replacement.send({"type": "start", "at": 1})
+        self.assertEqual(replacement("ready")["next"], 2)
+        self.pcm(replacement, 1)
+        replacement.send({"type": "end", "at": 9})
+        self.assertEqual(replacement("ack")["at"], 9)
+        self.assertEqual(replacement("line")["end"], 9)
+        self.assertEqual(replacement("close")["code"], 1000)
+        self.assertEqual(self.live(rid)["next"], 3)
+
+    def test_fatal_fallback_uses_device_lines_then_hub_positions_continue(self):
+        device = {"start": 0, "end": 4, "text": "Device fallback sentence.", "source": "hub"}
+        rid = self.recording(segments=[device])
+        ws = self.socket(rid)
+        self.mode(fatal="upstream_failed")
+        self.assertEqual(ws("error")["code"], "upstream_failed")
+        live = self.live(rid, "?from=0")
+        self.assertTrue(live["transcription"]["fallback"])
+        self.assertEqual(live["lines"][0]["source"], "device")
+        self.mode(fatal="")
+        ws = self.socket(rid)
+        self.pcm(ws, 4)
+        self.wait(lambda: self.observed(rid)["bytes"] == 4 * 32000, "covered hub sentence")
+        self.assertEqual(self.live(rid)["next"], 1)
+        self.assertNotIn("fallback", self.live(rid)["transcription"])
+        self.pcm(ws, 4)
+        self.assertEqual(ws("line")["n"], 1)
+        self.end(ws, 8)
+
+    def test_disabled_contribution_is_valid_but_not_ready(self):
+        self.assertEqual(self.call("PUT", "/api/v1/extensions/voice/-/enabled", {"enabled": False})[0], 200)
+        try:
+            status, cfg = self.call("PUT", "/api/v1/assistant", {"meeting_transcription_extension": "voice/gpt-live"})
+            self.assertEqual((status, cfg["meeting_transcription_ready"]), (200, False))
+        finally:
+            self.call("PUT", "/api/v1/extensions/voice/-/enabled", {"enabled": True})
+
+    def test_complete_upload_waits_for_open_socket_and_preserves_device_gaps(self):
+        rid = self.recording()
+        ws = self.socket(rid)
+        self.pcm(ws, 4)
+        self.assertIsNotNone(ws("line"))
+        self.upload(rid, complete=True, duration=4, segments=[{"start": 8, "end": 12, "text": "Uncovered device span."}])
+        self.assertEqual(self.meta(rid)["transcription"]["state"], "finishing")
+        self.assertEqual(self.call("PUT", f"/api/v1/recordings/{rid}/audio?at=0", b"\0\0")[0], 200)
+        self.end(ws, 4)
+        final = self.wait(lambda: (d := self.detail(rid))["meta"]["transcription"]["state"] == "final" and d, "final with device gap")
+        self.assertEqual([s["source"] for s in final["segments"]], ["hub", "device"])
+        self.assertEqual(final["minutes"]["points"][1]["text"], "Uncovered device span.")
+
+    def test_live_recording_deletion_closes_socket_and_gap_errors_are_ordered(self):
+        rid = self.recording()
+        ws = self.socket(rid)
+        self.call("DELETE", f"/api/v1/recordings/{rid}")
+        self.assertEqual(ws("error")["code"], "recording_deleted")
+        path = f"/api/v1/recordings/{rid}/audio"
+        for body, headers, code in [(bytes((10 << 20) + 2), {"X-Mock-Role": "answer"}, "forbidden"),
+                                    (bytes((10 << 20) + 2), {}, "too_large"), (b"x", {}, "recording_deleted")]:
+            self.assertEqual(self.call("PUT", path, body, headers)[1]["code"], code)
+        self.assertEqual(self.call("PUT", f"/api/v1/recordings/{uuid.uuid4()}/audio", b"x")[1]["code"], "recording_not_found")
+
+    def test_gap_refusal_order_and_failed_without_audio(self):
+        rid = self.recording()
+        for suffix, body, code, status in [("", b"\0\0", "bad_frame", 400), ("?at=-1", b"\0\0", "bad_frame", 400),
+                                          ("?at=nan", b"\0\0", "bad_frame", 400), ("?at=0", b"x", "bad_frame", 400),
+                                          ("?at=0", bytes((10 << 20) + 2), "too_large", 413),
+                                          ("?at=43200", b"\0\0", "audio_full", 413)]:
+            result = self.call("PUT", f"/api/v1/recordings/{rid}/audio{suffix}", body)
+            self.assertEqual((result[0], result[1]["code"]), (status, code))
+        self.upload(rid, complete=True, duration=0, segments=[{"start": 0, "end": 1, "text": "Only the device heard this.", "source": "hub"}])
+        self.assertEqual(self.meta(rid)["transcription"]["state"], "failed")
+        self.assertEqual(self.detail(rid)["segments"][0]["source"], "device")
+        self.assertEqual(self.detail(rid)["minutes"]["points"][0]["text"], "Only the device heard this.")
+
+
+class LegacyTranscriptionMockTests(Transcription, unittest.TestCase):
+    def test_disabled_and_unready_environment_switches(self):
+        for env in ({"MOCK_NO_MEETING_TRANSCRIPTION": "1"}, {"MOCK_NO_MEETING_CONVERSATION": "1"}, {"MOCK_NO_MEETING_LIVE_VIEW": "1"}):
+            with self.subTest(env=env):
+                self.base, stop = start(env)
+                try:
+                    self.assertNotIn("meeting_transcription", self.call("GET", "/api/v1/health")[1]["features"])
+                    self.assertNotIn("meeting_transcription_ready", self.call("GET", "/api/v1/assistant")[1])
+                    rid = str(uuid.uuid4())
+                    self.assertNotIn("transcription", self.upload(rid, transcription="hub")[1])
+                    self.assertEqual(self.call("GET", f"/api/v1/recordings/{rid}/audio")[0], 404)
+                finally: stop()
+        self.base, stop = start({"MOCK_MEETING_TRANSCRIPTION_DEFAULT": "hub", "MOCK_MEETING_TRANSCRIPTION_READY": "0"})
+        try:
+            cfg = self.call("GET", "/api/v1/assistant")[1]
+            self.assertEqual((cfg["meeting_transcription_default"], cfg["meeting_transcription_ready"]), ("hub", False))
+        finally: stop()
+
+    def test_device_token_header_and_query_authentication(self):
+        self.base, stop = start({"MOCK_DEVICE_TOKEN": "fixture-device-token"})
+        try:
+            rid = str(uuid.uuid4())
+            self.call("PUT", f"/api/v1/recordings/{rid}", {"revision": 1, "started_at": "2026-11-10T14:00:00Z", "device": "phone",
+                      "kind": "meeting", "transcription": "hub", "segments": []}, {"Authorization": "Bearer fixture-device-token"})
+            path = f"/api/v1/recordings/{rid}/audio"
+            websocket(self, path, status=403)
+            for route, headers in [(path, {"Authorization": "Bearer fixture-device-token"}), (path + "?token=fixture-device-token", {})]:
+                ws = websocket(self, route, headers=headers)
+                ws.send({"type": "start", "at": 0})
+                self.assertIsNotNone(ws("ready"))
+                self.end(ws, 0)
+        finally: stop()
+
+    def test_offline_refusal_is_before_upgrade(self):
+        self.base, stop = start({"MOCK_RECORDINGS_DOWN": "1"})
+        try:
+            path = f"/api/v1/recordings/{uuid.uuid4()}/audio"
+            websocket(self, path, status=503)
+            websocket(self, path, headers={"X-Mock-Role": "answer"}, status=403)
+        finally: stop()
+
+
+if __name__ == "__main__":
+    unittest.main()
