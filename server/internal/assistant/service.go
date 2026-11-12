@@ -74,7 +74,8 @@ type Service struct {
 	refs launcherSecrets
 	// trans reaches the transcription contributions (meeting_transcribe_ext.go): the extensions' when they offer it
 	// (SetExtensions); nil: none (tests).
-	trans transcribers
+	trans              transcribers
+	transcriptionReady transcriptionReadiness
 	// humanSent: the messages a person's own app sent, as the hub vouched (secret_handoff.go).
 	humanSent humanSends
 
