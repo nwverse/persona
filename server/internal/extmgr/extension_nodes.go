@@ -693,7 +693,10 @@ func (h *Manager) serveNodeExtensionHTTP(w http.ResponseWriter, r *http.Request)
 		p = h.extensions.reg.Get(id)
 	}
 	m := h.machineByID(mid)
-	if p == nil || p.Manifest.NodeProgram() == nil || !p.Manifest.Node.HTTP || m == nil || !h.extensions.nodeRunsOn(r.Context(), p, m) {
+	prefix := "/api/v1/extensions/" + requestedID + "/-/machines/" + mid
+	// /transcription/ is the manager's only, on a computer too (transcription.go).
+	if p == nil || p.Manifest.NodeProgram() == nil || !p.Manifest.Node.HTTP || m == nil || transcriptionPath(strings.TrimPrefix(r.URL.Path, prefix)) ||
+		!h.extensions.nodeRunsOn(r.Context(), p, m) {
 		writeErrCode(w, http.StatusNotFound, "not_found", fmt.Errorf("plugin %s serves nothing on machine %s", id, mid))
 		return
 	}
@@ -702,7 +705,6 @@ func (h *Manager) serveNodeExtensionHTTP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	id = p.Record.ID // Owner aliases route to the exact current node program.
-	prefix := "/api/v1/extensions/" + requestedID + "/-/machines/" + mid
 	dial := func(ctx context.Context, _, _ string) (net.Conn, error) { return dialNodeExtension(ctx, m, id) }
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
