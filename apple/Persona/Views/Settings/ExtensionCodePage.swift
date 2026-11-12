@@ -33,9 +33,15 @@ nonisolated extension ExtensionComponent {
 @MainActor @Observable final class CodePageState {
     /// Viewed marks kept on this device (for extensions without `mark_viewed`).
     let marks: CodeViewedMarks
+    /// Where the page's display options are kept (nil: nowhere, a test's page).
+    private let defaults: UserDefaults?
 
-    init(marks: CodeViewedMarks = .shared) {
+    /// The device's viewed marks and display options; a test's page passes its own (none kept), so what the app or
+    /// another run saved on the device does not change what it draws.
+    init(marks: CodeViewedMarks = .shared, defaults: UserDefaults? = .standard) {
         self.marks = marks
+        self.defaults = defaults
+        whitespace = defaults?.bool(forKey: Self.whitespaceKey) ?? false
     }
 
     /// Open directories by tree key.
@@ -112,7 +118,7 @@ nonisolated extension ExtensionComponent {
     /// Viewed marks changed here and sent with the extension's `mark_viewed`, by path, until its page says so too.
     private(set) var viewedOver: [String: Bool] = [:]
     /// Changes that are only whitespace drawn as unchanged; the app's choice, kept for every page.
-    private(set) var whitespace = UserDefaults.standard.bool(forKey: CodePageState.whitespaceKey)
+    private(set) var whitespace: Bool
     static let whitespaceKey = "extension.code.ignoreWhitespace"
     /// A thread to scroll to (its block's id), and the open thread the last jump went to.
     var jump: String?
@@ -192,7 +198,7 @@ nonisolated extension ExtensionComponent {
 
     func setWhitespace(_ on: Bool) {
         whitespace = on
-        UserDefaults.standard.set(on, forKey: Self.whitespaceKey)
+        defaults?.set(on, forKey: Self.whitespaceKey)
         version += 1
     }
 

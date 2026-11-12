@@ -73,8 +73,8 @@ struct ExtensionCodeReviewTests {
         b.hunks = [ExtensionHunk(oldStart: 1, newStart: 1, lines: ["+y"])]
         #expect(CodeReview.changeID(a) != CodeReview.changeID(b), "the file changed: the mark goes")
         #expect(CodeReview.changeID(.init(path: "a.go", revision: "r1")) == "a.go@r1")
-        let marks = CodeViewedMarks(saved: [])
-        let state = CodePageState(marks: marks)
+        let marks = CodeViewedMarks(saved: [], keeps: false)
+        let state = CodePageState(marks: marks, defaults: nil)
         #expect(!state.isViewed(a))
         state.setViewed(a, key: "diff:a.go", true)
         #expect(state.isViewed(a) && !state.isViewed(b) && marks.ids == [CodeReview.changeID(a)])
@@ -84,7 +84,7 @@ struct ExtensionCodeReviewTests {
 
     @Test func theSnapshotsPageHasItsToolbarAndFolds() throws {
         let v = try Self.view()
-        let state = CodePageState(marks: CodeViewedMarks(saved: []))
+        let state = CodePageState.scratch()
         let blocks = CodePageBlocks.of(v, sections: Self.mains(v), state: state, look: .unified, canComment: true)
         // The toolbar over the first diff: 1 of 5 viewed (retry.go, the extension's mark), 2 threads open (t1, t3;
         // t2 is a draft).
@@ -103,7 +103,7 @@ struct ExtensionCodeReviewTests {
 
     @Test func checkingViewedFoldsAndUncheckingLeavesItSo() throws {
         let v = try Self.view()
-        let state = CodePageState(marks: CodeViewedMarks(saved: []))
+        let state = CodePageState.scratch()
         let client = try Self.diff(v, "src/upload/client.go")
         let key = "diff:src/upload/client.go"
         func folded() -> Bool {
@@ -125,9 +125,8 @@ struct ExtensionCodeReviewTests {
 
     @Test func whitespaceIgnoredLeavesOnlyRealChanges() throws {
         var v = try Self.view()
-        let state = CodePageState(marks: CodeViewedMarks(saved: []))
-        let was = state.whitespace
-        defer { state.setWhitespace(was) }
+        let state = CodePageState.scratch()
+        #expect(!state.whitespace, "a test's page reads nothing the device kept")
         for i in v.sections.indices {
             v.sections[i].items = v.sections[i].items.map { c in
                 guard case .diff(var d) = c, d.path == "src/upload/limits.go" else { return c }
@@ -250,7 +249,7 @@ extension ExtensionCodeReviewTests {
 
     @Test func aDiffWithContextShowsItsGaps() throws {
         let v = try Self.view()
-        let state = CodePageState(marks: CodeViewedMarks(saved: []))
+        let state = CodePageState.scratch()
         func blocks() -> [CodePageBlock] { CodePageBlocks.of(v, sections: Self.mains(v), state: state, look: .unified, canComment: true) }
         let key = "diff:src/upload/client.go"
         // client.go's first hunk starts at line 20: 19 lines over it, few enough to show all at once.
@@ -287,7 +286,7 @@ extension ExtensionCodeReviewTests {
 
 extension ExtensionCodeReviewTests {
     @Test func twoLineNumbersPickTheLinesBetween() {
-        let state = CodePageState(marks: CodeViewedMarks(saved: []))
+        let state = CodePageState.scratch()
         state.pick(.init(diff: "d", side: "new", line: 25))
         #expect(state.composing == CodePageState.Anchor(diff: "d", side: "new", line: 25))
         state.pick(.init(diff: "d", side: "new", line: 22))
@@ -311,7 +310,7 @@ extension ExtensionCodeReviewTests {
 
     @Test func theCommentBoxSitsUnderTheLastLinePicked() throws {
         let v = try Self.view()
-        let state = CodePageState(marks: CodeViewedMarks(saved: []))
+        let state = CodePageState.scratch()
         let key = "diff:src/upload/client.go"
         state.pick(.init(diff: key, side: "new", line: 22))
         state.pick(.init(diff: key, side: "new", line: 25))
@@ -321,6 +320,12 @@ extension ExtensionCodeReviewTests {
         else { Issue.record("no comment box after a line"); return }
         #expect(l.new == 25 && a.start == 22 && id == "ic:\(key):new")
     }
+}
+
+extension CodePageState {
+    /// A page's state of its own: no viewed marks, whitespace shown, nothing read from or saved to the device (the app
+    /// under test and its UI tests use the same simulator's).
+    static func scratch() -> CodePageState { CodePageState(marks: CodeViewedMarks(saved: [], keeps: false), defaults: nil) }
 }
 
 @MainActor private final class Recorded {

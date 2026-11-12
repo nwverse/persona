@@ -20,8 +20,10 @@ final class ExtensionCodeReviewUITests: XCTestCase {
             let look = scheme + "-" + style
             let app = XCUIApplication()
             let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
+            // Whitespace shown at first, whatever a run that stopped part way left.
             app.launchArguments = ["-pairURL", pair, "-tab", "settings", "-ui.style", style, "-ui.scheme", scheme,
-                                   "-openExtension", "showcase", "-openExtensionPage", "snapshots"]
+                                   "-openExtension", "showcase", "-openExtensionPage", "snapshots",
+                                   "-extension.code.ignoreWhitespace", "NO"]
             app.launchPersona()
             dismissSystemAlerts(wait: 4)
             let row = app.buttons["plugin-ui-action-snapshot-code-review-v5"]
@@ -101,9 +103,12 @@ final class ExtensionCodeReviewUITests: XCTestCase {
             for _ in 0..<6 where !limits.exists { app.swipeUp() }
             XCTAssertTrue(limits.exists, app.debugDescription)
             shot(app, "renamed-" + look)
-            // Back as it was for the next run: client.go not viewed, whitespace shown.
+            // Back as it was for the next run: client.go not viewed (its box is back up the page), whitespace shown.
+            for _ in 0..<12 where !box.isHittable { app.swipeDown() }
             box.tap()
-            app.buttons["code-review-options"].tap()
+            let options = app.buttons["code-review-options"]
+            for _ in 0..<4 where !options.isHittable { app.swipeDown() }
+            options.tap()
             whitespace.tap()
             app.terminate()
         } }
