@@ -17,12 +17,16 @@ import { historyBack, historyForward, historyGo, parentPath, pathSegments, writa
 import { hitFolder, hitName, nameEntries, searchNames, type NameHit } from "../../lib/files-find-name";
 import { ago, bytes, shortPath } from "../../lib/format";
 import { openPanel } from "../../lib/panel";
+import { navigate } from "../../lib/router";
 import { notePlace } from "../../lib/panel-memory";
 import { FILE_MKDIR_FEATURE, FILE_WRITE_FEATURE } from "../../lib/file-ops";
+
+/** New terminals take a folder (#5832). */
+const PANE_CWD_FEATURE = "pane_cwd";
 import { hubHas, useStore } from "../../lib/store";
 import { useFsLive } from "../../lib/use-fs-live";
 import { NARROW, useMedia } from "../../lib/viewport";
-import { Button, copyText, cx, IconButton, Loading, Menu, useMenu } from "../../ui/atoms";
+import { Button, copyText, cx, IconButton, Loading, Menu, toast, useMenu } from "../../ui/atoms";
 import type { MenuAt, MenuItem } from "../../ui/menu-model";
 import { Icon } from "../../ui/icons";
 import { SearchField } from "../../ui/SearchField";
@@ -155,6 +159,17 @@ export function FilesPanel({ mid, sid, cwd, path, file, highlight: marked, onClo
   const writable = writableHere(shown, home);
   // permissions (#5831): where the computer takes changes, not on Windows
   const canChmod = writable && hubHas(features, FILE_CHMOD_FEATURE) && machine?.os?.toLowerCase() !== "windows";
+  // Open Terminal Here (#5832): a new tab on the computer in that folder, in the session's workspace when it has one
+  const canTerminal = hubHas(features, PANE_CWD_FEATURE);
+  const workspace = useStore((s) => s.sessions[mid]?.find((x) => x.session_id === sid)?.workspace_id);
+  const openTerminal = async (folder: string) => {
+    try {
+      const r = await api<{ terminal: string }>(`/machines/${enc(mid)}/panes`, { method: "POST", json: { cwd: folder, ...(workspace ? { workspace_id: workspace } : {}) } });
+      navigate({ name: "terminal", mid, id: r.terminal, view: "terminals" });
+    } catch (e) {
+      toast(t("files-nav.terminal_failed", { error: errorText(e) }), "error");
+    }
+  };
   // A broken link says what it says (Info); a folder opens; a file opens in the viewer.
   const enter = (e: FsEntry) => (e.link_broken ? setInfo({ path: joinPath(shown, e.name), entry: e }) : e.dir ? go(joinPath(shown, e.name)) : setOpen([joinPath(shown, e.name)]));
 
@@ -219,6 +234,7 @@ export function FilesPanel({ mid, sid, cwd, path, file, highlight: marked, onClo
             items={[
               { key: "tree", label: t("files-tree.treeView"), checked: tree, onSelect: () => chooseView(tree ? "drill" : "tree") },
               { key: "hidden", label: t("session-filespanel.show_hidden"), checked: showHidden, onSelect: () => setShowHidden(!showHidden) },
+              ...(canTerminal ? [{ key: "terminal", label: t("files-nav.open_terminal"), icon: "terminal" as const, onSelect: () => void openTerminal(shown) }] : []),
               { key: "info", label: t("files-info.info"), icon: "info", onSelect: () => setInfo({ path: shown }) },
               { key: "copy", label: t("session-filespanel.copy_path"), icon: "copy", onSelect: () => copyText(shown) },
               ...(sessionFolder && shown !== sessionFolder ? [{ key: "session", label: t("files-nav.session_folder"), icon: "folder" as const, onSelect: () => go(sessionFolder) }] : []),
@@ -245,6 +261,7 @@ export function FilesPanel({ mid, sid, cwd, path, file, highlight: marked, onClo
             items={beforeTrash(ops.rowItems(rowMenu.x, rowMenu.open), [
               { key: "info", label: t("files-info.info"), icon: "info", divider: true, onSelect: () => setInfo({ path: rowMenu.x.path }) },
               ...(canChmod ? [{ key: "perm", label: t("files-perm.menu"), icon: "shield" as const, onSelect: () => setPerm({ path: rowMenu.x.path }) }] : []),
+              ...(canTerminal && rowMenu.x.dir ? [{ key: "terminal", label: t("files-nav.open_terminal"), icon: "terminal" as const, onSelect: () => void openTerminal(rowMenu.x.path) }] : []),
             ])}
             anchor={rowMenu.at.anchor ?? null}
             point={rowMenu.at.point}

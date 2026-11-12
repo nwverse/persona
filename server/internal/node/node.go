@@ -1366,9 +1366,10 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		var a struct {
 			Kind        string `json:"kind"`
 			WorkspaceID string `json:"workspace_id"`
+			Cwd         string `json:"cwd"` // the file page's Open Terminal Here (#5832)
 		}
 		_ = json.Unmarshal(params, &a)
-		return n.newShell(ctx, a.Kind, a.WorkspaceID)
+		return n.newShell(ctx, a.Kind, a.WorkspaceID, a.Cwd)
 	case "panes.close_finished": // the user's "Close finished terminals" (stopped.go, #4754)
 		var a struct {
 			Panes   string `json:"panes"`

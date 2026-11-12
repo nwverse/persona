@@ -17154,7 +17154,8 @@ def mock_files(p, q):
         if isinstance(v, tuple):
             return {"path": path, "name": name, "size": mock_size(v), "mime": v[0], "data": v[1], "is_dir": False, "truncated": False}, 200
         mime = "text/markdown" if name.endswith(".md") else "text/plain"
-        return {"path": path, "name": name, "size": mock_size(v), "mime": mime, "text": v, "is_dir": False, "truncated": False}, 200
+        return {"path": path, "name": name, "size": mock_size(v), "mime": mime, "text": v, "is_dir": False, "truncated": False,
+                "revision": mock_text_revision(v)}, 200
     home, cwd = mock_abs(mid, arg("cwd"), "")
     root = home + "/" + MOCK_REPO
     if not (cwd == root or cwd.startswith(root + "/")):
@@ -17265,6 +17266,11 @@ def link_real(rel):
         if real and k.endswith("/") and (rel == k or rel.startswith(k)):
             return real + rel[len(k):]
     return rel
+
+
+def mock_text_revision(text):
+    """A text file's revision as file?stream=1 gives it and files/write checks it (#5829): its content's hash here."""
+    return "r" + hashlib.sha1(text.encode()).hexdigest()[:12]
 
 
 def mock_stat_detail(mid, asked, cwd):
@@ -20566,7 +20572,7 @@ _features_without_file_ops = features
 def features():
     return (_features_without_file_ops() + (["upload_dir", "file_edit"] if FILE_OPS else [])
             + (["file_info"] if os.environ.get("MOCK_FILE_LINKS") else [])
-            + (["file_mkdir", "file_write", "file_zip", "file_copy", "file_chmod"] if FILE_OPS else []))
+            + (["file_mkdir", "file_write", "file_zip", "file_copy", "file_chmod", "pane_cwd"] if FILE_OPS else []))
 
 
 def file_ops_key(mid, path, cwd):
@@ -20731,9 +20737,13 @@ def file_make_route(h, p, body):
             if taken(rel): return h.send_json({"error": "已经有了", "code": "exists", "name": rel.rpartition("/")[2]}, 409) or True
         elif rel not in MOCK_TREE:
             return h.send_json({"error": "不存在", "code": "not_found"}, 404) or True
+        elif not req.get("force") and isinstance(MOCK_TREE[rel], str) and req.get("revision") != mock_text_revision(MOCK_TREE[rel]):
+            # changed since it was opened (GET /mock/touch?path=): nothing written, as the node answers
+            return h.send_json({"error": "the file changed on the computer since it was opened", "code": "file_changed",
+                                "revision": mock_text_revision(MOCK_TREE[rel]), "mtime": ago()}, 409) or True
         MOCK_TREE[rel] = text
         fs_changed(mid, [(home + "/" + rel.rpartition("/")[0]).rstrip("/")], True)
-        return h.send_json({"path": home + "/" + rel, "size": len(text.encode()), "revision": "r%d" % len(FILE_OPS_LOG), "mtime": ago()}) or True
+        return h.send_json({"path": home + "/" + rel, "size": len(text.encode()), "revision": mock_text_revision(text), "mtime": ago()}) or True
     if op == "chmod":  # #5831: the bits kept for the Info sheet's answer
         home, rel, err = file_ops_key(mid, req.get("path", ""), cwd)
         if err: return h.send_json(*err) or True
@@ -21810,6 +21820,12 @@ class H(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if p == "/mock/touch":  # #5829: a file changed on the computer behind an open editor (path relative to the home)
+            rel = q.get("path", [""])[0].lstrip("~/")
+            if isinstance(MOCK_TREE.get(rel), str):
+                MOCK_TREE[rel] += "\n// changed on the computer\n"
+                return self.send_json({"touched": rel})
+            return self.send_json({"error": "no such text file"}, 404)
         if p == "/mock/video-reads":
             with VIDEO_READ_LOCK:
                 if "reset" in q: VIDEO_READS.clear()

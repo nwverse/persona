@@ -140,7 +140,11 @@ func (h *Hub) fileEdit(op string) http.HandlerFunc {
 			var re *rpc.Error
 			switch {
 			case errors.As(err, &re) && re.Code == "" && strings.HasPrefix(re.Message, "unknown method"):
-				writeCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.T(h.requestLang(r), "hub-fileedit.outdated", i18n.Args{"name": m.cfg.Name}), nil)
+				key := "hub-fileedit.outdated"
+				if op != "rename" && op != "move" && op != "trash" && op != "restore" {
+					key = "hub-fileedit.outdated_feature" // mkdir, write, zip, copy, chmod (#5828-#5831)
+				}
+				writeCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.T(h.requestLang(r), key, i18n.Args{"name": m.cfg.Name}), nil)
 			case errors.As(err, &re) && re.Code == proto.CodeNotFound:
 				writeCode(w, http.StatusNotFound, proto.CodeNotFound, re.Message, nil)
 			default:
