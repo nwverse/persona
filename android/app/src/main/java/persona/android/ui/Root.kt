@@ -737,9 +737,11 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         val sides = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
         val sideRoom = sides.getLeft(LocalDensity.current, LocalLayoutDirection.current) > 0 ||
             sides.getRight(LocalDensity.current, LocalLayoutDirection.current) > 0
+        val stackEvidence = assistantStackEvidence(visible)
         CompositionLocalProvider(LocalAmbience provides ambience, LocalWindowLayout provides windowLayout, LocalLargeWindowInput provides regular,
             LocalInboxItemPages provides inboxItemPages,
             LocalInboxTriageSetup provides triageSetup, LocalAssistantSidebarHost provides sidebar) {
+          AssistantStackNavigationProbe(stackEvidence.route, stackEvidence.selectedKey)
           JShellDrawer(sidebar.opened.value, onDismiss = { sidebar.opened.value = false }, drawer = { sharedSidebar("shared-sidebar") }) {
           Box(Modifier.fillMaxSize().background(PersonaTheme.palette.background)) {
             // One background for the window. Pages paint the same light at the same place (PageBackdrop), so in wide
