@@ -11,7 +11,7 @@
   "source_plugin": "插件",
   "title": "Skills",
   "upload": "上传 ZIP",
-  "file_label": "Skill ZIP 文件",
+  "file_label": "选择 ZIP 文件",
   "package_hint": "选择一个不超过 4 MiB 的 ZIP。根目录或一个包裹文件夹内须有唯一的 SKILL.md。安装前会预览名称、描述和位置。",
   "checking": "正在上传并校验…",
   "installing": "正在安装…",

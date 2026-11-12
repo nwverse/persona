@@ -1,8 +1,16 @@
 import { t } from "../i18n";
 import { api, ApiError } from "./api";
+import type { Skill } from "./hub-update";
 import { MANAGER_HEADER } from "./manager-choice";
 
 export const MAX_SKILL_ZIP = 4 << 20;
+
+// The same read-only inventory API. Keep this upload editor's abort/auth fencing in the
+// lazy Settings module, not hub-update's shared first-screen module.
+export const skillImportList = (manager: string, signal: AbortSignal, current: () => boolean) =>
+  api<{ machine_id: string; machine?: string; skills: Skill[] | null }>("/skills", {
+    headers: { [MANAGER_HEADER]: manager }, signal, isAuthContextCurrent: current,
+  });
 
 export interface SkillImportResult {
   name: string;

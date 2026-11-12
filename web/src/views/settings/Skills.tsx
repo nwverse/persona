@@ -2,9 +2,9 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { t } from "../../i18n";
 import { credentialOwner, errorText, subscribeCredentialOwner } from "../../lib/api";
-import { skills as loadSkills, type Skill } from "../../lib/hub-update";
+import type { Skill } from "../../lib/hub-update";
 import { useShownManager } from "../../lib/manager-choice";
-import { importSkill, readSkillZIP, skillImportError, type SkillImportResult } from "../../lib/skill-import";
+import { importSkill, readSkillZIP, skillImportError, skillImportList, type SkillImportResult } from "../../lib/skill-import";
 import { Button, Dialog, Loading } from "../../ui/atoms";
 import { Group, Pill, Row, RowFailed, SettingsHint } from "./SettingsParts";
 
@@ -33,6 +33,7 @@ function SkillsForManager({ manager, owner }: { manager: string; owner: string }
   const reading = useRef<AbortController | null>(null);
   const admitted = useRef(false);
   const uploadButton = useRef<HTMLDivElement>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
   const previewBody = useRef<HTMLDivElement>(null);
   const current = () => active.current && credentialOwner() === owner;
 
@@ -41,7 +42,7 @@ function SkillsForManager({ manager, owner }: { manager: string; owner: string }
     const controller = new AbortController();
     reading.current = controller;
     try {
-      const r = await loadSkills(manager, { signal: controller.signal, isAuthContextCurrent: current });
+      const r = await skillImportList(manager, controller.signal, current);
       if (!current() || controller.signal.aborted) return;
       setList(r.skills ?? []); setMachine(r.machine || r.machine_id); setError("");
     } catch (e) {
@@ -137,11 +138,9 @@ function SkillsForManager({ manager, owner }: { manager: string; owner: string }
           {view?.error && <p role="alert" className="text-red">{view.error}</p>}
           {view?.phase === "select" && <>
             <p>{t("settings-skills.package_hint")}</p>
-            <label className="block space-y-2">
-              <span>{t("settings-skills.file_label")}</span>
-              <input type="file" accept=".zip,application/zip" className="block min-h-11 w-full min-w-0 text-ink file:mr-3 file:rounded-control file:border-0 file:bg-inset file:px-3 file:py-2 file:text-ink"
-                onChange={(e) => { void check(e.currentTarget.files?.[0]); e.currentTarget.value = ""; }} />
-            </label>
+            <Button className="min-h-11" onClick={() => fileInput.current?.click()}>{t("settings-skills.file_label")}</Button>
+            <input ref={fileInput} type="file" accept=".zip,application/zip" className="hidden" aria-label={t("settings-skills.file_label")}
+              onChange={(e) => { void check(e.currentTarget.files?.[0]); e.currentTarget.value = ""; }} />
           </>}
           {busy && <div role="status" className="flex items-center gap-3"><Loading />{t(view?.phase === "checking" ? "settings-skills.checking" : view?.phase === "undoing" ? "settings-skills.undoing" : "settings-skills.installing")}</div>}
           {view?.phase === "preview" && result && <>

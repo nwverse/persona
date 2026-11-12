@@ -63,10 +63,7 @@ export const checkHubUpdate = () => api<HubUpdateStatus>("/hub/update/check", { 
 export const startHubUpdate = (now: boolean) => api<HubUpdateStatus>("/hub/update", { method: "POST", json: now ? { now: true } : {} });
 export const setHubUpdateSettings = (s: { auto?: boolean; auto_notice_seen?: boolean }) => api<HubUpdateStatus>("/hub/update/settings", { method: "PUT", json: s });
 export const hubUpdateHistory = () => api<{ history: HubUpdateRecord[] | null }>("/hub/update/history").then((r) => r.history ?? []);
-export const skills = (manager?: string, options: { signal?: AbortSignal; isAuthContextCurrent?: () => boolean } = {}) =>
-  api<{ machine_id: string; machine?: string; skills: Skill[] | null }>("/skills", {
-    headers: manager ? { [MANAGER_HEADER]: manager } : undefined, ...options,
-  });
+export const skills = (manager?: string) => api<{ machine_id: string; machine?: string; skills: Skill[] | null }>("/skills", { headers: manager ? { [MANAGER_HEADER]: manager } : undefined });
 
 export const DOCKER_COMMAND = "docker compose pull && docker compose up -d";
 

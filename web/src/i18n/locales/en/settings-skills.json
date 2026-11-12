@@ -12,7 +12,7 @@
   "source_plugin": "Plugin",
   "title": "Skills",
   "upload": "Upload ZIP",
-  "file_label": "Skill ZIP file",
+  "file_label": "Choose ZIP file",
   "package_hint": "Choose one ZIP, up to 4 MiB. It must contain one SKILL.md at the root or in one enclosing folder. You'll review the name, description and location before installing.",
   "checking": "Uploading and checking…",
   "installing": "Installing…",

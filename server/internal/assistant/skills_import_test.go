@@ -12,6 +12,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 type skillImportHub struct {
@@ -137,6 +138,13 @@ func TestSkillImportEnvironmentChangeAndOffline(t *testing.T) {
 	w = importHTTP(s, `{"op":"preview","archive":"UEs="}`, "")
 	if w.Code < 400 {
 		t.Fatalf("old node: %d %s", w.Code, w.Body)
+	}
+	for code, status := range map[string]int{"skill_conflict": 409, "skill_zip_path": 422, "skill_import_busy": 429, "skill_import_io": 500} {
+		h.err = &rpc.Error{Code: code, Message: "private filesystem detail"}
+		w = importHTTP(s, `{"op":"preview","archive":"UEs="}`, "")
+		if w.Code != status || !strings.Contains(w.Body.String(), code) || strings.Contains(w.Body.String(), "private filesystem") {
+			t.Fatalf("stable sanitized validation error: %d %s", w.Code, w.Body)
+		}
 	}
 }
 

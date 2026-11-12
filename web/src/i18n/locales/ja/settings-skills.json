@@ -11,7 +11,7 @@
   "source_plugin": "プラグイン",
   "title": "スキル",
   "upload": "ZIPをアップロード",
-  "file_label": "スキルのZIPファイル",
+  "file_label": "ZIPファイルを選択",
   "package_hint": "4MiB以下のZIPを1つ選んでください。ルート、または1つの外側フォルダー内に唯一のSKILL.mdが必要です。インストール前に名前、説明、場所を確認できます。",
   "checking": "アップロード・検証中…",
   "installing": "インストール中…",

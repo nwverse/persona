@@ -14,6 +14,30 @@ import (
 	"testing"
 )
 
+func TestImportUsesExistingDefaultAndConfiguredUserDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("PERSONA_SKILLS_DIR", "")
+	t.Setenv("PERSONA_HOME", "")
+	t.Setenv("PERSONA_PLUGIN_SKILLS_DIR", t.TempDir())
+	for _, root := range []string{filepath.Join(home, ".persona"), filepath.Join(t.TempDir(), "custom-state")} {
+		if root != filepath.Join(home, ".persona") {
+			t.Setenv("PERSONA_HOME", root)
+		}
+		i := &Importer{}
+		target := ImportTarget{Scope: "example-manager", Cwd: t.TempDir()}
+		archive := skillZIP(t, zipEntry{"SKILL.md", importManifest, 0})
+		preview, err := i.Import(context.Background(), target, ImportRequest{Op: "preview", Archive: archive})
+		if err != nil || preview.Destination != filepath.Join(root, "skills", "example-skill") {
+			t.Fatalf("resolver: %+v, %v", preview, err)
+		}
+		if _, err := i.Import(context.Background(), target, ImportRequest{Op: "install", Archive: archive, Reference: preview.Reference}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestImportPreservesEmptyResourcesAndRejectsPortablePathAliases(t *testing.T) {
 	i, target := importFixture(t)
 	archive := skillZIP(t, zipEntry{"package/SKILL.md", importManifest, 0},

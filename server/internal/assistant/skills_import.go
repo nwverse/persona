@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
@@ -88,7 +89,20 @@ func (s *Service) importSkill(w http.ResponseWriter, r *http.Request) {
 	params := map[string]any{"dir": target.dir, "scope": target.scope, "op": in.Op, "archive": in.Archive, "reference": in.Reference}
 	if err := s.call(ctx, target.machine, "skills.import", params, &out); err != nil {
 		var coded *rpc.Error
-		if errors.Is(err, apierr.ErrOffline) || (errors.As(err, &coded) && coded.Code != "") {
+		if errors.As(err, &coded) && strings.HasPrefix(coded.Code, "skill_") {
+			status := http.StatusUnprocessableEntity
+			switch coded.Code {
+			case "skill_conflict", "skill_import_expired", "skill_import_changed", "skill_environment_changed", "skill_undo_changed":
+				status = http.StatusConflict
+			case "skill_import_busy":
+				status = http.StatusTooManyRequests
+			case "skill_import_io":
+				status = http.StatusInternalServerError
+			case "skill_import_request":
+				status = http.StatusBadRequest
+			}
+			apierr.WriteCode(w, status, coded.Code, errors.New(coded.Code))
+		} else if errors.Is(err, apierr.ErrOffline) || (errors.As(err, &coded) && coded.Code != "") {
 			apierr.Call(w, err)
 		} else {
 			// Keep transport/offline classification without leaking an arbitrary node error in this upload flow.
