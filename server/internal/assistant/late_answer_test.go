@@ -128,8 +128,7 @@ func TestIrreversibleAskUserHistoryStaysUnanswered(t *testing.T) {
 	database := todoTestDB(t)
 	e := newAskTodoEnv(t, database)
 	ix, _ := expireRecorded(e, database, askArgs("6h", "false"))
-	e.s.sweepDecisionDeadlines(time.Now().Add(7 * time.Hour))
-	time.Sleep(100 * time.Millisecond)
+	e.s.sweepDecisionDeadlines(time.Now().Add(7 * time.Hour)) // a question that cannot be undone is handled within the sweep
 	rec := askRecord(t, database, ix.ID)
 	if rec.Interaction.Reversible == nil || *rec.Interaction.Reversible || rec.Resolution == nil || rec.Resolution.Late || len(rec.Resolution.Answers) != 0 {
 		t.Fatalf("history %+v %+v", rec.Interaction.Reversible, rec.Resolution)
