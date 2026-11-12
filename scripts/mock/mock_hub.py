@@ -1350,6 +1350,11 @@ if MOCK_CODEX_WAITING:
                          "", agent="codex", launcher="codex", awaiting_first_message=True, capabilities=CODEX_WAITING_CAPS))
 
 
+# MOCK_RUN_HERE_CODEX=<mid,…> (#5504): those computers start Codex in a shell pane the user picked and keep that pane when
+# the start fails (run_here), so Run agent here offers their Codex launchers; the others' stay out, as an older node's.
+RUN_HERE_CODEX = {x.strip() for x in os.environ.get("MOCK_RUN_HERE_CODEX", "").split(",") if x.strip()}
+
+
 def codex_launcher(name="codex", model="gpt-5.5"):
     l = {"name": name, "model": model, "agent": "codex", "agent_type": "codex"}
     if MOCK_CODEX_WAITING:
@@ -11522,6 +11527,8 @@ def machine_launchers(mid=""):
         out = [l for l in out if l["name"] != "codex"]
     if mid and mid in os.environ.get("MOCK_NO_CODEX", "").split(","):  # computers without a Codex launcher (#5275)
         out = [l for l in out if l["name"] != "codex"]
+    if mid in RUN_HERE_CODEX:
+        out = [dict(l, run_here=True, prompt_optional=True) if l.get("agent") == "codex" else l for l in out]
     if MOCK_PROVIDERS:
         out += [{k: l[k] for k in ("name", "display_name", "base_url", "model", "source") if l.get(k)}
                 for l in LAUNCHERS if l["source"] == "persona" and l.get("kind") != "api"]
