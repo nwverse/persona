@@ -54,5 +54,10 @@
   "restore_failed": "Couldn't put it back: {error}",
   "trash_failed": "Couldn't move to the Trash: {error}",
   "trashed_named": "Moved “{name}” to the Trash",
-  "dismiss": "Dismiss"
+  "dismiss": "Dismiss",
+  "download_zip": "Download as zip",
+  "archive_name": "Archive.zip",
+  "zipping_one": "Zipping {count} item on the computer…",
+  "zipping_other": "Zipping {count} items on the computer…",
+  "zip_failed": "Couldn’t zip: {error}"
 }

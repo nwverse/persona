@@ -140,6 +140,7 @@ extension View {
 struct FileViewer: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.showInFiles) private var showInFiles
     @State var ref: FileRef
     var key: SessionKey? = nil
     @State private var page: FileViewerModel?
@@ -383,6 +384,17 @@ struct FileViewer: View {
                     }
                 default:
                     EmptyView()
+                }
+            }
+            if let showInFiles, page?.kind != .directory {
+                Section {
+                    Button {
+                        let shown = page?.file?.path ?? ref.path
+                        let full = shown.hasPrefix("/") || shown.hasPrefix("~") ? shown : ((ref.cwd ?? "") as NSString).appendingPathComponent(shown)
+                        dismiss()
+                        showInFiles(full)
+                    } label: { Label("Show in Files Page", systemImage: Theme.Icon.folder) }
+                    .accessibilityIdentifier("file-show-in-files")
                 }
             }
             Button { UIPasteboard.general.string = ref.path } label: { Label("Copy Path", systemImage: Theme.Icon.copy) }
