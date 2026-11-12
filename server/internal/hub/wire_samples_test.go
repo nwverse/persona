@@ -131,6 +131,8 @@ func wireDecodeGo(t *testing.T, c wireSample) {
 		target = &struct {
 			Fleet FleetState `json:"fleet"`
 		}{}
+	case "queue_edit":
+		target = &proto.QueueEdit{}
 	case "inbox":
 		target = &struct {
 			Items []assistant.InboxItem `json:"items"`
@@ -304,6 +306,23 @@ func wireSamples(t *testing.T) map[string][]wireSample {
 	add("items", "items_inline_image", "未启用懒加载时图片保留内联数据。", "items", httpJSON(map[string]any{"items": []proto.Item{img}, "has_more": false}),
 		map[string]any{"/items/0/image/mime": "image/png", "/items/0/image/data": img.Image.Data, "/items/0/image/lazy": nil},
 		"server/internal/proto/item.go: Image", "apple/Shared/Models.swift: ImagePayload")
+	// A Persona chat's queue edit (take back, delete, move): the messages that were queued and, for the composer, their photos.
+	// The hub writes the node's answer as it is (proxyBody), so the sample is the node's encoding of proto.QueueEdit.
+	queueAnswer := func(v proto.QueueEdit) json.RawMessage {
+		raw, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return httpJSON(json.RawMessage(raw))
+	}
+	add("queue", "queue_edit_images", "取回 Persona 对话的排队消息：应答带每条消息的照片，没有照片的那条为 null。", "queue_edit",
+		queueAnswer(proto.QueueEdit{Queue: []string{"请看这张图。", "再检查一遍。"}, Images: [][]proto.Image{{*img.Image}, nil}}),
+		map[string]any{"/queue/0": "请看这张图。", "/queue/1": "再检查一遍。", "/images/0/0/mime": "image/png", "/images/0/0/data": img.Image.Data, "/images/1": nil},
+		"server/internal/proto/session.go: QueueEdit", "server/internal/node/assistant_queue.go: assistantEditQueue", "docs/protocol/protocol.md: POST /api/v1/sessions/{mid}/{sid}/queue")
+	add("queue", "queue_edit_words", "没有一条带照片时，应答省略 images。", "queue_edit",
+		queueAnswer(proto.QueueEdit{Queue: []string{"请补充示例。", "再检查一遍。"}}),
+		map[string]any{"/queue/0": "请补充示例。", "/queue/1": "再检查一遍。"},
+		"server/internal/proto/session.go: QueueEdit", "server/internal/node/assistant_queue.go: assistantEditQueue", "docs/protocol/protocol.md: POST /api/v1/sessions/{mid}/{sid}/queue")
 	monitor := task
 	monitor.ID, monitor.Seq = "entry_monitor#0", 11
 	monitor.Task = &proto.TaskNote{Kind: "monitor", Status: "event", Title: "示例监控", TaskID: "monitor_example", Detail: "示例值 > 0 & < 10"}
