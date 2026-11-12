@@ -13582,9 +13582,10 @@ if os.environ.get("MOCK_LONG_HISTORY") == "1":
 # MOCK_LONG_REPORT=1: an agent chat that ends in one very long final report, the shape of a real planning session that
 # scrolled badly (#4970): about 33,000 characters in one reply (headings, lists, nine tables of 115 rows, a dozen code
 # blocks, a quote), after 120 tool calls folded into work lines, eight subagent cards and the same report handed in as a
-# plan. `-openSession macbook/a1f3c2d4-0000-4000-8000-000000000090`. MOCK_LONG_REPORT=<items.json> serves that file's
-# items instead (a transcript's items as the hub parses them, kept outside the repository), cutting long tool outputs as
-# the hub's pages do.
+# plan. `-openSession macbook/a1f3c2d4-0000-4000-8000-000000000090`. MOCK_LONG_REPORT=cjk: the same chat with a report as
+# varied in its Chinese characters as a real one (#5076: what the glyph cache has to hold). MOCK_LONG_REPORT=<items.json>
+# serves that file's items instead (a transcript's items as the hub parses them, kept outside the repository), cutting
+# long tool outputs as the hub's pages do.
 LONG_REPORT = "a1f3c2d4-0000-4000-8000-000000000090"
 
 
@@ -13618,14 +13619,59 @@ def long_report_text():
     return "\n".join(out)
 
 
+def long_report_text_varied():
+    """The report's shape with a real report's glyph variety (#5076): about 10,900 Chinese characters, some 800 of them
+    distinct, the most common fifty 38% of the text (`MOCK_LONG_REPORT=1` repeats one sentence: about 100 distinct).
+    The characters are drawn from the CJK block by a fixed seed, so every run serves the same text."""
+    import random
+    rnd = random.Random(5076)
+    pool = [chr(0x4E00 + (k * 37) % 20902) for k in range(800)]
+    weights = [1 / (k + 15) for k in range(len(pool))]  # Zipf-like: a few characters often, most of them rarely
+
+    def words(n):
+        cs = rnd.choices(pool, weights, k=n)
+        for k in range(rnd.randint(8, 14), n, rnd.randint(9, 16)):  # punctuation as prose has it
+            cs[k] = rnd.choice("，，，。；、")
+        if rnd.random() < 0.4:  # an English word or two, as the real one mixes them
+            cs.insert(rnd.randrange(n), " %s " % rnd.choice(("adapter", "rollout", "client", "cache", "schema", "v2")))
+        return "".join(cs) + "。"
+
+    tables = [(7, 3), (20, 3), (10, 2), (9, 3), (8, 3), (35, 3), (8, 5), (7, 3), (11, 3)]
+    codes = [31, 6, 3, 7, 8, 18, 3, 1, 1, 20, 6, 56]
+    out = ["# " + words(10), "", "> " + words(30), ""]
+    for n in range(12):
+        out += ["## %d. %s" % (n + 1, words(6)), ""]
+        for k in range(3):
+            out += [words(110), ""]
+            out += ["### %d.%d %s" % (n + 1, k + 1, words(7)), ""]
+            out += ["- **%s**：%s" % (words(4), words(30 + j * 6)) for j in range(3)] + [""]
+            if k == 1:
+                out += ["#### " + words(4), "", "1. " + words(12), "2. " + words(14), "3. " + words(10), ""]
+        if n < len(tables):
+            rows, cols = tables[n]
+            out.append("| " + " | ".join(words(3) for _ in range(cols)) + " |")
+            out.append("|" + "---|" * cols)
+            out += ["| " + " | ".join(("`field_%d_%d`" % (r, c)) if c == 0 else words(8 + 8 * (c % 2)) for c in range(cols)) + " |"
+                    for r in range(rows - 2)]
+            out.append("")
+        if n < len(codes):
+            out.append("```text")
+            out += ["%-3d %s" % (j + 1, "step_%02d -> check_%02d -> commit  # keep the old reader until every client moved" % (j, j))[:64 + j % 10]
+                    for j in range(codes[n])]
+            out += ["```", ""]
+    return "\n".join(out)
+
+
 if os.environ.get("MOCK_LONG_REPORT"):
     _src = os.environ["MOCK_LONG_REPORT"]
     SESSIONS.append(sess("macbook", LONG_REPORT, "数据层迁移方案", "/Users/me/code/weather", "done", "idle", "weather", 1, "plan", 6, 3,
                          "方案写好了，共十二部分。"))
-    if _src == "1":
-        _report = long_report_text()
+    if _src in ("1", "cjk"):
+        _report = long_report_text_varied() if _src == "cjk" else long_report_text()
         _r = [it("user", "text", 180, text="把天气 App 的数据层迁移方案整理出来，先读完现有代码再写。")]
         _r += [it("assistant", "text", 179, text="好，我先分头读代码。")]
+        if _src == "cjk":  # a plain call before the subagents: the oldest step a call's notice can lead back to (-showJumpPerf)
+            _r += tool("Bash", {"command": "ls Sources/Data"}, "".join("Model%02d.swift\n" % k for k in range(15)), 179)
         for _a in range(8):
             _r += tool("Agent", {"description": "读第 %d 组模块" % (_a + 1), "prompt": "读 Sources/Data 下第 %d 组文件，列出公开接口。" % (_a + 1)},
                        "第 %d 组共 12 个文件，公开接口如下：\n" % (_a + 1) + "".join("- func load%d()\n" % k for k in range(40)), 178 - _a)
@@ -23340,7 +23386,7 @@ MOCK_HELP.append("MOCK_EXTENSION_PICKERS=1  （配合 MOCK_EXTENSIONS=1）多一
 MOCK_HELP.append("MOCK_EXTENSION_OPS=1|fail  （配合 MOCK_EXTENSIONS）扩展的安装 / 升级 / 卸载分步骤推进度（extension_operation 事件）：后台预览、停在等你同意、同意后同一个操作接着装；fail：每个扩展第一次安装停在「启动」、第一次卸载停在「删除」，都能重试；MOCK_EXTENSION_OPS_STEP=秒 每步的时长；MOCK_EXTENSION_INSTALL_DELAY=秒 没有分步骤的旧 hub 安装 / 卸载要这么久才回（#3307）")
 MOCK_HELP.append("MOCK_MANAGER_NAS=1  （默认的三个管理者）NAS 归离线的「家里」：像 hub 一样显示成离线，error 是 hub 的「助手暂时连不上，稍后再试」；它的一个 agent（备份脚本）状态 unknown")
 MOCK_HELP.append("MOCK_ASSISTANT_BASH=1  主对话自己的第一条 Bash 在等批准（#4883），是它唯一的卡片：对话里输入区上方显示「在等你批准」，不只在收起的「需要你」里")
-MOCK_HELP.append("MOCK_LONG_REPORT=1|<items.json>  An Agent chat (macbook/a1f3c2d4-0000-4000-8000-000000000090) ending in one ~33,000-character report with nine tables and a dozen code blocks after 120 folded tool calls (#4970); a path serves that file's transcript items instead")
+MOCK_HELP.append("MOCK_LONG_REPORT=1|cjk|<items.json>  An Agent chat (macbook/a1f3c2d4-0000-4000-8000-000000000090) ending in one ~33,000-character report with nine tables and a dozen code blocks after 120 folded tool calls (#4970); cjk: the report as varied in Chinese characters as a real one, ~800 distinct (#5076); a path serves that file's transcript items instead")
 MOCK_HELP.append("MOCK_ASK_LONG=1|actions|swipe|review|perm|agent  卡片比输入区上方的盒子还高（#3112）：1 主对话的 ask_user 提问卡（八个带说明的选项）；actions 单道八个带说明选项的多选题，swipe 短单选拖动不误发，review 六道单选题的长复核页，Submit 首屏可达（#4839）；perm 主对话的飞书授权卡（超长命令）；agent MacBook 上补测试的 Agent 对话里两张这样的授权卡、没有别的卡（手机和侧边面板把第二张折在「还有 1 件」后面）")
 MOCK_HELP.append("MOCK_MANAGER_NEEDS_YOU=0  名册不带 inbox_needs_you（旧 hub，或还不上报这个数的旧管理者）；默认每个在线的管理者带它收件箱里「需要你处理」的未完成条目数，数变了推 managers")
 MOCK_HELP.append("MOCK_MANAGER_OUTDATED=1  设置 › 管理者：「工作」带 needs_update（它还不读自己的 manager.json，hub 在它在线时这样标）")

@@ -47,8 +47,8 @@ let root: Root;
 const flush = async () => {
   for (let i = 0; i < 5; i++) await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
 };
-const open = async () => {
-  act(() => root.render(<ScreenView target={{ mid: "macbook", token: "tok", embedded: false, name: "MacBook", keep: "", unlock: false }} />));
+const open = async (embedded = false) => {
+  act(() => root.render(<ScreenView target={{ mid: "macbook", token: "tok", embedded, name: "MacBook", keep: "", unlock: false }} />));
   await flush();
 };
 const framebuffer = async (w: number, h: number) => {
@@ -134,22 +134,55 @@ describe("ScreenView on a Mac with two displays", () => {
     act(() => button()!.click());
     act(() => rows()[2].click());
     await flush();
-    expect(status.asked).toBe(1);
 
     act(() => button()!.click()); // the menu open as the display goes
+    await flush();
+    let asked = status.asked;
     status.displays = [];
     await framebuffer(480, 300);
-    expect(status.asked, "a framebuffer of another size asks for the displays again").toBe(2);
+    expect(status.asked - asked, "a framebuffer of another size asks for the displays again").toBe(1);
     expect(button()).toBeNull();
     expect(rows(), "the menu goes with its button").toEqual([]);
     expect(screen().style.width).toBe("");
 
     status.displays = TWO;
+    asked = status.asked;
     await framebuffer(960, 300);
-    expect(status.asked).toBe(3);
+    expect(status.asked - asked).toBe(1);
     expect(screen().style.left).toBe("-480px");
     act(() => button()!.click());
     expect(rows().map((r) => r.getAttribute("aria-checked")), "one click opens it again").toEqual(["false", "false", "true"]);
+  });
+});
+
+describe("ScreenView keeping up with the Mac", () => {
+  // Two displays of one size swapped in System Settings: the framebuffer keeps its size, so only opening the menu asks.
+  it("asks for the displays again as the menu opens and follows them", async () => {
+    await open();
+    await framebuffer(960, 300);
+    await connect();
+    act(() => button()!.click());
+    act(() => rows()[2].click());
+    await flush();
+    expect(screen().style.left).toBe("-480px");
+
+    status.displays = [{ ...TWO[1], x: 0 }, { ...TWO[0], x: 240 }];
+    const asked = status.asked;
+    act(() => button()!.click());
+    await flush();
+    expect(status.asked - asked).toBe(1);
+    expect(screen().style.left, "display 2 is now the left one").toBe("0px");
+    expect(rows().map((r) => r.getAttribute("aria-checked"))).toEqual(["false", "true", "false"]);
+  });
+
+  // An app's page has no bar to choose in: what this browser kept must not crop it.
+  it("shows every display on a page an app embeds", async () => {
+    localStorage.setItem("persona.screen.display.macbook", "display-2");
+    await open(true);
+    await framebuffer(960, 300);
+    await connect();
+    expect(screen().style.width).toBe("");
+    expect(button()).toBeNull();
   });
 });
 

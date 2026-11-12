@@ -3,7 +3,7 @@
 // (Apple's ARD sign-in), which go to the Mac only and are not kept. The app shows this page in its web view.
 import { BASE } from "../lib/base";
 import RFB from "@novnc/novnc";
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, errorText, pastHub } from "../lib/api";
 import { cx, Spinner } from "../ui/atoms";
 import { t } from "../i18n";
@@ -12,7 +12,7 @@ import { ensureSubtleAES } from "./aes";
 import { displayChoice, framing, keepPointerIn, layoutDisplays, machineDisplays, setDisplayChoice, type MachineDisplay, type Rect, type Size } from "./displays";
 import { accountOf, keepLabel, keysymsOf, screenSocket, toApp, type ScreenTarget } from "./screen";
 
-const DisplayMenu = lazy(() => import("./DisplayMenu"));
+type DisplayMenuView = typeof import("./DisplayMenu").default;
 
 type Phase =
   | { kind: "checking" }
@@ -188,26 +188,45 @@ export function ScreenView({ target }: { target: ScreenTarget }) {
     return () => watch.disconnect();
   }, []);
 
-  // A framebuffer of another size means the Mac's displays changed (one plugged in or out, another resolution): the
-  // arrangement read before connecting no longer fits it, so ask for the one the node reads now.
+  // The arrangement the node reads now; the latest answer wins. Asked again when the framebuffer changes size (a display
+  // plugged in or out, another resolution: the one read before connecting no longer fits) and as the menu opens, so
+  // its list is the Mac's as the choice is made.
+  const asked = useRef(0);
+  const reask = useCallback(() => {
+    const n = ++asked.current;
+    sharing(target).then(
+      (on) => n === asked.current && setDisplays(machineDisplays(on.displays)),
+      () => {}, // the arrangement already here stays; the layout offers nothing when it does not fit
+    );
+  }, [target]);
+  useEffect(() => () => void asked.current++, []); // an answer after the page went changes nothing
   const lastFb = useRef<Size | null>(null);
   useEffect(() => {
     if (!fb) return;
     const before = lastFb.current;
     lastFb.current = fb;
-    if (!before || (before.w === fb.w && before.h === fb.h)) return;
+    if (before && (before.w !== fb.w || before.h !== fb.h)) reask();
+  }, [fb, reask]);
+
+  const offered = useMemo(() => (fb ? layoutDisplays(displays, fb) : []), [displays, fb]);
+  // A page an app embeds has no bar to choose in, so it shows every display whatever this browser kept.
+  const shown = target.embedded ? null : (offered.find((d) => d.id === choice) ?? null);
+  // The menu is a chunk of its own (its words stay off the first screen's catalog), loaded once there is a choice to
+  // offer. One that would not load (offline, the hub redeployed) leaves the page showing every display, and is asked for
+  // again the next time the screen goes live.
+  const offering = !target.embedded && phase.kind === "live" && offered.length > 1;
+  const [DisplayMenu, setDisplayMenu] = useState<DisplayMenuView | null>(null);
+  useEffect(() => {
+    if (DisplayMenu || !offering) return;
     let gone = false;
-    sharing(target).then(
-      (on) => !gone && setDisplays(machineDisplays(on.displays)),
-      () => {}, // the arrangement already here stays; the layout offers nothing when it does not fit
+    import("./DisplayMenu").then(
+      (m) => !gone && setDisplayMenu(() => m.default),
+      () => {},
     );
     return () => {
       gone = true;
     };
-  }, [fb, target]);
-
-  const offered = useMemo(() => (fb ? layoutDisplays(displays, fb) : []), [displays, fb]);
-  const shown = offered.find((d) => d.id === choice) ?? null;
+  }, [DisplayMenu, offering]);
   const frame = shown && fb && stage ? framing(stage, fb, shown.frame) : null;
   const cropped = frame !== null;
   useEffect(() => (cropped && clip.current ? keepPointerIn(clip.current) : undefined), [cropped]);
@@ -290,11 +309,7 @@ export function ScreenView({ target }: { target: ScreenTarget }) {
           {t("screen-screenview.title", { name })}
           <span className="ml-2 text-[11.5px] font-normal text-ink-3">{live ? (control ? t("screen-screenview.in_control") : t("screen-screenview.view_only")) : phaseLabel(phase)}</span>
         </p>
-        {live && offered.length > 1 && (
-          <Suspense fallback={null}>
-            <DisplayMenu offered={offered} shown={shown?.id ?? null} onChoose={choose} />
-          </Suspense>
-        )}
+        {offering && DisplayMenu && <DisplayMenu offered={offered} shown={shown?.id ?? null} onChoose={choose} onOpen={reask} />}
         {live && (
           <div role="group" aria-label={t("screen-screenview.mode_label")} className="flex shrink-0 rounded-control bg-field p-0.5">
             {[false, true].map((on) => (

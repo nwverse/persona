@@ -1219,6 +1219,14 @@ tool outputs cut to the page's 4 KB as the hub does). DEBUG `-showAnswerWhole YE
 optimized build measures before and after; `-showAnswerPartLines <n>` changes the part size. Measure with `-showPagePerf` (open, first glide,
 glide back) and the chat's own `-showAutoScroll` (its sweep is programmatic animated jumps, its glide moves the chat's list).
 
+`MOCK_LONG_REPORT=cjk` (#5076) serves the same chat with a report as varied in its Chinese characters as a real one (about 10,900 of them,
+some 800 distinct; `MOCK_LONG_REPORT=1` repeats one sentence and has about 100): what CoreGraphics' 1 MB glyph cache has to hold. The chat's
+animated jumps to the newest end and `-showAutoScroll`'s sweep run on its list (`ChatJumpRun`); DEBUG `-showSwiftUIJumps YES` animates
+SwiftUI's scroll position instead, as before #5076, so one build measures both (jumps to a line animate SwiftUI's either way). `-showAutoScroll` has a `hop` segment after the sweep (eight jumps of 600 pt, `frames-hop.json`), and
+`-showJumpPerf YES` measures the jumps a user makes, three of each (`frames-jump-<end|send|quote|call|near>-<n>.json`, and
+`jump-perf.txt` with where each left the list): ↓ and sending from 8000 pt into the history, and from the newest end to a quote of the longest
+answer, to the oldest tool call (`MOCK_LONG_REPORT=cjk` has a plain call before its subagents) and to the oldest line on screen.
+
 2026-11-12, iPhone 17 Pro simulator (iOS 27), optimized Debug build, one build measured both ways (`-showAnswerWhole YES` is
 before); median / worst. Opening was measured under the heavy-job lock, scrolling was not (other builds ran, load 18–105; runs interleaved).
 

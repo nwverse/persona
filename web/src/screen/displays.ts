@@ -56,18 +56,25 @@ export function framing(stage: Size, fb: Size, d: Rect): { clip: Rect; inner: Re
   };
 }
 
-/** A point kept inside a box (its last pixel at most), as noVNC keeps a point inside its canvas. */
+/** A point kept inside a box, as noVNC keeps a point inside its canvas. A point outside goes to the nearest whole pixel
+ *  inside the box's edges: a browser gives a dispatched mouse event's position as whole pixels, so a point kept on a
+ *  fractional edge would land outside it again. */
 export function clampInto(box: { left: number; top: number; right: number; bottom: number }, x: number, y: number): { x: number; y: number } {
-  return { x: Math.min(Math.max(x, box.left), box.right - 1), y: Math.min(Math.max(y, box.top), box.bottom - 1) };
+  const left = Math.ceil(box.left), top = Math.ceil(box.top);
+  const right = Math.max(left, Math.floor(box.right) - 1), bottom = Math.max(top, Math.floor(box.bottom) - 1);
+  return { x: Math.min(Math.max(x, left), right), y: Math.min(Math.max(y, top), bottom) };
 }
 
-/** Keeps a drag that leaves `box` on the display it shows. noVNC holds the pointer while a button is down and maps it
- *  onto its whole canvas, which here reaches past `box` onto the displays hidden beside it; a move or release outside
- *  `box` is stopped on its way down and sent again at the nearest point inside. Returns what undoes it. */
+/** Keeps a drag that leaves `box` on the display it shows. noVNC follows the pointer while a button is down, and a
+ *  finger once it touched, and maps either onto its whole canvas, which here reaches past `box` onto the displays
+ *  hidden beside it. A mouse move or release outside `box` is stopped on its way down and sent again at the nearest
+ *  point inside; a touch gesture's position (noVNC's gesture events carry it in their detail) is moved there in place.
+ *  Returns what undoes it. */
 export function keepPointerIn(box: HTMLElement): () => void {
+  let sending = false; // the event sent again comes through here too
   const keep = (e: MouseEvent) => {
-    const r = box.getBoundingClientRect();
-    const p = clampInto(r, e.clientX, e.clientY);
+    if (sending) return;
+    const p = clampInto(box.getBoundingClientRect(), e.clientX, e.clientY);
     if (p.x === e.clientX && p.y === e.clientY) return;
     e.stopPropagation();
     const again = new MouseEvent(e.type, {
@@ -75,13 +82,26 @@ export function keepPointerIn(box: HTMLElement): () => void {
       clientX: p.x, clientY: p.y, ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, altKey: e.altKey, metaKey: e.metaKey,
       button: e.button, buttons: e.buttons, relatedTarget: e.relatedTarget,
     });
-    if (!e.target?.dispatchEvent(again)) e.preventDefault();
+    sending = true;
+    try {
+      if (!e.target?.dispatchEvent(again)) e.preventDefault();
+    } finally {
+      sending = false;
+    }
   };
-  box.addEventListener("mousemove", keep, true);
-  box.addEventListener("mouseup", keep, true);
+  const keepGesture = (e: Event) => {
+    const d = (e as CustomEvent<{ clientX?: unknown; clientY?: unknown } | null>).detail;
+    if (!d || typeof d.clientX !== "number" || typeof d.clientY !== "number") return;
+    const p = clampInto(box.getBoundingClientRect(), d.clientX, d.clientY);
+    d.clientX = p.x;
+    d.clientY = p.y;
+  };
+  const mouse = ["mousemove", "mouseup"] as const, gestures = ["gesturestart", "gesturemove", "gestureend"];
+  for (const type of mouse) box.addEventListener(type, keep, true);
+  for (const type of gestures) box.addEventListener(type, keepGesture, true);
   return () => {
-    box.removeEventListener("mousemove", keep, true);
-    box.removeEventListener("mouseup", keep, true);
+    for (const type of mouse) box.removeEventListener(type, keep, true);
+    for (const type of gestures) box.removeEventListener(type, keepGesture, true);
   };
 }
 
