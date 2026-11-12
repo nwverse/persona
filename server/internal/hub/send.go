@@ -87,8 +87,10 @@ func withoutControls(s string) string {
 }
 
 // switchSendWait is how long the hub waits for a message carrying out a launcher switch: the node's checks before the
-// quit take at most a minute and the rest at most five (node/launcher_switch.go switchProbeWait, switchBudget).
-const switchSendWait = 7 * time.Minute
+// quit take at most a minute and the rest at most five (node/launcher_switch.go switchProbeWait, switchBudget); a
+// switch to the other engine also builds its handoff before the quit and takes five and a half minutes after it
+// (node/engine_switch.go engineSwitchBudget, #5054).
+const switchSendWait = 8 * time.Minute
 
 // sendWait is how long the hub waits for the node to take message p to session s (as listed; zero when not): 90
 // seconds; 5 minutes for one that is starting or not running (a resume, node's claudeStartWait, #1396); switchSendWait
