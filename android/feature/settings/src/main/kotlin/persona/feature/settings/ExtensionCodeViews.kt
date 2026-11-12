@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -91,7 +92,7 @@ internal fun CodeHeader(item: ExtensionViewItem, modifier: Modifier) {
     val type = PersonaTheme.type
     JGroupItem(GroupPosition.Single, modifier) {
         Row(Modifier.fillMaxWidth().padding(horizontal = rowPadding, vertical = Tokens.Space.l), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
-            item.avatar?.let { JAvatar(it.text?.takeIf(String::isNotBlank) ?: item.title.orEmpty().take(1), size = Tokens.Space.xxxl) }
+            item.avatar?.let { JAvatar(it.text?.takeIf(String::isNotBlank) ?: item.title.orEmpty().take(1), size = Tokens.Space.xxl) }
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
                 Text(item.title.orEmpty(), style = type.title, color = palette.ink)
                 item.subtitle?.takeIf { it.isNotBlank() }?.let { Text(it, style = type.caption, color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis) }
@@ -232,7 +233,7 @@ internal fun CodeFile(item: ExtensionViewItem, state: ExtensionViewState, handle
                 for (i in 0 until shown) {
                     val n = start + i
                     val on = hl != null && n in hl.start..hl.end
-                    Text("$n", Modifier.then(if (on) Modifier.background(palette.statusSurface) else Modifier).widthIn(min = Tokens.Space.xxxl + Tokens.Space.s).padding(horizontal = Tokens.Space.s),
+                    Text("$n", Modifier.then(if (on) Modifier.background(palette.statusSurface) else Modifier).widthIn(min = Tokens.Space.xxl + Tokens.Space.s).padding(horizontal = Tokens.Space.s),
                         style = type.codeSmall, color = palette.ink3, maxLines = 1, textAlign = androidx.compose.ui.text.style.TextAlign.End)
                 }
             }
@@ -279,7 +280,7 @@ internal fun CommentLine(c: ExtensionViewComment) {
         return
     }
     Row(Modifier.fillMaxWidth().padding(horizontal = rowPadding, vertical = Tokens.Space.m), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
-        JAvatar(c.avatar?.text?.takeIf(String::isNotBlank) ?: c.author.take(1), size = Tokens.Space.xxl + Tokens.Space.xs)
+        JAvatar(c.avatar?.text?.takeIf(String::isNotBlank) ?: c.author.take(1), size = Tokens.Space.xl + Tokens.Space.xs)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xxs)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(c.author, style = type.callout.copy(fontWeight = FontWeight.SemiBold), color = palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis,
@@ -312,15 +313,19 @@ internal fun MiniComposer(placeholder: String, busy: Boolean, enabled: Boolean, 
 @Composable
 internal fun ReplyBox(action: ExtensionViewAction, values: Map<String, String>, state: ExtensionViewState, handle: ExtensionViewHandle) {
     val slot = "reply-${values["thread"].orEmpty()}"
-    val openState: androidx.compose.runtime.MutableState<Boolean> = handle.nativeLocal?.slot(handle.nodeKey, "$slot-open") { false } ?: rememberSaveable { mutableStateOf(false) }
-    var open by openState
-    val palette = PersonaTheme.palette
-    if (open) MiniComposer(stringResource(R.string.settings_ext_code_reply), busy = state.acting == action.id, enabled = !state.busy, onCancel = { open = false },
-        local = handle.nativeLocal, nodeKey = handle.nodeKey, slot = slot) { body ->
-        handle.act(action, values + ("body" to body)); open = false
-    } else Text(stringResource(R.string.settings_ext_code_reply), Modifier.fillMaxWidth().padding(horizontal = rowPadding, vertical = Tokens.Space.s)
-        .clip(RoundedCornerShape(Tokens.Radius.control)).background(palette.sunken).clickable { open = true }.padding(Tokens.Space.m),
-        style = PersonaTheme.type.callout, color = palette.ink3, maxLines = 1)
+    // Without the extension's own state, the box (open or not, its draft) is the thread's, not its place's: a thread
+    // added above doesn't move an open box down one (#4179). No thread id: one key for all, as before.
+    key(slot) {
+        val openState: androidx.compose.runtime.MutableState<Boolean> = handle.nativeLocal?.slot(handle.nodeKey, "$slot-open") { false } ?: rememberSaveable { mutableStateOf(false) }
+        var open by openState
+        val palette = PersonaTheme.palette
+        if (open) MiniComposer(stringResource(R.string.settings_ext_code_reply), busy = state.acting == action.id, enabled = !state.busy, onCancel = { open = false },
+            local = handle.nativeLocal, nodeKey = handle.nodeKey, slot = slot) { body ->
+            handle.act(action, values + ("body" to body)); open = false
+        } else Text(stringResource(R.string.settings_ext_code_reply), Modifier.fillMaxWidth().padding(horizontal = rowPadding, vertical = Tokens.Space.s)
+            .clip(RoundedCornerShape(Tokens.Radius.control)).background(palette.sunken).clickable { open = true }.padding(Tokens.Space.m),
+            style = PersonaTheme.type.callout, color = palette.ink3, maxLines = 1)
+    }
 }
 
 @Composable
@@ -337,7 +342,8 @@ internal fun CodeCommentThread(item: ExtensionViewItem, state: ExtensionViewStat
         comments.forEachIndexed { i, c -> if (i > 0) JDivider(); CommentLine(c) }
         if (comments.isEmpty()) Text(stringResource(R.string.settings_ext_code_no_comments), Modifier.fillMaxWidth().padding(Tokens.Space.l),
             style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3)
-        item.reply?.takeIf { it.id.isNotEmpty() }?.let { JDivider(); ReplyBox(it, emptyMap(), state, handle) }
+        // its reply box is this thread's (the item's key) where the items are drawn by place (#4179)
+        item.reply?.takeIf { it.id.isNotEmpty() }?.let { reply -> JDivider(); key(item.key) { ReplyBox(reply, emptyMap(), state, handle) } }
     }
 }
 

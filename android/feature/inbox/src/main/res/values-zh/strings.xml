@@ -72,6 +72,7 @@
     <string name="inbox_kind_group">群聊</string>
     <string name="inbox_kind_at_all">\@所有人</string>
     <string name="inbox_kind_cc">抄送</string>
+    <string name="inbox_kind_agent">Agent</string>
     <string name="inbox_compose_mail">写邮件</string>
     <string name="inbox_filter">筛选</string>
     <string name="inbox_filter_on">筛选（已开启）</string>

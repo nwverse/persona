@@ -46,11 +46,55 @@ nonisolated struct TaskPlan: Codable, Hashable, Identifiable, Sendable {
     var state: State
     var createdAt: Date?
     var updatedAt: Date?
+    /// A standing rule the hub suggests on this open plan (#4929, #5802): the owner started this kind three times. Filled
+    /// in where the plan is read, never stored with it; a hub from before sends none.
+    var suggestion: RuleSuggestion?
 
     enum CodingKeys: String, CodingKey {
-        case id, conversation, tasks, state
+        case id, conversation, tasks, state, suggestion
         case createdAt = "created_at", updatedAt = "updated_at"
     }
+
+    /// The plan with no rule suggested on it: once the suggestion was answered or is gone.
+    var withoutSuggestion: TaskPlan {
+        var plan = self
+        plan.suggestion = nil
+        return plan
+    }
+}
+
+/// How an interrupted receipt's task was dealt with, as the hub worked it out (#3834; docs/protocol/protocol.md
+/// "Tasks and the chat feed").
+nonisolated enum InterruptResolution: String, Codable, Hashable, Sendable {
+    case pending, cancelled, rerouted, resumed, accepted, done
+}
+
+/// Interruptions with the same cause in one chat within ten minutes, as their first receipt carries them (#3834).
+nonisolated struct InterruptBatch: Codable, Hashable, Sendable {
+    struct Entry: Codable, Hashable, Sendable {
+        var receipt: String
+        var todoID: String
+        var title: String
+        var resolution: String
+        enum CodingKeys: String, CodingKey { case receipt, todoID = "todo_id", title, resolution }
+        /// A resolution this build doesn't know reads as handled, not as pending.
+        var resolved: InterruptResolution { InterruptResolution(rawValue: resolution) ?? .done }
+    }
+    var cause: String
+    var machine: String?
+    var total: Int
+    var pending: Int
+    var resolved: Int
+    var tasks: [Entry]
+}
+
+/// How the chat draws an interrupted receipt: `hidden` inside its batch's head, `batch` the head of several,
+/// `resolved` one dealt with (a grey line), `pending` still to deal with (the red card).
+nonisolated enum InterruptLook: Equatable, Sendable {
+    case hidden
+    case batch(InterruptBatch)
+    case resolved(InterruptResolution)
+    case pending
 }
 
 /// An item the hub inserted into an assistant conversation; drawn among the transcript's lines by `at`.
@@ -115,6 +159,18 @@ nonisolated struct FeedItem: Codable, Hashable, Identifiable, Sendable {
     /// An interrupted receipt's raw error (the API error that cut the turn off); older hubs put it in `summary`.
     var receiptError: String? { string("error") }
     var summary: String? { string("summary") }
+    /// How the chat draws an interrupted receipt, from what the hub worked out (#3834): nil from a hub before it.
+    var interruptLook: InterruptLook? {
+        guard kind == .receipt, turnInterrupted, let raw = string("resolution"),
+              let resolution = InterruptResolution(rawValue: raw) else { return nil }
+        if let group = string("group"), !group.isEmpty, group != id { return .hidden }
+        if case .object(let o)? = body, let b = o["batch"],
+           let data = try? JSONEncoder().encode(b), let batch = try? JSONDecoder().decode(InterruptBatch.self, from: data),
+           batch.tasks.count > 1 {
+            return .batch(batch)
+        }
+        return resolution == .pending ? .pending : .resolved(resolution)
+    }
     var pr: String? { string("pr") }
     var machine: String? { string("machine") }
     /// `routed`: what the user said straight to the task; `message`: the message itself.
@@ -135,6 +191,9 @@ nonisolated struct FeedItem: Codable, Hashable, Identifiable, Sendable {
     var sentAt: Date? { string("sent_at").flatMap(JSON.parseDate) }
     var sent: String? { string("sent") }
     var filedAt: Date? { sentAt == nil ? string("filed_at").flatMap(JSON.parseDate) : nil }
+    /// A per-card decision; it does not file the Inbox item or stop the task's Agent.
+    var dismissedAt: Date? { string("dismissed_at").flatMap(JSON.parseDate) }
+    var dismissalID: String? { string("dismissal_id") }
 
     /// `review`: the supervisor's verdict (accepted / rework / needs_user / cancelled), the rework round, its note.
     var verdict: String? { string("verdict") }
@@ -298,6 +357,9 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
     var updatedAt: Date?
     /// When it was last reopened (by the user, or by the hub when its agent got more work); nil from older hubs.
     var reopenedAt: Date?
+    /// When the owner last looked at it in Just finished: Got It, or opening it (#5707, `seen_at`); one seen since it got
+    /// there is filed under Done (`TodoTriageLogic`). Nil when never seen, and from older hubs.
+    var seenAt: Date?
     var origin: String?
     var planID: String?
     /// The task's agent did not start, and why: the hub ended the todo there (it is done, #1077).
@@ -333,10 +395,14 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
     var priority: String?
     /// Where its finished work stands (`delivery`, docs/assistant/todos.md "Delivery"); nil from a hub without it.
     var delivery: TodoDelivery?
+    /// The manager whose to-do it is, as the hub's merged list stamps it (docs/protocol/protocol.md "Per-manager
+    /// routing"): the pages list the current assistant's, and a request about it names this one. Nil with one manager,
+    /// and on an answer about one to-do, which keeps the stamp the list gave it.
+    var manager: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, title, notes, origin, agents, spaces, quiet, stage, supervision, priority, ask, delivery
-        case doneAt = "done_at", createdAt = "created_at", updatedAt = "updated_at", reopenedAt = "reopened_at", planID = "plan_id", startError = "start_error",
+        case id, title, notes, origin, agents, spaces, quiet, stage, supervision, priority, ask, delivery, manager
+        case doneAt = "done_at", createdAt = "created_at", updatedAt = "updated_at", reopenedAt = "reopened_at", seenAt = "seen_at", planID = "plan_id", startError = "start_error",
              doneBy = "done_by", doneReason = "done_reason", prURL = "pr_url", dueAt = "due_at", dueDate = "due_date",
              remindAt = "remind_at", remindedAt = "reminded_at"
     }
@@ -346,7 +412,7 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
          agents: [Agent] = [], spaces: [Space]? = nil, quiet: Bool = false, stage: String? = nil, prURL: String? = nil,
          supervision: TaskSupervision? = nil, dueAt: Date? = nil, dueDate: String? = nil, remindAt: Date? = nil,
          remindedAt: Date? = nil, priority: String? = nil, ask: TodoAsk? = nil, reopenedAt: Date? = nil,
-         delivery: TodoDelivery? = nil) {
+         delivery: TodoDelivery? = nil, manager: String? = nil, seenAt: Date? = nil) {
         self.id = id
         self.title = title
         self.notes = notes
@@ -372,6 +438,8 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
         self.ask = ask
         self.reopenedAt = reopenedAt
         self.delivery = delivery
+        self.manager = manager
+        self.seenAt = seenAt
     }
 
     init(from decoder: Decoder) throws {
@@ -404,7 +472,10 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
         ask = (try? c.decodeIfPresent(TodoAsk.self, forKey: .ask)) ?? nil
         // New (#3206): absent from older hubs; one that does not decode is as if there were none.
         reopenedAt = (try? c.decodeIfPresent(Date.self, forKey: .reopenedAt)) ?? nil
+        // New (#5707): absent from older hubs; one that does not decode is as if it was never seen.
+        seenAt = (try? c.decodeIfPresent(Date.self, forKey: .seenAt)) ?? nil
         delivery = (try? c.decodeIfPresent(TodoDelivery.self, forKey: .delivery)) ?? nil
+        manager = try c.decodeIfPresent(String.self, forKey: .manager)
     }
 
     /// An ended task cannot keep an old decision card alive.
@@ -598,9 +669,16 @@ nonisolated struct DockAgent: Hashable, Identifiable, Sendable {
     }
 
     /// The agents going on in a session list (Persona's own conversations are not agents): waiting for the user
-    /// first, then the newest. Only what a pill shows goes in, so it changes when a pill would.
+    /// first, then the newest. Only what a pill shows goes in, so it changes when a pill would. A subtask (a Codex
+    /// subagent, an agent another agent created) is left out while a session above it is going too, which stands for
+    /// it, as the Agents list folds it under that one (`CodexTasks`); one that waits for the user never is.
     @MainActor static func going(_ sessions: [Session]) -> [DockAgent] {
-        sessions.filter { !$0.assistant && ($0.state == .needsYou || $0.state == .working) }
+        let goes = { (s: Session) in !s.assistant && (s.state == .needsYou || s.state == .working) }
+        var going = sessions.filter(goes)
+        if going.contains(where: \.isNestedSubtask), let parent = CodexTasks.parents(sessions, runs: goes) {
+            going = sessions.indices.filter { parent[$0] < 0 && goes(sessions[$0]) }.map { sessions[$0] }
+        }
+        return going
             .map { DockAgent(key: $0.key, title: $0.displayTitle, state: $0.state, since: $0.stateSince, todoID: $0.todo?.id,
                              activity: AssistantTrayActivity(sessions: [$0]), backgroundWaiting: $0.waitsToBeWoken) }
             .sorted { a, b in
@@ -760,9 +838,12 @@ nonisolated extension APIClient {
         var views: [String: ExtensionAssistantView]?
         var viewActions: [String: ExtensionViewAction]?
         var viewBlocks: [String]?
+        /// nil: legacy hub; empty: the frozen recovery window is complete.
+        var nextCursor: String?
 
         enum CodingKeys: String, CodingKey {
             case items, plans, views
+            case nextCursor = "next_cursor"
             case viewActions = "view_actions"
             case viewBlocks = "view_blocks"
         }
@@ -771,12 +852,37 @@ nonisolated extension APIClient {
     private struct PlanResponse: Decodable { var plan: TaskPlan }
     nonisolated private struct TodosResponse: Decodable, Sendable { var todos: [TodoItem] }
     private struct ItemResponse: Decodable { var item: FeedItem }
+    struct DraftDismissal: Decodable, Sendable {
+        var item: FeedItem
+        var dismissalID: String
+        enum CodingKeys: String, CodingKey { case item, dismissalID = "dismissal_id" }
+    }
+
+    /// Resolve exactly the displayed draft, using its original text rather than local edits.
+    func dismissDraft(_ id: String, original: String) async throws -> DraftDismissal {
+        struct Body: Encodable { var draft: String }
+        return try await post("/api/v1/assistant/feed/\(Self.pathPart(id))/dismiss", body: Body(draft: original), as: DraftDismissal.self)
+    }
+
+    /// Only the decision identified by this receipt can be undone.
+    func undoDraftDismissal(_ id: String, receipt: String) async throws -> FeedItem {
+        struct Body: Encodable {
+            var dismissalID: String
+            enum CodingKeys: String, CodingKey { case dismissalID = "dismissal_id" }
+        }
+        return try await post("/api/v1/assistant/feed/\(Self.pathPart(id))/undo-dismiss", body: Body(dismissalID: receipt), as: ItemResponse.self).item
+    }
 
     /// A conversation's feed after `since` (nil: all of it), with the plans its `plan` items name.
-    func feed(conversation: String, since: Date? = nil) async throws -> FeedResponse {
+    func feed(conversation: String, since: Date? = nil, cursor: String? = nil) async throws -> FeedResponse {
         let id = conversation.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/?#"))) ?? conversation
-        var query: [String: String] = [:]
-        if let since { query["since"] = Self.feedTime.string(from: since) }
+        var query: [String: String]
+        if let cursor {
+            query = ["cursor": cursor]
+        } else {
+            query = ["paginate": "1"]
+            if let since { query["since"] = Self.feedTime.string(from: since) }
+        }
         return try await get("/api/v1/assistant/conversations/\(id)/feed", query: query)
     }
 

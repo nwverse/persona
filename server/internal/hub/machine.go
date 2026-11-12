@@ -151,8 +151,7 @@ func (m *Machine) setName(name string) {
 }
 
 func (m *Machine) snapshot() proto.Machine {
-	computer := m.hub.computerOf(m) // before m.mu: it takes it
-	browser := m.hub.browserOf(m)
+	computer, browser, iphone := m.hub.extrasOf(m) // before m.mu: it takes it
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	warm := m.warmLocked(time.Now())
@@ -194,7 +193,7 @@ func (m *Machine) snapshot() proto.Machine {
 		c := proto.EngineHostsOf(cmp.Or(s.Engine, proto.EngineHerdr))
 		s.EngineHosts, s.EngineDefault = c.Hosts, c.Default
 	}
-	s.Computer, s.Browser = computer, browser // the system is in the manager's report (its monitoring)
+	s.Computer, s.Browser, s.IPhone = computer, browser, iphone // the system is in the manager's report (its monitoring)
 	return s
 }
 
@@ -229,11 +228,11 @@ func (m *Machine) call(ctx context.Context, method string, params any, out any) 
 	p := m.peer
 	info := m.info
 	m.mu.Unlock()
-	if info.Version != "" && info.EngineHosts == nil && method == "session.start" && proto.StartHost(params) != "" {
+	if info.Version != "" && info.EngineHosts == nil && devicewire.IsSessionStart(method) && proto.StartHost(params) != "" {
 		// An older node ignores host and would start in its engine instead (#2576): refused, nothing started.
 		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(m.hub.contextLang(ctx), "hub-machine.node_no_engine_hosts")}
 	}
-	if info.Version != "" && !info.ModelConfiguration && (method == "assistant.send" || method == "assistant.warm" || method == "session.start" || method == "session.send") {
+	if info.Version != "" && !info.ModelConfiguration && (method == "assistant.send" || method == "assistant.warm" || devicewire.IsSessionStart(method) || method == "session.send") {
 		raw, _ := json.Marshal(params)
 		var fields struct {
 			Model       string `json:"model"`
@@ -313,23 +312,43 @@ func (m *Machine) session(id string) (proto.Session, bool) {
 	return proto.Session{}, false
 }
 
-func (m *Machine) addWatcher(ctx context.Context, id string) {
+// watcherJoined counts one more app subscribed to session id, watcherLeft one fewer. Neither tells the node: the
+// caller syncs the node's watch afterwards (syncWatch, syncUnwatch). An app's connection counts in its read loop, in
+// the order its messages came, and syncs from a goroutine: the node may take up to watchCallTimeout to answer, and
+// nothing else the app sends is read while its read loop waits (#5915). Counting cannot move to the goroutine
+// too: a leave that ran ahead of its join would find nothing to take away, and the join would then stay for good.
+func (m *Machine) watcherJoined(id string) {
 	m.mu.Lock()
 	m.watchers[id]++
 	m.mu.Unlock()
-	m.syncWatch(ctx, id)
 }
 
-func (m *Machine) removeWatcher(id string) {
+func (m *Machine) watcherLeft(id string) {
 	m.mu.Lock()
 	m.watchers[id]--
 	if m.watchers[id] <= 0 {
 		delete(m.watchers, id)
 	}
 	m.mu.Unlock()
+}
+
+// syncUnwatch syncs session id's watch after an app left it, not on that app's connection, which may be gone.
+func (m *Machine) syncUnwatch(id string) {
 	ctx, cancel := context.WithTimeout(context.Background(), watchCallTimeout)
 	defer cancel()
 	m.syncWatch(ctx, id)
+}
+
+// addWatcher is a join and its sync in one call, removeWatcher a leave and its sync: for a caller that may wait for
+// the node, which a connection's read loop may not (watcherJoined).
+func (m *Machine) addWatcher(ctx context.Context, id string) {
+	m.watcherJoined(id)
+	m.syncWatch(ctx, id)
+}
+
+func (m *Machine) removeWatcher(id string) {
+	m.watcherLeft(id)
+	m.syncUnwatch(id)
 }
 
 // setSessionList keeps list as the sessions the node has now, and drops the highest item seq of those it no longer

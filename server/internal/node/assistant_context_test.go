@@ -57,6 +57,36 @@ func TestContextDelta(t *testing.T) {
 	}
 }
 
+func TestContextDeltaReplacesDoneAndMutedDetails(t *testing.T) {
+	before := strings.Replace(snapA, "  - 需要你：修登录（server，session_id=aaaaaaaa）", `  - 需要你：修登录（server，session_id=aaaaaaaa）
+  - 做完的（24 小时内）：旧完成标题（server，session_id=done-1）：旧结论
+  - 已屏蔽（用户关了它们的通知，上面的数不算它们；别主动提，问到再说）：旧屏蔽标题（server，session_id=mute-1）`, 1)
+	_, seen := contextDelta(nil, before)
+	counts := strings.NewReplacer(
+		"旧完成标题（server，session_id=done-1）：旧结论", "1 个，agents_list state=done 查",
+		"旧屏蔽标题（server，session_id=mute-1）", "1 个，agents_list state=muted 查",
+	).Replace(before)
+	block, seen := contextDelta(seen, counts)
+	for _, want := range []string{"- Agents：", "agents_list state=done 查", "agents_list state=muted 查"} {
+		if !strings.Contains(block, want) {
+			t.Errorf("the count-only Agents section lacks %q:\n%s", want, block)
+		}
+	}
+	for _, unwanted := range []string{"旧完成标题", "旧屏蔽标题", "旧结论", "done-1", "mute-1"} {
+		if strings.Contains(block, unwanted) {
+			t.Errorf("stale detail %q survived the section replacement:\n%s", unwanted, block)
+		}
+	}
+	empty := strings.NewReplacer(
+		"\n  - 做完的（24 小时内）：1 个，agents_list state=done 查", "",
+		"\n  - 已屏蔽（用户关了它们的通知，上面的数不算它们；别主动提，问到再说）：1 个，agents_list state=muted 查", "",
+	).Replace(counts)
+	block, _ = contextDelta(seen, empty)
+	if !strings.Contains(block, "- Agents：") || strings.Contains(block, "agents_list state=") {
+		t.Fatalf("empty done and muted lines did not replace the old Agents section:\n%s", block)
+	}
+}
+
 type stdinBuf struct{ bytes.Buffer }
 
 func (*stdinBuf) Close() error { return nil }

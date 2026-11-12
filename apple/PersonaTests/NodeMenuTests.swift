@@ -44,11 +44,11 @@ import Testing
         #expect(NodeMenu.gitBody(.pull, pane: "w1:p1") == ["op": "pull", "pane": "w1:p1"])
         #expect(NodeMenu.gitBody(.push, workspaceID: "w1", kind: "herdr") == ["op": "push", "workspace_id": "w1", "kind": "herdr"])
         #expect(NodeMenu.gitBody(.fetch, workspaceID: "w1", kind: nil) == ["op": "fetch", "workspace_id": "w1"])
-        #expect(NodeMenu.GitOp.pull.done("已经是最新") == "拉取：已经是最新")
+        #expect(NodeMenu.GitOp.pull.done("已经是最新") == "取回：已经是最新")
         #expect(NodeMenu.GitOp.fetch.done(nil) == "获取：完成")
         // what came of it in the app's language (#1888); an older node's own words when there is no outcome
         #expect(NodeMenu.GitOp.push.done(NodeMenu.GitOp.outcome("pushed")) == "推送：已推送")
-        #expect(NodeMenu.GitOp.pull.done(NodeMenu.GitOp.outcome("up_to_date")) == "拉取：已经是最新代码")
+        #expect(NodeMenu.GitOp.pull.done(NodeMenu.GitOp.outcome("up_to_date")) == "取回：已经是最新代码")
         #expect(NodeMenu.GitOp.outcome("something_new") == nil)
         #expect(NodeMenu.GitOp.outcome(nil) == nil)
         #expect(NodeMenu.GitOp.allCases.map(\.rawValue) == ["pull", "push", "fetch"])
@@ -113,6 +113,16 @@ import Testing
         #expect(NodeMenu.launchableHere(Launcher(name: "claude")))
         #expect(NodeMenu.launchableHere(Launcher(name: "c2", agent: "claude")))
         #expect(!NodeMenu.launchableHere(Launcher(name: "codex", agent: "codex")))
+    }
+
+    /// The footer names Codex, and where it starts, only on a computer that has a Codex launcher (#5275).
+    @Test func runHereFooterMentionsCodexOnlyWhereTheComputerHasIt() {
+        let plain = NodeMenu.runHereFooter([Launcher(name: "claude"), Launcher(name: "c2", agent: "claude")])
+        let withCodex = NodeMenu.runHereFooter([Launcher(name: "claude"), Launcher(name: "codex", agent: "codex", promptOptional: true)])
+        #expect(!plain.contains("Codex"))
+        #expect(withCodex.contains("Codex"))
+        #expect(withCodex.hasPrefix(plain), "the Codex line comes after the same first sentence")
+        #expect(NodeMenu.runHereFooter([]) == plain)
     }
 
     /// Run Agent Here opens the agent it started (#3287): the session `panes/agent` names, on the space's computer and

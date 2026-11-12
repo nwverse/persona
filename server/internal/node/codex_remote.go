@@ -28,12 +28,14 @@ import (
 var errCodexNoOwner = errors.New("没有可共享的 app-server 运行入口")
 
 type remoteThread struct {
-	id, publicID, title, cwd, status, turn, parent, partial string
+	id, publicID, title, cwd, path, status, turn, parent, partial string
 	// ended is the last turn turn/completed ended: a snapshot read before it (join, activeTurn, the metadata read)
 	// does not bring it back, and its completion arriving again is not another end (#5598).
 	ended string
 	// model and effort are what the app-server says the thread is configured with (codex_effort.go); "" unknown / unset.
-	model, effort string
+	model, effort       string
+	serviceTier         string
+	serviceTierRevision uint64
 	// failure / failureKind: the latest turn failed, as turn/completed said it (status failed, its error, #2185);
 	// cleared when a turn starts. Session.TurnError / TurnErrorKind, before the rollout has it.
 	failure, failureKind string
@@ -384,6 +386,7 @@ func (c *codexRemote) refresh() error {
 		path := rolloutPath(c.spec.Home, raw)
 		public := c.n.registerCodex(c.spec.Home, raw, path)
 		t.id, t.publicID, t.title, t.cwd = raw, public, firstNonEmpty(d.Name, d.Preview), d.Cwd
+		t.path = d.Path
 		if d.Model != "" { // an app-server that reports a thread's settings (older ones do not: keep what join said)
 			t.model, t.effort = d.Model, d.Effort
 		}
@@ -421,7 +424,9 @@ func (c *codexRemote) refresh() error {
 		if old, ok := c.threads[raw]; ok && old.revision != seenRevision[raw] {
 			t.joined, t.turn, t.partial, t.files, t.status, t.revision, t.buffer, t.lastDelta = old.joined, old.turn, old.partial, old.files, old.status, old.revision, old.buffer, old.lastDelta
 			t.failure, t.failureKind, t.ended = old.failure, old.failureKind, old.ended
+			t.serviceTier, t.serviceTierRevision = old.serviceTier, old.serviceTierRevision
 			t.model, t.effort = old.model, old.effort // an effort just set (codex_effort.go) over a read from before it
+			t.path = old.path
 			next[raw] = t
 		}
 	}
@@ -500,9 +505,10 @@ func (c *codexRemote) join(ctx context.Context, id string, remember bool) error 
 	}
 	// This is an explicit user-requested join, not a discovery or global subscription. Do not override runtime config.
 	var reply struct {
-		Thread remoteThreadData `json:"thread"`
-		Model  string           `json:"model"`
-		Effort string           `json:"reasoningEffort"`
+		Thread      remoteThreadData `json:"thread"`
+		Model       string           `json:"model"`
+		Effort      string           `json:"reasoningEffort"`
+		ServiceTier json.RawMessage  `json:"serviceTier"`
 	}
 	c.mu.Lock()
 	joining := c.threads[t.id]
@@ -532,7 +538,14 @@ func (c *codexRemote) join(ctx context.Context, id string, remember bool) error 
 	current, ok := c.threads[t.id]
 	if ok {
 		current.joined = true
+		if tier := codexServiceTier(reply.ServiceTier); tier != "" && current.serviceTier == "" {
+			current.serviceTier = tier
+			current.serviceTierRevision++
+		}
 		current.revision++
+		if reply.Thread.Path != "" {
+			current.path = reply.Thread.Path
+		}
 		if m := firstNonEmpty(reply.Model, reply.Thread.Model); m != "" {
 			current.model, current.effort = m, firstNonEmpty(reply.Effort, reply.Thread.Effort)
 		}
@@ -713,8 +726,9 @@ func (c *codexRemote) message(m codexMessage) {
 		} `json:"turn"`
 		Item     remoteEventItem `json:"item"`
 		Settings struct {
-			Model  string `json:"model"`
-			Effort string `json:"effort"`
+			Model       string          `json:"model"`
+			Effort      string          `json:"effort"`
+			ServiceTier json.RawMessage `json:"serviceTier"`
 		} `json:"threadSettings"`
 	}
 	if json.Unmarshal(m.Params, &ev) != nil {
@@ -746,6 +760,11 @@ func (c *codexRemote) message(m codexMessage) {
 	emit := false
 	refresh := false
 	switch m.Method {
+	case "thread/reverted":
+		invalidateCodexPaginated(c.spec.Home)
+		t.partial, t.failure, t.failureKind = "", "", ""
+		t.buffer = nil
+		emit, refresh = true, true
 	case "turn/started":
 		t.turn = ev.Turn.ID
 		t.status = proto.StatusWorking
@@ -798,6 +817,10 @@ func (c *codexRemote) message(m codexMessage) {
 		}
 	case "thread/settings/updated": // the thread's settings changed: on the computer, or from here (codex_effort.go)
 		t.model, t.effort = firstNonEmpty(ev.Settings.Model, t.model), ev.Settings.Effort
+		if tier := codexServiceTier(ev.Settings.ServiceTier); tier != "" {
+			t.serviceTier = tier
+			t.serviceTierRevision++
+		}
 	case "item/completed":
 		delete(t.files, ev.Item.ID)
 		refresh = true
@@ -813,6 +836,9 @@ func (c *codexRemote) message(m codexMessage) {
 	c.mu.Unlock()
 	if refresh {
 		go func() {
+			if m.Method == "thread/reverted" {
+				_ = c.refresh()
+			}
 			if f, err := c.n.file(t.publicID); err == nil {
 				c.n.refresh(t.publicID, f)
 			}
@@ -821,7 +847,7 @@ func (c *codexRemote) message(m codexMessage) {
 	if emit {
 		c.n.emitDelta(t.publicID, delta)
 	}
-	if m.Method == "turn/started" || m.Method == "turn/completed" || m.Method == "thread/settings/updated" {
+	if m.Method == "turn/started" || m.Method == "turn/completed" || m.Method == "thread/settings/updated" || m.Method == "thread/reverted" {
 		c.n.notifyCodex()
 	}
 }

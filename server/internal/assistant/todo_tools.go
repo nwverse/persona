@@ -185,6 +185,22 @@ func (s *Service) toolTodoGet(ctx context.Context, args json.RawMessage) (string
 	if strings.TrimSpace(t.Notes) != "" {
 		b.WriteString("notes:\n" + clip(strings.TrimSpace(t.Notes), 4000) + "\n")
 	}
+	if t.Supervision != nil {
+		b.WriteString("done_when (current reports, not a task acceptance):\n")
+		for i, c := range t.Supervision.Criteria {
+			fmt.Fprintf(&b, "%d. [%s] %s", i+1, c.State, c.Criterion)
+			if c.By != "" {
+				fmt.Fprintf(&b, " — %s", c.By)
+			}
+			if c.At != nil {
+				fmt.Fprintf(&b, " at %s", c.At.In(loc).Format(toolTimeLayout))
+			}
+			if c.Evidence != "" {
+				fmt.Fprintf(&b, "\n   %s", c.Evidence)
+			}
+			b.WriteString("\n")
+		}
+	}
 	if len(t.Agents) > 0 {
 		b.WriteString("agents:\n")
 		for _, ag := range t.Agents {
@@ -267,6 +283,14 @@ func (s *Service) toolTodoCreate(ctx context.Context, machine, self string, args
 	}
 	if ok, err := s.confirmOutbound(ctx, machine, self, "todo_create", title, args); err != nil || !ok {
 		return todoNotAllowed(err)
+	}
+	if s.isLeader(ctx, self) {
+		t, err := s.createDirectionTodo(ctx, self, title, strings.TrimSpace(a.Notes), plan)
+		if err != nil {
+			return "", fmt.Errorf("the to-do could not be saved, nothing changed: %w", err)
+		}
+		return "Created under your direction (you supervise it; to have an Agent do it, use task_plan with todo_id " + t.ID +
+			"): " + todoLine(t, now, loc), nil
 	}
 	t, err := s.createPlainTodo(ctx, title, strings.TrimSpace(a.Notes), plan)
 	if err != nil {

@@ -97,6 +97,16 @@ type NodePackagesConfig struct {
 	Proxy string `json:"proxy,omitempty"`
 }
 
+// UpdateConfig is where the hub looks for its own releases (docs/operations/hub-update.md "Update source"): URL a
+// release's download directory (latest.json and the files it lists, e.g. a GitHub repository's
+// releases/latest/download) in place of the one the build was made with; "" that one. Proxy an
+// http://[user:pass@]host:port proxy for the update's checks and downloads only (internal/netproxy); "" the
+// environment's, as before.
+type UpdateConfig struct {
+	URL   string `json:"url,omitempty"`
+	Proxy string `json:"proxy,omitempty"`
+}
+
 // TailcatConfig: DERPMapURL is a DERP map of your own relays (a derper) instead of Tailscale's public ones; the nodes
 // were set up with the same (`personad node tailcat init --derp-map-url`).
 type TailcatConfig struct {
@@ -114,12 +124,8 @@ type AssistantProfile struct {
 	// one-time code (`persona-hub manager-code`, `persona-manager join --builtin`): the hub neither starts it nor gives
 	// it a new token (docs/assistant/managers.md "The built-in manager as its own service").
 	Mode string `json:"mode,omitempty"`
-	// PersonaView: the assistant is taught ```persona-view (a View of the extensions' components, #1850) instead of
-	// ```persona-card. Off until every app the user has draws it (UI version 3); a persona-card draws on all of them.
-	PersonaView bool `json:"persona_view,omitempty"`
-	// HTMLViews: cards' html components may run (sandboxed, where a client passed its security checks) and call the
-	// persona.reply / persona.open bridge. Only with PersonaView; nil (absent) is on, false turns them into fallback.
-	HTMLViews *bool `json:"html_views,omitempty"`
+	// assistant.persona_view and assistant.html_views are no longer read: the assistant's cards, HTML ones included,
+	// are always on (#5509, docs/assistant/assistant-views.md "Prompts"); sayRetiredKeys logs a hub.json that still has them.
 }
 
 // Built-in manager modes (AssistantProfile.Mode).
@@ -140,19 +146,27 @@ func (p AssistantProfile) ServiceBound() bool {
 	return !p.External && p.Mode == AssistantModeService
 }
 
-// HTMLViewsOn is assistant.html_views with its default (on); it means nothing while PersonaView is off.
-func (p AssistantProfile) HTMLViewsOn() bool { return p.HTMLViews == nil || *p.HTMLViews }
+type SharingConfig struct {
+	PublicOrigin string `json:"public_origin,omitempty"`
+	// IngressKey authenticates only loopback sharing-ingress peer IPs, never content or management access.
+	IngressKey string `json:"ingress_key,omitempty"`
+}
 
 type Config struct {
 	// AutoUpdateNodes explicitly opts into fleet upgrades after Hub updates and node reconnects.
 	AutoUpdateNodes bool `json:"auto_update_nodes,omitempty"`
 	// Name is what people see this hub as (hubName); empty: its machine's host name.
 	Name string `json:"name,omitempty"`
+	// InitialLocale is the user's language until a device says one (locale.go, #5519): the language the installer ran
+	// in, written by a new install's `personad hub setup`. Once a device has said one (Postgres user_locale) it means
+	// nothing; empty, or a language the hub does not know, is zh-Hans as before.
+	InitialLocale i18n.Lang `json:"initial_locale,omitempty"`
 	// ShutdownTimeoutSeconds bounds the entire shutdown, including pool closure (default 8; policy, not a latency measurement).
-	ShutdownTimeoutSeconds int    `json:"shutdown_timeout_seconds,omitempty"`
-	Listen                 string `json:"listen"`
-	Token                  string `json:"token"`
-	PublicURL              string `json:"public_url"`
+	ShutdownTimeoutSeconds int            `json:"shutdown_timeout_seconds,omitempty"`
+	Listen                 string         `json:"listen"`
+	Token                  string         `json:"token"`
+	PublicURL              string         `json:"public_url"`
+	Sharing                *SharingConfig `json:"sharing,omitempty"`
 	// DatabaseURL points at the Postgres container (scripts/deploy/deploy.sh creates it and fills this in).
 	DatabaseURL string `json:"database_url"`
 	// The manager's own sections (managerconf.Moved: the connectors, extensions, bots, mail sign-ins, Lark, usage
@@ -175,6 +189,8 @@ type Config struct {
 	Tailcat TailcatConfig `json:"tailcat,omitempty"`
 	// NodePackages is where node builds the hub has none of come from.
 	NodePackages NodePackagesConfig `json:"node_packages,omitzero"`
+	// Update is where the hub's own releases come from, and through which proxy (selfupdate_source.go).
+	Update UpdateConfig `json:"update,omitzero"`
 	// Mesh tunes the links to other hubs (docs/server/mesh.md, config_mesh.go).
 	Mesh MeshConfig `json:"mesh,omitempty"`
 	// Link tunes the heartbeat with the computers' Persona Links (config_link.go, docs/operations/link.md "Heartbeat").
@@ -525,6 +541,43 @@ func writePair(w io.Writer, cfg *Config) {
 	fmt.Fprintf(w, "Server: %s\nToken:  %s\n\n用 Persona App 扫码配对：\n\n", cfg.PublicURL, cfg.Token)
 	qrterminal.GenerateHalfBlock(cfg.PairURL(), qrterminal.L, w)
 	fmt.Fprintf(w, "\nMac 上拷贝这条链接，在 Persona 的「连接 hub」里粘贴：\n%s\n", cfg.PairURL())
+}
+
+// retiredAssistantKeys are hub.json's assistant keys this hub no longer reads (#5509): the assistant's cards, HTML
+// ones included, are always on. A file that still has them works as before.
+var retiredAssistantKeys = []string{"persona_view", "html_views"}
+
+// sayRetiredKeys says once, as the hub starts, which retired keys hub.json still has, so an edit to one is not taken
+// for a switch.
+func (h *Hub) sayRetiredKeys() {
+	if h.cfg == nil || h.cfg.dir == "" {
+		return
+	}
+	b, err := os.ReadFile(filepath.Join(h.cfg.dir, "hub.json"))
+	if err != nil {
+		return
+	}
+	if found := retiredKeysIn(b); len(found) > 0 {
+		h.logf("config: hub.json's %s are no longer read and can be removed: the assistant's cards are always on",
+			strings.Join(found, ", "))
+	}
+}
+
+// retiredKeysIn is each of retiredAssistantKeys hub.json b has, as "assistant.<key>".
+func retiredKeysIn(b []byte) []string {
+	var file struct {
+		Assistant map[string]json.RawMessage `json:"assistant"`
+	}
+	if json.Unmarshal(b, &file) != nil {
+		return nil
+	}
+	var found []string
+	for _, k := range retiredAssistantKeys {
+		if _, ok := file.Assistant[k]; ok {
+			found = append(found, "assistant."+k)
+		}
+	}
+	return found
 }
 
 // sayMovedSections says once, as the hub starts, which of the manager's sections hub.json still has: the hub reads

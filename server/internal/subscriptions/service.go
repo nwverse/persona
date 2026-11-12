@@ -1,6 +1,7 @@
 package subscriptions
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -118,6 +119,10 @@ type Service struct {
 	running  int
 	asked    map[string]bool // subscriptions asked to run now
 	wake     chan struct{}
+
+	// Push sources (push.go): one push at a time, and each device's items in the last hour.
+	pushMu sync.Mutex
+	pushed map[string][]time.Time
 }
 
 type catalogEntry struct {
@@ -156,7 +161,7 @@ func New(o Options) *Service {
 		o.Delivered = func(Subscription) {}
 	}
 	return &Service{o: o, catalogs: map[string]catalogEntry{}, reading: map[string]bool{}, gates: map[string]*gate{},
-		busy: map[string]bool{}, asked: map[string]bool{}, wake: make(chan struct{}, 1)}
+		busy: map[string]bool{}, asked: map[string]bool{}, wake: make(chan struct{}, 1), pushed: map[string][]time.Time{}}
 }
 
 func (s *Service) now() time.Time { return s.o.Clock.Now().UTC() }
@@ -427,6 +432,9 @@ func (s *Service) DryRun(ctx context.Context, in DryRunRequest) (DryRun, error) 
 		if sub == nil {
 			return DryRun{}, notFound("subscription")
 		}
+		if IsPush(*sub) {
+			return DryRun{}, pushOnly("recipe")
+		}
 		in.Connector, in.Source = sub.Connector, sub.Source
 		if in.Recipe == nil {
 			r := sub.Recipe
@@ -445,6 +453,7 @@ func (s *Service) DryRun(ctx context.Context, in DryRunRequest) (DryRun, error) 
 		interval, daily = sub.IntervalSeconds, sub.DailyAt
 	}
 	dr, _ := s.check(ctx, c, in.Source, in.Recipe, sub, interval, daily)
+	dr.Warnings = append(unknownWarnings(in.Unknown), dr.Warnings...)
 	return dr, nil
 }
 
@@ -453,7 +462,7 @@ func (s *Service) DryRun(ctx context.Context, in DryRunRequest) (DryRun, error) 
 // first own one is used. t is filled as far as it got.
 func (s *Service) check(ctx context.Context, c ConnectorInfo, sourceID string, recipe *Recipe, sub *Subscription, interval int, daily string) (DryRun, target) {
 	dr := DryRun{Checks: []Check{{Key: CheckReadOnly}, {Key: CheckArgs}, {Key: CheckFields}, {Key: CheckDedup}, {Key: CheckInterval}},
-		Items: []Preview{}, Paths: []PathValue{}}
+		Items: []Preview{}, Paths: []PathValue{}, Warnings: []Warning{}}
 	t := target{conn: c, sub: sub}
 	fail := func(p *Problem) (DryRun, target) {
 		dr.Error = p
@@ -548,7 +557,8 @@ func (s *Service) check(ctx context.Context, c ConnectorInfo, sourceID string, r
 		dr.Count = 1
 		dr.Checks[2].OK, dr.Checks[3].OK = true, true
 		body := clip(pl.snapshot.Body, previewMax)
-		dr.Items = append(dr.Items, Preview{UID: pl.snapshot.UID, New: sub == nil || sub.SnapshotHash != pl.snapHash, Title: pl.snapshot.Title, Body: body})
+		dr.Items = append(dr.Items, Preview{UID: pl.snapshot.UID, New: sub == nil || sub.SnapshotHash != pl.snapHash, Title: pl.snapshot.Title, Body: body,
+			Summary: clip(oneLine(pl.snapshot.Body), previewMost), Problems: []FieldProblem{}})
 	} else {
 		dr.Count, dr.WeakDedup = len(pl.items), pl.weak
 		switch {
@@ -580,11 +590,12 @@ func (s *Service) check(ctx context.Context, c ConnectorInfo, sourceID string, r
 			if i >= 3 {
 				break
 			}
-			dr.Items = append(dr.Items, preview(m, !seen[m.item.UID]))
+			dr.Items = append(dr.Items, preview(m, !seen[m.item.UID], t.recipe.Fields))
 		}
 		if pl.first != nil {
 			dr.Paths = leaves(pl.first)
 		}
+		dr.Warnings = append(dr.Warnings, emptyFieldWarnings(t.recipe.Fields, pl.items)...)
 		limit := pageLimit(pl.args)
 		dr.MaybeMore = limit > 0 && len(pl.items) >= limit && len(fresh) == len(pl.items)
 	}
@@ -611,9 +622,9 @@ func fieldPath(r Recipe, name string) string {
 	return "(no path)"
 }
 
-func preview(m mapped, fresh bool) Preview {
+func preview(m mapped, fresh bool, f *connector.SubscriptionFields) Preview {
 	p := Preview{UID: m.item.UID, New: fresh, Title: m.item.Title, Sender: m.item.Sender, Thread: m.item.Thread, Link: m.item.Link,
-		Body: clip(m.item.Body, previewMax)}
+		Body: clip(m.item.Body, previewMax), Summary: clip(oneLine(m.item.Body), previewMost), Problems: itemProblems(m, f)}
 	if m.item.Time != nil {
 		v := m.item.Time.Format(time.RFC3339)
 		p.Time = &v
@@ -708,6 +719,48 @@ func withRecipe(sub Subscription, t target, dr DryRun, origin string, now time.T
 	return next
 }
 
+// rebased is next, whose recipe replaced cur's, with what the new recipe finds at once handled as existing says
+// (ExistingDigest when ""). A recipe that is the same as before changes nothing here: what it finds is already seen.
+//   - digest: while the Inbox was on and stays on, its catch-up starts again at the change (not a day before: the old
+//     recipe's items were delivered already), so the first run's items come in as rows when 3 or fewer, else as one
+//     digest row. An Inbox turned on by the same change catches up as any turned on.
+//   - baseline: the next run that succeeds records what it finds as seen and keeps none of it (Baseline).
+//   - deliver: each comes in as a new item.
+func rebased(next, cur Subscription, existing string, now time.Time) Subscription {
+	if SameRecipe(next.Recipe, cur.Recipe) {
+		return next
+	}
+	next.Baseline = nil
+	switch existing {
+	case ExistingDeliver:
+	case ExistingBaseline:
+		next.Baseline = &now
+	default:
+		if cur.ToInbox && next.ToInbox {
+			next.InboxFrom, next.InboxCatchup, next.CatchupFrom = &now, nil, &now
+		}
+	}
+	return next
+}
+
+// SameRecipe says whether two recipes pull and read the same way (their arguments compared as JSON values).
+func SameRecipe(a, b Recipe) bool {
+	x, errA := json.Marshal(normalRecipe(a))
+	y, errB := json.Marshal(normalRecipe(b))
+	return errA == nil && errB == nil && bytes.Equal(x, y)
+}
+
+// normalRecipe is r with its arguments' keys in order, so the same recipe written another way compares equal.
+func normalRecipe(r Recipe) Recipe {
+	var v any
+	if len(bytes.TrimSpace(r.Args)) == 0 {
+		r.Args = emptyObject
+	} else if json.Unmarshal(r.Args, &v) == nil {
+		r.Args, _ = json.Marshal(v)
+	}
+	return r
+}
+
 // Update changes a subscription made at p.Revision.
 func (s *Service) Update(ctx context.Context, id string, p Patch, by Actor) (Subscription, error) {
 	cur, err := s.o.Store.GetSubscription(ctx, id)
@@ -719,6 +772,12 @@ func (s *Service) Update(ctx context.Context, id string, p Patch, by Actor) (Sub
 	}
 	if p.Revision != cur.Revision {
 		return Subscription{}, conflictWith(cur)
+	}
+	if IsPush(*cur) && (p.Recipe != nil || p.IntervalSeconds != nil || p.DailyAt != nil) {
+		return Subscription{}, pushOnly("recipe or schedule")
+	}
+	if p.Existing != "" && (p.Recipe == nil || !slices.Contains([]string{ExistingDigest, ExistingBaseline, ExistingDeliver}, p.Existing)) {
+		return Subscription{}, errorf(http.StatusBadRequest, CodeBadRequest, "existing is digest, baseline or deliver, with a recipe")
 	}
 	next, prev := *cur, cur.Revision
 	now := s.now()
@@ -769,7 +828,7 @@ func (s *Service) Update(ctx context.Context, id string, p Patch, by Actor) (Sub
 		next.IntervalSeconds, schedule = *p.IntervalSeconds, true
 		changed = append(changed, "interval_seconds")
 	}
-	if fl := floorOf(next.Recipe.Mode, next.SourceMin); next.DailyAt == "" && next.IntervalSeconds < fl {
+	if fl := floorOf(next.Recipe.Mode, next.SourceMin); !IsPush(next) && next.DailyAt == "" && next.IntervalSeconds < fl {
 		return Subscription{}, &Error{Status: http.StatusUnprocessableEntity, Code: CodeIntervalTooShort,
 			Message: fmt.Sprintf("the interval must be at least %d seconds", fl)}
 	}
@@ -780,9 +839,9 @@ func (s *Service) Update(ctx context.Context, id string, p Patch, by Actor) (Sub
 		// The Inbox catches up from a day before it was turned on, once the first run since has read the source.
 		switch {
 		case next.ToInbox && !cur.ToInbox:
-			next.InboxFrom, next.InboxCatchup, turnedOn = &now, nil, true
+			next.InboxFrom, next.InboxCatchup, next.CatchupFrom, turnedOn = &now, nil, nil, true
 		case !next.ToInbox:
-			next.InboxFrom, next.InboxCatchup = nil, nil
+			next.InboxFrom, next.InboxCatchup, next.CatchupFrom = nil, nil, nil
 		}
 	}
 	if p.ToKB != nil {
@@ -794,6 +853,9 @@ func (s *Service) Update(ctx context.Context, id string, p Patch, by Actor) (Sub
 		case !next.ToKB:
 			next.KBFrom = nil
 		}
+	}
+	if p.Recipe != nil {
+		next = rebased(next, *cur, p.Existing, now)
 	}
 	switch {
 	case !on(next):
@@ -808,6 +870,13 @@ func (s *Service) Update(ctx context.Context, id string, p Patch, by Actor) (Sub
 			}
 		}
 		next.NextRunAt = &n
+	}
+	if IsPush(next) {
+		// Nothing to pull: its catch-up ends when its Inbox is turned on (what came in the day before comes in now).
+		next.NextRunAt = nil
+		if next.ToInbox && !cur.ToInbox {
+			next.InboxCatchup = &now
+		}
 	}
 	if len(changed) == 0 {
 		return shown(*cur), nil
@@ -826,7 +895,9 @@ func (s *Service) Update(ctx context.Context, id string, p Patch, by Actor) (Sub
 	}
 	s.o.Audit(ctx, next.Connector, "subscription_updated", by, map[string]any{"subscription": id, "fields": changed})
 	s.o.Changed(shown(next), false)
-	if on(next) && (!wasOn || p.Recipe != nil || turnedOn) {
+	if IsPush(next) && turnedOn {
+		s.o.Delivered(next) // what it holds reaches the destination turned on
+	} else if on(next) && (!wasOn || p.Recipe != nil || turnedOn) {
 		s.poke()
 	}
 	return shown(next), nil
@@ -840,6 +911,9 @@ func (s *Service) RunNow(ctx context.Context, id string, by Actor) (Subscription
 	}
 	if sub == nil {
 		return Subscription{}, notFound("subscription")
+	}
+	if IsPush(*sub) {
+		return Subscription{}, pushOnly("pull")
 	}
 	s.mu.Lock()
 	s.asked[id] = true
@@ -893,6 +967,7 @@ func (s *Service) switchOff(ctx context.Context, sub Subscription) (*Subscriptio
 		}
 		next, prev := sub, sub.Revision
 		next.ToInbox, next.ToKB, next.InboxFrom, next.InboxCatchup, next.KBFrom, next.NextRunAt = false, false, nil, nil, nil, nil
+		next.CatchupFrom = nil
 		next.Revision, next.UpdatedAt = prev+1, s.now()
 		ok, err := s.o.Store.UpdateSubscription(ctx, next, prev)
 		if err != nil {
@@ -929,3 +1004,58 @@ func (e *Error) MarshalJSON() ([]byte, error) {
 	}
 	return json.Marshal(body{e.Code, e.Message, e.RetryAfter})
 }
+
+// Recent are a subscription's newest held items, at most n, newest first (subscription_get's samples). Their content
+// goes only to the asker, as a dry run's items do.
+func (s *Service) Recent(ctx context.Context, id string, n int) ([]Held, error) {
+	if n <= 0 {
+		return []Held{}, nil
+	}
+	held, err := s.o.Store.HeldItems(ctx, id, ItemQuery{Limit: n, Newest: true})
+	if err != nil {
+		return nil, err
+	}
+	slices.Reverse(held)
+	return held, nil
+}
+
+// Patched is cur as Update would leave it after p, for showing the change before it is made (the assistant's approval
+// card): the settings people see, by Update's own rules. A recipe is taken as given (Update checks it first); one of
+// another mode takes that mode's default schedule unless p sets it. Nothing is checked or written.
+func Patched(cur Subscription, p Patch) Subscription {
+	next := cur
+	if p.Recipe != nil {
+		next.Recipe = *p.Recipe
+		if p.Recipe.Mode != cur.Recipe.Mode {
+			next.IntervalSeconds, next.DailyAt = defaultIntervalOf(p.Recipe.Mode, cur.SourceMin), ""
+			if p.Recipe.Mode == wire.ConnectorSubscriptionModeSnapshot {
+				next.DailyAt = defaultDailyAt
+			}
+		}
+	}
+	if p.Label != nil {
+		next.Label = cmpOr(clip(oneLine(*p.Label), 200), next.SourceName)
+	}
+	if p.TriageRules != nil {
+		next.TriageRules = clip(*p.TriageRules, 4000)
+	}
+	if p.FallbackTier != nil {
+		next.FallbackTier = *p.FallbackTier
+	}
+	if p.DailyAt != nil {
+		next.DailyAt = *p.DailyAt
+	}
+	if p.IntervalSeconds != nil {
+		next.IntervalSeconds = *p.IntervalSeconds
+	}
+	if p.ToInbox != nil {
+		next.ToInbox = *p.ToInbox
+	}
+	if p.ToKB != nil {
+		next.ToKB = *p.ToKB
+	}
+	return shown(next)
+}
+
+// DefaultInterval is how often a new subscription of mode pulls on a source whose own minimum is sourceMin seconds.
+func DefaultInterval(mode string, sourceMin int) int { return defaultIntervalOf(mode, sourceMin) }

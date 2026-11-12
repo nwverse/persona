@@ -69,6 +69,7 @@ type (
 	MessageCard         = assistantwire.MessageCard
 	DeviceSessions      = assistantwire.DeviceSessions
 	StartEnded          = assistantwire.StartEnded
+	ConversationSent    = assistantwire.ConversationSent
 	HTTPRequest         = assistantwire.HTTPRequest
 	HTTPResponse        = assistantwire.HTTPResponse
 	Profile             = assistantwire.Profile
@@ -175,6 +176,8 @@ const (
 	AppPlugins               = assistantwire.AppPlugins
 	PluginsAssistant         = assistantwire.PluginsAssistant
 	PluginsSkillsNeed        = assistantwire.PluginsSkillsNeed
+	PluginsProjectContext    = assistantwire.PluginsProjectContext
+	PluginsInboxContext      = assistantwire.PluginsInboxContext
 	SettingsList             = assistantwire.SettingsList
 	AppConnectors            = assistantwire.AppConnectors
 	ConnectorsSnapshots      = assistantwire.ConnectorsSnapshots
@@ -209,6 +212,8 @@ const (
 	EventStartEnded          = assistantwire.EventStartEnded
 	CodeNoDevice             = assistantwire.CodeNoDevice
 	CodeMachineOffline       = assistantwire.CodeMachineOffline
+	CodeNodeClosed           = assistantwire.CodeNodeClosed
+	CodeMeetingEnded         = assistantwire.CodeMeetingEnded
 	CodeStaleSnapshot        = assistantwire.CodeStaleSnapshot
 	CodeAssistantOffline     = assistantwire.CodeAssistantOffline
 	DeviceAll                = assistantwire.DeviceAll
@@ -218,8 +223,12 @@ const (
 	AssistantID              = assistantwire.AssistantID
 )
 
-// DeviceAssistantGuestPrepare makes a guest conversation's directory (guest.go).
-const DeviceAssistantGuestPrepare = assistantwire.DeviceAssistantGuestPrepare
+// DeviceAssistantGuestPrepare makes a guest conversation's directory (guest.go); DeviceAssistantGuestDelete removes a
+// meeting's room (meeting_room.go).
+const (
+	DeviceAssistantGuestPrepare = assistantwire.DeviceAssistantGuestPrepare
+	DeviceAssistantGuestDelete  = assistantwire.DeviceAssistantGuestDelete
+)
 
 var (
 	ErrNoDevice      = assistantwire.ErrNoDevice

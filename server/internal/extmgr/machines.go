@@ -55,6 +55,9 @@ type Machine struct {
 	// browser, browserAt: the same for ego lite (browser.status, the plugin ego; browser.go).
 	browser   *proto.Browser
 	browserAt time.Time
+	// iphone, iphoneAt: the same for the iPhones it reaches (iphone.status, the extension iphone; iphone.go).
+	iphone   *proto.IPhone
+	iphoneAt time.Time
 	// streams are the manager's streams to its node (portStreams).
 	streams *streams.Mux
 	// noLockMu and cursorMu send computer.nolock and computer.cursor to the node one at a time (tellNoLock,

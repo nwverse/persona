@@ -299,6 +299,8 @@ func TestResolutionFixturesIOS(t *testing.T) {
 	for _, marker := range []string{"nonisolated struct SessionKey", "nonisolated enum InteractionKind", "nonisolated struct QuestionOption", "nonisolated struct Question:", "nonisolated struct Interaction:", "nonisolated struct Resolution:", "nonisolated struct ScreenDialog:"} {
 		source += swiftBlock(t, models, marker) + "\n"
 	}
+	// Whether a card offers Always (#3590), as the view decides it.
+	source += "extension Interaction {\n" + swiftBlock(t, views, "var offersAlways: Bool {") + "\n" + swiftBlock(t, views, "var agentName: String? {") + "\n}\n"
 	source += swiftBlock(t, chat, "nonisolated enum ScreenParser") + "\n" + swiftBlock(t, chat, "nonisolated private extension Character") + "\n"
 	source += "enum NotificationActions {\n" + notification[strings.Index(notification, "    static let allow"):strings.Index(notification, "    static func category")] + swiftBlock(t, notification, "static func resolution(action:") + "\n}\n"
 	source += "enum ApproveFirstIntent {\n" + swiftBlock(t, read("apple/Persona/Intents/ApproveFirstIntent.swift"), "static func resolution(for ix:") + "\n}\n"
@@ -439,7 +441,7 @@ func check(_ expected: [String: Any], _ actual: [String: Any], _ name: String) {
       if allowed { r = Resolution(keys:["enter"],text:text) }
      } else if action == "terminal_keys" { r = Resolution(keys:op["keys"] as? [String]) }
      else {
-      if action == "always" { allowed = !ix.sessionID.isEmpty }
+      if action == "always" { allowed = ix.offersAlways }
       if action.hasPrefix("approve_") { allowed = !(op["rejecting"] as? Bool ?? false) }
       if allowed { r = button(action,op["feedback"] as? String ?? "") }
      }
@@ -503,7 +505,7 @@ func TestResolutionFixtureSourceEvidence(t *testing.T) {
 	root := answerFixtureRoot(t)
 	evidence := map[string][]string{
 		"apple/Persona/Views/Interactions/InteractionViews.swift": {
-			".disabled(!canAdvance || sending)", ".disabled(sending)", "if interaction.sessionID != \"\" {",
+			".disabled(!canAdvance || sending)", ".disabled(sending)", "if interaction.offersAlways {",
 			"if rejecting {", "rejecting = false", ".disabled(text.isEmpty)",
 			"if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {",
 			"let t = text.trimmingCharacters(in: .whitespacesAndNewlines)",

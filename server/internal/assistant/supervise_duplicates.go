@@ -178,6 +178,9 @@ func (s *Service) planDuplicates(ctx context.Context, tasks []PlanTask) string {
 	}
 	var b strings.Builder
 	for _, t := range tasks {
+		if t.Continues != "" {
+			continue // it says which work it carries on (task_brief_plan.go): not a copy of it
+		}
 		hints := duplicateHints(t, open, sessions)
 		if len(hints) == 0 {
 			continue
@@ -188,5 +191,8 @@ func (s *Service) planDuplicates(ctx context.Context, tasks []PlanTask) string {
 		return ""
 	}
 	return "\n\nPossible duplicates (work already going on): look at them (agent_read, the todo) before this goes on; if it is the " +
-		"same work, cancel the new task (task_review cancelled, or dismiss the plan) or send what is new to the agent already on it." + b.String()
+		"same work, cancel the new task (task_review cancelled, or dismiss the plan) or send what is new to the agent already on it. " +
+		"If the new task takes over from one of them (a retry elsewhere, a rework round, a part split off), plan it again with " +
+		"continues set to that todo id and continues_why, so it keeps that task's brief (the owner's request and criteria); " +
+		"if it is different work, say why in your answer." + b.String()
 }

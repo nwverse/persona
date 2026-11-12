@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,8 +23,9 @@ import (
 // through its rollout while the file is there, whatever its age, else from its row alone (title, directory, last update).
 // An id in the sidebar's lists that the database lacks is a chat deleted in the App, which the sidebar does not show either.
 //
-// The database is read with the system sqlite3, read-only, as the Messages and Cindy readers are (cindybridge.go). Without
-// sqlite3, without the database, or with a schema these columns are not in, nothing more is listed than before.
+// The database is read with the system sqlite3, read-only, as the Messages and Cindy readers are (cindybridge.go), also
+// while the App has it closed (codexDBTarget). Without sqlite3, without the database, or with a schema these columns are
+// not in, nothing more is listed than before.
 
 // codexAppDBRefresh: how often the database is looked at; it is read again only when it or the sidebar's lists changed.
 const codexAppDBRefresh = 5 * time.Second
@@ -35,7 +38,9 @@ type codexAppThread struct {
 	RolloutPath string `json:"rolloutPath"`
 	Title       string `json:"title"`
 	Cwd         string `json:"cwd"`
+	Source      string `json:"source"`
 	UpdatedAtMs int64  `json:"updatedAtMs"`
+	Paginated   bool   `json:"-"`
 }
 
 func (t codexAppThread) updated() time.Time { return time.UnixMilli(t.UpdatedAtMs) }
@@ -108,6 +113,32 @@ func codexAppThreads(home string) map[string]codexAppThread {
 	return rows
 }
 
+// codexDBTarget is what sqlite3 -readonly is given to open the App's database at db. The App keeps its databases in WAL
+// mode and removes their -wal and -shm when it closes one (it quit, or the database was idle); a read-only connection
+// cannot open a WAL database whose -shm is gone ("unable to open database file", seen with macOS's sqlite3 3.51), so such
+// a database is opened as immutable — without locks or a -shm — and read as it was last checkpointed: with the App's
+// connection closed, the file holds every change it committed. The path otherwise (the App has it open, or it is not in
+// WAL mode).
+func codexDBTarget(db string) string {
+	if _, err := os.Stat(db + "-shm"); err == nil {
+		return db
+	}
+	f, err := os.Open(db)
+	if err != nil {
+		return db
+	}
+	defer f.Close()
+	var header [20]byte // bytes 18 and 19, the file format's write and read versions, are 2 in WAL mode
+	if _, err := io.ReadFull(f, header[:]); err != nil || header[18] != 2 || header[19] != 2 {
+		return db
+	}
+	p := filepath.ToSlash(db)
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p // C:/… on Windows: file:///C:/…
+	}
+	return (&url.URL{Scheme: "file", Path: p, RawQuery: "immutable=1"}).String()
+}
+
 func fileStamp(path string) string {
 	st, err := os.Stat(path)
 	if err != nil {
@@ -118,16 +149,20 @@ func fileStamp(path string) string {
 
 // readCodexAppThreads reads the unarchived rows of ids (validID only: they are put in the query as they are).
 func readCodexAppThreads(ctx context.Context, db string, ids []string) (map[string]codexAppThread, error) {
+	return readCodexThreads(ctx, db, `archived = 0 AND id IN ('`+strings.Join(ids, "', '")+`')`)
+}
+
+func readCodexThreads(ctx context.Context, db, where string) (map[string]codexAppThread, error) {
 	sqlite, err := exec.LookPath("sqlite3")
 	if err != nil {
 		return nil, err
 	}
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	q := `SELECT id, rollout_path AS rolloutPath, COALESCE(NULLIF(name, ''), title) AS title, cwd, ` +
+	q := `SELECT id, rollout_path AS rolloutPath, COALESCE(NULLIF(name, ''), title) AS title, cwd, source, ` +
 		`COALESCE(updated_at_ms, updated_at * 1000) AS updatedAtMs FROM threads ` +
-		`WHERE archived = 0 AND id IN ('` + strings.Join(ids, "', '") + `')`
-	out, err := exec.CommandContext(cctx, sqlite, "-readonly", "-bail", "-json", "-cmd", ".timeout 2000", db, q).Output()
+		`WHERE ` + where
+	out, err := exec.CommandContext(cctx, sqlite, "-readonly", "-bail", "-json", "-cmd", ".timeout 2000", codexDBTarget(db), q).Output()
 	if err != nil {
 		return nil, err
 	}

@@ -39,7 +39,7 @@ nonisolated enum IntentText {
             return String(localized: "A plan is waiting for your approval")
         case .permission:
             if let s = ix.summary, !s.isEmpty { return s }
-            if let tool = ix.toolName, !tool.isEmpty { return String(localized: "\(tool) is asking for permission") }
+            if let tool = ix.toolDisplayName, !tool.isEmpty { return String(localized: "\(tool) is asking for permission") }
             return String(localized: "A permission request is waiting for you")
         case .screen:
             return String(localized: "The terminal is waiting for your input")
