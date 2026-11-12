@@ -2003,6 +2003,20 @@ The watch only prunes by age. Segments the phone has not confirmed stay up to `u
   reported the end (found by replaying a recording that ran out). `RFBOutbox.next()` wraps the wait in
   `withTaskCancellationHandler` and resumes the parked continuation with nil, with a flag for a cancel that comes
   before the continuation is stored (`RFBFrameTests.outboxHandsOverInOrderAndEndsOnFinishOrCancel`).
+## A menu's button must stay the same view while its menu opens (2026-11-12, #5289)
+
+- On an iPhone on its side with the keyboard up, tapping ⋯ on the VNC page stopped the app:
+  `AnimationKit/LiquidMorphAnimation.swift:310: Fatal error: Starting a pivot morph to a view that isn't in the view hierarchy`, under
+  `-[_UIContextMenuPresentation present]`. Opening a menu hides the keyboard (UIKit deactivates it for the menu:
+  `setDeactivatedKeyboard … reason: setDisableBecomeFirstResponder`). The page got taller, the rail's `ViewThatFits` picked a roomier
+  child, and since each child is its own subtree, the `Menu`'s button was replaced while the menu morphed out of it.
+- Anything that picks views by the space the keyboard leaves (`ViewThatFits` by height, `if` on a measured height, a size class) must not
+  hold a `Menu`, or must keep it the same view. The VNC rails (`fittingRail` in `apple/Persona/Screen/VNCPage.swift`) measure hidden copies
+  of their ways in a `ViewThatFits`. The copy shown says which one it is (`onAppear`), and the visible rail is one set of views that only
+  changes its spacing, which buttons it shows and whether it scrolls (a `ScrollView` always there, `scrollDisabled` when it fits).
+- The crash needs the menu's morph (iOS 26 and later) and a layout that changes when the keyboard goes. Upright, the VNC top row's
+  `ViewThatFits` picks by width, which the keyboard doesn't change, so it never met this.
+
 ## Simulator arguments and screenshot settling (#1872)
 
 - On Xcode 27.2, a direct `simctl launch` can drop leading DEBUG arguments before they reach `UserDefaults`; put `--` before them. Verify the App actually adopted the mock pairings—an old real-hub cache on screen is a launch-environment failure, not the target RED. UI launch helpers can carry the same separator without changing the assertions.
