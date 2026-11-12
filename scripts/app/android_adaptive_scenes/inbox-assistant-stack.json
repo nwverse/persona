@@ -43,7 +43,14 @@
     },
     {
       "step": "tap",
-      "text": "设计评审"
+      "text": "韩梅梅"
+    },
+    {
+      "step": "assert",
+      "checks": {
+        "route": {"equals": "inbox/lark"},
+        "selectedKey": {"equals": "lark:f1:100"}
+      }
     },
     {
       "step": "capture",
@@ -69,6 +76,13 @@
       "text": "Weekly Digest"
     },
     {
+      "step": "assert",
+      "checks": {
+        "route": {"equals": "inbox/mail"},
+        "selectedKey": {"equals": "mail:acc1:t3:503"}
+      }
+    },
+    {
       "step": "capture",
       "name": "03-sidebar-mail-detail"
     },
@@ -79,6 +93,13 @@
     {
       "step": "tap",
       "text": "发布群"
+    },
+    {
+      "step": "assert",
+      "checks": {
+        "route": {"equals": "inbox/event"},
+        "selectedKey": {"matches": ".+"}
+      }
     },
     {
       "step": "capture",
@@ -93,6 +114,13 @@
       "text": "Computers"
     },
     {
+      "step": "assert",
+      "checks": {
+        "route": {"equals": "machines"},
+        "selectedKey": {"equals": null}
+      }
+    },
+    {
       "step": "capture",
       "name": "05-sidebar-machines"
     },
@@ -103,6 +131,13 @@
     {
       "step": "tap",
       "text": "Knowledge"
+    },
+    {
+      "step": "assert",
+      "checks": {
+        "route": {"equals": "knowledge"},
+        "selectedKey": {"equals": null}
+      }
     },
     {
       "step": "capture",
@@ -118,11 +153,15 @@
     },
     {
       "step": "tap",
-      "text": "发布群"
+      "text": "韩梅梅"
     },
     {
       "step": "tap",
-      "resource-id": "inbox-handoff-field"
+      "text": "Edit"
+    },
+    {
+      "step": "tap",
+      "resource-id": "inbox-reply-field"
     },
     {
       "step": "text",
@@ -131,17 +170,19 @@
     {
       "step": "assert",
       "requires": {
-        "page": "发布群",
-        "fields": ["draftHmac", "selection", "focused"]
+        "page": "韩梅梅",
+        "fields": ["draftHmac", "focused"]
       },
       "checks": {
         "pid": "unchanged",
+        "route": {"equals": "inbox/lark"},
+        "selectedKey": {"equals": "lark:f1:100"},
         "focused": {"equals": true}
       }
     },
     {
       "step": "capture",
-      "name": "07-event-reply-draft"
+      "name": "07-lark-reply-draft"
     },
     {
       "step": "rotate",
@@ -150,20 +191,21 @@
     {
       "step": "assert",
       "requires": {
-        "page": "发布群",
-        "fields": ["draftHmac", "selection", "focused"]
+        "page": "韩梅梅",
+        "fields": ["draftHmac", "focused"]
       },
       "checks": {
         "pid": "unchanged",
+        "route": {"equals": "inbox/lark"},
+        "selectedKey": {"equals": "lark:f1:100"},
         "draftHmac": "unchanged",
-        "selection": "unchanged",
         "focused": {"equals": true},
         "window.orientation": {"equals": "landscape"}
       }
     },
     {
       "step": "capture",
-      "name": "08-event-reply-rotated"
+      "name": "08-lark-reply-rotated"
     },
     {
       "step": "posture",
@@ -172,20 +214,21 @@
     {
       "step": "assert",
       "requires": {
-        "page": "发布群",
-        "fields": ["draftHmac", "selection", "focused"]
+        "page": "韩梅梅",
+        "fields": ["draftHmac", "focused"]
       },
       "checks": {
         "pid": "unchanged",
+        "route": {"equals": "inbox/lark"},
+        "selectedKey": {"equals": "lark:f1:100"},
         "draftHmac": "unchanged",
-        "selection": "unchanged",
         "deviceState": {"equals": "HALF_OPENED"},
         "postureEvidenceType": {"equals": "folding-feature"}
       }
     },
     {
       "step": "capture",
-      "name": "09-event-reply-book"
+      "name": "09-lark-reply-book"
     },
     {
       "step": "posture",
@@ -201,20 +244,21 @@
     {
       "step": "assert",
       "requires": {
-        "page": "发布群",
-        "fields": ["draftHmac", "selection", "focused"]
+        "page": "韩梅梅",
+        "fields": ["draftHmac", "focused"]
       },
       "checks": {
         "pid": "unchanged",
+        "route": {"equals": "inbox/lark"},
+        "selectedKey": {"equals": "lark:f1:100"},
         "draftHmac": "unchanged",
-        "selection": "unchanged",
         "window.widthDp": {"equals": 480},
         "window.heightDp": {"equals": 800}
       }
     },
     {
       "step": "capture",
-      "name": "10-event-reply-compact"
+      "name": "10-lark-reply-compact"
     },
     {
       "step": "wm-size",
@@ -226,20 +270,21 @@
     {
       "step": "assert",
       "requires": {
-        "page": "发布群",
-        "fields": ["draftHmac", "selection", "focused"]
+        "page": "韩梅梅",
+        "fields": ["draftHmac", "focused"]
       },
       "checks": {
         "pid": "unchanged",
+        "route": {"equals": "inbox/lark"},
+        "selectedKey": {"equals": "lark:f1:100"},
         "draftHmac": "unchanged",
-        "selection": "unchanged",
         "window.widthDp": {"equals": 760},
         "window.heightDp": {"equals": 400}
       }
     },
     {
       "step": "capture",
-      "name": "11-event-wide-phone-list-detail"
+      "name": "11-lark-wide-phone-list-detail"
     },
     {
       "step": "wm-size",
@@ -251,20 +296,21 @@
     {
       "step": "assert",
       "requires": {
-        "page": "发布群",
-        "fields": ["draftHmac", "selection", "focused"]
+        "page": "韩梅梅",
+        "fields": ["draftHmac", "focused"]
       },
       "checks": {
         "pid": "unchanged",
+        "route": {"equals": "inbox/lark"},
+        "selectedKey": {"equals": "lark:f1:100"},
         "draftHmac": "unchanged",
-        "selection": "unchanged",
         "window.widthDp": {"equals": 600},
         "window.heightDp": {"equals": 480}
       }
     },
     {
       "step": "capture",
-      "name": "12-event-minimum-regular"
+      "name": "12-lark-minimum-regular"
     },
     {
       "step": "wm-size",
@@ -272,6 +318,10 @@
       "density": 160,
       "widthDp": 1200,
       "heightDp": 900
+    },
+    {
+      "step": "key",
+      "keycombination": ["BACK"]
     },
     {
       "step": "key",

@@ -45,7 +45,13 @@ uses the whole right column; opening a detail pushes it onto the same Assistant 
 to the main conversation. Regular windows never add a third Inbox column. A wide phone (at least 760dp wide and less than
 480dp tall) has no persistent sidebar and retains its existing Inbox list-detail pair; compact windows keep their single stack.
 Details and the threshold's reasoning: `docs/android/android-design.md` section 3.1. Extension management remains in Settings
-and is distinct from extension-provided pages.
+and is distinct from extension-provided pages. An extension page keeps the Assistant, Inbox or Settings stack it was actually
+opened from; a deep link or internal push does not invent a Settings parent, while a page opened inside Settings retains it.
+
+For `shots-live`, DEBUG automation installs `AssistantStackProbe` and writes `assistant-stack-probe.json` beside the generic
+adaptive probe. It carries the visible route, stable selected item key and the open Inbox reply's HMAC and focus, so tapped
+Lark / mail / event details and rotation / resize / Back assertions use real evidence. Release installs no backend or listener
+and writes no file; reply plaintext is never persisted. `ReplyComposerField` only adds the optional probe page and field tag.
 
 The Assistant tab's menu (the selected tab on Glass, the title elsewhere) has iOS's items in iOS's order (#4339 C18,
 `assistantMenu`): **Connection details** while the hub is out of reach, **Knowledge**, **Details** (the assistant's settings
