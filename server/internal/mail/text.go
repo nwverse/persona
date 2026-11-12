@@ -141,7 +141,7 @@ func renderText(mediaType string, s string) string {
 	return s
 }
 
-// stripHTML removes tags and script/style content and unescapes entities.
+// stripHTML removes tags, comments and script, style and title content and unescapes entities.
 func stripHTML(s string) string {
 	var b strings.Builder
 	lower := asciiLower(s) // same length as s: tags are matched at s's offsets
@@ -154,18 +154,22 @@ func stripHTML(s string) string {
 			i++
 			continue
 		}
-		end := strings.IndexByte(s[i:], '>')
+		if strings.HasPrefix(s[i:], "<!--") {
+			end := strings.Index(s[i+len("<!--"):], "-->")
+			if end < 0 {
+				break // the rest is a comment
+			}
+			i += len("<!--") + end + len("-->")
+			continue
+		}
+		end := tagEnd(s, i)
 		if end < 0 {
 			break
 		}
-		tag := lower[i : i+end+1]
-		i += end + 1
-		if strings.HasPrefix(tag, "<script") || strings.HasPrefix(tag, "<style") {
-			closing := "</script"
-			if strings.HasPrefix(tag, "<style") {
-				closing = "</style"
-			}
-			j := strings.Index(lower[i:], closing)
+		tag := lower[i : end+1]
+		i = end + 1
+		if name := bodyHidden(tag); name != "" {
+			j := strings.Index(lower[i:], "</"+name)
 			if j < 0 {
 				break // a preview cut off inside a <style> block: the rest is CSS, not text
 			}
@@ -179,6 +183,42 @@ func stripHTML(s string) string {
 		}
 	}
 	return html.UnescapeString(b.String())
+}
+
+// tagEnd is the index of the ">" that ends the tag s[i] (a "<") starts, -1 when there is none: a ">" inside a quoted
+// attribute value (one opened right after "=") does not end it.
+func tagEnd(s string, i int) int {
+	var quote byte
+	for j := i + 1; j < len(s); j++ {
+		switch c := s[j]; {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+		case c == '"' || c == '\'':
+			k := j - 1
+			for k > i && (s[k] == ' ' || s[k] == '\t' || s[k] == '\r' || s[k] == '\n') {
+				k--
+			}
+			if s[k] == '=' {
+				quote = c
+			}
+		case c == '>':
+			return j
+		}
+	}
+	return -1
+}
+
+// bodyHidden is the name of the element tag (lower-cased) opens when what it holds is no part of the text: script,
+// style and title; "" for any other tag.
+func bodyHidden(tag string) string {
+	for _, name := range []string{"script", "style", "title"} {
+		if rest, ok := strings.CutPrefix(tag, "<"+name); ok && rest != "" && strings.IndexByte(">/ \t\r\n", rest[0]) >= 0 {
+			return name
+		}
+	}
+	return ""
 }
 
 // blockTags are the elements that lay out what is inside them apart from what is around them, as a paragraph does:
