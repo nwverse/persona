@@ -472,10 +472,13 @@ type codexOrigin struct {
 	cli     bool
 	// exec: a one-shot run a program started (`codex exec`, an SDK, the App's background runs) or a subagent of one:
 	// nobody's conversation, not listed in Agents (programRun).
-	exec   bool
-	sub    bool
-	root   string // session_id identifies the shared root on newer Codex versions
-	parent string // the thread that spawned this subagent
+	exec bool
+	sub  bool
+	// guardian: an approval review, a subagent of source {"subagent": {"other": "guardian"}} that Codex runs on a tool
+	// call before the call runs. Its rollout holds only the review's request and assessment: not listed (#5486).
+	guardian bool
+	root     string // session_id identifies the shared root on newer Codex versions
+	parent   string // the thread that spawned this subagent
 	// started holds when the thread began, the session_meta line's time (Session.StartedAt), made once for every row
 	// of the thread: a hierarchy is never written once set, so the rows share it. Nil when the line has no time.
 	started *proto.SessionHierarchy
@@ -524,10 +527,12 @@ func readCodexOrigin(path string) codexOrigin {
 			ThreadSpawn struct {
 				Parent string `json:"parent_thread_id"`
 			} `json:"thread_spawn"`
+			Other string `json:"other"`
 		} `json:"subagent"`
 	}
 	if json.Unmarshal(m.Payload.Source, &spawn) == nil {
 		o.parent = spawn.Subagent.ThreadSpawn.Parent
+		o.guardian = spawn.Subagent.Other == "guardian"
 	}
 	o.parent = firstNonEmpty(m.Payload.Parent, o.parent)
 	var fields map[string]json.RawMessage

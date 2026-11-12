@@ -144,6 +144,9 @@ class OutboxMessageSender(
     override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?) =
         enqueue(OutboxEntry(clientMessageId, session, text, clearDraft, createdAt = now()))
 
+    override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?, launcher: String?, model: String?) =
+        enqueue(OutboxEntry(clientMessageId, session, text, clearDraft, createdAt = now(), launcher = launcher, model = model))
+
     override suspend fun sendApplyingSwitch(session: SessionKey, text: String, clientMessageId: String) =
         enqueue(OutboxEntry(clientMessageId, session, text, createdAt = now(), applySwitch = true))
 
@@ -463,9 +466,10 @@ class OutboxMessageSender(
 
     private class Stall(val giveUp: Job, var code: String?)
 
-    private fun request(entry: OutboxEntry) =
-        MessageRequest(hubScope, entry.session, entry.text, entry.clientMessageId, entry.clearDraft, opId = entry.operationId,
-            applySwitch = entry.applySwitch)
+    private fun request(entry: OutboxEntry) = MessageRequest(
+        hubScope, entry.session, entry.text, entry.clientMessageId, entry.clearDraft,
+        opId = entry.operationId, launcher = entry.launcher, model = entry.model, applySwitch = entry.applySwitch,
+    )
 
     private sealed interface MainTarget {
         data class Found(val session: SessionKey) : MainTarget

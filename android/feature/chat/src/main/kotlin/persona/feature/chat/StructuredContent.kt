@@ -44,7 +44,7 @@ internal fun MessageContent(item: Item, user: Boolean, update: ChatTextUpdate? =
         .let { if (hideCloseout) persona.core.domain.sort.stripCloseout(it) else it }
     val model = remember(text, item.from, user) { messageModel(text, item.from, user) }
     val uri = LocalUriHandler.current
-    Column(Modifier.fillMaxWidth().messageMenu(MessageTarget(item.id, model.plain, user, model.editText()))) {
+    Column(Modifier.fillMaxWidth().messageMenu(MessageTarget(item.id, model.plain, user, model.editText(), time = item.ts))) {
         MessageContextGroup(model.contexts, "${item.id}/contexts", uri::openUri, alignEnd = user)
         AttachedFileCards(model.attached, alignEnd = user)
         // a reply still being written: its quotes do not fold yet (#2984)
@@ -138,7 +138,7 @@ internal fun MergedUserBubble(items: List<Item>, updates: Map<String, ChatTextUp
     val attached = remember(models) { models.flatMap { it.attached }.distinctBy { it.path } }
     val target = remember(models, items, pending) {
         MessageTarget(items.firstOrNull()?.id.orEmpty(), models.joinToString("\n\n") { it.plain }.trim(), true,
-            models.joinToString("\n\n") { it.editText() }.trim(), pending)
+            models.joinToString("\n\n") { it.editText() }.trim(), pending, items.lastOrNull()?.ts)
     }
     val timestamp = items.lastOrNull()?.ts
     val locale = currentLocale

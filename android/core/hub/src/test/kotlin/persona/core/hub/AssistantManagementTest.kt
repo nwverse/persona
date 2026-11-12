@@ -144,7 +144,7 @@ class AssistantManagementTest {
             server.enqueue(MockResponse().setBody("""{"launchers":[{"name":"team","display_name":"Team API","agent_type":"claude"}],
                 "default":{"provider":"claude","model":"opus","effort":"high"},
                 "unavailable":[{"name":"resp","kind":"api","api":"responses","code":"api_protocol","reason":"用的是 Responses 协议"}]}"""))
-            val launchers = api.assistantLaunchers("mac")
+            val launchers = api.assistantLauncherList("mac")
             assertEquals("/api/v1/machines/mac/launchers?purpose=assistant", server.takeRequest().path)
             assertEquals("Team API", launchers.launchers.single().title)
             assertEquals("opus", launchers.default?.model)

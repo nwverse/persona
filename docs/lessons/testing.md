@@ -350,6 +350,22 @@ The `scripts/ci/` lanes are written for the hosted runners; on a Mac developer m
 - A database copied with `CREATE DATABASE ... TEMPLATE` keeps none of its template's `ALTER DATABASE ... SET` settings: set `synchronous_commit` on every copy (`dbtest.create`). Nothing may be connected to the template; Postgres waits up to 5 s on its own for backends that are closing, so no sleep after `Close` is needed. Use `STRATEGY wal_log`: `file_copy` checkpoints the whole server twice.
 - Since Postgres 15, every `DROP DATABASE` forces a checkpoint of the whole server, which writes whatever other tests left dirty. On a loaded machine, one drop took 0.07-3.8 s. Count that before giving more tests a database of their own.
 
+## "TempDir RemoveAll cleanup: directory not empty" after an assistant test (2026-11-12, #5510)
+
+- A test passed and then failed its own cleanup: something wrote into its `t.TempDir()` after the test returned. In
+  `internal/assistant` the writer was the service's debounced timers (`directionsSoon`, `directionTreeSoon`,
+  `meetingLiveChanged`, an attending look): they fire up to a second later, call `kbGet`, and that opened the
+  knowledge base again after the test's cleanup had closed it, putting back `.lock`, `chats/`, `people/` and the rest.
+  The same happened to a stopping manager (a late timer took the data directory's lock back), so it was a code bug:
+  `kbEnd` closes for good, and test fixtures register `t.Cleanup(s.kbEnd)`, not `kbClose` (which stays reopenable,
+  for the disconnected case and restart tests). A timer that already holds the engine still writes: the meeting
+  fixture runs the attending feed on real timers, so its cleanup waits for the looks already running and lets none
+  start after (`trackAttendFeed` in `server/internal/assistant/meeting_live_test.go`).
+- It shows only under load (one in four shuffled package runs on a busy Mac; six processes of `-run '^TestMeeting'
+  -count=20 -cpu=1` reproduce it every time). To find such a writer, give the fixture a directory whose cleanup, when
+  `os.RemoveAll` fails, lists what is left (with modification times against the cleanup's start) and dumps every
+  goroutine with `runtime.Stack(buf, true)`: the stack that calls `MkdirAll` or opens the lock names the timer.
+
 ## Green here, red on the hub: judge server tests on the hub machine (2026-11-12, #5182, #5188)
 
 - A test that needs Postgres skips without `PERSONA_TEST_DATABASE_URL`, and a plain `go test` prints `ok` for its package. #5031 changed what `task_plan` answers and checked `internal/hub` without a database, so `TestSupervisedTaskOverTheBus`, which drives that answer end to end, never ran and went red on `main` (#5182). Before a change that touches what a database test covers, run its package with `scripts/test/test-server.sh <package>`, or `go test -v` and check for `SKIP` lines.

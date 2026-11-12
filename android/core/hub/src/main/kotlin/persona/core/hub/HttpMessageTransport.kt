@@ -111,6 +111,8 @@ class HttpMessageTransport(
             put("client_msg_id", request.opId)
             request.clearDraft?.let { put("clear_draft", it) }
             request.todoId?.let { put("todo_id", it) }
+            request.launcher?.let { put("launcher", it) }
+            request.model?.let { put("model", it) }
             if (request.applySwitch) put("apply_switch", true)
         }.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
         return try {

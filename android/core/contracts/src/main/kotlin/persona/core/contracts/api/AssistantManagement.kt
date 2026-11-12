@@ -27,11 +27,15 @@ interface AssistantManagement {
     suspend fun updateConfig(update: AssistantConfigUpdate): AssistantConfig = throw UnsupportedOperationException("Assistant settings unavailable")
     /** The launchers a machine offers (GET /api/v1/machines/{id}/launchers). */
     suspend fun launchers(machineId: String): List<AgentLauncher> = throw UnsupportedOperationException("Assistant settings unavailable")
+    /** Only launchers the hub accepts for a Persona conversation; New Agent keeps using [launchers]. */
+    suspend fun assistantLaunchers(machineId: String): List<AgentLauncher> = launchers(machineId)
+    /** The models of [launcher], null on a hub without the list. */
+    suspend fun launcherModels(machineId: String, launcher: String): LauncherModels? = null
     /**
-     * What a machine can run Persona chats on, the main chat's default and what it can't run them on with why
-     * (`GET /api/v1/machines/{id}/launchers?purpose=assistant`): the model panel's providers in a Persona chat (#5033).
+     * [assistantLaunchers] with the rest of the hub's answer: the main chat's default and what can't run Persona chats
+     * there, with why (`GET /api/v1/machines/{id}/launchers?purpose=assistant`): the model panel's providers (#5033, #5055).
      */
-    suspend fun assistantLaunchers(machineId: String): AssistantLaunchers = throw UnsupportedOperationException("Assistant settings unavailable")
+    suspend fun assistantLauncherList(machineId: String): AssistantLaunchers = AssistantLaunchers(assistantLaunchers(machineId))
     /**
      * Keeps [pick] as what the conversation's next messages run on (`PUT /api/v1/assistant/conversations/{id}/model`,
      * feature `assistant_model_pick`); answers the pick the hub kept. A refusal throws the hub's failure with its words

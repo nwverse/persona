@@ -2,11 +2,11 @@
   "formatVersion": 1,
   "database": {
     "version": 5,
-    "identityHash": "ccc75564c2161d333130f4e959bd58f7",
+    "identityHash": "cefe534548b1dd1dc8b3aa61f32bb4af",
     "entities": [
       {
         "tableName": "outbox",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`position` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `scope` TEXT NOT NULL, `machine` TEXT NOT NULL, `session` TEXT NOT NULL, `client_msg_id` TEXT NOT NULL, `text` TEXT NOT NULL, `clear_draft` TEXT, `state` TEXT NOT NULL, `error` TEXT, `created_at` INTEGER NOT NULL, `main_target` INTEGER NOT NULL DEFAULT 0, `op_id` TEXT, `apply_switch` INTEGER NOT NULL DEFAULT 0)",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`position` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `scope` TEXT NOT NULL, `machine` TEXT NOT NULL, `session` TEXT NOT NULL, `client_msg_id` TEXT NOT NULL, `text` TEXT NOT NULL, `clear_draft` TEXT, `state` TEXT NOT NULL, `error` TEXT, `created_at` INTEGER NOT NULL, `main_target` INTEGER NOT NULL DEFAULT 0, `op_id` TEXT, `launcher` TEXT, `model` TEXT)",
         "fields": [
           {
             "fieldPath": "position",
@@ -79,11 +79,14 @@
             "affinity": "TEXT"
           },
           {
-            "fieldPath": "apply_switch",
-            "columnName": "apply_switch",
-            "affinity": "INTEGER",
-            "notNull": true,
-            "defaultValue": "0"
+            "fieldPath": "launcher",
+            "columnName": "launcher",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "model",
+            "columnName": "model",
+            "affinity": "TEXT"
           }
         ],
         "primaryKey": {
@@ -192,7 +195,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'ccc75564c2161d333130f4e959bd58f7')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'cefe534548b1dd1dc8b3aa61f32bb4af')"
     ]
   }
 }

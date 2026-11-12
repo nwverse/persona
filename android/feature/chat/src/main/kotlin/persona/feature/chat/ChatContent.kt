@@ -182,6 +182,8 @@ private fun ChatMarkdownBody(text: String, id: String, bodyStyle: TextStyle, col
  */
 @Composable
 internal fun CodeText(text: String, language: String = "", syntax: Boolean = false, bar: Boolean = false) {
+    // In a picture the whole code shows, with nothing to tap (iOS's card theme).
+    if (LocalInPicture.current) return CodeBody(text, language, syntax && language.isNotBlank())
     var expanded by remember(text) { mutableStateOf(false) }
     val preview = remember(text, expanded) { if (expanded) text else text.lineSequence().take(40).joinToString("\n") }
     val copy = rememberCopy()
@@ -202,6 +204,9 @@ internal fun CodeText(text: String, language: String = "", syntax: Boolean = fal
         }
     }
 }
+
+/** True where messages are drawn into a picture (Share's card, [MessageShareCard]): code blocks lose their Copy bar and "Show all". */
+internal val LocalInPicture = staticCompositionLocalOf { false }
 
 /** A code block's code: links in it tappable, coloured by [language] when [colour]; [header] inside its box, on top. */
 @Composable

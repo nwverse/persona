@@ -11,18 +11,19 @@
 
 /**
  * Whether the web's html runtime passed the security cases: web/e2e/html-runtime-security.mjs in Chromium and WebKit
- * (#4215, the runs attached to the change that turned this on). A card still runs only where the hub allows it
- * (assistant_html_bridge: persona_view and html_views on) and has a key.
+ * (#4215, the runs attached to the change that turned this on). A card still runs only where the hub has the bridge
+ * (assistant_html_bridge, on every hub since #5509) and has a key.
  */
 export const WEB_HTML_RUNTIME_VERIFIED = true;
 
-/** The hub's hello feature for the bridge: …/html-actions is there, with persona_view and html_views both on. */
+/** The hub's hello feature for the bridge: …/html-actions is there (always, since #5509; an older hub says it only
+ *  with its persona_view and html_views switches on). */
 export const HTML_BRIDGE_FEATURE = "assistant_html_bridge";
 
 export type HtmlRunDecision = { run: true } | { run: false; reason: "runtime_unverified" | "disabled" | "no_key" };
 
 /** Whether an html component would run: the hub allows it (hello feature), the component has a stable key, and this
- *  client's runtime passed. The last is false on the web, so this always says fallback here. */
+ *  client's runtime passed (WEB_HTML_RUNTIME_VERIFIED on the web). */
 export function htmlDecision(o: { hubAllows: boolean; componentKey?: string; verified?: boolean }): HtmlRunDecision {
   if (!(o.verified ?? WEB_HTML_RUNTIME_VERIFIED)) return { run: false, reason: "runtime_unverified" };
   if (!o.hubAllows) return { run: false, reason: "disabled" };

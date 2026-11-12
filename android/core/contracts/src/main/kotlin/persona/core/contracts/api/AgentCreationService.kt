@@ -119,6 +119,8 @@ data class AgentLauncher(
     @SerialName("base_url") val baseUrl: String? = null,
     val model: String? = null,
     @SerialName("agent_type") val agentType: String = "claude",
+    /** A runtime's own declaration that it can run the assistant; false or absent on other launchers. */
+    val assistant: Boolean = false,
     /** Its health on this computer (docs/server/launcher-health.md); null when never checked or from an older hub. */
     val health: LauncherHealth? = null,
     /** A Persona-managed provider's own name (feature `launcher_auto_name`), shown over [name]; null for the others. */
@@ -139,6 +141,12 @@ data class AssistantLaunchers(
     val default: LauncherDefault? = null,
     val unavailable: List<UnavailableLauncher> = emptyList(),
 )
+
+/** The model a launcher names, short. Older nodes used the Chinese display placeholder for no model. */
+fun launcherModel(launcher: AgentLauncher): String? = launcher.model
+    ?.takeUnless { it == "默认" } // i18n-ignore: legacy wire value, never displayed
+    ?.substringAfterLast('/')
+    ?.takeIf(String::isNotBlank)
 
 /** A purpose's effective setup ([provider] is a launcher's name). */
 @Serializable

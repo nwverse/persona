@@ -815,6 +815,31 @@ class OutboxMessageSenderTest {
         sender.close()
     }
 
+    @Test fun launcherAndModelStayOnEverySendAndRetry() = runTest {
+        val store = MemoryOutboxStore()
+        val hub = ReplayingHub()
+        val sender = OutboxMessageSender(scope, store, hub, backgroundScope)
+        hub.answers += MessageTransportResult.Accepted
+        hub.answers += MessageTransportResult.Accepted
+        sender.send(session, "first", "first", null, "runtime", "model-id")
+        sender.send(session, "second", "second", null, "runtime", "model-id")
+        runCurrent()
+        assertEquals(listOf("first", "second"), hub.requests.map { it.clientMessageId })
+        assertTrue(hub.requests.all { it.launcher == "runtime" && it.model == "model-id" })
+
+        hub.answers += MessageTransportResult.HubError("input_draft", "none", retryable = false)
+        sender.send(session, "retry", "retry", null, "runtime", "model-id")
+        runCurrent()
+        assertEquals(OutboxState.Refused, store.state("retry"))
+        hub.answers += MessageTransportResult.Accepted
+        assertTrue(sender.retry("retry"))
+        runCurrent()
+        assertEquals("runtime", hub.requests.last().launcher)
+        assertEquals("model-id", hub.requests.last().model)
+        assertTrue(hub.requests.last().opId != "retry")
+        sender.close()
+    }
+
     /** Like the hub's client ops: a repeated operation id gets the first answer again (a 503 replays as unknown). */
     private class ReplayingHub : MessageTransport {
         override val readyToSend = MutableStateFlow(true)

@@ -27,6 +27,14 @@ interface MessageSender {
     /** When this phone wrote each send, including ones already in the transcript. Epoch millis, by client message id. */
     val writtenAt: StateFlow<Map<String, Long>> get() = NoWrittenAt
     suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String? = null)
+    /** [launcher] and [model] apply to this message; null keeps the hub's configured default. */
+    suspend fun send(
+        session: SessionKey, text: String, clientMessageId: String, clearDraft: String?,
+        launcher: String?, model: String?,
+    ) {
+        require(launcher == null && model == null) { "Launcher/model overrides are not supported" }
+        send(session, text, clientMessageId, clearDraft)
+    }
     /**
      * [send] for the user's own message from a chat whose session shows a launcher switch waiting
      * (`pending_switch`, docs/protocol/protocol.md "Switching a running Agent to another provider"): it goes with

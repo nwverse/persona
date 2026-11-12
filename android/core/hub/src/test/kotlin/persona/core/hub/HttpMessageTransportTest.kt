@@ -193,8 +193,17 @@ class HttpMessageTransportTest {
                         val body = JsonCodec.parseToJsonElement(sent.body.readUtf8()).jsonObject
                         assertEquals("stable-id", (body["client_msg_id"]?.jsonPrimitive?.content).zhAny())
                         assertEquals("draft", (body["clear_draft"]?.jsonPrimitive?.content).zhAny())
+                        assertFalse("launcher" in body)
+                        assertFalse("model" in body)
                         assertNull("only the message that carries a launcher switch out says so", body["apply_switch"])
                     }
+                    responses.send(MockResponse().setBody("""{"ok":true}"""))
+                    assertEquals(MessageTransportResult.Accepted,
+                        transport.send(message.copy(launcher = "runtime", model = "model-id")))
+                    val overrideBody = JsonCodec.parseToJsonElement(
+                        withTimeout(5000) { requests.receive() }.body.readUtf8()).jsonObject
+                    assertEquals("runtime", overrideBody["launcher"]?.jsonPrimitive?.content)
+                    assertEquals("model-id", overrideBody["model"]?.jsonPrimitive?.content)
                     // #5055: the user's message from a chat with a switch waiting carries it out first
                     responses.send(MockResponse().setBody("""{"ok":true}"""))
                     assertEquals(MessageTransportResult.Accepted, transport.send(message.copy(applySwitch = true)))
