@@ -57,10 +57,17 @@ enum class AgentGrouping {
 enum class RepoLevel { Repository, MainCheckout, Worktree }
 enum class AgentQuickFilter(val state: AgentState?, val source: AgentSource? = null) {
     All(null), NeedsYou(AgentState.NeedsYou), Unread(AgentState.Unread), Working(AgentState.Working),
+    /**
+     * Working, but all it still runs in the background only waits (#6045, iOS `AgentFilter.backgroundWaiting`): a filter of
+     * its own, and not Working. The hub has no state for it: a paged list asks for working rows ([state]) and keeps these.
+     */
+    BackgroundWaiting(AgentState.Working),
     /** Where the agent was opened (#2526): a botmux session (its Feishu group) or a herdr pane. */
     Feishu(null, AgentSource.Feishu), Terminal(null, AgentSource.Terminal);
     fun matches(session: AgentSession) = when {
         source != null -> session.session.agentSource == source
+        this == BackgroundWaiting -> session.waitsInBackground
+        this == Working -> session.state == AgentState.Working && !session.waitsInBackground
         else -> state == null || session.state == state
     }
     /** "Lark group" matches botmux sessions only, so it and a hidden botmux cannot both hold (web `botmuxAndFilter`). */
@@ -89,8 +96,12 @@ data class AgentListGroup(
     val repo: RepoLevel? = null,
     /** The group this one sits in: a working tree's repository, whose own [rows] are then empty (its trees hold them). */
     val under: String? = null,
+    /** "By repository": what a working tree's line says beside its name (#4338 A7); null for every other group. */
+    val worktree: WorktreeLine? = null,
     /** Server membership for this exact group; null means its rows/counts describe the loaded window. */
     val totalCount: Int? = null,
+    /** "By repository": the idle agents a busy working tree folds behind its quiet line (#4338 A8); null for none. */
+    val idleFold: IdleFold? = null,
 )
 
 data class AgentListResult(
@@ -111,6 +122,8 @@ data class AgentMachineGroup(
     val folded: Boolean,
     /** "By repository": how many repositories it has. */
     val repoCount: Int? = null,
+    /** How many of [stateCounts]'s working only wait in the background (#6045): its heading counts them apart. */
+    val waitingInBackground: Int = 0,
 ) {
     val id: String get() = "machine/${machine.id}"
 }
@@ -141,12 +154,15 @@ const val StateSeenGroup = "state/idle"
 const val StateSeenOpened = "!state/idle"
 
 /**
- * The list's own filter before the quick filter and the botmux switch: not the assistant, the machine, the search. The
- * search reads the branch too, which a working tree headed by its workspace's title shows nowhere (#4497, as the web).
+ * The list's own filter before the quick filter and the botmux switch: not the assistant, the machine, the search ([AgentQuery]:
+ * its words in the session's fields, the branch among them, #4497, and its conditions, #4338 A10). [pins] and
+ * [machineNames] are what `is:pinned` and `machine:` read; [now] dates `since:`.
  */
-fun AgentListSettings.admits(s: persona.core.contracts.Session): Boolean =
+fun AgentListSettings.admits(s: persona.core.contracts.Session, pins: AgentPreferences = AgentPreferences(),
+                             machineNames: Map<String, String> = emptyMap(), now: java.time.Instant = java.time.Instant.now()): Boolean =
     !s.assistant && (machineFilter.isEmpty() || machineFilter == s.machineId) &&
-        (query.isEmpty() || s.key.path in queryAncestors || listOf(s.title, s.cwd, s.lastText, s.spaceName, s.slotName, s.branch).any { it?.contains(query, ignoreCase = true) == true })
+        (query.isEmpty() || s.key.path in queryAncestors ||
+            AgentQuery.parse(query).admits(s, s.key.path in pins.sessions, machineNames[s.machineId], now))
 
 /**
  * Whether the list of running sessions draws [row], its search, quick filter and botmux switch aside: pinned (under
@@ -162,7 +178,7 @@ fun buildAgentList(
     settings: AgentListSettings = AgentListSettings(), todos: List<Todo> = emptyList(),
 ): AgentListResult {
     val tree = codexTaskForest(sessions, runs = { settings.draws(it, pins) })
-    return buildFlatAgentList(tree.roots, machines, pins, mutes, tree.searchSettings(settings), todos)
+    return buildFlatAgentList(tree.roots, machines, pins, mutes, tree.searchSettings(settings, pins, machines.associate { it.id to it.name }), todos)
         .copy(children = tree.children)
 }
 
@@ -178,7 +194,8 @@ fun buildFlatAgentList(
     settings: AgentListSettings = AgentListSettings(),
     todos: List<Todo> = emptyList(),
 ): AgentListResult {
-    val base = sessions.filter { settings.admits(it.session) && !(settings.hideBotmux && it.session.isBotmux) }
+    val machineNames = machines.associate { it.id to it.name }
+    val base = sessions.filter { settings.admits(it.session, pins, machineNames) && !(settings.hideBotmux && it.session.isBotmux) }
     val counts = AgentQuickFilter.entries.filter { it != AgentQuickFilter.All }
         .associateWith { filter -> base.count { !it.isNestedSubtask && filter.matches(it) } }
     val filtered = base.filter { settings.quick.matches(it) || it.id in settings.kept }
@@ -208,7 +225,8 @@ fun buildFlatAgentList(
             // A repository with nothing going on is quiet: folded, after the busy ones, like a quiet space; a quiet working
             // tree is folded too but keeps its place (main checkout first, then by name, as on iOS).
             fun quiet(members: List<AgentSession>) = !quick && members.none(::stays)
-            fun section(id: String, title: CoreText, members: List<AgentSession>, level: RepoLevel, under: String?, machineFolded: Boolean): AgentListGroup {
+            fun section(id: String, title: CoreText, members: List<AgentSession>, level: RepoLevel, under: String?, machineFolded: Boolean,
+                        tree: AgentWorktree? = null, online: Boolean = true): AgentListGroup {
                 val isQuiet = quiet(members)
                 val rows = ordered(members)
                 val folded = if (isQuiet) id !in settings.expandedQuiet && settings.query.isEmpty() else id in settings.folded
@@ -217,7 +235,11 @@ fun buildFlatAgentList(
                     isQuiet || quick || showIdle(id) -> rows
                     else -> rows.filter(::stays)
                 }
-                return AgentListGroup(id, title, rows, visible, folded, if (isQuiet) "quiet" else null, stateCounts(rows), repo = level, under = under)
+                // Its idle agents behind one line, as iOS's `agentRows`; a search shows them with no line.
+                val idle = if (isQuiet || quick || settings.query.isNotEmpty()) emptyList() else rows.filterNot(::stays)
+                return AgentListGroup(id, title, rows, visible, folded, if (isQuiet) "quiet" else null, stateCounts(rows), repo = level, under = under,
+                    worktree = tree?.let { worktreeLine(it, isQuiet, rows.count { row -> !row.isNestedSubtask }, online) },
+                    idleFold = idle.takeIf { it.isNotEmpty() }?.let { IdleFold(it, open = id in settings.expandedIdle) })
             }
             val known = machines + live.map { it.session.machineId }.distinct()
                 .filter { id -> machines.none { it.id == id } }.map { Machine(it, "") }
@@ -240,12 +262,13 @@ fun buildFlatAgentList(
                     else listOf(AgentListGroup(repo.id, repoTitle(repo.name), emptyList(), emptyList(), repo.id in settings.folded,
                         stateCounts = stateCounts(repo.members), repo = RepoLevel.Repository)) +
                         repo.worktrees.map { tree ->
-                            section(tree.id, repoTitle(tree.name), tree.members, if (tree.main) RepoLevel.MainCheckout else RepoLevel.Worktree, repo.id, machineFolded)
+                            section(tree.id, repoTitle(tree.name), tree.members, if (tree.main) RepoLevel.MainCheckout else RepoLevel.Worktree, repo.id, machineFolded,
+                                tree, online = machine.online || machines.none { it.id == machine.id })
                         }
                 }
                 result += groups
                 AgentMachineGroup(machine, groups.map { it.id }, members.count { !it.isNestedSubtask }, agentSpaces(members).size, stateCounts(members),
-                    machineFolded, repoCount = repos.size)
+                    machineFolded, repoCount = repos.size, waitingInBackground = members.count { !it.isNestedSubtask && it.waitsInBackground })
             }
             return AgentListResult(counts, result, filtered.filter { it.state == AgentState.Unread }.map { it.id },
                 machines = machineGroups)
@@ -268,7 +291,7 @@ fun buildFlatAgentList(
                 val spaces = agentSpaces(members)
                 AgentMachineGroup(machine, nested.groups.filterNot { it.id == "pinned" }.map { it.id }, members.count { !it.isNestedSubtask }, spaces.size,
                     AgentState.entries.associateWith { state -> members.count { !it.isNestedSubtask && it.state == state } },
-                    machineFolded)
+                    machineFolded, waitingInBackground = members.count { !it.isNestedSubtask && it.waitsInBackground })
             }
             return AgentListResult(counts, result, filtered.filter { it.state == AgentState.Unread }.map { it.id },
                 machines = machineGroups)
@@ -286,8 +309,8 @@ fun buildFlatAgentList(
             }
         }
         AgentGrouping.Todo -> {
-            // Project › To-do › Agent (#3156, web `buildTodoTree` #2698): each todo under the project its agents work in; "Opened by hand"
-            // and "No to-do" last, each split by project too. A heading holds no rows itself (the groups under it do).
+            // As iOS's By To-do (`TodosLogic.buildTodoAgentGroups`, #4338 A5): a section per open to-do with agents on it, in
+            // the to-dos' order; then "Opened by hand" (open) and "No to-do", one list each, as the web's todos.ts (#2608).
             val sessionMap = sessions.associateBy { it.session.key }
             val uncompletedTodos = todos.filter { !it.isDone }.sortedWith(
                 compareBy<Todo> { it.state { k -> sessionMap[k]?.session }.rank }
@@ -295,19 +318,10 @@ fun buildFlatAgentList(
                     .thenBy { it.id }
             )
             fun counts(rows: List<AgentSession>) = AgentState.entries.associateWith { state -> rows.count { !it.isNestedSubtask && it.state == state } }
-            fun leaf(id: String, title: CoreText, members: List<AgentSession>, under: String) {
+            fun section(id: String, title: CoreText, members: List<AgentSession>, folded: Boolean) {
                 val rows = ordered(members)
-                val folded = id in settings.folded
-                result += AgentListGroup(id, title, rows, if (folded) emptyList() else rows, folded, stateCounts = counts(rows), under = under)
+                result += AgentListGroup(id, title, rows, if (folded) emptyList() else rows, folded, stateCounts = counts(rows))
             }
-            fun heading(id: String, title: CoreText, members: List<AgentSession>, folded: Boolean) {
-                result += AgentListGroup(id, title, emptyList(), emptyList(), folded, stateCounts = counts(members))
-            }
-            /** By project: the one with an agent waiting for you first (then working), keeping the incoming order; "Other" last. */
-            fun <T> byProject(items: List<T>, project: (T) -> String, members: (T) -> List<AgentSession>): List<Pair<String, List<T>>> =
-                items.groupBy(project).toList().sortedWith(compareBy<Pair<String, List<T>>> { it.first.isEmpty() }
-                    .thenBy { (_, list) -> todoTreeRank(list.flatMap(members)) })
-            fun projectTitle(project: String) = repoTitle(project.ifEmpty { UnnamedRepo })
             // Each agent sits under one to-do only, as on the web (`assignedSessionKeys`): a to-do's agents list can still hold
             // an agent the session's own `todo` (pushed with the session, so newer) already moved to another, and one row twice
             // would repeat its list key. Unlike the web, which takes the first to-do listing it, the session's own open to-do
@@ -322,28 +336,20 @@ fun buildFlatAgentList(
                 val matched = live.filter { home[it.session.key] == todo.id }
                 if (matched.isEmpty()) null else todo to matched
             }
-            byProject(linked, { (_, rows) -> todoProjectOf(rows.map { it.session.cwd }) }, { it.second }).forEach { (project, inProject) ->
-                val id = TodoProjectPrefix + project.ifEmpty { "-" }
-                heading(id, projectTitle(project), inProject.flatMap { it.second }, id in settings.folded)
-                inProject.forEach { (todo, rows) -> leaf("todo/${todo.id}", CoreText.plain(todo.title), rows, id) }
-            }
+            linked.forEach { (todo, rows) -> section("todo/${todo.id}", CoreText.plain(todo.title), rows, "todo/${todo.id}" in settings.folded) }
             val unlinked = live.filter { it.session.key !in claimed }
-            fun loose(id: String, title: CoreText, rows: List<AgentSession>, folded: Boolean) {
-                heading(id, title, rows, folded)
-                byProject(rows, { repoOf(it.session.cwd).name }, { listOf(it) }).forEach { (project, inProject) ->
-                    leaf("$TodoLoosePrefix$id/${project.ifEmpty { "-" }}", projectTitle(project), inProject, id)
-                }
-            }
-            // Opened by hand in herdr and on no to-do: a section of its own before "No to-do", open (web todos.ts, #2608).
+            // Opened by hand in herdr and on no to-do: a section of its own before "No to-do", open.
             val manual = unlinked.filter { it.session.isManualHerdr }
-            if (manual.isNotEmpty()) loose(TodoManualGroup, CoreText.of(Key.AgentsManual), manual, TodoManualGroup in settings.folded)
+            if (manual.isNotEmpty()) section(TodoManualGroup, CoreText.of(Key.AgentsManual), manual, TodoManualGroup in settings.folded)
             val rest = unlinked.filterNot { it.session.isManualHerdr }
             if (rest.isNotEmpty()) {
-                // Folded under the to-dos unless something in it needs you; with no to-do above it is the whole list, so open.
-                // The user's own fold wins either way ([TodoNoneOpened] once they opened it).
-                val byDefault = linked.isNotEmpty() && rest.none { it.state == AgentState.NeedsYou }
-                val folded = TodoNoneGroup in settings.folded || (byDefault && TodoNoneOpened !in settings.expandedIdle)
-                loose(TodoNoneGroup, CoreText.of(Key.AgentsNoTodo), rest, folded)
+                // Folded under the sections above unless something in it needs you; with none above it is the whole list, so
+                // open (iOS `TodoAgentGroup.folded`). The user's own fold wins either way ([TodoNoneOpened] once they opened
+                // it), and a search opens it.
+                val byDefault = (linked.isNotEmpty() || manual.isNotEmpty()) && rest.none { it.state == AgentState.NeedsYou }
+                val folded = settings.query.isEmpty() &&
+                    (TodoNoneGroup in settings.folded || (byDefault && TodoNoneOpened !in settings.expandedIdle))
+                section(TodoNoneGroup, CoreText.of(Key.AgentsNoTodo), rest, folded)
             }
         }
         AgentGrouping.Machine -> (if (latest) machines.sortedByDescending { m ->
@@ -397,24 +403,15 @@ fun buildFlatAgentList(
 private fun repoTitle(name: String): CoreText = if (name == UnnamedRepo) CoreText.of(Key.RepoOther) else CoreText.plain(name)
 
 /** "By to-do"'s sections that are not a to-do: agents opened by hand, then those on none. */
-/** "By to-do"'s project headings (#3156): `todo-project/<repository name>`, `-` for "Other". */
-const val TodoProjectPrefix = "todo-project/"
-/** A project's agents under "Opened by hand" or "No to-do": `todo-loose/<that group's id>/<repository name>`. */
-const val TodoLoosePrefix = "todo-loose/"
-
 /**
- * The project a todo's agents work in (web `projectOf`): the repository most of their cwds sit in ("By repository"'s [repoOf],
- * merged across computers), the first by name on a tie; "" when none has a cwd.
+ * A long run of a section's rows (iOS `AgentRowCap`): the first [ROWS], then "Show All N"; a run only a few over the cap
+ * shows them all (no "Show All 22").
  */
-fun todoProjectOf(cwds: List<String>): String = cwds.map { repoOf(it).name }.filter(String::isNotEmpty)
-    .groupingBy { it }.eachCount().entries.sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key })
-    .firstOrNull()?.key.orEmpty()
-
-/** "Waiting for you" before "Working" before "Done" (web `TreeState`): what the most urgent agent under a branch says. */
-private fun todoTreeRank(rows: List<AgentSession>): Int = when {
-    rows.any { it.state == AgentState.NeedsYou } -> 0
-    rows.any { it.state == AgentState.Working } -> 1
-    else -> 2
+object AgentRowCap {
+    const val ROWS = 20
+    fun capped(count: Int, cap: Int = ROWS): Int? = if (count <= cap + 5) null else cap
+    /** In `expandedIdle` while the section [groupId] shows all its rows. */
+    fun key(groupId: String) = "all:$groupId"
 }
 
 const val TodoManualGroup = "todo/manual"

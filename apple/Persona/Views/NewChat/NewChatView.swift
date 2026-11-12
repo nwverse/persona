@@ -32,6 +32,10 @@ struct NewChatView: View {
     /// A todo handed to a new Agent (TodoHandoffSheet): the todo's context block goes ahead of the first message, the
     /// session is named after the todo, and only the todo's hub's machines are offered.
     var contextBlock: String? = nil
+    /// A message forwarded to a new Agent (#3807): its card over the first message, which carries it as `contextBlock`,
+    /// and the pictures it had, attached.
+    var forwarded: ContextRef? = nil
+    var forwardedImages: [UIImage] = []
     var nameHint: String? = nil
     var onlyGroup: String? = nil
     var onStarted: (Session) -> Void
@@ -79,6 +83,8 @@ struct NewChatView: View {
     @State private var worktreeBranch = ""
     /// Photos and files for the first message (#2321), and the pickers that add them.
     @State private var attachments = NewAgentAttachments()
+    /// The forwarded pictures are attached once, not again each time the form appears.
+    @State private var forwardedAttached = false
     @State private var photoPicks: [PhotosPickerItem] = []
     @State private var showPhotos = false
     @State private var showCamera = false
@@ -121,6 +127,10 @@ struct NewChatView: View {
     /// The launcher runs Codex: it starts with its first message (Codex makes the thread then) and the start waits for it.
     private var codex: Bool { launchers.first(where: { $0.name == runLauncher })?.isCodex == true }
 
+    /// A Codex this computer opens only with its first message (an older computer); a newer one opens it waiting for
+    /// one, sent later here or typed in its terminal (docs/integrations/codex.md「Starting without a first message」).
+    private var codexNeedsFirst: Bool { launchers.first(where: { $0.name == runLauncher })?.needsFirstMessage == true }
+
     /// The list for `runLauncher`; nil: none to pick (not loaded, an older hub).
     private var models: LauncherModels? { modelList.list }
     private var modelsLoading: Bool { modelList.loading }
@@ -161,8 +171,11 @@ struct NewChatView: View {
     /// Why this computer can't start with it (its Claude Code is known to be too old); nil when it can.
     private var ultracodeBlocked: String? { ultracodeShown ? Ultracode.startBlocked(claudeVersion: machine?.claudeVersion) : nil }
 
-    private var promptHint: String { codex ? String(localized: "What should Codex do? (Required: Codex starts a session only after the first message)")
-                                       : String(localized: "What should Claude do? (Optional)") }
+    private var promptHint: String {
+        if codexNeedsFirst { return String(localized: "What should Codex do? (Required: Codex starts a session only after the first message)") }
+        if codex { return String(localized: "What should Codex do? (Optional: you can also send it later, here or in its terminal)") }
+        return String(localized: "What should Claude do? (Optional)")
+    }
 
     /// Nothing missing for Start Chat, and the machine's own launchers and directories are in.
     private var ready: Bool {
@@ -171,7 +184,7 @@ struct NewChatView: View {
     }
 
     private var codexNeedsMessage: Bool {
-        codex && contextBlock == nil && prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        codexNeedsFirst && contextBlock == nil && prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     /// What the attachments hold the start back for (a Codex launcher, uploads still going); nil: nothing.
@@ -369,6 +382,11 @@ struct NewChatView: View {
                 }
 
                 Section {
+                    if let forwarded {
+                        QuoteCard(heading: forwarded.quoteHeading, icon: Theme.Icon.forwardMessage, meta: ForwardMessage.meta(forwarded),
+                                  summary: forwarded.forwardSummary, lines: QuoteBlock.forwardLines, tint: Theme.accent, ink: .secondary) {}
+                            .accessibilityIdentifier("newChat.forward")
+                    }
                     promptField
                         .focused($promptFocused)
                         .accessibilityIdentifier("newChat.prompt")
@@ -484,6 +502,12 @@ struct NewChatView: View {
             }
             .onAppear {
                 if prompt.isEmpty { prompt = initialPrompt }
+                if !forwardedAttached {
+                    forwardedAttached = true
+                    for img in forwardedImages.prefix(MessagePhotos.limit) {
+                        if let p = MessagePhotos.payload(img) { attachments.images.append(p) }
+                    }
+                }
                 if let preset { machineID = preset.machineID; cwd = preset.cwd } else { pickDefaultMachine() }
             }
             .onChange(of: model.machines) { _, _ in if preset == nil { pickDefaultMachine() } }
@@ -519,6 +543,11 @@ struct NewChatView: View {
                     try? Data(count: 3 << 20).write(to: url)
                     attachments.upload([url], to: ref, model: model)
                 }
+            }
+            // `-showNewAgentPrompt YES`: once this computer's launchers are in, First Message scrolled into view and
+            // focused, for screenshots of its hint (#4961).
+            .onChange(of: defaultsFor) { _, now in
+                if !now.isEmpty, UserDefaults.standard.bool(forKey: "showNewAgentPrompt") { promptRequests += 1 }
             }
             #endif
             .interactiveDismissDisabled(starting)
@@ -915,7 +944,8 @@ struct NewChatView: View {
             let outgoing = contextBlock.map { p.isEmpty ? $0 : "\($0)\n\n\(p)" } ?? p
             if codex {
                 // Codex picks its thread's id once it has the first message: it goes with the start, which answers
-                // with that thread (one session, already working on it).
+                // with that thread (one session, already working on it). With none, the start answers with Codex
+                // waiting for it (Session.awaitingFirstMessage).
                 let s = try await api.start(.init(machineID: ref.id, cwd: dir, launcher: launcher, prompt: contextBlock == nil ? prompt : outgoing,
                                                   workspaceID: targetPreset?.workspaceID, host: targetPreset?.host, model: sentModel, tabName: name.isEmpty ? nil : name,
                                                   nameHint: nameHint ?? (p.isEmpty ? nil : p), todoID: todoID))

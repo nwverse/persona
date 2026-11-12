@@ -199,8 +199,11 @@ type codexAppState struct {
 	projects    map[string]codexAppProject
 	sidebar     []string // the threads of both lists that are valid ids, sorted: what codexAppThreads looks up
 
+	order []string // the App's projects in its sidebar's order (project-order)
+
 	namesOnce sync.Once
 	names     map[string]string // a project's folder (real path) → the App's name for it; see folderName
+	places    map[string]int    // a project's folder (real path) → its place in order, from 1; see folderPlace
 }
 
 type codexAppProject struct {
@@ -241,11 +244,12 @@ func loadCodexAppState(home string) *codexAppState {
 			ProjectID string `json:"projectId"`
 		} `json:"thread-project-assignments"`
 		Projects map[string]codexAppProject `json:"local-projects"`
+		Order    []string                   `json:"project-order"`
 	}
 	if json.Unmarshal(b, &raw) != nil {
 		return nil
 	}
-	s := &codexAppState{unread: map[string]bool{}, projectless: map[string]bool{}, assigned: map[string]string{}, projects: raw.Projects}
+	s := &codexAppState{unread: map[string]bool{}, projectless: map[string]bool{}, assigned: map[string]string{}, projects: raw.Projects, order: raw.Order}
 	for _, hosts := range raw.ReadState.UnreadByIdentity {
 		for host, ids := range hosts {
 			if len(host) < 6 || host[:6] != "local:" {
@@ -319,25 +323,47 @@ func (a *codexAppState) folderName(root string) string {
 	if a == nil || root == "" {
 		return ""
 	}
+	a.folders()
+	return a.names[folderKey(root)]
+}
+
+// folderPlace: where the App's sidebar lists the project whose folder is root (as for folderName), from 1 down its
+// project-order; 0 when no project with that folder is in the order (the order lists the projects the App's own
+// sidebar shows; a ChatGPT project is not among them). Of two projects with the same folder, the first in the order.
+func (a *codexAppState) folderPlace(root string) int {
+	if a == nil || root == "" {
+		return 0
+	}
+	a.folders()
+	return a.places[folderKey(root)]
+}
+
+// folders reads the projects' folders once: real paths, as codexProjectRoot gives a repository's root.
+func (a *codexAppState) folders() {
 	a.namesOnce.Do(func() {
-		a.names = map[string]string{}
-		for _, p := range a.projects {
-			name := strings.TrimSpace(p.Name)
-			if name == "" {
-				continue
+		a.names, a.places = map[string]string{}, map[string]int{}
+		place := map[string]int{}
+		for i, id := range a.order {
+			if _, ok := place[id]; !ok {
+				place[id] = i + 1
 			}
+		}
+		for id, p := range a.projects {
+			name := strings.TrimSpace(p.Name)
 			for _, r := range p.RootPaths {
 				if !filepath.IsAbs(r) {
 					continue
 				}
 				k := folderKey(realPath(filepath.Clean(r)))
-				if old, ok := a.names[k]; !ok || name < old {
+				if old, ok := a.names[k]; name != "" && (!ok || name < old) {
 					a.names[k] = name
+				}
+				if i := place[id]; i > 0 && (a.places[k] == 0 || i < a.places[k]) {
+					a.places[k] = i
 				}
 			}
 		}
 	})
-	return a.names[folderKey(root)]
 }
 
 // folderKey: Windows paths do not tell case apart (see pathWithin).
@@ -450,6 +476,9 @@ type codexOrigin struct {
 	sub    bool
 	root   string // session_id identifies the shared root on newer Codex versions
 	parent string // the thread that spawned this subagent
+	// started holds when the thread began, the session_meta line's time (Session.StartedAt), made once for every row
+	// of the thread: a hierarchy is never written once set, so the rows share it. Nil when the line has no time.
+	started *proto.SessionHierarchy
 }
 
 var codexOrigins sync.Map // path → codexOrigin (the first line never changes)
@@ -468,8 +497,9 @@ func readCodexOrigin(path string) codexOrigin {
 		return codexOrigin{}
 	}
 	var m struct {
-		Type    string `json:"type"`
-		Payload struct {
+		Timestamp string `json:"timestamp"`
+		Type      string `json:"type"`
+		Payload   struct {
 			Originator   string          `json:"originator"`
 			Parent       string          `json:"parent_thread_id"`
 			SessionID    string          `json:"session_id"`
@@ -481,6 +511,9 @@ func readCodexOrigin(path string) codexOrigin {
 		return codexOrigin{} // not written yet: read again next time
 	}
 	o := codexOrigin{desktop: m.Payload.Originator == "Codex Desktop" || m.Payload.Originator == "codex_work_desktop", cli: m.Payload.Originator == "codex-tui" || m.Payload.Originator == "codex_cli_rs"}
+	if at, err := time.Parse(time.RFC3339Nano, m.Timestamp); err == nil && !at.IsZero() {
+		o.started = &proto.SessionHierarchy{StartedAt: at.UTC()}
+	}
 	var source string
 	if json.Unmarshal(m.Payload.Source, &source) != nil {
 		source = "" // an object: a subagent

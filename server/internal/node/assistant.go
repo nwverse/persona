@@ -24,6 +24,7 @@ import (
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/shellcmd"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
 
@@ -210,7 +211,7 @@ func (n *Node) assistantResumable(id string) bool {
 // assistantSend delivers a user message, starting or restarting the headless claude when needed.
 // id == "" starts a new conversation and returns its id.
 func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string, images []proto.Image, mode, effort string, options ...modelExecution) (string, error) {
-	if launcher != "" && !nameRe.MatchString(launcher) {
+	if launcher != "" && !shellcmd.NameRe.MatchString(launcher) {
 		return "", fmt.Errorf("invalid launcher %q", launcher)
 	}
 	if id != "" && !validID(id) && !n.runtimeAssistant(id) {
@@ -289,7 +290,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			launcher, options = "", nil // it keeps what it started on (the hub sends none either)
 		}
 		for i := range options {
-			if options[i].Runtime != "" {
+			if options[i].Runtime != "" && (options[i].Runtime != proto.AssistantRuntimeAgentSDK || guestKind == guestMeeting) {
 				return "", errGuestAgent
 			}
 		}
@@ -354,7 +355,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if err != nil {
 		return "", err
 	}
-	if guest != nil && (agent != "claude" || execution.Runtime != "") {
+	if guest != nil && (agent != "claude" || execution.Runtime != "" && (execution.Runtime != proto.AssistantRuntimeAgentSDK || guestKind == guestMeeting)) {
 		return "", errGuestAgent
 	}
 	if agent == "claude" {
@@ -476,12 +477,13 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	}
 
 	interject = interject && !fresh && p.interjects()
+	midTurn := !fresh && p.midTurn()
 	content := []map[string]any{}
 	if live != "" {
 		content = append(content, map[string]any{"type": "text", "text": live})
 	}
-	if interject {
-		content = append(content, interjectNote())
+	if midTurn {
+		content = append(content, interjectNote(interject))
 	}
 	for _, img := range images {
 		content = append(content, map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": img.Mime, "data": img.Data}})
@@ -748,6 +750,12 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 			p.compacting = false
 			if !recovering {
 				p.busy = false
+				// A failed turn (is_error, or an answer that is only an auth / upstream error) is the session's turn
+				// error, as Codex's is: the apps show it failed and the push says so (#4669). The transcript may hold no
+				// line for it at all (a start refused before the model ran).
+				if text, kind := claudeTurnFailure(ev.IsError, ev.Result, kinds); text != "" {
+					p.turnError, p.turnErrorKind = text, kind
+				}
 			}
 			p.lastActive = time.Now()
 			p.partial.Reset()

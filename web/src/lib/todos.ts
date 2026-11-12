@@ -6,6 +6,8 @@ import { api, ApiError, enc } from "./api";
 import { contextBody } from "./context-body";
 import { parseAPIError, retryable } from "./api-errors";
 import { stateOf } from "./format";
+import { foldedState } from "./child-sessions";
+import { foldRows } from "./folded-rows";
 import { splitAgentSessions, type AgentGroup, type AgentMutes } from "./agent-groups";
 import type { AgentState, Machine, Session } from "./types";
 import type { Route } from "./router";
@@ -87,6 +89,8 @@ export interface Todo {
   /** What it waits on from the user (#2056, docs/assistant/todos.md "Waiting for the owner"); unset while nothing does,
    *  and from hubs before it. */
   ask?: TodoAsk;
+  /** Current task-review decision, including a receipt-scoped dismissal; absent on older hubs. */
+  decision_review?: { review_at: string; dismissal_id?: string };
   /** Nobody is working on it (#3618, docs/assistant/todos.md "Nobody is working on this"): every agent of this open
    *  to-do is gone and nothing brings one back. `reason`: `error` (closed after a model error), `offline` (its computer
    *  is not connected) or `closed`; `since` is when the hub first saw it. Unset otherwise, and from hubs before it. */
@@ -349,7 +353,8 @@ export function todoStatus(todo: Todo, lookup?: SessionLookup): TodoStatus {
       continue;
     }
     const s = lookup?.(a.machine_id, a.session_id);
-    const st: AgentState = s ? stateOf(s) : "offline";
+    // its child sessions' state folded in (#5120): one waiting on the user makes the task wait, one working works
+    const st: AgentState = s ? foldedState(s) : "offline";
     if (st === "needs_you") {
       hasNeedsYou = true;
       break;
@@ -509,7 +514,7 @@ export function mostUrgentAgent(
 
   for (const a of active) {
     const s = lookup?.(a.machine_id, a.session_id);
-    const st: AgentState | "failed" = a.start_error ? "failed" : s ? stateOf(s) : "offline";
+    const st: AgentState | "failed" = a.start_error ? "failed" : s ? foldedState(s) : "offline";
     const sc = score(st, s);
     if (sc > bestScore || !best) {
       bestScore = sc;
@@ -916,10 +921,12 @@ export interface DockAgent {
  * conversation, every agent going on that no task stands for — the ones opened by hand on the Agents page — waiting
  * for the user first, then the newest in its state; elsewhere nothing. Persona's own conversations are not agents. A
  * task's agents (a task not done, from any conversation) are its pill already; an agent the hub tags with a todo shows
- * only when that todo was made by hand, so a task the todo list has not caught up with stays out too.
+ * only when that todo was made by hand, so a task the todo list has not caught up with stays out too. A child session
+ * folded under one of them is no entry of its own: its parent's entry carries its state (#5120).
  */
 export function dockAgents(sessions: Session[], todos: Todo[], conversation: string, main: string | undefined): DockAgent[] {
   if (!main || conversation !== main) return [];
+  sessions = foldRows(sessions);
   const taskAgents = new Set<string>();
   const manual = new Set<string>();
   for (const t of todos) {
