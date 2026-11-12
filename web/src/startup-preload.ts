@@ -190,14 +190,14 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * card drawn as the same notice, and their words). And 444 B for cindy's run status bar (#5312: ja 590,296 B against
  * 589,852 B on main at a38ddd0cd: the state words worked out from the turn's newest steps in an Agent session and the plain
  * phases in a Persona conversation, Done only for a finished turn and its pop, their words; the speed history, its button
- * and card load once an Agent's turn runs). And 134 B for switching an Agent between Claude Code and Codex (#5054: ja
- * 590,383 B against 588,896 B on main at 29c02b9513, +1,487 B, of which 1,400 B fit the room main had, plus 47 B of
+ * and card load once an Agent's turn runs). And 304 B for switching an Agent between Claude Code and Codex (#5054: ja
+ * 590,553 B against 589,019 B on main at e85d9a239a, +1,534 B, of which 1,277 B fit the room main had, plus 47 B of
  * room: the switch divider's chip above the first message the other engine got, the live stretch's items in a
  * switched-back conversation, the old session link's redirect to the conversation's row, the pill's engine switch state
  * and their words; the earlier stretches' windows, reading and drawing, the handoff panel and their words, the "Switch
  * Agent?" dialog and the panel's engine code load lazily). Raise it on purpose, in the change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 590_430;
+export const FIRST_SCREEN_BUDGET = 590_600;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
