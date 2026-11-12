@@ -54140,6 +54140,29 @@
       },
       "extractionState" : "manual"
     },
+    "Follow Main Chat" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Follow Main Chat"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跟随主对话"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メインチャットに従う"
+          }
+        }
+      }
+    },
     "FYI" : {
       "localizations" : {
         "en" : {
@@ -71701,6 +71724,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Main Chat Follows Up Tasks" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Main Chat Follows Up Tasks"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主对话自己跟进任务"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メインチャットがタスクをフォロー"
+          }
+        }
+      }
     },
     "MCP Form Needs You" : {
       "extractionState" : "manual",
@@ -90559,6 +90605,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%1$@のみ"
+          }
+        }
+      }
+    },
+    "Only applies to the background supervisor, the conversation that follows up tasks for the main chat. Empty fields follow Main Chat. Changing the provider clears the previous model and thinking effort. Choose Follow Main Chat and save to clear the independent settings." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Only applies to the background supervisor, the conversation that follows up tasks for the main chat. Empty fields follow Main Chat. Changing the provider clears the previous model and thinking effort. Choose Follow Main Chat and save to clear the independent settings."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅用于后台督办，即替主对话跟进任务的对话。留空的字段跟随主对话。更换供应商会清除原来的模型和思考强度。选择「跟随主对话」并保存，即可清除独立设置。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックグラウンド監督（メインチャットに代わってタスクをフォローする会話）のみに適用されます。空欄はメインチャットの設定に従います。プロバイダーを変更すると、以前のモデルと思考量がクリアされます。「メインチャットに従う」を選んで保存すると、個別設定を解除できます。"
           }
         }
       }
@@ -155965,6 +156034,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "While this is off, the background supervisor follows up the tasks Persona hands out, so the main chat answers you first." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "While this is off, the background supervisor follows up the tasks Persona hands out, so the main chat answers you first."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭时，Persona 派出的任务由后台督办跟进，主对话优先回复你。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オフのあいだは、Persona が任せたタスクをバックグラウンド監督がフォローし、メインチャットはあなたへの返信を優先します。"
+          }
+        }
+      }
     },
     "While You Were Away" : {
       "localizations" : {

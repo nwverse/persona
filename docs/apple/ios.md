@@ -1452,6 +1452,34 @@ The hub's `main_background_folded` (`GET` / `PUT /api/v1/assistant`, on unless c
 counts as on and hides the switch) is Settings › Assistant › **Fold background rounds**. Off, the main conversation
 and Needs You look exactly as before. Tests: `ChatBackgroundRoundsTests`.
 
+## Background supervisor (#5083)
+
+The hub's built-in background supervisor (`docs/assistant/unified-entry.md`, "Background supervisor") on iPhone, iPad,
+Mac and Vision Pro. Nothing here shows on a hub from before it.
+
+- **Its conversation** is the one `GET /api/v1/assistant` names as `background_supervisor`
+  (`AssistantState.isBackgroundSupervisor`, never the main conversation). The hub opens it with `origin: "task"`, so it
+  is in All Chats under Scheduled Tasks and never in the sidebar's Directions or Recent (`AutoConversations`,
+  `AssistantSidebarGroups`). Its row has no Archive (swipe, menu, the Mac's Delete key), no Pin and no End, in the
+  sidebar's search results and in All Chats; Rename and the copy items stay. The hub refuses those actions too. Until
+  the app has read the assistant settings again after the hub made the conversation, the row still has the actions
+  and the hub's refusal is shown.
+- **The switch**: Settings › Assistant › **Main Chat Follows Up Tasks** is the hub's `main_supervises_own_tasks`
+  (`GET` / `PUT /api/v1/assistant`), off by default: while it is off the background supervisor follows up the tasks
+  Persona hands out. It is read and written through `AppModel.assistantConfig` (`setMainSupervisesOwnTasks`: shown at
+  once, put back when the hub refuses), as the two switches above it. A hub that omits the field has no switch.
+- **Its model**: Settings › Models lists the use `assistant.supervise` after the categories and the other uses set
+  apart. The hub's catalog leaves it out, so `ModelConfigurationModel.load` asks for it by its id beside the catalog
+  (`listing`); a hub without it answers 404 and the list has no such row. Its page says "Follow Main Chat" where Lark
+  /agent says "Follow Agents", and saves to the use's own record.
+- **Its reviews in the main chat**: a review is the feed kind `review` in the conversation that planned the task,
+  whoever reviewed, so `ChatLines.mergeFeed` places it and `ReviewFeedLine` draws it as one line that opens the task.
+  Nothing marks the reviewer in the feed item, and the line does not name one.
+
+Mock hub: `MOCK_BACKGROUND_SUPERVISOR=1` adds the conversation (with `MOCK_ORIGINS=1` for the other sources); the
+switch and the model use are there without it, and `MOCK_LEGACY_HUB=1` has none of the three. Tests:
+`BackgroundSupervisorTests`, and `AssistantSettingsModelTests.testMainSupervisesOwnTasksSwitch` against the mock hub.
+
 ## Source mentions in the assistant conversation (#2130)
 
 Display provenance does not change model input roles. Relayed conversation messages and automated updates use the
