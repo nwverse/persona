@@ -136,6 +136,13 @@
     <string name="designsystem_machine_monitor">机器监控</string>
     <string name="designsystem_details">详情</string>
     <string name="designsystem_space">空间</string>
+    <string name="designsystem_repository">仓库</string>
+    <string name="designsystem_main_worktree">主工作树</string>
+    <string name="designsystem_worktree">工作树</string>
+    <string name="designsystem_worktree_primary">主要</string>
+    <string name="designsystem_worktree_detached">Detached HEAD</string>
+    <string name="designsystem_worktree_offline">这台电脑现在离线</string>
+    <string name="designsystem_worktree_idle">空闲</string>
     <string name="designsystem_expand_named">展开%1$s</string>
     <string name="designsystem_collapse_named">折叠%1$s</string>
     <plurals name="designsystem_idle_more">
