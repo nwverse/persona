@@ -1,6 +1,6 @@
 // Inbox Sources' relationship view (#5741, docs/extensions/subscriptions.md "Pages"): what brings each source, how it is
-// read, the source and where its things go. Wide, four columns joined by curves; phone-wide, a tree per extension with
-// filters. Picking a source lights up its whole path and opens its details: Open Settings (its page in the list) and,
+// read, the source and where its things go. Wide, four columns joined by curves with the details over them; phone-wide,
+// a tree per extension with filters and the details in a sheet. Picking a source lights up its whole path and opens its details: Open Settings (its page in the list) and,
 // for a subscription, Set Up with the assistant. The words, badges and duplicates are the list's (the server's).
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -24,9 +24,6 @@ import { Icon, type IconName } from "../../ui/icons";
 import { Badge, glyphOf } from "../extensions/ViewBody6";
 import { ROW_ICON } from "../extensions/ViewBody";
 
-/** At this width the details sit beside the columns; narrower, they go over the columns, which nothing covers. */
-const PANEL_BESIDE = COLUMNS_MIN + 272 + 20;
-const PANEL_W = 272;
 /** A link of a source that reads, and of one that can't read now (signed out, failing, needing a new recipe). */
 const LINK = "color-mix(in srgb, var(--ink-3) 45%, transparent)";
 const LINK_IDLE = "var(--line-strong)";
@@ -74,15 +71,11 @@ export function SourcesGraphView({ assistant, onOpen, onAsk }: { assistant: stri
       ) : (
         <>
           <Legend picked={!!pick} />
-          {picked && width < PANEL_BESIDE && <div className="mb-4 rounded-card bg-surface p-4 shadow-[0_0_0_1px_var(--line-strong)]">{details(true)}</div>}
-          <div className="flex gap-5">
-            {/* an inset, so the rings of the nodes at the edges aren't cut by the scroller */}
-            <div className="min-w-0 flex-1 overflow-x-auto p-1">
-              <Columns graph={graph} width={(width >= PANEL_BESIDE ? width - PANEL_W - 20 : width) - 8} pick={pick} onPick={toggle} />
-            </div>
-            {picked && width >= PANEL_BESIDE && (
-              <aside className="w-[272px] shrink-0 self-start rounded-card bg-surface p-4 shadow-[0_0_0_1px_var(--line-strong)]">{details()}</aside>
-            )}
+          {/* the details over the columns, so nothing of the path they light up is covered */}
+          {picked && <div className="mb-4 rounded-card bg-surface p-4 shadow-[0_0_0_1px_var(--line-strong)]">{details(true)}</div>}
+          {/* an inset, so the rings of the nodes at the edges aren't cut by the scroller */}
+          <div className="overflow-x-auto p-1">
+            <Columns graph={graph} width={width - 8} pick={pick} onPick={toggle} />
           </div>
           <p className="mt-4 px-1 text-[12px] text-ink-3">{pick ? t("subscriptions.graph_hint_picked") : t("subscriptions.graph_hint")}</p>
         </>
