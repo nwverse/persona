@@ -615,7 +615,7 @@ struct AssistantActionBar: View {
                     }
                 }
             } label: {
-                line(title: title, detail: detail, tint: AgentState.needsYou.tone.text, subtitle: subtitle, trail: isOpen ? .expanded : .folded, mark: mark)
+                line(title: title, detail: detail, tint: AgentState.needsYou.tone.text, subtitle: isOpen ? nil : subtitle, trail: isOpen ? .expanded : .folded, mark: mark)
             }
             .buttonStyle(.plain)
             .accessibilityValue(isOpen ? String(localized: "Expanded") : String(localized: "Collapsed"))

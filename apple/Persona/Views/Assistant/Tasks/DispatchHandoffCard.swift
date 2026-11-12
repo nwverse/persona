@@ -27,8 +27,10 @@ struct DispatchHandoffCard: View {
     /// What the meta line under the title says.
     enum Meta: Equatable {
         /// An Agent has the task: when it last moved (nil when nothing yet) and the task's state.
-        case agent(at: Date?, state: TaskState)
+        case agent(at: Date?, state: TaskState, limit: Bool)
         case failed(String)
+        /// Did not start, and the conversation's failed receipt says why: the card only says it did not.
+        case failedBelow
         case gone
         case closedEarly
         case starting
@@ -44,12 +46,24 @@ struct DispatchHandoffCard: View {
     private func meta(todo: TodoItem?, lead: Session?) -> Meta {
         if let lead, let todo {
             let at = lead.activityAt ?? lead.updatedAt
-            return .agent(at: at.flatMap { $0.isMeaningful ? $0 : nil }, state: store.state(todo))
+            let state = store.state(todo)
+            let limit = state != .needsYou && todo.doneAt == nil && lead.isUsageLimited()
+            return .agent(at: at.flatMap { $0.isMeaningful ? $0 : nil }, state: state, limit: limit)
         }
-        if let failure = failure(todo) { return .failed(failure) }
+        if let failure = failure(todo) { return failedReceipt(todo) ? .failedBelow : .failed(failure) }
         if todo?.doneAt != nil { return .closedEarly }
         if todo == nil, entry.todoID != nil, !store.todos.isEmpty { return .gone }
         return .starting
+    }
+
+    /// The conversation has a failed receipt for the task (the web's `useFailedReceipts`): it says why, so the card need not.
+    private func failedReceipt(_ todo: TodoItem?) -> Bool {
+        guard let id = entry.todoID ?? todo?.id, let conversation = entry.conversation else { return false }
+        return Self.hasFailedReceipt(store.feed(conversation), todo: id)
+    }
+
+    nonisolated static func hasFailedReceipt(_ feed: [FeedItem], todo: String) -> Bool {
+        feed.contains { $0.kind == .receipt && $0.ref == todo && $0.failed }
     }
 
     /// Why the task's Agent did not start: the hub's word on the to-do, its plan's, the Agent's own row, or the plan task's.
@@ -124,7 +138,7 @@ struct DispatchHandoffCardBody: View, Equatable {
 
     @ViewBuilder private var metaLine: some View {
         switch meta {
-        case .agent(let at, let state):
+        case .agent(let at, let state, let limit):
             HStack(spacing: Theme.Space.xs) {
                 if let at {
                     ThemedIcon(Theme.Icon.recent).font(Theme.Font.label).foregroundStyle(.secondary)
@@ -135,13 +149,22 @@ struct DispatchHandoffCardBody: View, Equatable {
                     Text("No activity yet").lineLimit(1).foregroundStyle(.tertiary)
                 }
                 Text(verbatim: "·").foregroundStyle(.tertiary)
-                TaskMark(state: state).scaledFrame(width: Theme.Size.markM)
-                Text(state.label).lineLimit(1).foregroundStyle(state == .needsYou ? AnyShapeStyle(state.labelColor) : AnyShapeStyle(.secondary))
+                if limit {
+                    ThemedIcon(Theme.Icon.backgroundWaiting).foregroundStyle(Theme.caution).scaledFrame(width: Theme.Size.markM)
+                        .accessibilityIdentifier("dispatch.limit-mark")
+                    Text("Usage Limit").lineLimit(1).foregroundStyle(Theme.cautionText)
+                } else {
+                    TaskMark(state: state).scaledFrame(width: Theme.Size.markM)
+                    Text(state.label).lineLimit(1).foregroundStyle(state == .needsYou ? AnyShapeStyle(state.labelColor) : AnyShapeStyle(.secondary))
+                }
             }
             .font(Theme.Font.caption)
             .foregroundStyle(.secondary)
         case .failed(let failure):
             Text("Didn't start: \(failure) [Tasks Store 38bbb7]").font(Theme.Font.caption).foregroundStyle(Theme.danger).lineLimit(2)
+                .accessibilityIdentifier("dispatch.failure")
+        case .failedBelow:
+            Text("Didn't Start").font(Theme.Font.caption).foregroundStyle(Theme.danger).lineLimit(1)
                 .accessibilityIdentifier("dispatch.failure")
         case .gone:
             Text("This task no longer exists").font(Theme.Font.caption).foregroundStyle(.tertiary).lineLimit(1)
