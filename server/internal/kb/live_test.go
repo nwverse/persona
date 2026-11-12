@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -602,5 +604,79 @@ func TestLiveConcurrent(t *testing.T) {
 	<-stop
 	if _, err := os.Stat(e.Store.Path(KindRecording, recID)); !os.IsNotExist(err) {
 		t.Fatalf("the live log brought a deleted recording back: %v", err)
+	}
+}
+
+// The topics (#3862 phase 2): CleanTopics takes a list within the limits (titles and notes on one line, states in
+// lower case) and refuses one over a limit saying which; TopicsSet replaces them, moves their revision and topics_at
+// only when they change, and MeetingChanged hears of PartTopics, as it hears of PartLines on every stored append.
+func TestTopicsSet(t *testing.T) {
+	at := 61.0
+	clean, err := CleanTopics([]LiveTopic{{Title: " Export\n cap ", State: " Done ", At: &at, Note: "kept\tat 4 MB"},
+		{Title: strings.Repeat("字", MaxTopicTitle), State: TopicCurrent, Note: strings.Repeat("a", MaxTopicNote)}})
+	if err != nil || clean[0].Title != "Export cap" || clean[0].State != TopicDone || clean[0].Note != "kept at 4 MB" || *clean[0].At != 61 {
+		t.Fatalf("clean %+v %v", clean, err)
+	}
+	if none, err := CleanTopics([]LiveTopic{}); err != nil || none != nil {
+		t.Fatalf("none %+v %v", none, err)
+	}
+	twenty := make([]LiveTopic, MaxTopics)
+	for i := range twenty {
+		twenty[i] = LiveTopic{Title: fmt.Sprint(i), State: TopicOpen}
+	}
+	if _, err := CleanTopics(twenty); err != nil {
+		t.Fatalf("20 topics: %v", err)
+	}
+	neg, nan := -1.0, math.NaN()
+	for name, c := range map[string]struct {
+		topics []LiveTopic
+		want   string
+	}{
+		"21":          {append(slices.Clone(twenty), LiveTopic{Title: "x", State: TopicOpen}), "21 topics, over the 20"},
+		"title":       {[]LiveTopic{{Title: strings.Repeat("字", MaxTopicTitle+1), State: TopicOpen}}, "topic 1's title is 81 characters, over the 80"},
+		"note":        {[]LiveTopic{{Title: "a", State: TopicOpen}, {Title: "b", State: TopicOpen, Note: strings.Repeat("a", MaxTopicNote+1)}}, "topic 2's note is 201 characters"},
+		"empty title": {[]LiveTopic{{Title: " \n ", State: TopicOpen}}, "topic 1 has no title"},
+		"state":       {[]LiveTopic{{Title: "a", State: "next"}}, `state is "next"`},
+		"two current": {[]LiveTopic{{Title: "a", State: TopicCurrent}, {Title: "b", State: "Current"}}, "2 topics are current"},
+		"negative at": {[]LiveTopic{{Title: "a", State: TopicOpen, At: &neg}}, "topic 1's at"},
+		"NaN at":      {[]LiveTopic{{Title: "a", State: TopicOpen, At: &nan}}, "topic 1's at"},
+	} {
+		if _, err := CleanTopics(c.topics); !errors.Is(err, ErrBadTopics) || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+
+	e := goldenEngine(t, nil)
+	var heard [][]string
+	e.MeetingChanged = func(_ string, parts []string) { heard = append(heard, parts) }
+	now := time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone)
+	if _, err := e.TopicsSet(recID, clean, now); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("no recording: %v", err)
+	}
+	putRecording(t, e, recID, attendedUpload(1, now, AttendanceParticipant), now)
+	if _, _, err := e.LiveAppend(recID, 0, []LiveSegment{{Start: 1, End: 2, Text: "a line"}}); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := e.TopicsSet(recID, clean, now); err != nil || !changed {
+		t.Fatalf("set: %v %v", changed, err)
+	}
+	if changed, err := e.TopicsSet(recID, clean, now.Add(time.Minute)); err != nil || changed {
+		t.Fatalf("the same again: %v %v", changed, err)
+	}
+	if _, err := e.TopicsSet(recID, append(clean, clean[1]), now); !errors.Is(err, ErrBadTopics) {
+		t.Fatalf("over a limit: %v", err)
+	}
+	l, _, _ := e.LiveRead(recID)
+	if len(l.Topics) != 2 || l.TopicsRev != 1 || !l.TopicsAt.Equal(now) {
+		t.Fatalf("after the same list again %+v", l)
+	}
+	if changed, err := e.TopicsSet(recID, nil, now.Add(time.Hour)); err != nil || !changed {
+		t.Fatalf("cleared: %v %v", changed, err)
+	}
+	if l, _, _ = e.LiveRead(recID); l.Topics != nil || l.TopicsRev != 2 || !l.TopicsAt.Equal(now.Add(time.Hour)) {
+		t.Fatalf("cleared %+v", l)
+	}
+	if want := [][]string{{PartLines}, {PartTopics}, {PartTopics}}; fmt.Sprint(heard) != fmt.Sprint(want) {
+		t.Fatalf("heard %v, want %v", heard, want)
 	}
 }
