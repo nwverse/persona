@@ -128,8 +128,10 @@ type hubRun struct {
 	device   []kb.RecordingSegment
 	deviceTo float64
 
-	// flushedTo: the job's sentences up to here are in (flushed); wake is closed on every change a waiter reads.
+	// flushedTo: the job's sentences up to here are in (flushed); flushWant: the earliest at a heard ask waits for the
+	// live edge to reach before it flushes (0: none); wake is closed on every change a waiter reads.
 	flushedTo float64
+	flushWant float64
 	wake      chan struct{}
 }
 
@@ -377,6 +379,10 @@ func (r *hubRun) audio(at float64, pcm []byte) {
 	r.edge, r.audioAt = to, time.Now()
 	if j := r.ensureJobLocked(from); j != nil {
 		j.feedLocked(from, pcm)
+		if r.flushWant > 0 && float64(j.sentS)/kb.AudioRate >= r.flushWant {
+			r.flushWant = 0
+			r.notifyLocked() // a heard ask's audio reached the job: it flushes now (hubFlush)
+		}
 	}
 }
 
@@ -743,7 +749,13 @@ func (s *Service) hubFlush(ctx context.Context, id string, at float64) bool {
 			r.mu.Unlock()
 			return false
 		}
-		if j.ready && !j.flushAsked && float64(j.sentS)/kb.AudioRate >= at {
+		switch {
+		case !j.ready:
+		case float64(j.sentS)/kb.AudioRate < at: // the ask came before its audio: woken once the audio reaches it
+			if r.flushWant == 0 || at < r.flushWant {
+				r.flushWant = at
+			}
+		case !j.flushAsked:
 			j.flushLocked()
 		}
 		wake := r.wake

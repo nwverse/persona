@@ -272,6 +272,35 @@ func TestHubHeardAskFlushes(t *testing.T) {
 	}
 }
 
+// A heard ask that reaches the hub before its audio flushes once the audio reaches its at, not after askLiveWait.
+func TestHubHeardAskBeforeItsAudio(t *testing.T) {
+	h := newHubFixture(t)
+	h.tr.set(func(f *fakeTranscriber) {
+		f.live = jobScript{lines: []fakeLine{{0.5, 1.5, "What did we decide about the cap?"}, {30, 31, "Later."}}, held: true}
+	})
+	h.hubUpload(meetingRec, 1, nil)
+	p, _ := h.open(meetingRec, 0, nil)
+	p.audio(1)
+	waitFor(t, "audio", func() bool {
+		acks := p.of("ack")
+		return len(acks) > 0 && acks[len(acks)-1]["at"] == 1.0
+	})
+	began := time.Now()
+	asked := make(chan map[string]any, 1)
+	go func() {
+		asked <- h.do("POST", askPath(meetingRec), "", map[string]any{"id": askOne, "at": 1.6}, http.StatusOK)
+	}()
+	waitFor(t, "the ask waiting", func() bool { return len(h.asksOf(meetingRec)) == 1 })
+	p.audio(1) // the ask's audio comes after it
+	ask := meetingAskOf(t, <-asked)
+	if ask["state"] != askAnswered {
+		t.Fatalf("heard ask: %v", ask)
+	}
+	if took := time.Since(began); took >= askLiveWait {
+		t.Fatalf("the ask waited %v for audio that came at once", took)
+	}
+}
+
 // A dropped job socket is opened again at once from the live edge; a job with no audio for jobIdle is ended.
 func TestHubJobReopenedAndIdle(t *testing.T) {
 	h := newHubFixture(t)
