@@ -113,5 +113,7 @@
   "codex_waiting": "Codexは「{computer}」で開いています。下で最初のメッセージを送るか、ターミナルに直接入力してください。",
   "codex_first_placeholder": "Codex への最初のメッセージ",
   "handoff_from": "{title} から移動しました · クリックして戻る",
-  "handoff_dismiss": "戻るヒントを閉じる"
+  "handoff_dismiss": "戻るヒントを閉じる",
+  "team": "コラボ",
+  "team_needs_you": "コラボ：対応を待っている Worker があります"
 }

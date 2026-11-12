@@ -18,6 +18,10 @@ PORT = int(os.environ.get("PORT", "18760"))
 # MOCK_CHILD_SESSIONS=1 (#5120) builds on the Paseo computer: its agent's created agents are its children.
 if os.environ.get("MOCK_CHILD_SESSIONS"):
     os.environ.setdefault("MOCK_PASEO", "1")
+# MOCK_TEAM=1 (#5180) builds on MOCK_TAB_PANES's tab of three: it adds a worker's request, a third worker and a stopped pane.
+MOCK_TEAM = bool(os.environ.get("MOCK_TEAM"))
+if MOCK_TEAM:
+    os.environ.setdefault("MOCK_TAB_PANES", "1")
 NOW = datetime.now(timezone.utc)
 LOG = sys.stderr
 # MOCK_HUB_ID keeps the identity across restarts, so a paired App stays paired when the switches change.
@@ -1507,7 +1511,10 @@ if os.environ.get("MOCK_SPLIT_TABS"):
 # MOCK_TAB_PANES=1: one herdr tab holding three agents (#2320): the "Initiator" in the tab's first pane (pane_index 0) and two
 # panes it split off (a Codex that stopped on a dialog on the computer, a Claude that is done), with herdr's real-looking
 # pane ids; beside it ordinary one-agent tabs and a tab whose top left pane is a shell (two peers, no "Initiator"). No cards,
-# so the overview files the three-agent tab under "On the computer".
+# so the overview files the three-agent tab under "On the computer". The three are a tab team (#5180, fold_hierarchy): the
+# two panes fold under the lead as its workers; the shell-first tab's two stay peers.
+# MOCK_TEAM=1 adds to that team a permission card of the Codex worker's, a third worker (working, pane 3) and a stopped pane
+# (offline, pane 4) that is no worker, and gives the lead and each worker a short transcript with a tool call.
 PANES_LEAD = "7ab5e000-0000-4000-8000-000000000001"
 PANES_REVIEW = "7ab5e000-0000-4000-8000-000000000002"
 PANES_TESTS = "7ab5e000-0000-4000-8000-000000000003"
@@ -1515,6 +1522,8 @@ PANES_DEPS = "7ab5e000-0000-4000-8000-000000000004"
 PANES_PEER_A = "7ab5e000-0000-4000-8000-000000000005"
 PANES_PEER_B = "7ab5e000-0000-4000-8000-000000000006"
 PANES_DOCS = "7ab5e000-0000-4000-8000-000000000007"
+PANES_API_DOCS = "7ab5e000-0000-4000-8000-000000000008"
+PANES_STOPPED = "7ab5e000-0000-4000-8000-000000000009"
 
 
 def tab_panes_sessions():
@@ -1535,14 +1544,47 @@ def tab_panes_sessions():
              "文档目录理好了。", seen_at=ago(minutes=20), pane_id="w2:pW", pane_index=0),
         sess("nas", SPLIT_NAS, "备份脚本", "/home/me/code/backup", "idle", "idle", "backup", 1, "1", 1, 200,
              "备份改成增量了。", seen_at=ago(minutes=190)),
+    ] + (team_sessions() if MOCK_TEAM else [])
+
+
+def team_sessions():
+    """MOCK_TEAM's rows of the lead's tab: a third worker, working, and a stopped pane, which is no worker (#5180)."""
+    return [
+        sess("server", PANES_API_DOCS, "更新新中间件的接口文档", "/home/me/code/app", "working", "working", "app", 1, "1", 1, 1,
+             "在补刷新接口的说明。", pane_id="w1:p52", pane_index=3, state_since=ago(minutes=6)),
+        sess("server", PANES_STOPPED, "查刷新接口的慢日志", "/home/me/code/app", "offline", "offline", "app", 1, "1", 1, 40,
+             "慢日志里没找到刷新接口。", pane_id="w1:p53", pane_index=4),
     ]
 
 
 def tab_panes_items():
+    if MOCK_TEAM:
+        return team_items()
     return {PANES_LEAD: [it("user", "text", 15, text="把 token 刷新挪到中间件里，开两个窗格分别审改动和补测试"),
                          it("assistant", "text", 0, text="开了两个窗格分头审改动、补测试，我在合中间件。")],
             PANES_REVIEW: [it("user", "text", 10, text="审一下登录重构的改动"), it("assistant", "text", 1, text="有两处会吞掉错误，要我直接改吗？")],
             PANES_TESTS: [it("user", "text", 10, text="补刷新失败的测试"), it("assistant", "text", 3, text="补了 6 个用例，都过了。")],
+            PANES_PEER_B: bench_items()}
+
+
+def team_items():
+    """MOCK_TEAM's transcripts: the lead's and each worker's (#5180). The Codex worker's ends on the command its permission
+    card asks for (toolu_panes_review_test)."""
+    return {PANES_LEAD: [it("user", "text", 15, text="把 token 刷新挪到中间件里，开几个窗格分别审改动、补测试、更新文档")]
+                        + tool("Edit", {"file_path": "src/auth/middleware.ts", "old_string": "next()", "new_string": "await refresh(req); next()"}, "ok", 14)
+                        + [it("assistant", "text", 0, text="开了三个窗格分头审改动、补测试、更新文档，我在合中间件。")],
+            PANES_REVIEW: [it("user", "text", 10, text="审一下登录重构的改动")]
+                          + tool("Bash", {"command": "git diff main -- src/auth"}, "src/auth/middleware.ts | 24 ++++++++----", 9)
+                          + [it("assistant", "text", 2, text="有两处会吞掉错误，先跑一遍现有的测试确认。"),
+                             it("assistant", "tool_use", 1, tool_use_id="toolu_panes_review_test", tool_name="Bash",
+                                tool_input={"command": "go test ./auth/..."})],
+            PANES_TESTS: [it("user", "text", 10, text="补刷新失败的测试")]
+                         + tool("Bash", {"command": "npm test -- src/auth"}, "6 passed", 4)
+                         + [it("assistant", "text", 3, text="补了 6 个用例，都过了。")],
+            PANES_API_DOCS: [it("user", "text", 8, text="给新中间件更新接口文档")]
+                            + tool("Read", {"file_path": "docs/api/auth.md"}, "## Refresh\n…", 6)
+                            + [it("assistant", "text", 1, text="在补刷新接口的说明。")],
+            PANES_STOPPED: [it("user", "text", 45, text="查一下刷新接口的慢日志"), it("assistant", "text", 40, text="慢日志里没找到刷新接口。")],
             PANES_PEER_B: bench_items()}
 
 
@@ -1582,6 +1624,12 @@ def bench_items():
 if os.environ.get("MOCK_TAB_PANES"):
     MACHINES[:] = [m for m in MACHINES if m["id"] in ("server", "nas")]
     SESSIONS[:] = tab_panes_sessions()
+    if MOCK_TEAM:  # the lead says it split off three panes; the Codex worker waits on a permission card, not a dialog
+        for _s in SESSIONS:
+            if _s["session_id"] == PANES_LEAD:
+                _s["last_text"] = "开了三个窗格分头审改动、补测试、更新文档，我在合中间件。"
+            elif _s["session_id"] == PANES_REVIEW:
+                _s.update(last_text="有两处会吞掉错误，先跑一遍现有的测试确认。", pending_interactions=1)
 ORIG_STATE = {s["session_id"]: (s["state"], s["status"]) for s in SESSIONS}
 SEEN = []  # session ids marked seen (GET /mock/seen)
 SESSION_CLOSE = {"fail": False, "attempts": [], "closed": [], "interactions": []}
@@ -7348,9 +7396,11 @@ def mock_interactions():
         if MOCK_TASKS:  # a task's agent asking: the hub names the task (task_title)
             titles = {a["session_id"]: t["title"] for t in TODOS if t.get("origin") and not t.get("done_at") for a in t.get("agents", [])}
             out = [dict(x, task_title=titles[x["session_id"]]) if x.get("session_id") in titles else x for x in out]
-    # the session a card's session folds under (Interaction.folded_under, #5120): its home is that session's page
-    folds = {(r["machine_id"], r["session_id"]): r["folded_under"] for r in all_sessions() if r.get("folded_under")}
-    return [dict(x, folded_under=folds[(x.get("machine_id"), x.get("session_id"))]) if (x.get("machine_id"), x.get("session_id")) in folds else x for x in out]
+    # the session a card's session folds under (Interaction.folded_under, #5120): its home is that session's page; a tab
+    # worker's card says so too (folded_as, #5180)
+    folds = {(r["machine_id"], r["session_id"]): {k: r[k] for k in ("folded_under", "folded_as") if r.get(k)}
+             for r in all_sessions() if r.get("folded_under")}
+    return [dict(x, **folds[(x.get("machine_id"), x.get("session_id"))]) if (x.get("machine_id"), x.get("session_id")) in folds else x for x in out]
 
 
 # MOCK_FLEET: the hub's fleet summary (server/internal/hub/liveactivity.go buildFleet) for Android's ongoing notification,
@@ -12879,6 +12929,12 @@ if os.environ.get("MOCK_TAB_PANES"):
     ITEMS.update(tab_panes_items())
     INTERACTIONS[:] = []
     MOCK_INTERACTIONS[:] = []
+    if MOCK_TEAM:  # a worker's request (#5180): the hub sends it with folded_under (the lead) and folded_as "worker"
+        INTERACTIONS.append(
+            {"id": "team_review_test", "machine_id": "server", "session_id": PANES_REVIEW, "session_title": "审一下登录重构的改动",
+             "cwd": "/home/me/code/app", "kind": "permission", "agent": "codex", "tool_use_id": "toolu_panes_review_test",
+             "created_at": ago(minutes=1), "expires_at": later(minutes=29), "tool_name": "Bash",
+             "summary": "go test ./auth/...", "tool_input": {"command": "go test ./auth/..."}})
 if os.environ.get("MOCK_BOTMUX"):
     ITEMS[BOTMUX_BLOCKED] = [it("user", "text", 5, text="把周报导出改成按部门分 sheet")] + [
         it("assistant", "text", 3, text="导出脚本改好了，正在跑全量。")]
@@ -13490,14 +13546,42 @@ def is_child_row(r):
     return bool(r.get("is_subagent") or r.get("parent_session_id") or r.get("asking_parent_session_id") or (root and root != r["session_id"]))
 
 
+def tab_leads(rows):
+    """The manager's tab teams (#5180, fold_hierarchy): for each worker's (machine, session id), its lead's row. A tab is the
+    rows of one machine, space kind, space and slot, both named; an assistant row or an archived one is in none. Its lead is
+    the one row in its first pane (pane_index 0) that is no child and not offline: none or two such rows, and its Agents
+    are peers. Every other row of a tab with a lead that is no child and not offline is its worker."""
+    def tab(r):
+        if (r.get("assistant") or r.get("archived") or not r.get("space_id") or not r.get("slot_id") or is_child_row(r)
+                or r.get("state") == "offline"):
+            return None
+        return (r["machine_id"], r.get("space_kind") or "", r["space_id"], r["slot_id"])
+    first = {}
+    for r in rows:
+        k = tab(r)
+        if k is not None and type(r.get("pane_index")) is int and r["pane_index"] == 0:
+            first[k] = None if k in first else r
+    lead = {}
+    for r in rows:
+        k = tab(r)
+        l = first.get(k) if k is not None else None
+        if l is not None and l["session_id"] != r["session_id"]:
+            lead[(r["machine_id"], r["session_id"])] = l
+    return lead
+
+
 def fold_hierarchy(rows):
-    """The manager's folding (#5120, docs/protocol/protocol.md "Session hierarchy"), on copies: a child (is_subagent, a
-    parent, or the parent a waiting runtime child names in asking_parent_session_id) whose topmost listed ancestor on its
-    machine is another listed row gets folded_under that ancestor, which gets children (its descendants by their own
-    state). Orphans and cycles fold nowhere."""
+    """The manager's folding (#5120, #5180, docs/protocol/protocol.md "Session hierarchy"), on copies: a child
+    (is_subagent, a parent, or the parent a waiting runtime child names in asking_parent_session_id) whose topmost listed
+    ancestor on its machine is another listed row gets folded_under that ancestor, which gets children (its descendants by
+    their own state). A tab's worker (tab_leads) has its lead as its parent and gets folded_as "worker" too; the lead's
+    children count its workers. Orphans and cycles fold nowhere."""
     by = {(r["machine_id"], r["session_id"]): r for r in rows}
+    lead = tab_leads(rows)
 
     def parent(r):
+        if not is_child_row(r):
+            return lead.get((r["machine_id"], r["session_id"]))
         for k in ("parent_session_id", "asking_parent_session_id", "root_session_id"):
             v = r.get(k)
             if v and v != r["session_id"] and (r["machine_id"], v) in by:
@@ -13506,7 +13590,7 @@ def fold_hierarchy(rows):
     top = {}
     for r in rows:
         cur, seen, found = r, {r["session_id"]}, None
-        while is_child_row(cur):
+        while True:
             p = parent(cur)
             if p is None:
                 break
@@ -13517,21 +13601,25 @@ def fold_hierarchy(rows):
             found = cur = p
         if found is not None:
             top[(r["machine_id"], r["session_id"])] = found["session_id"]
-    if not top and not any("folded_under" in r or "children" in r for r in rows):
+    if not top and not any("folded_under" in r or "folded_as" in r or "children" in r for r in rows):
         return rows
     rollup = {}
     for (mid, sid), root in top.items():
-        c = rollup.setdefault((mid, root), {"total": 0, "working": 0, "needs_you": 0})
+        c = rollup.setdefault((mid, root), {"total": 0, "working": 0, "needs_you": 0, "workers": 0})
         c["total"] += 1
         state = by[(mid, sid)].get("state")
         if state in ("working", "needs_you"):
             c[state] += 1
+        if (mid, sid) in lead:
+            c["workers"] += 1
     out = []
     for r in rows:
         k = (r["machine_id"], r["session_id"])
-        r = {x: v for x, v in r.items() if x not in ("folded_under", "children")}
+        r = {x: v for x, v in r.items() if x not in ("folded_under", "folded_as", "children")}
         if k in top:
             r["folded_under"] = top[k]
+            if k in lead:
+                r["folded_as"] = "worker"
         if k in rollup:
             r["children"] = {x: v for x, v in rollup[k].items() if v or x == "total"}
         out.append(r)
@@ -23028,7 +23116,8 @@ def chat_cards_mock():
 
 if os.environ.get("MOCK_CHAT_CARDS") == "1":
     chat_cards_mock()
-MOCK_HELP.append("MOCK_TAB_PANES=1  一个 herdr 标签页里三个 Agent（#2320）：发起者（pane_index 0，工作中）和它分出的两个窗格（Codex 停在电脑上的对话框、Claude 做完未看），旁边是一个 Agent 的普通标签页和左上是 shell 的两个平级 Agent；没有卡片")
+MOCK_HELP.append("MOCK_TAB_PANES=1  一个 herdr 标签页里三个 Agent（#2320）：发起者（pane_index 0，工作中）和它分出的两个窗格（Codex 停在电脑上的对话框、Claude 做完未看），旁边是一个 Agent 的普通标签页和左上是 shell 的两个平级 Agent；没有卡片。两个窗格作为 worker 折叠在发起者下面（folded_under / folded_as，#5180）")
+MOCK_HELP.append("MOCK_TEAM=1  A tab team (#5180, implies MOCK_TAB_PANES): the lead's tab adds a permission card of the Codex worker's (folded_under the lead, folded_as worker), a third worker that is working and a stopped pane that stays a row of its own; the lead and every worker have a short transcript")
 MOCK_HELP.append("MOCK_CHAT_CARDS=1  （配合 MOCK_SPLIT_TABS=1）server 上 w1:t1 那个工作中的 Claude 同时有计划、提问、授权三张卡，两条排队消息，/loop 和一个后台任务：手机上输入区最挤的样子（#1996）")
 
 # ---------- MOCK_GOAL: an agent working toward a goal (docs/integrations/agent-goal.md, #2420) ----------

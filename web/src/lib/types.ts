@@ -361,6 +361,9 @@ export interface Session {
    *  created), set by the hub's manager (docs/protocol/protocol.md "Session hierarchy", #5120): the web never lists or
    *  counts it on its own, and draws it as a card in that session's chat. */
   folded_under?: string;
+  /** How it folds under `folded_under`: `"worker"` for an Agent of a host tab whose lead (its first pane) is
+   *  `folded_under` (#5180, a Claude Code agent team's teammate): it is in the lead's Team panel, not a card in its chat. */
+  folded_as?: "worker";
   /** On a session other sessions fold under: how many, and how many of them work or need the user (by their own state). */
   children?: SessionChildren;
   /** When the session began, where the node knows it (child sessions at least). */
@@ -697,6 +700,8 @@ export interface SessionChildren {
   total: number;
   working?: number;
   needs_you?: number;
+  /** How many of them are its tab's workers (`folded_as: "worker"`, #5180): a lead with workers has a Team panel. */
+  workers?: number;
 }
 
 export interface Interaction {
@@ -743,6 +748,8 @@ export interface Interaction {
   agent_type?: string;
   /** The session the card's session folds under (Session.folded_under, #5120): the card's home is that session's page. */
   folded_under?: string;
+  /** Session.folded_as of the card's session (#5180): `"worker"` when a lead's worker asks. */
+  folded_as?: "worker";
   elicitation?: Elicitation;
   /** What a permission card needs filled in before it is approved (a password): such a card is never approved in one tap. */
   fields?: { key: string; label: string; secret?: boolean }[];

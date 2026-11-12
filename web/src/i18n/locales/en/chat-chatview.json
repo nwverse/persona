@@ -113,5 +113,7 @@
   "codex_waiting": "Codex is open on {computer}. Send its first message below, or type it in its terminal.",
   "codex_first_placeholder": "First message to Codex",
   "handoff_from": "Came from {title} · click to return",
-  "handoff_dismiss": "Hide the way back"
+  "handoff_dismiss": "Hide the way back",
+  "team": "Team",
+  "team_needs_you": "Team: a worker needs you"
 }
