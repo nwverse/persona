@@ -1022,6 +1022,8 @@ Step R3 (section 4c) of `docs/design/proposals/main-chat-availability.md`. The m
 background rounds ship off or empty, because each spends tokens or acts for the owner. Once a week a briefing says,
 from this install's own records, which of them would have removed how many of the last 7 days' asks or background
 rounds, what it costs in one sentence, and where it is turned on. Code: `server/internal/assistant/setup_suggest.go`.
+One line is of another kind, a lower tier for the background supervisor's model ("A lower tier for the background
+supervisor" below, `setup_suggest_tier.go`); every rule of this section holds for it too.
 
 - **Computed, not written.** Every number is counted by the manager from what is recorded anyway; no model call makes
   or changes one, and there is no table of its own. The model is given the finished lines and told to copy them
@@ -1047,7 +1049,8 @@ rounds, what it costs in one sentence, and where it is turned on. Code: `server/
   copy and not checked against the computed lines.
 - **Where a mechanism is turned on.** Session triage's three switches, the standing authorizations and the
   remembered kinds of task are on the assistant's own settings page in the web app (`/settings?tab=persona`; iOS
-  Settings › General, Android Settings › AI); the lines name the switch by the label it has there. Leader
+  Settings › General, Android Settings › AI); the lines name the switch by the label it has there. The background
+  supervisor's model is its purpose's page of Model Settings (`/settings?tab=models&purpose=assistant.supervise`). Leader
   conversations: **Pin** in a conversation's menu. The spot-check share: asking Persona, confirmed on a card. The
   assistant answering agents' questions and the independent review have no switch in any app: their lines say so and
   name the key and value for the assistant's configuration file (`docs/operations/config.md`).
@@ -1068,6 +1071,7 @@ the work events are kept.
 | Leader conversations (`leaders`, `assistant.leaders`) | The main conversation's rounds last week that a supervision message started (the `round` rows of "Availability metrics" above), and their minutes | No leader conversation exists |
 | Spot-check reviews (`review_sample`, `assistant.review_sample_percent`) | Supervised tasks whose first and only review, last week, was the supervisor's own `accepted` with every `done_when` criterion met with evidence, no `user_check`, the work live, and never reopened | The share is 100 |
 | Independent review (`independent_review`, `agents.review.launcher`) | Reworks a supervisor sent last week after the done judge had called the work done (`review_rework` with `judged_done`) | No reviewer launcher is set |
+| A lower tier for the background supervisor (`supervisor_tier`, the purpose `assistant.supervise`) | The background supervisor's settled acceptances of the last 30 days on the model its purpose is bound to now, and how many of them were reopened ("A lower tier for the background supervisor" below) | At least 20 settled, at most 1 in 20 of them reopened, and a lower tier that is not the smallest is known |
 
 What the numbers do and do not say:
 
@@ -1094,16 +1098,57 @@ What the numbers do and do not say:
 - **A hello that fails names nothing it cannot read.** Whether the delegate and the independent review are on comes
   from the hub's hello; when it cannot be read neither is named, as the triage's three are not when its switches
   cannot be read.
-- **A lower tier for supervision is not suggested.** The proposal ties it to K1's numbers (reviews and tokens per
-  supervisor model), which are not recorded yet; the block leaves it out until they are.
+
+### A lower tier for the background supervisor (#5805)
+
+The block's last line, from the numbers of "Supervision by model" below (section 9c of the proposal): the reviews the
+background supervisor made on its current model held, and its provider has a tier below that one. It is computed like
+the other lines, named at most once in 30 days, and changes no binding: the owner picks another model for the purpose
+**Background supervisor** in Model Settings, or does not. Code: `server/internal/assistant/setup_suggest_tier.go`.
+All four must hold:
+
+- **The background supervisor is on and did the reviews.** `assistant.main_supervises_own_tasks` is not on, the
+  background supervisor exists, and only `task_reviewed` rows with role `background` are read. A review by the main
+  conversation, a leader or a task leader's agent says nothing about this binding.
+- **Enough settled acceptances: 20.** Counted over the last 30 days (as long as work events are kept; 7 days rarely
+  hold enough to judge a reviewer), on exactly the model the purpose `assistant.supervise` resolves to now (its own
+  binding, else the main chat's, else the provider's default model; a `[1m]` marker aside, any effort). Reviews made
+  on another model, before the binding was changed, are not counted, so a changed binding starts from zero. The row's
+  model is what the node listed for the conversation; when a node lists another form of the name than the binding
+  has (an alias, a gateway's own id), nothing matches and nothing is suggested.
+- **Reopened over settled is at most 1 in 20 (5 percent).** The share is `reopened` over `settled`, by the one rule
+  of "Supervision by model": never over `accepted`, because an acceptance younger than 24 hours has not had its day
+  to be reopened in and would only water the share down. A reopen is held against the background supervisor's latest
+  acceptance of the task before it even when another conversation accepted the task in between, which can only make
+  the share higher.
+- **A lower tier that is not the smallest is known.** All the manager knows of tiers is the tier models of a provider
+  added in Persona (`opus_model`, `sonnet_model`, `haiku_model`, `fable_model` of the provider's record, which the
+  owner or the import of their shell alias filled in; smallest first: `haiku_model`, `sonnet_model`, `opus_model`,
+  `fable_model`). The supervisor's model must be one of them; the tier below is the nearest filled slot under it with
+  another model; and under that one there must be yet another filled slot with a third model. So on a provider with
+  three tier models only the largest gets the line, pointing at the middle one. The smallest tier is never suggested
+  (an acceptance is a judgment call: `docs/assistant/model-config.md` "Models for each role"), nor is a tier the
+  manager cannot tell is not the smallest. Not known, and so never suggested: plain `claude` and an rc-file launcher
+  (nothing is stored about their models), a provider with fewer than three distinct tier models, a model that is none
+  of the provider's tier models, a direct API provider, and Agent presets (`docs/assistant/model-profiles.md`), which
+  have names and descriptions but no order.
+
+The line names the two models as the owner's provider has them (no model is named in code), the two numbers, and in
+one sentence the cost and the risk: a lower tier spends less on every review, but the numbers say how the current
+model reviewed, not how the lower one will. It says its own 30 days, since the block's introduction speaks of the
+last 7 days and of mechanisms that are off. The `brief` item's `count` is the settled acceptances and `setting` the
+purpose id. Out of scope: the reverse. Nothing suggests a stronger tier, whatever is reopened; the table of "Models
+for each role" says when to raise it. Once the owner has moved the supervisor down, the same rule may name the next
+tier down after its own 20 settled acceptances, but never the smallest.
 
 ## Supervision by model (#5086)
 
 Step K1 of the same proposal (section 9c): what supervision costs per accepted task, by the model the supervisor ran
 on, so a cheaper or a stronger model for the background supervisor (`assistant.supervise`,
 `docs/assistant/model-config.md` "Models for each role") can be judged on this install. It is the `supervision` field
-of `GET /api/v1/assistant/availability`; nothing shows it in an app or a briefing, and nothing acts on it. Each number
-in one sentence:
+of `GET /api/v1/assistant/availability`; no app shows it, and nothing acts on it. The weekly block reads the same rows
+for its one line about a lower tier ("A lower tier for the background supervisor" above), which changes nothing
+either. Each number in one sentence:
 
 - **Accepted** (`by_model[].accepted`): the acceptances in the window, each a `task_review` that accepted a task and
   closed it, by the model and effort the reviewer ran on when it reviewed; a task accepted, reopened and accepted

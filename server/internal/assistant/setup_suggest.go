@@ -27,6 +27,9 @@ import (
 //   - Once a month: a mechanism that was named is not named again for setupQuietFor (setting setupKey).
 //   - Never acted on: nothing here writes any setting but setupKey; the owner turns a mechanism on themselves.
 //
+// One line is not a mechanism that is off: a lower tier for the background supervisor's model (setup_suggest_tier.go),
+// under the same four rules.
+//
 // There is no weekly routine: the block goes with the first briefing (a routine with facts on, briefing.go) that
 // reaches the owner in a week of the owner's time zone, Monday first. Reached: the run's turn ended normally, with its
 // `brief` item, which carries the block, in the conversation (briefReached), or its Lark card went out (briefAsked).
@@ -56,26 +59,33 @@ const (
 	setupTrust        = "task_trust"
 	setupSample       = "review_sample"
 	setupReview       = "independent_review"
+	// setupSupervisorTier: a lower tier for the background supervisor's model (setup_suggest_tier.go).
+	setupSupervisorTier = "supervisor_tier"
 )
 
-// setupOrder is the order the block names them in: what removes asks first, then what removes background rounds.
+// setupOrder is the order the block names them in: what removes asks first, then what removes background rounds, then
+// what makes the rounds that are left cheaper.
 var setupOrder = []string{setupDelegate, setupStanding, setupTrust, setupDecide, setupAutoContinue, setupWake,
-	setupLeaders, setupSample, setupReview}
+	setupLeaders, setupSample, setupReview, setupSupervisorTier}
 
-// setupSettings is the setting each mechanism is turned on with.
+// setupSettings is the setting each mechanism is turned on with; for the supervisor's tier, the model purpose whose
+// binding the owner would change.
 var setupSettings = map[string]string{
 	setupLeaders: "assistant.leaders", setupDelegate: ruleDelegateSetting,
 	setupDecide: triageSettingKey + ".decide", setupAutoContinue: triageSettingKey + ".auto_continue", setupWake: triageSettingKey + ".wake",
 	setupStanding: standingAuthorizationsKey, setupTrust: trustSetting,
 	setupSample: "assistant.review_sample_percent", setupReview: "agents.review.launcher",
+	setupSupervisorTier: purposeSupervise,
 }
 
 // setupPages is the web app's settings page a mechanism is on, for those that have one: the assistant's own page
 // (web/src/views/settings/nav.ts, tab persona) holds Session triage, the standing authorizations and the remembered
-// kinds of task. The others are named in their line (a conversation's menu, asking Persona, the configuration file).
+// kinds of task; the background supervisor's purpose is its own page of Model Settings. The others are named in their
+// line (a conversation's menu, asking Persona, the configuration file).
 var setupPages = map[string]string{
 	setupDecide: "/settings?tab=persona", setupAutoContinue: "/settings?tab=persona", setupWake: "/settings?tab=persona",
 	setupStanding: "/settings?tab=persona", setupTrust: "/settings?tab=persona",
+	setupSupervisorTier: "/settings?tab=models&purpose=" + purposeSupervise,
 }
 
 // setupBook is the setting setupKey: the week whose first briefing reached the owner, and when each mechanism was
@@ -90,6 +100,7 @@ type setupSuggestion struct {
 	ID      string `json:"id"`
 	Setting string `json:"setting"`
 	// Count is what the mechanism would have removed (setupCount); Minutes, for leaders, the time those rounds took.
+	// For supervisor_tier, Count is the settled acceptances its reviews were judged on (setupTierCount).
 	Count   int    `json:"count"`
 	Minutes int    `json:"minutes,omitempty"`
 	Text    string `json:"text"`           // the whole line, in the bot's language
@@ -122,16 +133,22 @@ func setupWeek(now time.Time, loc *time.Location) string {
 
 // ---- counting ----
 
-// setupNumber is one mechanism's count: n things, and for rounds the seconds they took.
+// setupNumber is one mechanism's count: n things, and for rounds the seconds they took. The supervisor's tier
+// (setupTierCount): n settled acceptances on model of which reopened were reopened, and lower, the model a tier down.
 type setupNumber struct {
 	n       int
 	seconds float64
+
+	reopened     int
+	model, lower string
 }
 
 // setupEvidence is what the counts are read from: the work events and decisions since the lookback (oldest first),
-// the plans made since (oldest first) and the to-dos as they are.
+// the plans made since (oldest first) and the to-dos as they are. reviews: the task_reviewed and todo_reopened rows
+// since the lookback (oldest first), which only the supervisor's tier reads.
 type setupEvidence struct {
 	events    []db.WorkEvent
+	reviews   []db.WorkEvent
 	decisions []db.TodoDecisionRow
 	plans     []*TaskPlan
 	todos     []Todo
@@ -334,7 +351,8 @@ type setupState struct {
 // suggests: mechanism id is off and c reaches its threshold. tasks.trust and the standing authorizations are never
 // "on" as a whole: what is already granted is left out of their counts (setupCount). The triage's three actions are
 // counted only while the triage itself is on: without it nothing about a stopped turn is recorded, and they do
-// nothing.
+// nothing. The supervisor's tier has no switch: it is named when a lower tier is known (c.lower, setupTierOf), enough
+// acceptances settled and few enough of them were reopened.
 func (st setupState) suggests(id string, c setupNumber) bool {
 	switch id {
 	case setupLeaders:
@@ -353,6 +371,8 @@ func (st setupState) suggests(id string, c setupNumber) bool {
 		return st.helloKnown && !st.review && c.n >= setupMin
 	case setupStanding, setupTrust:
 		return c.n >= setupMin
+	case setupSupervisorTier:
+		return c.lower != "" && c.n >= setupTierMin && c.reopened*setupTierReopenedIn <= c.n
 	}
 	return false
 }
@@ -386,6 +406,9 @@ func (s *Service) setupRead(ctx context.Context, now time.Time) (setupEvidence, 
 		return ev, err
 	}
 	ev.events = append(recent, marks...)
+	if ev.reviews, err = st.WorkEventsBetween(ctx, back, now, []string{taskReviewedEvent, todoReopenedEvent}); err != nil {
+		return ev, err
+	}
 	if ev.decisions, err = st.TodoDecisionsSince(ctx, back); err != nil {
 		return ev, err
 	}
@@ -445,6 +468,9 @@ func (s *Service) setupFor(ctx context.Context, now time.Time, loc *time.Locatio
 		return nil
 	}
 	counts, state := setupCount(ev, now.Add(-setupWindow), now), s.setupStateNow(ctx)
+	if c, ok := s.setupTier(ctx, ev, now); ok {
+		counts[setupSupervisorTier] = c
+	}
 	for _, id := range setupOrder {
 		c := counts[id]
 		if !state.suggests(id, c) {
@@ -463,9 +489,12 @@ func (s *Service) setupFor(ctx context.Context, now time.Time, loc *time.Locatio
 func setupWord(l i18n.Lang, web, id string, c setupNumber) setupSuggestion {
 	sg := setupSuggestion{ID: id, Setting: setupSettings[id], Count: c.n}
 	args := i18n.Args{"n": c.n}
-	if id == setupLeaders {
+	switch id {
+	case setupLeaders:
 		sg.Minutes = int(c.seconds/60 + 0.5)
 		args["minutes"] = sg.Minutes
+	case setupSupervisorTier: // the models are the owner's own names for them, as their provider has them
+		args["reopened"], args["model"], args["lower"] = c.reopened, c.model, c.lower
 	}
 	sg.Text = i18n.T(l, "assistant-setup_suggest."+id, args)
 	if page := setupPages[id]; page != "" && web != "" {

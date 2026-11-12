@@ -3590,11 +3590,13 @@ in plan order (a task without `todo_id` did not start and has no link); no extra
 //          "accept":[{"id":"<to-do id>","title","detail"?:"what changed","from"?,"link"?,"waited_s","asked_at":"…","verdict"?:"the verdict line","outcome"?:"done|cannot|decide","recommend"?:"…"}],  // to-dos waiting to be verified, or whose conclusion waits for the owner, the longest waiting first
 //          "later"?:[{"id":"<question id>","title":"what was asked (a line)","from"?,"link"?:"<the Agent's chat>","machine_id"?,"session_id"?,"waited_s"}],"later_total"?:3,  // questions Agents left for a briefing (urgent false), the oldest first, at most 10; both left out when the queue is empty; the Handled button posts the id to POST /api/v1/later/{id}/handled
 //          "progress":[{"id":"<to-do id>","title","stage"?:"plan|develop|review|merge|deploy|verify","stage_kind"?:"code|general"}],"progress_total":2,  // open to-dos whose Agents are working, the longest open first, at most 8
-//          "setup"?:[{"id":"delegate|standing_authorizations|task_trust|triage_decide|triage_auto_continue|triage_wake|leaders|review_sample|independent_review",
+//          "setup"?:[{"id":"delegate|standing_authorizations|task_trust|triage_decide|triage_auto_continue|triage_wake|leaders|review_sample|independent_review|supervisor_tier",
 //                     "setting":"agents.delegate","count":4,"minutes"?:31,"text":"the whole line, in the hub's language","link"?:"<its settings page in the web app>"}]}
 //         setup (#5085, `docs/assistant/assistant.md` ("Recommended setup")): which mechanism that is off would have removed how many (`count`) of the last 7 days' asks or
 //         background rounds (`minutes`: the time of those rounds, for leaders), with its cost and where it is turned on in `text`. Only on the first briefing of a week,
 //         and only when it names something; left out otherwise. Read-only: nothing is turned on, and no route answers it. An app that does not know it skips it.
+//         `supervisor_tier` (#5805) is not a mechanism that is off: its line says the background supervisor's reviews held on its current model and that its provider has a
+//         lower tier; `count` is the settled acceptances of the last 30 days it was judged on and `setting` the model purpose `assistant.supervise`. An app draws `text` like any other row.
 //         `link` is absolute and present only when the hub has a public address; an app links to its own settings page by `id` instead.
 //         stage_kind (#3380): also sent on to-dos; general tasks omit the web stage strip, code draws it. Missing or unknown keeps the legacy behavior.
 //         waiting_unknown: the cards waiting for an answer were not read yet (the hub had just started), so `waiting` is empty for want of knowing.
