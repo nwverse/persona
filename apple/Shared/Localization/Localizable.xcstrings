@@ -484,6 +484,29 @@
       },
       "extractionState" : "manual"
     },
+    "Done: %@ [Meeting Topic]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Done: %1$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已讨论：%1$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "済み：%1$@"
+          }
+        }
+      }
+    },
     "Driving [Place Map]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -714,6 +737,29 @@
         }
       }
     },
+    "Not yet: %@ [Meeting Topic]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not yet: %1$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "待讨论：%1$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "これから：%1$@"
+          }
+        }
+      }
+    },
     "Note [Recording Kind]": {
       "extractionState": "manual",
       "localizations": {
@@ -737,6 +783,29 @@
         }
       }
     },
+    "Now: %@ [Meeting Topic]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Now: %1$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "当前：%1$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "いま：%1$@"
+          }
+        }
+      }
+    },
     "Only the current assistant's settings are shown. Switch assistants to change another's settings.": {
       "extractionState": "manual",
       "localizations": {
@@ -756,6 +825,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "現在のアシスタントの設定だけを表示しています。別のアシスタントを変更するには切り替えてください。"
+          }
+        }
+      }
+    },
+    "Persona: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona: %1$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona：%1$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona：%1$@"
           }
         }
       }
@@ -1285,6 +1377,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "时间到了，Claude Code 会自动拒绝"
+          }
+        }
+      }
+    },
+    "Topics [Meeting]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Topics"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "议题"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "議題"
           }
         }
       }
@@ -171331,6 +171446,121 @@
           "stringUnit": {
             "state": "translated",
             "value": "終日録音"
+          }
+        }
+      }
+    },
+    "Couldn't move it to Done: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't move it to Done: %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「完了」に移動できませんでした：%@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没能移到「已完成」：%@"
+          }
+        }
+      }
+    },
+    "Couldn't put it back: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't put it back: %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "元に戻せませんでした：%@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没能放回：%@"
+          }
+        }
+      }
+    },
+    "Got It [To-do Seen]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Got It"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "了解"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "知道了"
+          }
+        }
+      }
+    },
+    "Got It: move %@ to Done" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Got It: move %@ to Done"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "了解：「%@」を完了に移動"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "知道了：把「%@」移到已完成"
+          }
+        }
+      }
+    },
+    "Moved to Done" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Moved to Done"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「完了」に移動しました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已移到「已完成」"
           }
         }
       }

@@ -84,11 +84,11 @@ Web 是本地 vite 页面，视口 430 px 宽（手机宽度，和 iPhone 可比
 - iOS：一个按钮样式的行，「Dispatched: <标题>」，多个任务时先写「Dispatched N」再列标题。
 - Web：卡片：箭头图标、标题、NEW 标、时间、**状态**（Working / Unread…），右上 ↗；失败时下面一行红字原因。
 - **选 Web 的卡片形态**（带状态和时间）。
-- 理由：派出去之后用户最想知道的是「现在怎么样了」，iOS 这行只有标题，要点开才知道；Web 卡片在聊天里就能看到状态变化。（iOS 这部分我没能截到图，依据是源码，见 §6 局限。）
+- 理由：派出去之后用户最想知道的是「现在怎么样了」，iOS 这行只有标题，要点开才知道；Web 卡片在聊天里就能看到状态变化。（iOS 的截图：`ios-handoff-receipt-*`，每张里都有「Dispatched: 标题」那一行，它是一条灰底的整行按钮，只有标题和「Open ›」，没有状态也没有时间。）
 
 ### D7 结论卡：画不画、画成什么样
 
-- iOS：`ReceiptCard`：左图标（✓ 绿 / 时钟灰 / ✕ 红）+ 标题（「X is done / stopped, not done yet / didn't start / was interrupted」）+ 摘要最多 4 行（Markdown 链接）+ 「PR」「View」两个按钮；底色是状态色 12% 透明，stopped 用灰。
+- iOS（截图 `ios-handoff-receipt-{done,stopped,failed,interrupted}-*`）：`ReceiptCard`：左图标（✓ 绿 / 时钟灰 / ✕ 红）+ 标题（「X is done / stopped, not done yet / didn't start / was interrupted」）+ 摘要最多 4 行（Markdown 链接）+ 「PR」「View」两个按钮；底色是状态色 12% 透明，stopped 用灰。
 - Web（死代码 `OutcomeReceipt`）：同样结构，另有「Show all」展开、Copy / Quote、验收提示行；线上只画被打断的批次卡。
 - **选：两端都画结论卡，结构取 iOS 的，加上 Web 的「Show all」和 Copy / Quote。** 对 Web 是恢复，对 iOS 是补两个小功能。
 - 理由：结论里有 Agent 最后一段话和 PR，是任务的交付物；只靠交接卡的状态字，用户在聊天里看不到「做完了什么」，要去 Agent 页翻。摘要 4 行截断但无法展开是 iOS 现在的缺口。Web 是否有意去掉结论卡见 P3。
@@ -263,7 +263,8 @@ Web 的 `--orange` 浅色 `#a64c00` 比 iOS 的 `caution` 暗很多，更接近 
 
 ## 6. 局限
 
-- **iOS 聊天里的交接卡和结论卡没有截到图**：在模拟器里主对话被一张 Bash 批准卡占满了聊天区（这个状态是 mock 里一个待批准的交互，不是真实使用的常态，我没有继续点掉它去看下面的聊天流）。这两项（D6、D7 的 iOS 一侧）依据源码（`DispatchedTaskLinks.swift`、`TaskViews.swift` 的 `ReceiptCard`），不是截图。
+- iOS 聊天里的交接卡和四种结论卡的截图是在 mock hub 上逐个回答掉待处理的批准 / 选项题之后，滚动聊天流截到的。done / stopped 来自同一条回执，做法是在 mock hub 上把对应待办标成完成（`PATCH /api/v1/todos/{id}` `{"done":true}`）后再截；interrupted / failed 用 `MOCK_TASKS_CUT=1` 的数据。
+- iOS 的「Dispatched」行截到的都是已有 mock 数据里的任务，没有单独造「运行中 / 需要你」状态的交接行；这两种状态的进度在托盘截图里。
 - Web 的结论卡（`OutcomeReceipt`）线上不画，所以也没有截图；§3.3 的样子是按源码和 iOS 的实际样子合成的设计，不是现状。
 - 只看了英文；中文和日文的文案长度没有对比。
 - 没有测对比度，D10 的建议色是估的，实现时要过 `StyleSpecTests` 同口径的检查。
@@ -276,4 +277,5 @@ Web 的 `--orange` 浅色 `#a64c00` 比 iOS 的 `caution` 暗很多，更接近 
 - `ios-tray-progress-*`、`web-tray-progress-*`：In progress 托盘（working / starting / usage limit / unread）
 - `ios-tray-needs-top-*`、`web-tray-needs-*`：Needs you 托盘
 - `web-handoff-working-*`、`web-handoff-failed-*`：Web 聊天里的交接卡（运行中 / 没起来）
+- `ios-handoff-receipt-{done,stopped,failed,interrupted}-*`：iOS 聊天里的「Dispatched」行和结论卡的四种状态
 - `web-brief-to-verify-*`：早报里的拍板行（看 D8 的窄屏挤压）

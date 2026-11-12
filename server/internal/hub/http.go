@@ -57,8 +57,11 @@ func (h *Hub) routes() http.Handler {
 	h.nodeUpdateRelayRoutes(api)
 	api.HandleFunc("GET /api/v1/interactions", func(w http.ResponseWriter, r *http.Request) {
 		ixs := visibleInteractions(h.pendingInteractions(), h.requestHasElicitation(r))
-		if em := extensionManager(r); em != "" { // an extension's token: its manager's cards only
-			ixs = slices.DeleteFunc(ixs, func(ix proto.Interaction) bool { return cmp.Or(ix.Manager, assistantwire.AssistantID) != em })
+		if extensionToken(r) { // an extension's token: its manager's cards only, none private (extension_private.go)
+			em := extensionManager(r)
+			ixs = slices.DeleteFunc(ixs, func(ix proto.Interaction) bool {
+				return em != "" && cmp.Or(ix.Manager, assistantwire.AssistantID) != em || h.hiddenFromExtensions(ix)
+			})
 		}
 		writeJSON(w, map[string]any{"interactions": h.withMuted(ixs)})
 	})
@@ -674,7 +677,7 @@ func (h *Hub) listSessions(w http.ResponseWriter, r *http.Request) {
 		if mid != "" && m.cfg.ID != mid || em != "" && owner != em || named != "" && owner != named {
 			continue
 		}
-		lists = append(lists, stampedList{h.shown(m.cfg.ID, m.keptSessions()), owner})
+		lists = append(lists, stampedList{withoutHealthSessions(r, h.shown(m.cfg.ID, m.keptSessions())), owner})
 	}
 	writeSessionLists(w, lists)
 }

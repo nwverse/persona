@@ -28,7 +28,10 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -270,6 +273,8 @@ fun JRow(
     role: Role = Role.Button,
     /** [leadingIcon]'s colour in place of the quiet ink (an extension's named `icon_color`). */
     leadingIconTint: Color? = null,
+    /** The start of the title in the quiet ink, drawn before [title]: a hub conversation title's day and kind ("1101 | Fix | "), so its topic is what the eye finds (iOS `ConversationTitle`). */
+    titleLead: String? = null,
 ) {
     val palette = PersonaTheme.palette
     RowFrame(modifier, onClick, onLongClick, null, enabled, selected, value, trailing, chevron, changingValue, role) {
@@ -280,7 +285,10 @@ fun JRow(
         }
         Column(Modifier.weight(1f)) {
             val titleText: @Composable (Modifier) -> Unit = { m ->
-                Text(title, m, style = PersonaTheme.type.body, color = if (destructive) palette.danger.text else palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                val ink = if (destructive) palette.danger.text else palette.ink
+                if (titleLead == null) Text(title, m, style = PersonaTheme.type.body, color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                else Text(buildAnnotatedString { withStyle(SpanStyle(color = palette.ink3)) { append(titleLead) }; append(title) }, m,
+                    style = PersonaTheme.type.body, color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             if (titleAccessory == null) titleText(Modifier)
             else Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {

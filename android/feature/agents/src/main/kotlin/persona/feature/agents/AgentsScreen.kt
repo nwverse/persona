@@ -290,11 +290,13 @@ internal fun AgentsScreen(
     // it, the agents' rows under their line and the idle ones behind one quiet line; each computer's idle repositories a row
     // each in its Idle Repositories. Brief and Board keep their headings and "N more idle" (decision 8).
     val repoTree = PersonaTheme.style == AppStyle.Glass && page.preferences.grouping == AgentGrouping.Repo
-    val tree = remember(page.list, page.settings.machineFilter, tabs, page.preferences.foldedTabs, page.preferences.mutes, expandedTasks, repoTree) {
+    // By project on Glass folds a space's opened idle agents again with "Hide N Idle" (iOS `collapseRow`, #4338 A8).
+    val hideIdle = PersonaTheme.style == AppStyle.Glass && page.preferences.grouping == AgentGrouping.MachineSpace
+    val tree = remember(page.list, page.settings.machineFilter, tabs, page.preferences.foldedTabs, page.preferences.mutes, expandedTasks, repoTree, hideIdle) {
         agentTreeEntries(page.list, page.settings.machineFilter, tabs, page.preferences.foldedTabs, page.preferences.mutes, expandedTasks,
             showAll = page.settings.expandedIdle.takeIf {
                 page.settings.query.isEmpty() && page.settings.quick == AgentQuickFilter.All && !page.pagination.paged
-            }, idleRepos = repoTree)
+            }, idleRepos = repoTree, hideIdle = hideIdle)
     }
     // Rows outside the tree name their computer while the list mixes computers, By To-do's their host while it mixes
     // hosts (iOS `rowMachine`, `mixedHosts`; #4338 A9).
@@ -557,7 +559,7 @@ internal fun AgentsScreen(
                                 }, quiet = entry.quiet, offline = line?.offline == true)
                         } else if (entry.space) AgentSpaceHeader(groupTitle, group.folded, { model.fold(group) }, depth = entry.depth, first = entry.first,
                             quiet = entry.quiet, sessions = group.totalCount ?: group.rows.size, counts = group.headingCounts,
-                            flags = buildList {
+                            waiting = group.waitingInBackground, flags = buildList {
                                 if (space != null && space.preferenceKey in page.preferences.pins.spaces) add(RowFlag(stringResource(R.string.agents_flag_space_pinned), PhIcons.PushPin))
                                 if (space != null && space.preferenceKey in page.preferences.mutes.spaces) add(RowFlag(stringResource(R.string.agents_flag_space_muted), PhIcons.Prohibit))
                                 // iOS TodoSpaceTag: the project is on a to-do.
@@ -576,7 +578,9 @@ internal fun AgentsScreen(
                                 actionLabel = stringResource(R.string.agents_view_todo))
                         } else AgentTreeHeader(groupTitle, group.folded, { model.fold(group) }, first = entry.first,
                             icon = PhIcons.PushPin.takeIf { group.id == "pinned" } ?: PersonaIcons.backgroundWaiting.takeIf { group.id == "state/background" },
-                            counts = group.stateSectionCounts ?: group.todoLooseCounts ?: group.headingCounts, waitsInBackground = group.id == "state/background")
+                            counts = group.stateSectionCounts ?: group.todoLooseCounts ?: group.headingCounts, waitsInBackground = group.id == "state/background",
+                            // Pinned's counts are the states', so a clock counts the agents that only wait in the background apart.
+                            waiting = if (group.stateSectionCounts == null && group.todoLooseCounts == null) group.waitingInBackground else 0)
                     }
                     is TreeRowEntry -> item(entry.key, contentType = "session") {
                         val row = entry.row
@@ -615,11 +619,13 @@ internal fun AgentsScreen(
                         val slot = repoSlots[entry.key]
                         val fold = entry.fold
                         // By Repository on Glass: iOS's quiet line, which folds them again once open (#4338 A8).
-                        if (fold != null) AgentRepoIdleLine(fold.rows.size, fold.names, fold.open,
+                        if (fold != null && repoTree) AgentRepoIdleLine(fold.rows.size, fold.names, fold.open,
                             onClick = { if (fold.open) model.hideIdle(entry.group) else model.showIdle(entry.group) },
                             modifier = if (slot != null) Modifier.repoCard(slot.first, slot.last) else Modifier, level = slot?.level ?: entry.depth)
-                        else AgentIdleRow(entry.hidden, onClick = { model.showIdle(entry.group) },
-                            modifier = if (slot != null) Modifier.repoCard(slot.first, slot.last) else Modifier, depth = slot?.level ?: entry.depth)
+                        // By project on Glass: "Hide N Idle" after the opened agents; closed, "N more idle" as before.
+                        else AgentIdleRow(entry.hidden, onClick = { if (fold != null) model.hideIdle(entry.group) else model.showIdle(entry.group) },
+                            modifier = if (slot != null) Modifier.repoCard(slot.first, slot.last) else Modifier, depth = slot?.level ?: entry.depth,
+                            open = fold != null)
                     }
                     is TreeIdleReposEntry -> item(entry.key, contentType = "section") {
                         JSectionHeader(stringResource(R.string.agents_idle_repositories), count = entry.count, countTone = Status.Idle)
@@ -897,7 +903,9 @@ internal fun SectionTitle(text: String) { JSectionHeader(text) }
 @Composable
 internal fun SlotRow(
     row: AgentSession, machine: String?, metadata: AgentRowMetadata, now: Instant, compact: Boolean, pinned: Boolean, muted: Boolean,
-    depth: Int, position: GroupPosition, located: Boolean, onOpen: () -> Unit, menuItems: @Composable () -> List<JAction>,
+    depth: Int, position: GroupPosition, located: Boolean, onOpen: () -> Unit,
+    /** What a long press offers; null: nothing (a computer's projects page lists its agents outside any space as iOS does, with no menu). */
+    menuItems: (@Composable () -> List<JAction>)?,
     slotLabel: String? = null, requestCount: Int = 0,
     /** Swiping the row left offers "Close" (iOS); null where the agent cannot be closed from here ([closeSwipe]). */
     onClose: (() -> Unit)? = null,
@@ -933,7 +941,7 @@ internal fun SlotRow(
     JSwipeActions(end = onClose?.let { SwipeAction(stringResource(R.string.agents_close), PhIcons.X, Status.NeedsYou, it, destructive = true) }) {
     AgentRow(
         title = session.displayTitle, status = row.rowStatus(muted), depth = depth, position = position,
-        onClick = onOpen, onLongClick = { menu = true }, compact = compact, muted = muted,
+        onClick = onOpen, onLongClick = menuItems?.let { { menu = true } }, compact = compact, muted = muted,
         selected = isSessionSelected(LocalDetailKey.current, session.key),
         // What its card asks while it needs you, else why its host says it waits or stopped, where its work stands, its last words.
         preview = session.rowLine(card, now, muted)?.text(), time = relativeTime(agentResources(), row.updatedAt, now),
@@ -998,7 +1006,7 @@ internal fun SlotRow(
         note = WorkflowSummary.lineFields(session, now)?.let { RowNote(it, WorkflowIcon) },
     )
     }
-    if (menu) JActionSheet(menuItems(), { menu = false }, title = session.displayTitle)
+    if (menu && menuItems != null) JActionSheet(menuItems(), { menu = false }, title = session.displayTitle)
 }
 
 /**

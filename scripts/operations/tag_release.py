@@ -291,6 +291,56 @@ def check_android_index(assets, version):
         raise ConfigError("%s is not the APK android.json describes (size or sha256)" % name)
 
 
+def verify_remote_assets(repository, tag, assets, listed, gh="gh", missing=False):
+    """Verify exact remote bytes, also on gh versions whose release view has no digest field.
+
+    GitHub CLI 2.23.0 omits digest from --json assets. Its REST response has the
+    digest; if an older GitHub API omits that too, download the asset instead of
+    accepting its name or size as proof.
+    """
+    actual = {}
+    for remote in listed:
+        if not isinstance(remote, dict) or not isinstance(remote.get("name"), str):
+            raise ConfigError("GitHub returned an invalid Release asset")
+        actual[remote["name"]] = remote
+    if missing and not actual:
+        raise ConfigError("uploaded asset digest verification failed: " + assets[0]["name"])
+    fallback = None
+    for item in assets:
+        path = Path(item["path"])
+        digest = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+        remote = actual.get(item["name"])
+        if remote is not None and remote.get("digest") is not None:
+            if remote["digest"] != digest:
+                raise ConfigError("another artifact already owns Release asset name: " + item["name"])
+            continue
+        if remote is None and not missing:
+            # Before uploading, an absent asset is what pending is for. The
+            # post-upload view must contain it, through this REST fallback.
+            continue
+        if fallback is None:
+            fallback = {}
+            data = json.loads(subprocess.check_output(
+                [gh, "api", "repos/" + repository + "/releases/tags/" + tag], text=True, timeout=60))
+            if not isinstance(data, dict) or not isinstance(data.get("assets"), list):
+                raise ConfigError("GitHub REST returned no Release asset list")
+            fallback = {remote.get("name"): remote for remote in data["assets"] if isinstance(remote, dict)}
+        remote = fallback.get(item["name"])
+        if not isinstance(remote, dict) or remote.get("size") != path.stat().st_size:
+            raise ConfigError("uploaded asset digest verification failed: " + item["name"])
+        if remote.get("digest") is not None:
+            if remote["digest"] != digest:
+                raise ConfigError("uploaded asset digest verification failed: " + item["name"])
+            continue
+        url = remote.get("url")
+        prefix = "https://api.github.com/repos/" + repository + "/releases/assets/"
+        if not isinstance(url, str) or not url.startswith(prefix) or not url[len(prefix):].isdigit():
+            raise ConfigError("GitHub returned an invalid asset download URL: " + item["name"])
+        body = subprocess.check_output([gh, "api", "-H", "Accept: application/octet-stream", url], timeout=1800)
+        if hashlib.sha256(body).hexdigest() != digest.removeprefix("sha256:"):
+            raise ConfigError("uploaded asset digest verification failed: " + item["name"])
+
+
 def upload(repository, tag, assets, gh="gh"):
     # The workflow owns Release creation; never create a tag from this machine.
     release = json.loads(subprocess.check_output(
@@ -303,15 +353,8 @@ def upload(repository, tag, assets, gh="gh"):
         return
     if len({item["name"] for item in assets}) != len(assets):
         raise ConfigError("duplicate Release asset name in receipt")
-    remote_assets = {item["name"]: item for item in release["assets"]}
-    pending = []
-    for item in assets:
-        digest = "sha256:" + hashlib.sha256(Path(item["path"]).read_bytes()).hexdigest()
-        existing = remote_assets.get(item["name"])
-        if existing and existing.get("digest") != digest:
-            raise ConfigError("another artifact already owns Release asset name: " + item["name"])
-        if not existing:
-            pending.append(item)
+    verify_remote_assets(repository, tag, assets, release["assets"], gh)
+    pending = [item for item in assets if item["name"] not in {remote["name"] for remote in release["assets"]}]
     if not pending:
         print("Release assets already have the verified digests", flush=True)
         return
@@ -336,14 +379,9 @@ def upload(repository, tag, assets, gh="gh"):
         [gh, "release", "view", tag, "--repo", repository, "--json", "assets"], text=True, timeout=60))
     # gh returns {"assets": [...]}; older callers may return the bare list.
     listed = remote if isinstance(remote, list) else remote.get("assets") if isinstance(remote, dict) else None
-    if not isinstance(listed, list):
+    if not isinstance(listed, list) or not all(isinstance(item, dict) and isinstance(item.get("name"), str) for item in listed):
         raise ConfigError("gh release view returned no asset list")
-    actual = {item["name"]: item for item in listed}
-    for item in assets:
-        digest = hashlib.sha256(Path(item["path"]).read_bytes()).hexdigest()
-        remote_asset = actual.get(item["name"])
-        if not remote_asset or remote_asset.get("digest") != "sha256:" + digest:
-            raise ConfigError("uploaded asset digest verification failed: " + item["name"])
+    verify_remote_assets(repository, tag, assets, listed, gh, missing=True)
 
 
 def write_state(path, state):
