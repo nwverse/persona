@@ -159,7 +159,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if err != nil {
 		return "", "", err
 	}
-	if claude {
+	if claude && !t.preservePermission {
 		t.Permission = "bypassPermissions"
 	}
 	if t.MachinePolicy == machineFixed {
@@ -181,6 +181,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	}
 	if len(t.DoneWhen) > 0 { // what the supervisor will check (supervise.go)
 		prompt += "\n\n" + prompts.RenderTaskDoneWhen(t.DoneWhen)
+	}
+	if t.TodoID != "" && !s.isWorkMachine(m.ID) {
+		prompt += "\n\n" + prompts.RenderTaskHandoff()
 	}
 	switch {
 	case t.Role == roleLeader: // what it may hand out, and how its workers reach it (task_leader.go)

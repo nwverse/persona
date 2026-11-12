@@ -608,6 +608,50 @@ The depth is dot (the main chat or a leader conversation) → task leader → wo
 - **Permissions**: a task that is not read-only (`readonly: false`) takes the default mode as elsewhere (the owner's default, else the launcher's). Claude-family launchers always start in `bypassPermissions`, for both read-only and writable tasks. Codex read-only tasks keep plan mode and the read-only sandbox. If a read-only task is already in plan mode, its `ExitPlanMode` request is denied automatically before a card is registered, with instructions to return findings and report completion to its supervisor (#3985).
 - **Work-trust computers**: a `role: "leader"` task is refused with a readable reason at planning, at Start, on a retry, in `startTaskAgent` (so a remedy or recovered start) and in the health detour (`healthyPlace` never moves a flexible task leader there): a work-trust computer's agents get only the reporting tools, so the role could not work, and its privacy boundary is not widened.
 
+### Separate sessions within a supervised task (#5751)
+
+**Audience: coding Agents and their supervisors.** A supervised Agent can hand part of its existing assignment to a
+separate session with `task_spawn {title, prompt}`. Codex and other pane-based Agents without Persona MCP can use the
+same tool through the local node, with no hub credential:
+
+```sh
+personad tool task_spawn '{"title":"Check the regression","prompt":"Inspect the tests and return evidence."}'
+```
+
+- **Ownership**: the node resolves the Agent currently in the calling pane. For Codex shell tools, the runtime's
+  per-turn `CODEX_THREAD_ID` takes precedence over a shared daemon's potentially stale pane environment: it must
+  match exactly one thread in the node's registry (ambiguous or unknown IDs are refused, not matched by directory).
+  The manager verifies its active link to
+  an open supervised to-do, starts the child on that computer in that directory, and records `source: spawned`,
+  `via: <parent machine>/<parent session>` on the **same to-do** before returning the child, to-do and supervisor IDs.
+  The child participates in the existing task's progress, completion review and retirement. No new task, task-leader
+  role or supervision level is created. An ordinary worker still cannot use a leader's `task_plan` or `task_review`.
+- **Scope**: only `title` and `prompt` are accepted, and the assignment must remain within the current task. Task,
+  supervisor, parent, machine, directory and permissions cannot be supplied by the Agent. The current launcher's
+  model and effort are reused. Permission comes from the live parent, or its persisted original plan assignment
+  when Codex does not expose it; unknown permission stays in plan mode, never a writable owner default. Another
+  spawned session with unknown permission cannot borrow the original Agent's plan permission.
+- **Failure**: an unbound pane, unrelated Agent, completed task, guest or work-trust computer cannot dispatch this
+  way. A known Codex thread needs no pane. Other `personad tool` calls retain the assistant-only connector gate.
+  If ownership changes while the child
+  starts, the manager refuses the link and asks the node to stop the child; the error names its session and stop
+  result. An uncertain start must not be retried automatically.
+- **Runtime new-conversation tools are different**: a standalone Codex `create_thread` can be recorded as
+  `thread_source: user` with no parent. Persona cannot securely infer its task from a matching directory, title or
+  returned thread ID. Use `task_spawn` for supervised handoffs; ask the supervisor for unrelated work rather than
+  silently opening an unmanaged conversation. Existing unmanaged conversations are not retroactively adopted.
+- **Native sidecars**: Codex `source.subagent.thread_spawn.parent_thread_id` / `parent_thread_id` establish session
+  ancestry (`is_subagent`, `parent_session_id`, `root_session_id`). The web folds known children under their parent,
+  and the task tree can show those helpers. This is display/runtime ancestry, **not a `todo_agents` link**.
+  Automatic task links require the existing `persona_from` / `spawn_from` marker, a linked workspace or the botmux
+  dispatch relationship (see [Following spawned Agents](todos.md#following-spawned-agents)). Native sidecars without
+  such a link remain bounded in-session helpers, not independently reviewed Persona tasks or leader workers.
+- **Credentials**: assignment prompts explicitly forbid reading `~/.persona/hub.json`, extracting its hub token or
+  calling privileged `/api/v1` endpoints to manage tasks. A refusal is not permission to bypass the scoped tool.
+  The existing [agent sandbox](../server/agent-sandbox.md) can mask those credential files for supported starts,
+  but is opt-in and does not wrap an already-running external Codex daemon. This change neither enables it nor
+  claims an OS security boundary for unrestricted processes running as the hub's user.
+
 #### Standing authorizations
 
 The manager keeps explicit user grants in its Postgres settings key `assistant.standing_authorizations`.

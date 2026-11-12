@@ -234,6 +234,13 @@ For renames through hub (shared with pin/mute's rename API), hub tells assistant
 
 ## Following spawned Agents
 
+For a supervised Agent's explicit handoff to a separate session, prefer `task_spawn` (or
+`personad tool task_spawn` from its terminal). The manager records the child on the caller's existing to-do with the
+same supervisor before returning; the Agent never reads a hub credential or chooses a to-do ID. See
+[Separate sessions within a supervised task](unified-entry.md#separate-sessions-within-a-supervised-task-5751).
+Native Codex sidecar ancestry and UI folding alone do not create a to-do link. A standalone runtime
+`create_thread` without parent metadata is not a supported supervised handoff.
+
 Child Agents spawned by a linked Agent automatically join the same to-do, tracking their parent hierarchy:
 1. **Parent marker**: an active Agent on an unfinished to-do has a `persona_todo_ref` marker on its herdr pane, value `<todo_id>@<machine_id>/<session_id>`.
 2. **Dispatcher passes the marker**: after launching a child, the dispatcher reads its own pane marker and writes the value to the child's pane as `persona_from`.
