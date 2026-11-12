@@ -137,12 +137,15 @@ export function ReplyBar({ text, ts, fork, more, pinned, usage, usageMs, persona
           {time}
         </time>
       )}
-      {usage && (
-        // a pinned reply's time stays; what it cost comes with the pointer, as the buttons do
-        <span className={cx("flex items-center", pinned && cx("transition-opacity", fade))} style={pinned ? fadeStyle : undefined}>
+      {usage &&
+        (pinned ? (
+          // a pinned reply's time stays; what it cost comes with the pointer, as the buttons do
+          <span data-usage-fade className={cx("flex items-center transition-opacity", fade)} style={fadeStyle}>
+            <TurnUsage usage={usage} ms={usageMs} persona={persona} onOpen={setCard} />
+          </span>
+        ) : (
           <TurnUsage usage={usage} ms={usageMs} persona={persona} onOpen={setCard} />
-        </span>
-      )}
+        ))}
       {menu && <Menu anchor={menu} onClose={() => setMenu(null)} items={more} width={more.some((a) => a.hint) ? 200 : 184} />}
     </div>
   );

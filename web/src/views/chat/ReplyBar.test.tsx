@@ -15,6 +15,7 @@ import type { ModelTokens } from "../../lib/turn-cost";
 import { REPLY_BAR_LINGER_MS } from "../../ui/motion";
 import { ChatActionsContext, type ChatActions } from "./chat-actions";
 import { MessageActions } from "./MessageActions";
+import { ReplyBar } from "./ReplyBar";
 import { forgetPrices } from "../../lib/turn-cost";
 import { Answer, SegmentView } from "./SegmentView";
 import { StepView, type WorkProps } from "./WorkGroup";
@@ -219,6 +220,21 @@ describe("what the exchange cost, after the time", () => {
     expect(card()).not.toBeNull();
     wait(20);
     expect(card()).toBeNull();
+  });
+
+  it("on the chat's last reply, whose time stays (#5285), comes with the pointer like the buttons", async () => {
+    await act(async () => root.render(<div><ReplyBar text="All done." ts="2026-11-12T09:59:01Z" more={[]} pinned usage={OPUS_TURN} /></div>));
+    await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+    const fade = () => host.querySelector<HTMLElement>("[data-usage-fade]")!;
+    expect(usageText()?.textContent).toBe("价值 $0.35");
+    expect(fade().previousElementSibling?.tagName).toBe("TIME");
+    expect(fade().className).toContain("opacity-0");
+    expect(bar().className).not.toContain("opacity-0"); // the time stays
+    enter();
+    expect(fade().className).toContain("opacity-100");
+    leave();
+    wait(REPLY_BAR_LINGER_MS);
+    expect(fade().className).toContain("opacity-0");
   });
 
   it("keeps the bar while its card is open, pins it with a click, and Esc or a click elsewhere closes it", async () => {
