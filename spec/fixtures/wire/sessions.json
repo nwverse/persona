@@ -202,6 +202,51 @@
     }
   },
   {
+    "name": "sessions_assistant_queue",
+    "description": "Persona 对话的队列先列用户自己的消息，最后 queued_relayed 条来自其他对话或系统。",
+    "source": [
+      "server/internal/proto/session.go: Session.QueuedRelayed",
+      "server/internal/assistant/fleet_sessions.go: Service.decorateInventory",
+      "apple/Shared/Models.swift: Session.ownQueuedCount"
+    ],
+    "derived": true,
+    "decoder": "sessions",
+    "input": {
+      "sessions": [
+        {
+          "machine_id": "m1",
+          "session_id": "a1",
+          "started_by_persona": false,
+          "assistant": true,
+          "title": "Persona",
+          "cwd": "/home/user/persona",
+          "status": "working",
+          "state": "working",
+          "queued_relayed": 1,
+          "seen_at": "0001-01-01T00:00:00Z",
+          "state_since": "2026-01-02T03:04:05Z",
+          "queued": [
+            "请补充示例。",
+            "再检查一遍。",
+            "来自「示例对话」：示例结果已整理好。"
+          ],
+          "updated_at": "2026-01-02T03:04:05Z",
+          "pending_interactions": 0,
+          "started_by_jarvis": false
+        }
+      ]
+    },
+    "expected": {
+      "accepted": true,
+      "fields": {
+        "/sessions/0/assistant": true,
+        "/sessions/0/queued/0": "请补充示例。",
+        "/sessions/0/queued/2": "来自「示例对话」：示例结果已整理好。",
+        "/sessions/0/queued_relayed": 1
+      }
+    }
+  },
+  {
     "name": "sessions_model_switch",
     "description": "完整会话行携带等待下一条消息的服务商切换和 Persona 对话自己选的模型。",
     "source": [
