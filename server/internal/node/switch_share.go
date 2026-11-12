@@ -28,6 +28,9 @@ type switchShare struct {
 	// flights: the switches past their checks, from just before the quit until they end: the row listed meanwhile, and
 	// a channel closed at the end.
 	flights map[string]*switchFlight
+	// resumes: the sessions the user's Resume is starting right now (how many, resuming): a switch to the other engine
+	// does not take one of them up as the conversation's earlier session meanwhile (hold).
+	resumes map[string]int
 	// held: the records a switch wrote that its Node could no longer send its hub (its connection had ended), until a
 	// Node whose state has loaded takes them (to); delivering while drain gives them to it, one batch after another,
 	// so a record written meanwhile goes after the ones before it.
@@ -108,13 +111,14 @@ func (s *switchShare) begin(id string, row proto.Session) bool {
 	return true
 }
 
-// hold registers session id as being resumed by a switch under way (the conversation's earlier session that a switch
-// to the other engine resumes, engine_switch.go): a message to it and the user's Resume of it wait (wait), a pick, a
-// stop and keys are refused (busy), and it is not listed. end ends it. false when a switch of it is under way already.
+// hold registers session id as taken up by a switch under way (the conversation's earlier session that a switch to the
+// other engine resumes, engine_switch.go), from before its first Ctrl+C until it ends: a message to it and the user's
+// Resume of it wait (wait), a pick, a stop and keys are refused (busy), and it is not listed. end ends it. false when a
+// switch of it is under way already, or the user's Resume is starting it (resuming).
 func (s *switchShare) hold(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.flights[id] != nil {
+	if s.flights[id] != nil || s.resumes[id] > 0 {
 		return false
 	}
 	if s.flights == nil {
@@ -122,6 +126,27 @@ func (s *switchShare) hold(id string) bool {
 	}
 	s.flights[id] = &switchFlight{done: make(chan struct{}), unlisted: true}
 	return true
+}
+
+// resuming registers the user's Resume of session id while it starts the session (done ends it); ok false while a
+// switch of it is under way or holds it: the Resume waits for that first (awaitSwitch).
+func (s *switchShare) resuming(id string) (done func(), ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.flights[id] != nil {
+		return nil, false
+	}
+	if s.resumes == nil {
+		s.resumes = map[string]int{}
+	}
+	s.resumes[id]++
+	return func() {
+		s.mu.Lock()
+		if s.resumes[id]--; s.resumes[id] <= 0 {
+			delete(s.resumes, id)
+		}
+		s.mu.Unlock()
+	}, true
 }
 
 // end ends session id's switch under way: those waiting for it go on, and its records are no longer held for it. It

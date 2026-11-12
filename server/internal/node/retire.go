@@ -295,7 +295,7 @@ func (n *Node) resumeCodex(ctx context.Context, launch host.Launcher, id string,
 	shells := paneShells(ctx, created)
 	done, err := n.runAgentCommand(ctx, launch, created, ws, "", n.agentCommand(shellQuote(n.bin)+" codex-start "+shellQuote(file), shellQuote, shells...), shells...) // typedstart.go
 	if err != nil {
-		if adoptedPane(ctx) != nil && prompt != "" && n.codexMessageMayHaveGone(ctx, pane, file, err) {
+		if adoptedPane(ctx) != nil && prompt != "" && n.codexMessageMayHaveGone(ctx, pane, file) {
 			return unconfirmedStart(err) // a switch's message may be in it (engine_switch.go)
 		}
 		return err // the tab is closed: no pane to bind
@@ -314,7 +314,7 @@ func (n *Node) resumeCodex(ctx context.Context, launch host.Launcher, id string,
 		case <-wait.Done():
 			screen, _ := n.readPane(context.WithoutCancel(ctx), pane, "recent-unwrapped", 30)
 			err := fmt.Errorf("Codex 没有在新标签页里接上会话 %s\n%s", id, lastLines(screen, 12))
-			if adoptedPane(ctx) != nil && prompt != "" && n.codexMessageMayHaveGone(ctx, pane, file, err) {
+			if adoptedPane(ctx) != nil && prompt != "" && n.codexMessageMayHaveGone(ctx, pane, file) {
 				return unconfirmedStart(err) // a switch's message may be in it (engine_switch.go)
 			}
 			return err

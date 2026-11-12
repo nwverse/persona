@@ -352,6 +352,16 @@ func TestEngineSwitchToCodexOnTheUsersNextMessage(t *testing.T) {
 // among them, and it is listed, its own earlier stretch naming it notwithstanding.
 func TestEngineSwitchBackResumesTheEarlierSession(t *testing.T) {
 	n, f, _, cwd, until := codexSwitchNode(t)
+	// Persona joined the Codex thread on its app-server: it does not join it again once the conversation moved on.
+	n.codices = newCodexRegistry()
+	n.codices.scan = func() []codexProcess { return nil }
+	n.codices.checked = func() ([]codexProcess, bool) { return nil, true }
+	n.configureCodex(proto.CodexConfig{}) // ~/.codex is the legacy home: its thread ids are the session ids
+	n.codices.mu.Lock()
+	n.codices.config.Joined = map[string]string{sidB: "daemon"}
+	n.codices.mu.Unlock()
+	listSessions(t, n)
+	f.reset()
 	n.state.setPendingSwitch(sidB, &proto.PendingSwitch{Launcher: "claude", Agent: "claude", At: time.Now()})
 	quitsOn(f, "w1:p1", sidB, nil, shellPane("w1:p1", "w1:t1", "w1", cwd, sidB))
 	claudeComesUp(t, f, cwd, func(string) bool { return true })
@@ -379,6 +389,12 @@ func TestEngineSwitchBackResumesTheEarlierSession(t *testing.T) {
 	}
 	if b, _ := n.state.get(sidB); b.EngineHistory != nil || b.PendingSwitch != nil {
 		t.Errorf("the Codex thread's record = %+v", b)
+	}
+	n.codices.mu.Lock()
+	_, rejoins := n.codices.config.Joined[sidB]
+	n.codices.mu.Unlock()
+	if rejoins {
+		t.Error("the Codex thread the conversation moved on from is still joined again on a reconnect")
 	}
 	if row := rowOf(t, n, sidA); len(row.EngineHistory()) != 2 {
 		t.Errorf("the conversation's row has history %+v", row.EngineHistory())
@@ -518,8 +534,9 @@ func TestJoinStretches(t *testing.T) {
 	if list[1].Title != "first" || list[2].Title != "mine" {
 		t.Errorf("titles = %q, %q", list[1].Title, list[2].Title)
 	}
-	// Only a parked row goes: not one that runs (a pane, a working status), waits for the user (blocked, a card) or was
-	// cut off but is a pane's; the row of a switch moving on (starting, a switch to the other engine pending) does.
+	// Only a parked row goes (idle, done, offline, cut off, with no pane): not one that runs (a pane, a claude process,
+	// working, unknown) or waits for the user (blocked); the row of a switch moving on (starting, a switch to the other
+	// engine pending) does.
 	switching := &proto.PendingSwitch{Launcher: "cx", Agent: "codex"}
 	for _, tc := range []struct {
 		name string
@@ -528,11 +545,16 @@ func TestJoinStretches(t *testing.T) {
 	}{
 		{"offline", proto.Session{Status: off}, true},
 		{"interrupted", proto.Session{Status: proto.StatusInterrupted}, true},
+		// the Codex thread an app-server keeps loaded after a switch to Claude Code: a message to it would fork the conversation
+		{"loaded on an app-server", proto.Session{Status: proto.StatusDone, SourceKind: "codex_app_server",
+			Capabilities: &proto.SessionCapabilities{Read: true, Send: true}}, true},
+		{"idle with no pane", proto.Session{Status: proto.StatusIdle}, true},
 		{"in a pane", proto.Session{Status: proto.StatusIdle, PaneID: "w1:p2"}, false},
 		{"offline, but a pane's", proto.Session{Status: off, PaneID: "w1:p2"}, false},
+		{"a claude in another terminal", proto.Session{Status: proto.StatusIdle, SourceKind: proto.SourceClaudeTerminal}, false},
 		{"working elsewhere", proto.Session{Status: proto.StatusWorking}, false},
 		{"blocked", proto.Session{Status: proto.StatusBlocked}, false},
-		{"a card waits", proto.Session{Status: off, PendingInteractions: 1}, false},
+		{"unknown", proto.Session{Status: proto.StatusUnknown}, false},
 		{"switching on", proto.Session{Status: proto.StatusIdle, Starting: true, PendingSwitch: switching}, true},
 		{"starting", proto.Session{Status: proto.StatusIdle, Starting: true}, false},
 	} {
@@ -623,18 +645,23 @@ func TestLauncherDefaultModelSkipsThePlaceholder(t *testing.T) {
 }
 
 // codexReadsAndRuns plays a Codex that codex-start started in pane w1:p1 but that never shows a thread (a dialog it
-// waits on, a thread not seen in time): the line's file is read (and removed, as codex-start does), and from then on
-// the pane runs codex in front of its shell.
-func codexReadsAndRuns(f *fakeHerdr) {
+// waits on, a thread not seen in time): the line's file is claimed (as codex-start does), and from then on the pane
+// runs codex in front of its shell. It returns what the files held.
+func codexReadsAndRuns(f *fakeHerdr) func() []codexStartFile {
 	var mu sync.Mutex
 	running := false
+	var files []codexStartFile
 	f.after(func(c herdrCall) {
 		if c.Method != "pane.send_input" || str(c.Params["pane_id"]) != "w1:p1" {
 			return
 		}
 		if m := startFileRE.FindStringSubmatch(str(c.Params["text"])); m != nil {
-			_ = os.Remove(m[1])
+			b, err := claimCodexStartFile(m[1])
+			var file codexStartFile
 			mu.Lock()
+			if err == nil && json.Unmarshal(b, &file) == nil {
+				files = append(files, file)
+			}
 			running = true
 			mu.Unlock()
 		}
@@ -648,20 +675,35 @@ func codexReadsAndRuns(f *fakeHerdr) {
 		mu.Unlock()
 		return map[string]any{"process_info": map[string]any{"foreground_processes": []any{map[string]any{"pid": 1, "name": name, "argv0": name}}}}
 	})
+	return func() []codexStartFile {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]codexStartFile(nil), files...)
+	}
 }
 
-// A Codex start that may have the message (codex-start read it, and a Codex runs in the pane) is not followed by
-// another start or a rollback, which would run the message twice or have the user send it again: the switch stops where
-// it is, nothing more is pressed or typed, the switch is dropped, and the message is answered as not known to have gone.
+// withShortCodexWaits shortens how long a Codex start waits for its thread and how long a switch looks for a late one.
+func withShortCodexWaits(t *testing.T, start, late time.Duration) {
+	t.Helper()
+	oldStart, oldLate := codexStartWait, lateCodexWait
+	codexStartWait, lateCodexWait = start, late
+	t.Cleanup(func() { codexStartWait, lateCodexWait = oldStart, oldLate })
+}
+
+// A Codex start that may have the message (codex-start claimed it, and a Codex runs in the pane) is not followed by
+// another start or a rollback, which would run the message twice or have the user send it again, whatever codex-start
+// printed (a line of its on the screen is no proof it failed: the Codex may run after it): the switch stops where it
+// is, nothing more is pressed or typed, the switch is dropped, and the message is answered as not known to have gone.
+// The pane no longer stands for the session switched away from (its row would show the Codex, and a message to it go
+// there), and the thread, showing up late, takes the conversation.
 func TestEngineSwitchStopsWhenTheStartMayHaveTheMessage(t *testing.T) {
-	old := codexStartWait
-	codexStartWait = time.Second
-	t.Cleanup(func() { codexStartWait = old })
-	n, f, _, cwd, _ := switchNode(t, proto.StatusIdle, nil)
+	withShortCodexWaits(t, time.Second, 20*time.Second)
+	n, f, home, cwd, _ := switchNode(t, proto.StatusIdle, nil)
 	n.state.setPendingSwitch(sidA, &proto.PendingSwitch{Launcher: "cx", Agent: "codex", At: time.Now()})
 	f.reset()
 	quitsToShell(f, cwd)
-	codexReadsAndRuns(f)
+	files := codexReadsAndRuns(f)
+	f.setScreen("w1:p1", codexStartError+" agent sandbox: codex-start not wrapped (off)\n")
 	claudeComesUp(t, f, cwd, func(string) bool { return true }) // a rollback would bring the claude back
 	err := tell(t, n, "hello", true)
 	if code, data := refusalOf(t, err); code != "" || data["delivered"] != deliveredUnknown {
@@ -680,6 +722,33 @@ func TestEngineSwitchStopsWhenTheStartMayHaveTheMessage(t *testing.T) {
 	}
 	if n.pendingSwitch(sidA) != nil || n.switches().inFlight(sidA) {
 		t.Error("the switch still waits, or is left under way")
+	}
+	n.mu.Lock()
+	bound, guarded := n.panes["w1:p1"], n.codexStarting["w1:p1"]
+	n.mu.Unlock()
+	if st, _ := n.state.get(sidA); bound == sidA || st.Pane == "w1:p1" || !guarded {
+		t.Fatalf("the pane is still the old session's (bound %q, record %q) or open to a guess (%v)", bound, st.Pane, guarded)
+	}
+	// The thread comes up after all.
+	got := files()
+	if len(got) != 1 {
+		t.Fatalf("codex-start files %+v", got)
+	}
+	writeThread(t, home, switchedThread, cwd, got[0].Prompt)
+	f.reply("session.snapshot", snapshot(nil, nil, []any{agentOf("codex", switchedThread, proto.StatusIdle, "w1:p1", "w1:t1", "w1", cwd, "")}, nil))
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		st, ok := n.state.get(switchedThread)
+		if ok && len(st.EngineHistory) == 1 && st.EngineHistory[0].SessionID == sidA && st.Pane == "w1:p1" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the late thread did not take the conversation: %+v (%v)", st, ok)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if st, _ := n.state.get(sidA); st.EngineHistory != nil {
+		t.Errorf("the old session still carries the history: %+v", st)
 	}
 }
 
@@ -708,65 +777,109 @@ func TestEngineSwitchStopsWhenTheFirstPromptIsUnconfirmed(t *testing.T) {
 	}
 }
 
-// The user's Resume of the earlier session while the switch resumes it waits for the switch and finds it running: no
-// second claude --resume of it is typed, here or in a new tab.
+// The user's Resume of the earlier session while the switch takes it up (from the first Ctrl+C on, as its --resume
+// is typed) waits for the switch and finds it running: no second claude --resume of it is typed, here or in a new tab.
 func TestEngineSwitchHoldsTheEarlierSessionWhileItResumesIt(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		when func(c herdrCall) bool
+	}{
+		{"at the first Ctrl+C", func(c herdrCall) bool { return c.Method == "pane.send_keys" }},
+		{"as its --resume is typed", func(c herdrCall) bool {
+			return c.Method == "pane.send_input" && strings.Contains(str(c.Params["text"]), "--resume "+sidA)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n, f, _, cwd, _ := codexSwitchNode(t)
+			n.claudeStart, n.claudeReady = 10*time.Second, 10*time.Second
+			f.reply("workspace.list", map[string]any{"workspaces": []any{map[string]any{"workspace_id": "w1", "label": "proj"}}})
+			f.reply("tab.create", map[string]any{"tab": map[string]any{"tab_id": "w1:t2"}, "root_pane": map[string]any{"pane_id": "w1:p2"}})
+			n.state.setPendingSwitch(sidB, &proto.PendingSwitch{Launcher: "claude", Agent: "claude", At: time.Now()})
+			quitsOn(f, "w1:p1", sidB, nil, shellPane("w1:p1", "w1:t1", "w1", cwd, sidB))
+			// The switch's claude --resume comes up a second after it is typed; the user's Resume goes in before.
+			plain, ansi := screenFixture(t, "claude-2.1.312-empty-162.txt"), screenFixture(t, "claude-2.1.312-empty-162.ansi")
+			var mu sync.Mutex
+			up, asked := false, false
+			resumed := make(chan error, 1)
+			f.after(func(c herdrCall) {
+				if str(c.Params["pane_id"]) != "w1:p1" {
+					return
+				}
+				mu.Lock()
+				ask := !asked && tc.when(c)
+				asked = asked || ask
+				mu.Unlock()
+				if ask {
+					go func() {
+						_, err := request(t, n, "session.start", map[string]any{"resume_session_id": sidA})
+						resumed <- err
+					}()
+				}
+				if c.Method == "pane.send_input" && strings.Contains(str(c.Params["text"]), "--resume "+sidA) {
+					go func() {
+						time.Sleep(time.Second)
+						f.setScreens("w1:p1", plain, ansi)
+						f.reply("session.snapshot", snapshot(nil, nil, []any{claudeAgent(sidA, proto.StatusIdle, "w1:p1", "w1:t1", "w1", cwd, "")}, nil))
+						mu.Lock()
+						up = true
+						mu.Unlock()
+					}()
+				}
+			})
+			f.handle("agent.get", func(p map[string]any) any {
+				mu.Lock()
+				defer mu.Unlock()
+				if !up || str(p["target"]) != "w1:p1" {
+					return map[string]any{"agent": nil}
+				}
+				return map[string]any{"agent": map[string]any{"agent": "claude", "agent_status": proto.StatusIdle, "pane_id": "w1:p1",
+					"tab_id": "w1:t1", "workspace_id": "w1"}}
+			})
+			if err := tellTo(t, n, sidB, "and now?"); err != nil {
+				t.Fatalf("send: %v\n%s", err, strings.Join(f.trace(), "\n"))
+			}
+			select {
+			case err := <-resumed:
+				if err != nil {
+					t.Errorf("the Resume: %v", err)
+				}
+			case <-time.After(30 * time.Second):
+				t.Fatal("the Resume did not end")
+			}
+			var again []string
+			for _, c := range f.calls() {
+				if c.Method == "pane.send_input" && strings.Contains(str(c.Params["text"]), "--resume "+sidA) {
+					again = append(again, str(c.Params["pane_id"]))
+				}
+			}
+			if len(again) != 1 || len(f.trace("tab.create", "workspace.create")) != 0 {
+				t.Fatalf("claude --resume typed in %q, tabs %q", again, f.trace("tab.create", "workspace.create"))
+			}
+		})
+	}
+}
+
+// A switch does not resume an earlier session the user's Resume is starting right now: a fresh session takes the
+// conversation, and the Resume's start is the only one of that session.
+func TestEngineSwitchLeavesAnEarlierSessionBeingResumed(t *testing.T) {
 	n, f, _, cwd, _ := codexSwitchNode(t)
-	n.claudeStart, n.claudeReady = 10*time.Second, 10*time.Second
-	f.reply("workspace.list", map[string]any{"workspaces": []any{map[string]any{"workspace_id": "w1", "label": "proj"}}})
-	f.reply("tab.create", map[string]any{"tab": map[string]any{"tab_id": "w1:t2"}, "root_pane": map[string]any{"pane_id": "w1:p2"}})
 	n.state.setPendingSwitch(sidB, &proto.PendingSwitch{Launcher: "claude", Agent: "claude", At: time.Now()})
 	quitsOn(f, "w1:p1", sidB, nil, shellPane("w1:p1", "w1:t1", "w1", cwd, sidB))
-	// The switch's claude --resume comes up a second after it is typed; the user's Resume goes in meanwhile.
-	plain, ansi := screenFixture(t, "claude-2.1.312-empty-162.txt"), screenFixture(t, "claude-2.1.312-empty-162.ansi")
-	var mu sync.Mutex
-	up := false
-	resumed := make(chan error, 1)
-	f.after(func(c herdrCall) {
-		if c.Method != "pane.send_input" || str(c.Params["pane_id"]) != "w1:p1" || !strings.Contains(str(c.Params["text"]), "--resume "+sidA) {
-			return
-		}
-		go func() {
-			_, err := request(t, n, "session.start", map[string]any{"resume_session_id": sidA})
-			resumed <- err
-		}()
-		go func() {
-			time.Sleep(time.Second)
-			f.setScreens("w1:p1", plain, ansi)
-			f.reply("session.snapshot", snapshot(nil, nil, []any{claudeAgent(sidA, proto.StatusIdle, "w1:p1", "w1:t1", "w1", cwd, "")}, nil))
-			mu.Lock()
-			up = true
-			mu.Unlock()
-		}()
-	})
-	f.handle("agent.get", func(p map[string]any) any {
-		mu.Lock()
-		defer mu.Unlock()
-		if !up || str(p["target"]) != "w1:p1" {
-			return map[string]any{"agent": nil}
-		}
-		return map[string]any{"agent": map[string]any{"agent": "claude", "agent_status": proto.StatusIdle, "pane_id": "w1:p1",
-			"tab_id": "w1:t1", "workspace_id": "w1"}}
-	})
+	claudeComesUp(t, f, cwd, func(string) bool { return true })
+	done, ok := n.switches().resuming(sidA) // a Resume of it, between its wait and its start
+	if !ok {
+		t.Fatal("no Resume could be registered")
+	}
+	defer done()
 	if err := tellTo(t, n, sidB, "and now?"); err != nil {
-		t.Fatalf("send: %v\n%s", err, strings.Join(f.trace(), "\n"))
+		t.Fatalf("send: %v", err)
 	}
-	select {
-	case err := <-resumed:
-		if err != nil {
-			t.Errorf("the Resume: %v", err)
-		}
-	case <-time.After(30 * time.Second):
-		t.Fatal("the Resume did not end")
+	starts := typedStarts(f, "w1:p1")
+	if len(starts) != 1 || !sessionIDArg.MatchString(starts[0]) || strings.Contains(starts[0], "--resume") {
+		t.Fatalf("typed %q", starts)
 	}
-	var again []string
-	for _, c := range f.calls() {
-		if c.Method == "pane.send_input" && strings.Contains(str(c.Params["text"]), "--resume "+sidA) {
-			again = append(again, str(c.Params["pane_id"]))
-		}
-	}
-	if len(again) != 1 || len(f.trace("tab.create", "workspace.create")) != 0 {
-		t.Fatalf("claude --resume typed in %q, tabs %q", again, f.trace("tab.create", "workspace.create"))
+	if got := promptsTo(f); len(got) == 0 || !strings.Contains(got[0], `from="codex" to="claude"`) || strings.Contains(got[0], `resumed="1"`) {
+		t.Fatalf("prompts %q", got)
 	}
 }
 
@@ -785,5 +898,136 @@ func TestEngineSwitchListsAnEarlierSessionThatRunsAgain(t *testing.T) {
 	}
 	if _, listed := list[sidB]; !listed {
 		t.Fatal("the conversation's row is gone")
+	}
+}
+
+// codex-start's notes (the agent sandbox not wrapping the start) are never read as it failing: the Codex after them
+// has the message.
+func TestCodexStartNotesAreNoFailure(t *testing.T) {
+	var b strings.Builder
+	codexStartNotef(&b, "agent sandbox: %s not wrapped (%s): %s", "codex-start", "off", "why")
+	if strings.Contains(b.String(), codexStartError) {
+		t.Fatalf("a note reads as codex-start failing: %q", b.String())
+	}
+}
+
+// codex-start claims its file by renaming it away before it reads it, and a node that withdrew it first leaves it
+// nothing: exactly one of them has the message.
+func TestCodexStartClaimsItsFile(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "start.json")
+	if err := os.WriteFile(file, []byte(`{"argv":["codex"],"prompt":"hi"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := claimCodexStartFile(file)
+	if err != nil || !strings.Contains(string(b), `"hi"`) {
+		t.Fatalf("claimed %q, %v", b, err)
+	}
+	if left, _ := os.ReadDir(dir); len(left) != 0 {
+		t.Errorf("left %v", left)
+	}
+	if os.Rename(file, file+".withdrawn") == nil {
+		t.Error("the node could still withdraw a claimed file")
+	}
+	if err := os.WriteFile(file, []byte(`{"argv":["codex"],"prompt":"hi"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(file, file+".withdrawn"); err != nil { // the node withdraws it first
+		t.Fatal(err)
+	}
+	if b, err := claimCodexStartFile(file); err == nil {
+		t.Fatalf("codex-start claimed a withdrawn file: %q", b)
+	}
+}
+
+// A Codex thread Persona has no record of (one started elsewhere), the conversation's earlier stretch, that a switch
+// back resumes and that may have the message without showing it gets a record all the same: the conversation's history
+// goes on it, and the list shows one row.
+func TestEngineSwitchToAnUnrecordedCodexThread(t *testing.T) {
+	const thread = "01a19a00-0000-7000-8000-00000000507a"
+	withShortCodexWaits(t, time.Second, time.Second)
+	t.Cleanup(func() { codexResumes.Delete(thread) })
+	n, f, home, cwd, _ := switchNode(t, proto.StatusIdle, longTurn)
+	until := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+	writeThread(t, home, thread, cwd, "earlier, in Codex")
+	n.codices = newCodexRegistry()
+	n.codices.scan = func() []codexProcess { return nil }
+	n.codices.checked = func() ([]codexProcess, bool) { return nil, true }
+	n.configureCodex(proto.CodexConfig{})
+	n.state.update(sidA, func(v *sessionState) bool {
+		v.EngineHistory = []proto.EngineLeg{{SessionID: thread, Agent: "codex", Until: until}}
+		return true
+	})
+	listSessions(t, n)
+	n.state.setPendingSwitch(sidA, &proto.PendingSwitch{Launcher: "cx", Agent: "codex", At: time.Now()})
+	f.reset()
+	quitsToShell(f, cwd)
+	files := codexReadsAndRuns(f)
+	err := tell(t, n, "hello", true)
+	if code, data := refusalOf(t, err); code != "" || data["delivered"] != deliveredUnknown {
+		t.Fatalf("answered %q %v (%v), want delivered unknown", code, data, err)
+	}
+	if got := files(); len(got) != 1 || !strings.HasSuffix(strings.Join(got[0].Argv, " "), " resume "+thread) {
+		t.Fatalf("codex-start ran %+v", got)
+	}
+	st, ok := n.state.get(thread)
+	if !ok || len(st.EngineHistory) != 2 || st.EngineHistory[1].SessionID != sidA || st.Pane != "w1:p1" || st.Launcher != "cx" {
+		t.Fatalf("the thread's record = %+v (%v)", st, ok)
+	}
+	if old, _ := n.state.get(sidA); old.EngineHistory != nil {
+		t.Errorf("the session switched away from still carries the history: %+v", old)
+	}
+}
+
+// A switch whose new claude came up behind a dialog of its own did not type its first message: the handoff waits on
+// the session's record and goes in front of the next message sent to it, whoever sends it, once.
+func TestEngineSwitchKeepsTheHandoffForTheNextMessage(t *testing.T) {
+	n, f, _, cwd, _ := codexSwitchNode(t)
+	n.state.setPendingSwitch(sidB, &proto.PendingSwitch{Launcher: "claude", Agent: "claude", At: time.Now()})
+	quitsOn(f, "w1:p1", sidB, nil, shellPane("w1:p1", "w1:t1", "w1", cwd, sidB))
+	plain, ansi := screenFixture(t, "claude-2.1.312-empty-162.txt"), screenFixture(t, "claude-2.1.312-empty-162.ansi")
+	var mu sync.Mutex
+	status := ""
+	f.after(func(c herdrCall) {
+		if c.Method == "pane.send_input" && strings.Contains(str(c.Params["text"]), "--resume "+sidA) {
+			mu.Lock()
+			status = proto.StatusBlocked // the resume's own dialog (a large session's prompt) holds the keyboard
+			mu.Unlock()
+			f.reply("session.snapshot", snapshot(nil, nil, []any{claudeAgent(sidA, proto.StatusBlocked, "w1:p1", "w1:t1", "w1", cwd, "")}, nil))
+		}
+	})
+	f.handle("agent.get", func(p map[string]any) any {
+		mu.Lock()
+		defer mu.Unlock()
+		if status == "" {
+			return map[string]any{"agent": nil}
+		}
+		return map[string]any{"agent": map[string]any{"agent": "claude", "agent_status": status, "pane_id": "w1:p1",
+			"tab_id": "w1:t1", "workspace_id": "w1"}}
+	})
+	if err := tellTo(t, n, sidB, "and now?"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if got := promptsTo(f); len(got) != 0 {
+		t.Fatalf("typed into the dialog: %q", got)
+	}
+	if st, _ := n.state.get(sidA); st.PendingHandoff == nil || !st.PendingHandoff.Resumed {
+		t.Fatalf("the handoff is not kept: %+v", st.PendingHandoff)
+	}
+	// The user answers the dialog; their message (sent again) carries the handoff.
+	mu.Lock()
+	status = proto.StatusIdle
+	mu.Unlock()
+	f.setScreens("w1:p1", plain, ansi)
+	f.reply("session.snapshot", snapshot(nil, nil, []any{claudeAgent(sidA, proto.StatusIdle, "w1:p1", "w1:t1", "w1", cwd, "")}, nil))
+	listSessions(t, n)
+	_, _ = request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "and now?"})
+	got := promptsTo(f)
+	if len(got) == 0 {
+		t.Fatal("the message was not typed")
+	}
+	checkHandoffBlock(t, got[0], "codex", "claude", "", true, "and now?")
+	if st, _ := n.state.get(sidA); st.PendingHandoff != nil {
+		t.Errorf("the handoff still waits after going in: %+v", st.PendingHandoff)
 	}
 }

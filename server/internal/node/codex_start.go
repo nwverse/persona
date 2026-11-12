@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -215,7 +216,7 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 	}
 	done, err := n.runAgentCommand(ctx, launch, created, ws, "", cmd, shells...) // typedstart.go
 	if err != nil {
-		if adoptedPane(ctx) != nil && prompt != "" && n.codexMessageMayHaveGone(ctx, pane, file, err) {
+		if adoptedPane(ctx) != nil && prompt != "" && n.codexMessageMayHaveGone(ctx, pane, file) {
 			return nil, unconfirmedStart(err) // a switch's message may be in it (engine_switch.go)
 		}
 		return nil, err
@@ -238,7 +239,7 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 		if strings.TrimSpace(shown) == "" { // a screen Codex draws from the top of a tall pane: the bottom rows are blank
 			shown, _ = n.readPane(ctx, pane, "visible", 30)
 		}
-		if adoptedPane(ctx) != nil && prompt != "" && n.codexMessageMayHaveGone(ctx, pane, file, err) {
+		if adoptedPane(ctx) != nil && prompt != "" && n.codexMessageMayHaveGone(ctx, pane, file) {
 			// A switch's message (engine_switch.go) may be in the Codex the line started: no other start may get it too.
 			return nil, unconfirmedStart(fmt.Errorf("%v\n%s", err, lastLines(shown, 12)))
 		}
@@ -443,8 +444,13 @@ func codexThreadStart(path string) (time.Time, string) {
 	return began, ""
 }
 
-// codexStartError starts what `personad codex-start` prints when it cannot run the launcher.
-const codexStartError = "personad codex-start:"
+// codexStartError starts what `personad codex-start` prints when it cannot run the launcher. codexStartNote starts
+// what it prints and goes on (the agent sandbox not wrapping the start): never read as a failure, since the Codex it
+// then runs has the message.
+const (
+	codexStartError = "personad codex-start:"
+	codexStartNote  = "personad codex-start (note):"
+)
 
 // codexStartFile is what `personad codex-start` runs: the launcher's words (variables set in front, `A=1 codex …`,
 // then the command and its arguments) and the first message.
@@ -463,16 +469,16 @@ type codexStartFile struct {
 	Dir string `json:"dir,omitempty"`
 }
 
-// CodexStart is `personad codex-start <file>`: it reads a codexStartFile (and removes it), changes to its directory,
-// then runs its words with the message as one more argument after "--", in place of itself. No shell sees either. The
-// file's agent replaces a HERDR_AGENT the shell had: appended, the inherited one would come first, and that is the one
-// getenv and herdr read.
+// CodexStart is `personad codex-start <file>`: it claims a codexStartFile (renames it away, then reads and removes
+// it), changes to its directory, then runs its words with the message as one more argument after "--", in place of
+// itself. No shell sees either. Claimed by a rename, the file is either this process's or withdrawn by the node (a
+// switch whose start gave up on it, codexMessageMayHaveGone): never both. The file's agent replaces a HERDR_AGENT the
+// shell had: appended, the inherited one would come first, and that is the one getenv and herdr read.
 func CodexStart(args []string) error {
 	if len(args) != 1 {
 		return errors.New(codexStartError + " usage: personad codex-start <file>")
 	}
-	b, err := os.ReadFile(args[0])
-	_ = os.Remove(args[0])
+	b, err := claimCodexStartFile(args[0])
 	var f codexStartFile
 	if err == nil {
 		err = json.Unmarshal(b, &f)
@@ -528,6 +534,23 @@ func CodexStart(args []string) error {
 	return osproc.Exec(path, argv, env)
 }
 
+// claimCodexStartFile takes codex-start's file at path: renamed away first, then read and removed. A file the node
+// withdrew first (codexMessageMayHaveGone) is gone: an error, and nothing of it runs.
+func claimCodexStartFile(path string) ([]byte, error) {
+	taken := path + ".taken"
+	if err := os.Rename(path, taken); err != nil {
+		return nil, err
+	}
+	defer os.Remove(taken)
+	return os.ReadFile(taken)
+}
+
+// codexStartNotef prints a note of codex-start's that it goes on after (codexStartNote): never what a start reads as
+// codex-start failing (codexStartError).
+func codexStartNotef(w io.Writer, format string, a ...any) {
+	fmt.Fprintf(w, codexStartNote+" "+format+"\n", a...)
+}
+
 // codexStartExec is what codex-start execs for its words (path, argv, env): in the agent sandbox when it is on
 // (agentsandbox.go), for a Codex only when it is sure to run danger-full-access in its own process (codexInner). A
 // managed launcher (`personad launch`) is left to Launch, which wraps its own start; other words (pi resumed by
@@ -539,7 +562,7 @@ func codexStartExec(path string, argv, env []string) (string, []string, []string
 	home, _ := os.UserHomeDir()
 	cwd, _ := os.Getwd()
 	inner := func() string { return codexInner(argv, env, cwd, home) }
-	logf := func(format string, a ...any) { fmt.Fprintf(os.Stderr, "personad codex-start: "+format+"\n", a...) }
+	logf := func(format string, a ...any) { codexStartNotef(os.Stderr, format, a...) }
 	wrapped, wenv, st := wrapAgent("codex-start", home, identity.DataDir(home), cwd, nil, inner, append([]string{path}, argv[1:]...), env, logf)
 	if wrapped[0] == path {
 		return path, argv, env, st
