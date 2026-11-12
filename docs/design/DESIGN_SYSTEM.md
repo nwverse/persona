@@ -930,6 +930,7 @@ The watch widget extension doesn't build `Theme`, so complications take their fo
 - **The stale face**: a recording snapshot is trusted only while the app keeps rewriting it (every 10 minutes while recording); the timeline carries a second entry at `AllDaySnapshot.staleAfter` (25 minutes after the last write), which shows "Check recording", how long since it was last heard, the triangle, orange. Why: if the app dies without a word, a face still saying "Recording all day" would be a lie.
 - **Taps** open the app with the action the face offers (`persona://allday?action=start|continue|open`): start when off, continue when paused or stopped, the page when recording or stale. Only the app in front can open the microphone, so the face never acts on its own.
 - VoiceOver reads the title, the running time as its value and what a tap does as its hint. `-openWatchItem allday-complication` previews every family in every state.
+- **Record** (#5493, `MeetingRecordingComplication`; circular, corner, rectangular, inline, the Smart Stack): static, the recording mark in the system's red and **Record**, the word of every start ("One Record entry (#5243)"); the rectangular face adds "Meeting" under it (what a tap records; a longer line was cut short in en and ja). A tap opens the app straight into a meeting recording (`persona://record?meeting=1`), or marks the meeting while all-day recording runs. Its kind stays `persona.watch.meeting-recording`. `-openWatchItem record-complication` previews every family.
 
 ## 4. Interaction patterns
 
@@ -1757,11 +1758,12 @@ page the user watches during the meeting is the page they keep writing in after 
 
 ## One Record entry (#5243)
 
-Every place that starts a recording on the iPhone says **Record** and does one thing: it records a meeting (minutes, and
-Persona can attend with the hub's default role), named after the calendar event on now when there is one, or opens the
-recording running. That is the Recordings page's button, the main conversation's + list, the home screen's menu, the
-Control and Siri / Shortcuts. Reason: two large buttons, **Meeting Recording** and **Start Recording**, looked alike and
-owners couldn't tell which to press; impromptu talks are meetings too (principles 1 and 4).
+Every place that starts a recording on the iPhone and the watch says **Record** and does one thing: it records a
+meeting (minutes, and Persona can attend with the hub's default role), named after the calendar event on now when there
+is one, or opens the recording running. That is the Recordings page's button, the main conversation's + list, the home
+screen's menu, the Control and Siri / Shortcuts, and on the watch its recording page's button and its complication.
+Reason: two large buttons, **Meeting Recording** and **Start Recording**, looked alike and owners couldn't tell which
+to press; impromptu talks are meetings too (principles 1 and 4).
 
 - **The drawer's row is a place, not a start** (#5517): **Recordings** (录音 / 録音), first among the drawer's places,
   opens the Recordings page, as each row under it opens its page; Record there starts. While a recording runs the row
@@ -1782,7 +1784,18 @@ owners couldn't tell which to press; impromptu talks are meetings too (principle
   start would get it, and a room meeting's page again.
 - Identifiers for tests: `recording-meeting-start` (Record), `recording-kind` and `recording-kind-detail` at the start,
   `recording-page-menu` and `recording-kind-now` while recording; `sidebar-meeting-recording` for the drawer's Recordings row. UI
-  tests: `RecordEntryUITests`. The watch keeps its two entries for now.
+  tests: `RecordEntryUITests`.
+- **The watch** (#5493) has the same one entry, sized for a wrist. Its home list's row is a place, **Recordings**
+  (`WatchMeetingEntries`), opening the recording page; "Recording… Open" while a recording runs. On that page
+  **Record** is the one prominent button (`.borderedProminent`, one line), always a meeting. **Type: Meeting** under it
+  is a text button (`.borderless`, the secondary font) with the kind's mark, as the iPhone's Type row: Record's
+  qualifier, never a second start button, with no capsule of its own, so Record stays the one large button at the top.
+  A tap switches it to **Type: Note**, which shows "No minutes, and Persona stays out." under it, for that one start;
+  never remembered. Why a tap and not a picker: two values, one tap each way, and a watch picker pushes a page or fills
+  the screen with a wheel. The **Record** complication stays a one-tap start of a meeting, as the Control on the
+  iPhone. While all-day recording runs, Mark Meeting stands in for every start (one microphone). Identifiers:
+  `watch-meeting-recording` (the row), `watch-recording-start` (Record), `watch-recording-kind` and
+  `watch-recording-kind-detail`. The watch is dark only (section 6.1), so its screenshots have no light variant.
 
 ## Checking typed credentials by themselves (#4881)
 

@@ -1404,6 +1404,29 @@
         }
       }
     },
+    "Type: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Type: %1$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "类型：%1$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "種類：%1$@"
+          }
+        }
+      }
+    },
     "settings.search.about": {
       "extractionState": "manual",
       "localizations": {
