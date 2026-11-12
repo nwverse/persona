@@ -257,6 +257,9 @@ internal fun AssistantManagement.inGroup(names: GroupNames): AssistantManagement
         override suspend fun endConversation(session: SessionKey) = source.endConversation(names.raw(session))
         override suspend fun compactConversation(session: SessionKey) = source.compactConversation(names.raw(session))
         override suspend fun archiveConversation(session: SessionKey) = source.archiveConversation(names.raw(session))
+        override suspend fun unarchiveConversation(session: SessionKey) = source.unarchiveConversation(names.raw(session))
+        override suspend fun archivedConversations() = source.archivedConversations().map(names::session)
+        override suspend fun renameConversation(session: SessionKey, title: String) = source.renameConversation(names.raw(session), title)
         override suspend fun makeDirection(session: SessionKey) = source.makeDirection(names.raw(session))
         override suspend fun endDirection(session: SessionKey) = source.endDirection(names.raw(session))
         override suspend fun newMainConversation(carrySummary: Boolean, expect: String?) =

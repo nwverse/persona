@@ -1,5 +1,15 @@
 # Lessons: web UI and interactions
 
+## A lazy page importing a first-screen module can split it into a chunk of its own (#3962)
+
+Step 4c's settings pages imported `referenceState` from `lib/extensions.ts`, which the first screen already loaded inside
+another chunk. Rollup puts each module in the chunk shared by everything that imports it, so the new lazy importers moved
+`lib/extensions.ts` into a chunk of its own, still on the first screen, and the first screen grew 1.5 kB in every
+language (the same delta everywhere is the sign) although no first-screen code changed: a separate file compresses worse
+and adds its import and export lists. Put what a lazy page needs from such a module in a small module of its own
+(`lib/secret-reference.ts`). To find the file that moved, build main and the branch with the budget at 1 (the build then
+prints every language's count), and compare the first-screen files' brotli sizes with hashes blanked out.
+
 ## A size budget over built files must not count their content hashes (#5164)
 
 The first-screen budget added up the brotli copies of files that import and preload each other by content-hashed name.
@@ -8,6 +18,16 @@ names them gets eight new near-random characters per reference, which brotli can
 change, measured 34 B more for ja (19 B over the budget) while the first screen's code was unchanged. Count a fixed
 string in place of each built file's hash (`firstScreenBytes` in `web/src/startup-preload.ts`), so only a change to what
 the code does moves the number. Any other compressed-size check over Vite's output needs the same.
+
+## A lazy chunk's new import renames a first-screen chunk's exports (#5331)
+
+Rollup gives each export of a shared chunk a minified alias in the chunk's own order (`a`, `b`, …, `eu`, `ev`) and sorts
+the chunk's `export{…}` list by alias. When a lazy page imports a name from a first-screen chunk that the chunk did not
+export yet (#5310's lazy workflow board took `CATALOG_POLL_MS` and `isResumed` from `App`), the chunk gains one export,
+every later alias moves on by one, the list reorders and every first-screen import of those names is renamed: `App`
+grew 9 B, but the ja count grew 255 B and `main` failed the build, with no first-screen code changed. `firstScreenBytes`
+now counts imported names as one fixed string and export lists as empty ones. To check a surprising move, compare the
+number of entries in each first-screen chunk's `export{…}` between the two builds.
 
 ## A new list of sessions folds child sessions too (#5120)
 
