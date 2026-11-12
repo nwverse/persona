@@ -1,4 +1,5 @@
 import type { UsageCard } from "./tokens";
+import type { RuleSuggestion } from "./rule-suggestion";
 // The hub's wire types (docs/protocol/protocol.md). Only the fields the web client reads.
 
 export type AgentState = "needs_you" | "working" | "unread" | "idle" | "offline" | "unknown";
@@ -145,6 +146,9 @@ export interface SessionCapabilities {
   close?: boolean;
   /** The permission mode and effort chips can change it (session.modes, #1843): the node's word, absent from older nodes. */
   modes?: boolean;
+  /** Returning to before a user message, with optional native file restoration. */
+  rewind?: boolean;
+  rewind_code?: boolean;
 }
 
 /** A session's work state (docs/assistant/agent-work.md): working, blocked on a named precondition, or done. */
@@ -814,6 +818,9 @@ export interface Interaction {
   delegating?: boolean;
   /** What the assistant filled in when it left the question to the user. */
   delegate?: Delegate;
+  /** A rule the hub suggests on a question a supervisor passed up, once the owner gave the same answer three times
+   *  (#4929, lib/rule-suggestion.ts); the card comes again without it once it was answered. Absent otherwise. */
+  suggestion?: RuleSuggestion;
 }
 
 /** The assistant's context on a question it left to the user (Interaction.delegate). */
