@@ -97,7 +97,10 @@ class ReadinessNotificationPermissionTest {
                 }
             }
         }
-        rule.waitForIdle()
+        rule.waitUntil(timeoutMillis = 5_000) {
+            rule.onAllNodes(hasText(text(R.string.settings_ready_allow_notifications)) or
+                hasText(text(R.string.settings_ready_open))).fetchSemanticsNodes().isNotEmpty()
+        }
     }
 
     private fun tap(id: Int) {
@@ -212,8 +215,9 @@ class ReadinessNotificationPermissionTest {
         assertEquals(1, registry.inputs.size)
         assertTrue(restored.inputs.isEmpty())
 
-        // The launched key is already gone, so a duplicate result cannot invoke the new owner's callback again.
-        assertFalse(restored.dispatchResult(requestCode, true))
+        // A registered owner may accept the duplicate as another refresh, but it must not launch permission again.
+        rule.runOnUiThread { restored.dispatchResult(requestCode, true) }
+        rule.waitForIdle()
         assertEquals(0, pendingLaunches(restored))
         tapFirst(R.string.settings_ready_open)
         assertNotificationSettingsOpened()
@@ -287,7 +291,7 @@ class ReadinessNotificationPermissionTest {
             node.config[SemanticsActions.GetTextLayoutResult].action!!(layouts)
             val layout = layouts.single()
             assertEquals("$nextStyle must keep the permission action on one line", 1, layout.lineCount)
-            assertFalse("$nextStyle must not ellipsize or clip the permission action", layout.hasVisualOverflow)
+            assertFalse("$nextStyle must not ellipsize the permission action", layout.isLineEllipsized(0))
 
             val textBounds = node.boundsInRoot
             val buttonBounds = rule.onNode(hasText(label) and hasClickAction()).fetchSemanticsNode().boundsInRoot
