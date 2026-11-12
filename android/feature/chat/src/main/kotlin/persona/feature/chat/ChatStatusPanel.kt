@@ -52,11 +52,13 @@ internal fun OutboxStatus(
 internal fun ChatSessionStatusLine(
     state: StatusLineState, session: Session?, recordedDuration: Long?, tools: Int,
     onDetails: () -> Unit, terminal: (() -> Unit)?, draftSaveError: String? = null,
+    /** The header shows the loop and background work (Glass, #4339 C8): their chips are not repeated here. */
+    activityInHeader: Boolean = false,
 ) {
     val chips = listOfNotNull(
         session?.queued?.takeIf { it.isNotEmpty() }?.let { stringResource(R.string.chat_status_chip_queued, it.size) },
-        session?.loop?.let { stringResource(R.string.chat_status_loop) },
-        session?.background?.takeIf { it.isNotEmpty() }?.let { stringResource(R.string.chat_status_chip_background, it.size) },
+        session?.loop?.takeIf { !activityInHeader }?.let { stringResource(R.string.chat_status_loop) },
+        session?.background?.takeIf { it.isNotEmpty() && !activityInHeader }?.let { stringResource(R.string.chat_status_chip_background, it.size) },
         draftSaveError?.let { stringResource(R.string.chat_status_draft_failed) },
     )
     // The header's title line says the state, once (#3957; iOS shows none above its composer): this line keeps only what

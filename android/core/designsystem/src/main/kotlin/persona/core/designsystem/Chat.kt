@@ -60,6 +60,8 @@ fun ChatTopBar(
     onTitleClick: (() -> Unit)? = null,
     /** Which agent runs here, and in which client (#6390): its mark before the status line's dot. */
     agentMark: AgentMarkSpec? = null,
+    /** What a tap on the title does, as the screen reader says it ("View session info"); null: just a button. */
+    titleClickLabel: String? = null,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     val palette = PersonaTheme.palette
@@ -67,7 +69,7 @@ fun ChatTopBar(
     val style = PersonaTheme.style
     val tone = status?.let { palette.status(it) }
     val titleBlock: @Composable RowScope.() -> Unit = {
-        Column(Modifier.weight(1f).padding(horizontal = 4.dp).then(if (onTitleClick != null) Modifier.clickable(role = Role.Button, onClick = onTitleClick) else Modifier)) {
+        Column(Modifier.weight(1f).padding(horizontal = 4.dp).then(if (onTitleClick != null) Modifier.clickable(role = Role.Button, onClickLabel = titleClickLabel, onClick = onTitleClick) else Modifier)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (busy) { JSpinner(Modifier.size(14.dp), stroke = 1.8.dp); Spacer(Modifier.width(6.dp)) }
                 Text(title, style = if (style == AppStyle.Board) type.headline else type.label.copy(fontSize = androidx.compose.ui.unit.TextUnit(16f, androidx.compose.ui.unit.TextUnitType.Sp)), color = palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -121,10 +123,12 @@ fun ChatTopBar(
 }
 
 /** The user's message: a neutral glass bubble, wash bubble or bordered box. Right-aligned, at most 86% wide.
- *  [own] uses the user's bubble color; forwarded messages keep the ordinary surface. */
+ *  [own] uses the user's bubble color; forwarded messages keep the ordinary surface. [leading]: a mark before the bubble,
+ *  level with its last line (an unsent message's state, iOS `PendingBubble`), inside the 86%; [faded]: the bubble at
+ *  [UnsentBubbleAlpha], a message that waits or did not go. */
 @Composable
 fun UserBubbleFrame(modifier: Modifier = Modifier, footer: (@Composable () -> Unit)? = null, own: Boolean = true,
-    content: @Composable ColumnScope.() -> Unit) {
+    faded: Boolean = false, leading: (@Composable () -> Unit)? = null, content: @Composable ColumnScope.() -> Unit) {
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
     val shape = when (style) {
@@ -132,22 +136,29 @@ fun UserBubbleFrame(modifier: Modifier = Modifier, footer: (@Composable () -> Un
         AppStyle.Brief -> RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp)
         AppStyle.Board -> RoundedCornerShape(10.dp)
     }
+    val chrome = LocalHomeChrome.current
+    val bubble = { frame: Modifier ->
+        frame.clip(shape)
+            .then(when (style) {
+                AppStyle.Glass -> Modifier.background(if (own) homeUserFill(palette, chrome) else palette.surface)
+                    .border(HomeTokens.composerStroke, palette.line, shape)
+                AppStyle.Brief -> Modifier.background(if (own) palette.statusSurface else palette.surface)
+                AppStyle.Board -> Modifier.background(if (own) palette.statusSurface else palette.surface).border(1.dp, palette.line, shape)
+            })
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+    }
     Column(modifier.fillMaxWidth().padding(vertical = 6.dp), horizontalAlignment = Alignment.End) {
-        Column(
-            Modifier.fillMaxWidth(0.86f).wrapContentWidth(Alignment.End).clip(shape)
-                .then(when (style) {
-                    AppStyle.Glass -> Modifier.background(if (own) homeUserFill(palette, LocalHomeChrome.current) else palette.surface)
-                        .border(HomeTokens.composerStroke, palette.line, shape)
-                    AppStyle.Brief -> Modifier.background(if (own) palette.statusSurface else palette.surface)
-                    AppStyle.Board -> Modifier.background(if (own) palette.statusSurface else palette.surface).border(1.dp, palette.line, shape)
-                })
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-        ) {
-            content()
+        if (leading == null && !faded) Column(bubble(Modifier.fillMaxWidth(0.86f).wrapContentWidth(Alignment.End))) { content() }
+        else Row(Modifier.fillMaxWidth(0.86f).wrapContentWidth(Alignment.End), verticalAlignment = Alignment.Bottom) {
+            leading?.invoke()
+            Column(bubble(Modifier.weight(1f, fill = false).stableAlpha(if (faded) UnsentBubbleAlpha else 1f))) { content() }
         }
         footer?.let { Spacer(Modifier.height(4.dp)); it() }
     }
 }
+
+/** An unsent message's bubble while it waits or after it failed (iOS `PendingBubble`'s 0.6). */
+const val UnsentBubbleAlpha = 0.6f
 
 @Composable
 fun UserBubble(text: String, modifier: Modifier = Modifier, time: String? = null) {

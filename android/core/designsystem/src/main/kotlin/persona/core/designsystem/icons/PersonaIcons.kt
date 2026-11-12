@@ -28,6 +28,8 @@ object PersonaIcons {
     val attachment: PhIcon get() = PhIcons.Paperclip
     /** SF Symbol `chevron.left`. */
     val back: PhIcon get() = PhIcons.CaretLeft
+    /** SF Symbol `gearshape.2`. */
+    val backgroundTask: PhIcon get() = PhIcons.GearSix
     /** SF Symbol `clock.fill`. */
     val backgroundWaiting: PhIcon get() = PhIcons.Clock
     /** SF Symbol `macwindow`. */
@@ -268,6 +270,8 @@ object PersonaIcons {
     val retry: PhIcon get() = PhIcons.ArrowClockwise
     /** SF Symbol `play.fill`. */
     val run: PhIcon get() = PhIcons.Play
+    /** SF Symbol `safari`. */
+    val safari: PhIcon get() = PhIcons.GlobeSimple
     /** SF Symbol `display`. */
     val screen: PhIcon get() = PhIcons.Monitor
     /** SF Symbol `magnifyingglass`. */
