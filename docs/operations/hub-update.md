@@ -58,6 +58,9 @@ set `PERSONA_TEST_DOCKER_CONFIG` to a credential-free directory containing
 `cli-plugins/docker-compose`; deployment tests only render configuration offline.
 The worker passes its Python interpreter through to every script suite.
 The SSH publisher uses Paramiko 4.0.0 in the same private environment.
+The remote runs the publication program with Python 3.11 or later: `python3`, unless the
+publisher config's optional `remote_python` names another interpreter (one program name or
+absolute path, for hosts whose `python3` is older). The node and manager publishers use it too.
 
 Build with `update_url=file://<remote_root>/releases/hub` for a private source.
 By default, SSH uploads only the Hub platform and atomically promotes its manifest. The

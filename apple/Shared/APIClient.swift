@@ -238,6 +238,17 @@ nonisolated struct APIClient: Sendable {
         return c
     }
 
+    /// Freeze the current assistant for a settings page, including routes outside `/assistant`.
+    /// An explicit item manager takes precedence; the default still sends no manager header.
+    func currentAssistantSettings() -> APIClient { manager(managerID ?? shownManager) }
+
+    /// Whether two captured settings requests still belong to the same hub and assistant.
+    func sameSettingsScope(as other: APIClient?) -> Bool {
+        guard let other else { return false }
+        return config == other.config && group == other.group
+            && (managerID ?? shownManager) == (other.managerID ?? other.shownManager)
+    }
+
     /// This client for the Persona page while it shows manager `id` (nil or empty: the default's).
     func showing(_ id: String?) -> APIClient {
         var c = self
