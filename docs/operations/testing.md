@@ -1382,7 +1382,9 @@ How often a client reads `GET /api/v1/sessions`, and what kind of read, while it
 - The mock in paging mode with a list about the size of a busy hub: `MOCK_SESSIONS_LIST=1 MOCK_AGENTS=2 PORT=<port> python3 scripts/mock/mock_hub.py`
   (266 sessions, a 207 KB complete list). Its `since` answers from a journal of the last 128 revisions (changed, added and
   removed rows, rows entering or leaving a filter; an older one is `409 revision_expired`), and each `sessions_list` hint
-  carries the list's current revision, once per change.
+  carries the list's current revision, once per change. `MOCK_SUMMARY_STRICT=1` writes `summary=1` rows as the hub's
+  `runtimeSummary` does (no `background`, `subagents` or `workflows`, only their counts and `workflow_progress`; #5888);
+  without it the mock's summary rows keep the complete arrays.
 - `GET /mock/sessions_reads` counts the reads by client (the `X-Persona-Client` platform: `web`, `ios-app`) and kind: `full`
   (no paging query), `baseline` (a page without `since`), `since`, `counts`, `lookup`, with bytes, plus the hints sent;
   `?reset=1` starts again.
