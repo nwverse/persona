@@ -19,6 +19,12 @@ final class MessageMenu {
     /// The lifted message's words selected where they are (#603, `LiftSelection.swift`): a second long press on it, or
     /// Select Text. nil: lifted with its bar.
     var inPlace: InPlaceSelect?
+    /// The lifted copy of a message drawn in parts lays out all of its parts (#5221): asked for when its words are to
+    /// be selected (the text view over them follows every line). Until then it lays out only the parts near the screen.
+    var liftWhole = false
+    /// Selecting asked for while that copy lays out all of its parts: `LiftedMessage` starts it once they are there,
+    /// with what showed kept where it was.
+    @ObservationIgnored var pendingSelect: InPlaceSelect?
     /// The message being shared as a card.
     var sharing: ShareMessage?
     /// Forward (#3807): the chat makes the pressed message a forward and opens its picker (`forwarding`). nil: the bar
@@ -91,19 +97,27 @@ final class MessageMenu {
     }
 
     func close() {
-        if selected != nil || lift != nil || inPlace != nil {
+        pendingSelect = nil
+        if selected != nil || lift != nil || inPlace != nil || liftWhole {
             withAnimation(Theme.Motion.conceal) {
                 selected = nil
                 lift = nil
                 inPlace = nil
+                liftWhole = false
             }
         }
     }
 
-    /// Selects the lifted message's words where they are: the word at `point` (in the window), or all of them.
+    /// Selects the lifted message's words where they are: the word at `point` (in the window), or all of them. A
+    /// message drawn in parts first lays out all of them (`liftWhole`); the selecting starts once they are there.
     func selectInPlace(at point: CGPoint?) {
-        guard lift != nil else { return }
+        guard let lift else { return }
         Haptics.tap()
+        if lift.part != nil, !liftWhole {
+            pendingSelect = InPlaceSelect(at: point)
+            liftWhole = true
+            return
+        }
         withAnimation(Theme.Motion.state) { inPlace = InPlaceSelect(at: point) }
     }
 
@@ -259,8 +273,10 @@ struct LongPressAt: UIGestureRecognizerRepresentable {
 extension View {
     /// The pressable part of a message (the bubble / the text). preview: the same part again, lifted over the dimmed chat
     /// when pressed; card: it is words on the page with nothing around them (an answer), lifted on a card of its own.
-    func messageLongPress<P: View>(id: String, card: Bool = false, @ViewBuilder preview: @escaping () -> P) -> some View {
-        modifier(MessageLongPress(id: id, card: card, preview: preview))
+    /// part: this is that row of the rows a message is drawn in (a long answer, #4970), and preview draws all of the
+    /// message, this part marked with `liftPressedPart` and identified by this number (`MessageLift.part`).
+    func messageLongPress<P: View>(id: String, card: Bool = false, part: Int? = nil, @ViewBuilder preview: @escaping () -> P) -> some View {
+        modifier(MessageLongPress(id: id, card: card, part: part, preview: preview))
     }
     /// The whole row of a message: hosts the action bar above the press point and lifts the row above its neighbours.
     /// pending: your message not in the transcript yet (`PendingBubble`, #6427): Copy, Select Text and Share only, no
@@ -295,6 +311,7 @@ private struct MessageLongPress<P: View>: ViewModifier {
     @Environment(\.messageBar) private var bar
     let id: String
     let card: Bool
+    let part: Int?
     let preview: () -> P
     /// Where the part is, kept without drawing anything again (it changes on every scrolled frame).
     @State private var place = LiftPlace()
@@ -345,10 +362,12 @@ private struct MessageLongPress<P: View>: ViewModifier {
         LiftLines.shared.lift = ""
         LiftLines.shared.select = ""
         #endif
+        // All of a message drawn in parts is as tall as it takes, at the part's width.
+        let offer = part != nil ? place.offer.map { ProposedViewSize(width: $0.width, height: nil) } : place.offer
         withAnimation(Theme.Motion.state) {
             menu.selected = id
             menu.lift = MessageLift(bar: bar, frame: f.global, press: press, preview: AnyView(shown), card: card,
-                                    offer: place.offer, environment: place.environment)
+                                    offer: offer, environment: place.environment, part: part)
         }
     }
 }
@@ -470,9 +489,19 @@ struct MessageActionBar: View {
     /// Only on this phone (`messageActionBar(delete:)`): Delete last, in the danger color.
     var delete: MessageBarDelete?
     var itemWidth: CGFloat = Self.item
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     static let height: CGFloat = 62
     static let item: CGFloat = 58
+    /// The bar's items stay at the default text size, as the system's tab bars and toolbars do, so every word that fits
+    /// there fits at every size up to the accessibility ones; a long press shows an item's name large (Large Content
+    /// Viewer, #5019).
+    static let barTypeSize: DynamicTypeSize = .large
+    /// At the accessibility sizes the actions are a list instead, one a row with its icon and whole name
+    /// (DESIGN_SYSTEM.md 1.2 rule 3), whose words grow up to this.
+    static let listTypeSize: DynamicTypeSize = .xxxLarge
+    /// The actions as a list (`listTypeSize`) rather than a bar; the page places it by its measured size.
+    static func stacks(_ size: DynamicTypeSize) -> Bool { size.isAccessibilitySize }
     static func width(isUser: Bool, more: Bool = false) -> CGFloat { width(count: (isUser ? 5 : 4) + (more ? 1 : 0)) }
     static func width(count: Int) -> CGFloat { item * CGFloat(count) + 12 }
     /// Each action's width when the bar is `width` wide.
@@ -503,75 +532,117 @@ struct MessageActionBar: View {
         return UUID(uuidString: String(line)) != nil
     }
 
+    /// One action: its word, its icon, and whether the bar closes after it. tint: the danger color for Delete; nil, the
+    /// primary ink.
+    private struct Item: Identifiable {
+        var title: String
+        var symbol: String
+        var closes = true
+        var tint: Color? = nil
+        var perform: () -> Void
+        var id: String { title }
+    }
+
+    private var items: [Item] {
+        var all = [Item(title: String(localized: "Copy [Message Menu 63d90d]"), symbol: Theme.Icon.copy) {
+            UIPasteboard.general.string = text
+            Haptics.success()
+        }]
+        // "Select Text", not "Select": next to Copy a bare Select reads as picking messages (WeChat's multi-select); the
+        // Japanese name keeps "text" too (#5019). On iOS it selects all of the lifted message's words where they are
+        // (#603); the Mac opens its window.
+        #if os(macOS)
+        all.append(Item(title: String(localized: "Select Text [Message Menu 4d8efc]"), symbol: Theme.Icon.select) {
+            menu.selecting = SelectableText(text: text, plain: isUser, msg: id, quotable: !pending)
+        })
+        #else
+        all.append(Item(title: String(localized: "Select Text [Message Menu 4d8efc]"), symbol: Theme.Icon.select, closes: false) {
+            menu.selectInPlace(at: nil)
+        })
+        #endif
+        if !pending {
+            all.append(Item(title: String(localized: "Quote"), symbol: "quote.opening") { menu.quote?(text, id, isUser, nil) })
+        }
+        if Self.forwards(menu: menu, pending: pending) {
+            all.append(Item(title: String(localized: "Forward [Message Menu]"), symbol: Theme.Icon.forwardMessage) {
+                menu.forward?(MessageBarInfo(id: id, text: text, isUser: isUser, date: date, pending: pending, from: from))
+            })
+        } else {
+            all.append(Item(title: String(localized: "Share"), symbol: Theme.Icon.share) {
+                menu.sharing = ShareMessage(text: text, isUser: isUser, source: menu.source(), date: date, agent: menu.agent())
+            })
+        }
+        if isUser && !pending {
+            all.append(Item(title: String(localized: "Edit [Message Menu 051836]"), symbol: Theme.Icon.edit) { menu.edit?(text) })
+        }
+        if Self.rewinds(id: id, isUser: isUser, menu: menu) {
+            all.append(Item(title: String(localized: "Rewind"), symbol: Theme.Icon.rewindChat) { menu.rewinding = RewindAsk(id: id, text: text) })
+        }
+        if Self.forks(id: id, isUser: isUser, menu: menu) {
+            all.append(Item(title: String(localized: "More"), symbol: Theme.Icon.more) { menu.more = id })
+        }
+        if let delete { // last, as a menu's destructive item is
+            all.append(Item(title: delete.title, symbol: Theme.Icon.delete, tint: Theme.danger, perform: delete.run))
+        }
+        return all
+    }
+
     var body: some View {
-        HStack(spacing: 0) {
-            action(String(localized: "Copy [Message Menu 63d90d]"), Theme.Icon.copy) {
-                UIPasteboard.general.string = text
-                Haptics.success()
-            }
-            // "Select Text", not "Select": next to Copy a bare Select reads as picking messages (WeChat's multi-select).
-            // On iOS it selects all of the lifted message's words where they are (#603); the Mac opens its window.
-            #if os(macOS)
-            action(String(localized: "Select Text [Message Menu 4d8efc]"), Theme.Icon.select) {
-                menu.selecting = SelectableText(text: text, plain: isUser, msg: id, quotable: !pending)
-            }
-            #else
-            action(String(localized: "Select Text [Message Menu 4d8efc]"), Theme.Icon.select, closes: false) {
-                menu.selectInPlace(at: nil)
-            }
-            #endif
-            if !pending {
-                action(String(localized: "Quote"), "quote.opening") { menu.quote?(text, id, isUser, nil) }
-            }
-            if Self.forwards(menu: menu, pending: pending) {
-                action(String(localized: "Forward [Message Menu]"), Theme.Icon.forwardMessage) {
-                    menu.forward?(MessageBarInfo(id: id, text: text, isUser: isUser, date: date, pending: pending, from: from))
+        Group {
+            if Self.stacks(typeSize) {
+                // As wide as its longest row, every row that wide.
+                VStack(spacing: 0) {
+                    ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
+                        if i > 0 { Divider() }
+                        action(item)
+                    }
                 }
+                .fixedSize()
+                .dynamicTypeSize(...Self.listTypeSize)
             } else {
-                action(String(localized: "Share"), Theme.Icon.share) {
-                    menu.sharing = ShareMessage(text: text, isUser: isUser, source: menu.source(), date: date, agent: menu.agent())
-                }
-            }
-            if isUser && !pending {
-                action(String(localized: "Edit [Message Menu 051836]"), "pencil") { menu.edit?(text) }
-            }
-            if Self.rewinds(id: id, isUser: isUser, menu: menu) {
-                action(String(localized: "Rewind"), Theme.Icon.rewindChat) { menu.rewinding = RewindAsk(id: id, text: text) }
-            }
-            if Self.forks(id: id, isUser: isUser, menu: menu) {
-                action(String(localized: "More"), Theme.Icon.more) { menu.more = id }
-            }
-            if let delete { // last, as a menu's destructive item is
-                action(delete.title, Theme.Icon.delete, tint: Theme.danger, perform: delete.run)
+                HStack(spacing: 0) { ForEach(items) { action($0) } }
+                    .padding(.horizontal, Theme.Space.sm)
+                    .frame(height: Self.height)
+                    .dynamicTypeSize(...Self.barTypeSize)
             }
         }
-        .padding(.horizontal, Theme.Space.sm)
-        .frame(height: Self.height)
         .background(Theme.Lift.bar, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
         // Its edge over the dimmed chat.
         .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous).stroke(Theme.cardStroke, lineWidth: 0.5))
         .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
     }
 
-    /// tint: the danger color for Delete; nil, the primary ink.
-    private func action(_ title: String, _ symbol: String, closes: Bool = true, tint: Color? = nil,
-                        perform: @escaping () -> Void) -> some View {
+    private func action(_ item: Item) -> some View {
         Button {
-            perform()
-            if closes { menu.close() }
-        } label: { label(title, symbol, tint: tint) }
+            item.perform()
+            if item.closes { menu.close() }
+        } label: { label(item) }
         .buttonStyle(.plain)
-        .accessibilityLabel(title) // its word only, not the symbol's own name too
+        .accessibilityLabel(item.title) // its word only, not the symbol's own name too
+        .accessibilityShowsLargeContentViewer { ThemedIcon(item.symbol); Text(item.title) }
     }
 
-    private func label(_ title: String, _ symbol: String, tint: Color?) -> some View {
-        VStack(spacing: Theme.Space.xs) {
-            // Symbols differ in height: a fixed box keeps every label on one line.
-            ThemedIcon(symbol).font(Theme.Font.heading).dynamicTypeSize(...DynamicTypeSize.xxLarge).scaledFrame(height: Theme.Size.iconS)
-            Text(title).font(Theme.Font.label).lineLimit(1).minimumScaleFactor(0.8) // Select Text on a narrow bar
+    @ViewBuilder private func label(_ item: Item) -> some View {
+        Group {
+            if Self.stacks(typeSize) {
+                // A row: the icon in a fixed box, so the names line up, then the whole name.
+                HStack(spacing: Theme.Space.m) {
+                    ThemedIcon(item.symbol).font(Theme.Font.heading).scaledFrame(width: Theme.Size.iconS, height: Theme.Size.iconS)
+                    Text(item.title).font(Theme.Font.body).lineLimit(1)
+                }
+                .padding(.horizontal, Theme.Space.l)
+                .scaledFrame(minHeight: Theme.Size.tapTarget)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                VStack(spacing: Theme.Space.xs) {
+                    // Symbols differ in height: a fixed box keeps every label on one line.
+                    ThemedIcon(item.symbol).font(Theme.Font.heading).scaledFrame(height: Theme.Size.iconS)
+                    Text(item.title).font(Theme.Font.label).lineLimit(1).minimumScaleFactor(0.8) // Select Text on a narrow bar
+                }
+                .frame(width: itemWidth, height: Self.height)
+            }
         }
-        .foregroundStyle(tint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(HierarchicalShapeStyle.primary))
-        .frame(width: itemWidth, height: Self.height)
+        .foregroundStyle(item.tint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(HierarchicalShapeStyle.primary))
         .contentShape(.rect)
     }
 }

@@ -738,7 +738,7 @@ func (d *Devices) List() []Summary {
 func (d *Devices) summaryOf(m *Machine) Summary {
 	m.mu.Lock()
 	s := Summary{ID: m.cfg.ID, Name: m.name(), Kind: m.cfg.Kind, SSHHost: m.cfg.SSHHost, Home: m.info.Home,
-		DataDir: m.info.DataDir, Online: m.online}
+		DataDir: m.info.DataDir, Online: m.online || m.warmLocked(time.Now())}
 	m.mu.Unlock()
 	s.Trust = d.machineTrust(m)
 	s.Reachable = m.reachable()
@@ -789,7 +789,7 @@ func (d *Devices) Views() []View {
 	for _, m := range d.machinesNow() {
 		m.mu.Lock()
 		v := View{Summary: Summary{ID: m.cfg.ID, Name: m.name(), Kind: m.cfg.Kind, SSHHost: m.cfg.SSHHost, Home: m.info.Home,
-			DataDir: m.info.DataDir, Online: m.online}, Info: m.info, Sessions: slices.Clone(m.sessions)}
+			DataDir: m.info.DataDir, Online: m.online || m.warmLocked(time.Now())}, Info: m.info, Sessions: slices.Clone(m.sessions)}
 		m.mu.Unlock()
 		v.Trust = d.machineTrust(m)
 		v.Reachable = m.reachable()
@@ -865,6 +865,17 @@ func (d *Devices) Session(id, session string) (proto.Session, bool) {
 		return proto.Session{}, false
 	}
 	return m.session(session)
+}
+
+// Watched says whether the hub watches a machine's session for its apps (session.watch): an app has it open.
+func (d *Devices) Watched(id, session string) bool {
+	m := d.machineByID(id)
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.watched[session]
 }
 
 // Sessions are a machine's sessions as its node listed them; false when there is no such machine.

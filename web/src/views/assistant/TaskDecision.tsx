@@ -44,10 +44,13 @@ export function TaskDecision({ todo, rowKey }: { todo: Todo; rowKey: string }) {
     admission.current = true;
     setBusy(true);
     setDismissing(true);
+    const deferredKey = decisionLaterKey(todo);
+    later(deferredKey);
     try {
       const state = await write();
       if (!current()) return;
       apply(state);
+      later(deferredKey, false);
       toast(t("assistant-decisionrow.dismissed"), "ok", {
         label: t("assistant-tasks.undo_dismiss"),
         run: async () => {
@@ -61,10 +64,14 @@ export function TaskDecision({ todo, rowKey }: { todo: Todo; rowKey: string }) {
         },
       });
     } catch (error) {
+      if (current()) {
+        later(deferredKey, false);
+        toast(t("assistant-tasks.dismiss_failed", { error: errorText(error) }), "error");
+      }
+    } finally {
       admission.current = false;
       setBusy(false);
       setDismissing(false);
-      if (current()) toast(t("assistant-tasks.dismiss_failed", { error: errorText(error) }), "error");
     }
   };
   const defer = () => {

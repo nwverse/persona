@@ -20,9 +20,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.flow
 
+/** [terminal]: the session's terminal service (its own hub group's), which the chat's terminal cover reads; null: none. */
 @Composable
 internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navigator, feedback: AppFeedback, requestId: String? = null,
-    onSessionClosed: (SessionKey) -> Unit = {}, onOpenCard: (ResolvedRoute) -> Unit, onGroupGone: (ChatRoute, ChatRoute?) -> Unit) {
+    onSessionClosed: (SessionKey) -> Unit = {}, onOpenCard: (ResolvedRoute) -> Unit, onGroupGone: (ChatRoute, ChatRoute?) -> Unit,
+    terminal: persona.core.contracts.api.TerminalTransport? = session.terminal) {
     // The services of the session's own hub group, which need not be the selected one (docs/android/android.md "Multiple hubs").
     val source = chatWiringSource()
     val activeWiring by remember(source, route.machineId) { source.bindingsFor(SessionKey(route.machineId, route.sessionId)) }
@@ -68,6 +70,9 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
     var openedPath by rememberSaveable { mutableStateOf<String?>(null) }
     // Its line (`a.kt:12`): the file opens scrolled to it.
     var openedLine by rememberSaveable { mutableStateOf<Int?>(null) }
+    // The terminal comes up over the chat (iOS TerminalCover, #4339 C7), from ⋯, the work line or a request's Open terminal.
+    var terminalOpen by rememberSaveable(route.machineId, route.sessionId) { mutableStateOf(false) }
+    val resumer = remember(session) { SessionTerminalResumer({ session.sessions.sessions.value }, { session.agentsWiring.state.value.creation }) }
     val handToPersona = rememberHandToPersona(wiring?.mainSender, navigator)
     var insertionFocused by remember { mutableStateOf(false) }
     var git by remember { mutableStateOf<persona.core.contracts.api.SessionGitStatus?>(null) }
@@ -86,12 +91,12 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
         Box(Modifier.fillMaxSize()) {
             // Keep the composer and conversation mounted while browsing the session directory.
             ChatScreen(key, session.chats, session.sender, session.interactions, session.sessions, { if (!closed) navigator.back() },
-                onTerminal = if (session.terminal != null && !assistant) ({ navigator.navigate(TerminalRoute(it.machineId, it.sessionId)) }) else null,
+                onTerminal = if (terminal != null && !assistant) ({ focus.clearFocus(); terminalOpen = true }) else null,
                 chrome = ChatChromeBindings(
                     onFiles = if (filesAvailable) ({ open(FilesPane.Files) }) else null,
                     onGit = if (filesAvailable && git?.isRepo == true) ({ open(FilesPane.Git) }) else null,
                     gitLabel = "Git${git?.files?.size?.takeIf { it > 0 }?.let { " · $it" }.orEmpty()}",
-                    actions = actions, connection = wiring?.connection ?: session.connection, requestId = requestId, covered = pane != null,
+                    actions = actions, connection = wiring?.connection ?: session.connection, requestId = requestId, covered = pane != null || terminalOpen,
                     worktrees = wiring?.worktrees,
                     onOpenSession = { navigator.navigate(ChatRoute(it.machineId, it.sessionId)) },
                     waiting = waiting,
@@ -126,6 +131,7 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
                 }, initialPane = pane!!, initialPath = openedPath, initialLine = openedLine,
                     connection = connectionState)
             }
+            if (terminal != null && !assistant) persona.feature.terminal.TerminalCover(key, terminalOpen, { terminalOpen = false }, terminal, resumer)
         }
     }
 }

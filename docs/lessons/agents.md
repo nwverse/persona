@@ -409,8 +409,7 @@ passed in the login shell and reset the launcher to `ok`, so the assistant kept 
   In tests, attach with a PTY via `script -q /dev/null herdr`.
 - Claude restore uses built-in bare `claude --resume <id>`, losing launchers, `--settings`, and `--mcp-config` (2026-11-04: after the user opened herdr, 8 Persona sessions switched to their own subscription,
   lost MCP and hooks, and the transcript-less one showed Login). No per-pane disable-restore switch exists, but a per-pane restore command does: `resume_argv` in `pane.report_agent_session`.
-  - First claim the pane with `pane.report_agent`, or it returns `resume_not_accepted`; an actually recognized Agent process must be present, not an empty shell.
-  - After claiming, herdr still recognizes state from the screen (reported `idle` doesn't override working).
+  - When herdr already detects the Agent process in the pane (Claude, Codex, pi…), `pane.report_agent_session` accepts and persists `resume_argv` directly without `pane.report_agent`. Do **not** claim detected panes with a one-shot `pane.report_agent {state: "idle"}`: in herdr 0.9.x a custom reporter's `hook_authority` overrides screen and OSC state detection in `recompute_effective_state`, locking `agent_status` to `idle` for the lifetime of the Agent (#4657). Clear any stale `custom:persona` authority with `pane.clear_agent_authority {source}` (never without `source`, which would also drop `herdr:pi`'s full-lifecycle authority), and fall back to `pane.report_agent` only when `pane.report_agent_session` returns `resume_not_accepted` (an Agent process herdr doesn't detect natively, such as a compatible CLI, where `traexAgents` reads state itself and must still merge session-less entries in `snap.Agents`). Releasing authority via CLI (`herdr pane release-agent`) also requires `--seq` greater than the last reported `seq`, or `accept_hook_report` drops the release.
   - herdr types argv into the pane shell: quote only necessary elements (an alias as the first element still expands); elements must not contain single quotes.
   - If official integration later reports the same or another session id, herdr retains the original `resume_argv`: after a session id change, explicitly report again or it restores the old session.
 
@@ -890,3 +889,11 @@ sees a wait it can't name, and a following `dequeue` pops whatever it guessed. G
 `command_lifecycle` lines for it instead (queued, started, cancelled, completed). Take one back with `cancel_async_message`, and treat
 `cancelled: false` as "it went in": writing it again would send it twice. Check such behavior against the real CLI with a short
 `claude -p` script before building on it; the requests are not in the public docs.
+
+## A published runtime stream must end after its viewer leaves (#5247)
+
+The Hub caches the latest live text for new subscribers. The runtime SDK's watch state can disappear before the
+prompt finishes, while that published text still exists. `streamEnd` uses the stream entry as well as the current
+watch to send its empty boundary, and cancels pending throttled text first. A native transcript may have a
+middle-truncated copy of the reply, so text reconciliation alone cannot retire the Hub's full cached copy.
+Cover unwatch before completion, a pending batch, and a later watcher in the SDK and AGY lifecycle tests.

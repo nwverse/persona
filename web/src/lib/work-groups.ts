@@ -178,7 +178,9 @@ function groupTurn(items: Step[], turnStart: number | null, live: boolean, strea
       for (const c of children) if (c.kind === "group" && c.id === group.id) c.id = c.id.replace(/^work-/, "work-run-");
     }
   }
-  // A text before the last tool result is still the newest text, not the group's duration endpoint.
+  // The time runs to the latest end of every step of the exchange, its answer included (#5119): the span the live
+  // clock was counting, so it carries on from what that showed (iOS ChatLines.workEnd counts the same). A text written
+  // before the last tool result is still the newest text, not where the time stops.
   if (group && group.startedAt !== undefined) {
     const end = items.reduce((latest, s) => Math.max(latest, stepEnd(s) ?? latest), group.startedAt);
     group.durationMs = Math.max(0, end - group.startedAt);
@@ -223,13 +225,16 @@ export function workBlocks(steps: Step[], opts: WorkGroupOptions): WorkNode[] {
   return out;
 }
 
-/** The plan of an exchange: only its latest TodoWrite of two or more items (that the tool took) draws a card; the
- *  others are not drawn. */
-export function planSteps(steps: Step[]): Step[] {
-  let latest = -1;
-  // a TodoWrite the tool refused did not change the plan (#5602)
-  steps.forEach((s, i) => isPlanStep(s) && !(s as ToolStep).result?.is_error && planTodos(s as ToolStep).length >= 2 && (latest = i));
-  return steps.filter((s, i) => !isPlanStep(s) || i === latest);
+/** A TodoWrite that can be its exchange's plan card: the tool took it (a refused one did not change the plan, #5602)
+ *  and it lists two or more items (cindy draws no card for a list of one). The one rule for the card and the pill. */
+export const isPlanList = (s: Step): s is ToolStep => isPlanStep(s) && !(s as ToolStep).result?.is_error && planTodos(s as ToolStep).length >= 2;
+
+/** The step of an exchange that draws its plan card: its latest plan list, "" for none (cindy draws one card per plan,
+ *  where its latest list was written). Its other plan updates stay in the summary as ordinary rows, each inspectable
+ *  (super rule 2; cindy drops them). */
+export function planCardStep(steps: Step[]): string {
+  for (let i = steps.length - 1; i >= 0; i--) if (isPlanList(steps[i])) return steps[i].id;
+  return "";
 }
 
 export interface Todo {
@@ -275,8 +280,10 @@ function explorationOf(s: ToolStep): { kind: ExplorationKind; key?: string } | u
   return undefined;
 }
 
-// a workflow's call counts too: a group that launched one did more than read
-const directTools = (g: WorkGroupNode): ToolStep[] => g.children.flatMap((c) => (c.kind === "step" && (isRowStep(c.step) || isWorkflowStep(c.step)) ? [c.step] : []));
+// a workflow's call counts too: a group that launched one did more than read; so does a plan update (cindy's verb
+// "updated" is no reading), drawn as a row or as the card
+const directTools = (g: WorkGroupNode): ToolStep[] =>
+  g.children.flatMap((c) => (c.kind === "step" && (isRowStep(c.step) || isWorkflowStep(c.step) || isPlanStep(c.step)) ? [c.step as ToolStep] : []));
 
 /** "Read 3 files · searched 2 times" when a group did nothing but read and search (a file read twice counts once). */
 export function explorationSummary(g: WorkGroupNode): string {
@@ -334,10 +341,14 @@ export const workLineOpens = (g: WorkGroupNode, _style: WorkLineStyle, _turnLive
  *  super rule 2 does not allow), each remembering its own choice after that. */
 export const nestedLineDefault = (_style: WorkLineStyle): boolean => true;
 
+/** How a duration reads where it ticks (cindy's status bar options): from `0s`, and `1m 0s` rather than `1m`. */
+export const TICKING_DURATION = { minimumSeconds: 0, alwaysShowRemainder: true } as const;
+
 /** cindy's formatSessionDuration: under an hour `6s`, `1m 5s`, `2m` (the same in every language's catalog; at least a
- *  second); from an hour the language's form, always with the minutes ("1h 0m", "1 小时 0 分", "1時間0分"; "1d 2h 5m"). */
-export function workDuration(msValue: number): string {
-  const total = Math.max(1, Math.round((Number.isFinite(msValue) ? msValue : 0) / 1000));
+ *  second); from an hour the language's form, always with the minutes ("1h 0m", "1 小时 0 分", "1時間0分"; "1d 2h 5m").
+ *  `opts` are cindy's formatDuration options, so the running bar (TICKING_DURATION) and the summaries share one format. */
+export function workDuration(msValue: number, opts: { minimumSeconds?: number; alwaysShowRemainder?: boolean } = {}): string {
+  const total = Math.max(opts.minimumSeconds ?? 1, Math.round((Number.isFinite(msValue) ? msValue : 0) / 1000));
   if (total < 60) return t("lib-work-groups.dur_seconds", { s: total });
   if (total >= 3600) {
     const d = Math.floor(total / 86_400);
@@ -347,7 +358,7 @@ export function workDuration(msValue: number): string {
   }
   const m = Math.floor(total / 60);
   const s = total % 60;
-  return s ? t("lib-work-groups.dur_minutes_seconds", { m, s }) : t("lib-work-groups.dur_minutes", { m });
+  return s || opts.alwaysShowRemainder ? t("lib-work-groups.dur_minutes_seconds", { m, s }) : t("lib-work-groups.dur_minutes", { m });
 }
 
 /** A finished group's title: "Worked for 1m 5s" ("Work details" without its times), and what it read when that is all
