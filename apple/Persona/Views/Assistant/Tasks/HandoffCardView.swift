@@ -50,7 +50,8 @@ struct HandoffCardView: View {
                     .font(Theme.Font.captionStrong).foregroundStyle(.secondary).lineLimit(1)
             }
             if let recap = card.recap, !recap.isEmpty {
-                Button { withAnimation(Theme.Motion.state) { openRecap.toggle() } } label: {
+                // Unfolding keeps the card's top where it is in the chat (DESIGN_SYSTEM.md 4.7.1), as Edit does.
+                Button { toggleInPlace(pin, pinKey, animation: Theme.Motion.state, closing: openRecap) { openRecap.toggle() } } label: {
                     VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                         Text("Summary [Hand-Off Card]").font(Theme.Font.captionStrong).foregroundStyle(.secondary)
                         Text(recap).font(Theme.Font.body).lineLimit(openRecap ? nil : 3).multilineTextAlignment(.leading)
