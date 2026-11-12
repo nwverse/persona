@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
+
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/kb"
 )
@@ -269,4 +271,45 @@ func TestFinalPassEndsWithTheRecording(t *testing.T) {
 	e.PruneRecordings(time.Now().AddDate(0, 0, 40))
 	h.s.hubSweep(e)
 	waitFor(t, "the replay job closed", func() bool { return h.tr.jobsOf(extwire.TranscriptionReplay)[1].over() })
+}
+
+// The final pass waits for the live job's last sentences after the phone's end: a complete upload right after the
+// end starts no pass before the socket got its last lines and was closed 1000.
+func TestFinalPassWaitsForTheLastLines(t *testing.T) {
+	h := newHubFixture(t)
+	gate := make(chan struct{})
+	h.tr.set(func(f *fakeTranscriber) {
+		f.live = jobScript{lines: liveTwo[:1], held: true, endGate: gate}
+		f.replay = jobScript{windows: []fakeWindow{{0, 2, false, []fakeLine{{0.5, 1.5, "Replay one."}}}}}
+	})
+	h.hubUpload(meetingRec, 1, nil)
+	p, _ := h.open(meetingRec, 0, nil)
+	p.audio(2)
+	p.send(map[string]any{"type": "end", "at": 2.0})
+	waitFor(t, "the job told of the end", func() bool {
+		jobs := h.tr.jobsOf(extwire.TranscriptionLive)
+		if len(jobs) != 1 {
+			return false
+		}
+		_, _, _, ended := jobs[0].snapshot()
+		return ended
+	})
+	h.hubUpload(meetingRec, 2, map[string]any{"complete": true, "duration": 2.0})
+	h.s.finalRound(context.Background())
+	h.s.hubTr.mu.Lock()
+	st := h.s.hubTr.passes[meetingRec]
+	running := st != nil && st.running
+	h.s.hubTr.mu.Unlock()
+	m, _, _ := h.engine().MeetingRead(meetingRec)
+	if running || !m.Transcription.FinalFrom.IsZero() {
+		t.Fatal("the pass started before the last lines")
+	}
+	close(gate)
+	if f := p.wait("line", 1); f["text"] != liveTwo[0].text {
+		t.Fatalf("line %v", f)
+	}
+	if status := p.waitClosed(); status != websocket.StatusNormalClosure || len(p.of("error")) != 0 {
+		t.Fatalf("closed %d, errors %v", status, p.of("error"))
+	}
+	h.finalState(meetingRec, "final")
 }

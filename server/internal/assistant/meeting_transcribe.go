@@ -84,6 +84,8 @@ type hubRun struct {
 	started    bool
 	downSince  time.Time
 	ended      bool
+	// finishing: the phone sent end and its last sentences are still coming (finishLive): the final pass waits.
+	finishing bool
 
 	// The live job (nil while none), when one may be opened again, whether the last one dropped.
 	job        *liveJob
@@ -353,11 +355,12 @@ func (r *hubRun) detach(p *phoneSocket, ended bool) {
 	}
 }
 
-// socketOpen: a socket is up that has not sent end.
+// socketOpen: a socket is up that has not sent end, or one that sent it still waits for its last sentences (the final
+// pass would close that job before they come).
 func (r *hubRun) socketOpen() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.phone != nil && !r.ended
+	return r.phone != nil && !r.ended || r.finishing
 }
 
 // audio is audio the phone's socket stored, from recording second at: what lies past the live edge goes to the live

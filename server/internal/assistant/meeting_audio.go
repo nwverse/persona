@@ -287,6 +287,7 @@ func (r *hubRun) finishLive(p *phoneSocket) {
 	if r.phone == p {
 		r.ended = true
 	}
+	r.finishing = true // the final pass waits for the last sentences
 	j := r.job
 	if j != nil {
 		r.endJobLocked(j)
@@ -314,6 +315,7 @@ func (r *hubRun) finishLive(p *phoneSocket) {
 	}
 	r.mu.Lock()
 	r.putHubLocked()
+	r.finishing = false
 	r.mu.Unlock()
 }
 

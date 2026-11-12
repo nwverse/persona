@@ -76,6 +76,7 @@ type jobScript struct {
 	dropAt   float64 // the socket dropped once the audio passes this second (0: never)
 	usage    float64 // the usage frame's seconds at done
 	windows  []fakeWindow
+	endGate  chan struct{} // the end is answered once this is closed (nil: at once)
 }
 
 // fakeJob is one job the fake contribution ran.
@@ -298,6 +299,13 @@ func (f *fakeTranscriber) serve(w http.ResponseWriter, r *http.Request) {
 			j.mu.Lock()
 			j.ended = true
 			j.mu.Unlock()
+			if script.endGate != nil {
+				select {
+				case <-script.endGate:
+				case <-ctx.Done():
+					return
+				}
+			}
 			if !emit(at, j.start.Mode == extwire.TranscriptionReplay) {
 				return
 			}
