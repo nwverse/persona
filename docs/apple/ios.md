@@ -45,7 +45,8 @@ Chat page:
   one row of a 30,000-character report was laid out whole, twice, on opening and redrew every table's decoration on each scrolled frame. Cuts fall only
   between plain blocks whose reply-theme margins are fixed (paragraph, ATX heading, fenced code, table), each part drawn the gap MarkdownUI would put
   there; lists, quotes, display math and HTML comments are never cut. A long press on any part lifts the whole answer and acts on all of it: Copy, Select
-  Text, Quote and Forward (#5221, `AnswerPartsLift`: the parts stacked again, one text to select, placed from where the pressed part is); its file chips sit
+  Text, Quote and Forward (#5221, `AnswerPartsLift`: the parts stacked again in a lazy stack, only those near the screen laid out, placed from where the
+  pressed part is; all of them laid out once its words are to be selected, under one text view); its file chips sit
   under the last part. Persona's own conversation (boxed answers) and the Mac keep one row. `AnswerPartsLookTests` checks the parts draw the same pixels as the whole.
 - Expanded work is one card: each step remains a separate lazy-loaded chat row (a turn may have hundreds; one giant view would hang), with each row drawing a card slice
   (`WorkCardSlice`: top corners on first step, bottom corners on Collapse N steps, backgrounds extending halfway into spacing to join neighbors), thin separators starting at the text column; tool rows 44pt high.
@@ -1956,6 +1957,42 @@ Key points:
 - Card `plain_text` in Markdown contexts must decode entities such as `&nbsp;` and `<br>` / `<a href>` / `<font color>` (markup left by the Lark gateway).
 - Card callback buttons are enabled only when `actionMethod == 2` (through the Lark gateway's card-actions API); select / input and other form controls show only their current values.
 - Custom `Layout` can receive `.infinity` for `proposal.width` (ScrollView / ideal-size measurement); check `isFinite` before converting to an integer or it crashes.
+
+## Settings by scope (#5236)
+
+The shared iPhone, iPad and Mac settings page has three groups:
+
+| Scope | Entries |
+| --- | --- |
+| Current Assistant's Settings | Models, Assistant Profile, Channels, Connectors, Extensions, Knowledge Selection, Meetings, Agent, Machines (platform and hub capabilities decide availability) |
+| This Device | Appearance & Display, Language & Dictation, Notifications, Translation, Storage, Health, This iPhone, About |
+| Hub | Hub Connection, Hub Version, Assistants, Avatar, Devices & Pairing |
+
+With several installed assistants, the first heading shows the current assistant's avatar, name and existing switcher,
+with scope guidance. With one, it keeps the chosen Persona face and name without a switcher. The health space remains
+bound to the default assistant. The avatar is shared across devices; theme color, interface style, text size, list layout
+and light/dark appearance remain device preferences. The layout page is titled **Agents List Layout**.
+
+Models replaces the two separate model-provider and model-configuration entries. Common purpose/model choices come first;
+providers and keys sit under Advanced, and a purpose's runtime/provider choices are folded in its editor. Agent collects
+Claude Code, Codex and Session Triage. Applying runtime settings to all online computers affects only this assistant's
+computers in the current Hub. Connectors, extensions, markets, channels and knowledge selection use a captured assistant
+request context; switching assistants returns Settings to the list, and a late response cannot replace the new scope.
+An explicitly manager-bound detail link still opens that assistant's copy without changing the app's pick.
+
+About shows the app version and a folded Diagnostics section containing the build commit and last new-chat check.
+Devices & Pairing retains the device list, pairing again, Watch sync and confirmed disconnect. Mobile permissions,
+Health, dictation and lock-screen privacy remain available in their appropriate device pages.
+
+Settings search matches localized entry names and common aliases (for example API Key, dictation, lock screen, cache,
+Watch, and commit), then navigates directly to the destination. It changes no settings. Legacy SettingsPage values,
+ModelLaunchersRoute and existing DEBUG page-opening arguments continue to work. For a search-state capture, the existing
+`-openAppearance` argument accepts `search:<query>`; no new DEBUG switch is introduced.
+
+Regression coverage: `SettingsNavigationTests`, `AssistantSettingsScopeTests`, `SettingsResourceScopeTests`,
+`ManagerSwitchTests`, and `SettingsNavigationUITests` / `ModelsSettingsHierarchyTests`. A remembered assistant pick
+routes settings before the roster arrives; only a confirmed legacy-roster 404 suppresses it, without erasing the pick.
+These tests do not claim that an installed TestFlight app was updated.
 
 ## Engine selection
 
