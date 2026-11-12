@@ -182,8 +182,9 @@ func validDay(s string) bool {
 	return err == nil && d.Format(time.DateOnly) == s
 }
 
-// dropRoom ignores a day upload's room and private mark, as attending is: a role asked for is off with
-// AttendanceNotMeeting (problem, normalizeAttendance's, wins when it has one).
+// dropRoom ignores a day upload's room, private mark and timeline, as attending is: a role asked for is off with
+// AttendanceNotMeeting (problem, normalizeAttendance's, wins when it has one). Its transcription mode is never stored
+// (putTranscriptionFields): hub asked for is answered device with TranscriptionNotMeeting.
 func (u *RecordingUpload) dropRoom(problem string) string {
 	if u.room != nil {
 		if _, p := u.roomRole(); problem == "" {
@@ -191,7 +192,7 @@ func (u *RecordingUpload) dropRoom(problem string) string {
 		}
 		u.room = nil
 	}
-	u.Private = nil
+	u.Private, u.timeline = nil, nil
 	return problem
 }
 

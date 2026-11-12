@@ -229,6 +229,11 @@ type Service struct {
 	// meeting.answer model in tests (nil: the configured one).
 	asks         meetingAsks
 	meetingModel kb.Model
+	// hubTr is the meetings transcribed on the hub (meeting_transcribe.go); sockets makes socketMux, ServeSocket's
+	// (meeting_audio.go).
+	hubTr     hubRuns
+	sockets   sync.Once
+	socketMux *http.ServeMux
 }
 
 var _ Handler = (*Service)(nil)
