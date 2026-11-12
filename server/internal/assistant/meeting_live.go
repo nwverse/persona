@@ -330,6 +330,10 @@ type meetingLiveView struct {
 	More     bool            `json:"more,omitempty"`
 	Topics   *[]kb.LiveTopic `json:"topics,omitempty"`
 	TopicsAt *time.Time      `json:"topics_at,omitempty"`
+	// The highlights (#3862 phase 2b), GET only: the room's highlights so far ([] before the first) with their last
+	// change. Never in detail.meta.
+	Highlights   *[]kb.LiveHighlight `json:"highlights,omitempty"`
+	HighlightsAt *time.Time          `json:"highlights_at,omitempty"`
 }
 
 // only is v cut to parts (GET …/live?parts=asks,room): those of them it has, with their revisions.
@@ -371,6 +375,13 @@ func (v meetingLiveView) only(parts []string) map[string]any {
 			if v.TopicsAt != nil {
 				out["topics_at"] = v.TopicsAt
 			}
+		case kb.PartHighlights:
+			if v.Highlights != nil {
+				out[p] = *v.Highlights
+			}
+			if v.HighlightsAt != nil {
+				out["highlights_at"] = v.HighlightsAt
+			}
 		default:
 			continue
 		}
@@ -395,7 +406,8 @@ func (s *Service) liveView(ctx context.Context, l kb.Live, rec kb.Recording, ask
 	if asks != nil {
 		out.Asks = &asks
 	}
-	out.Revs = map[string]int64{kb.PartAsks: l.AsksRev, kb.PartLines: int64(len(l.Segments)), kb.PartTopics: l.TopicsRev}
+	out.Revs = map[string]int64{kb.PartAsks: l.AsksRev, kb.PartLines: int64(len(l.Segments)), kb.PartTopics: l.TopicsRev,
+		kb.PartHighlights: l.HighlightsRev}
 	if m := rec.Conv; m != nil {
 		out.Private, out.Room, out.Followup = m.Private, m.RoomView(), m.FollowupView()
 		for _, p := range []string{kb.PartRoom, kb.PartPrivate, kb.PartFollowup} {
@@ -405,7 +417,7 @@ func (s *Service) liveView(ctx context.Context, l kb.Live, rec kb.Recording, ask
 		}
 	}
 	if asks == nil {
-		out.Revs = nil // POST …/live: GET reads them, and the topics
+		out.Revs = nil // POST …/live: GET reads them, the topics and the highlights
 	} else {
 		topics := l.Topics
 		if topics == nil {
@@ -415,6 +427,15 @@ func (s *Service) liveView(ctx context.Context, l kb.Live, rec kb.Recording, ask
 		if !l.TopicsAt.IsZero() {
 			at := l.TopicsAt
 			out.TopicsAt = &at
+		}
+		highlights := l.Highlights
+		if highlights == nil {
+			highlights = []kb.LiveHighlight{}
+		}
+		out.Highlights = &highlights
+		if !l.HighlightsAt.IsZero() {
+			at := l.HighlightsAt
+			out.HighlightsAt = &at
 		}
 	}
 	if rec.RoomMeeting() {
