@@ -1,6 +1,52 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Among the Codex App's chats in no project": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Among the Codex App's chats in no project"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在 Codex App 的“无项目”对话里"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Codex App のプロジェクトなしのチャットに入ります"
+          }
+        }
+      }
+    },
+    "Starts in the Codex App. With no folder it goes where the App keeps chats in no project; a new folder is made when it starts.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Starts in the Codex App. With no folder it goes where the App keeps chats in no project; a new folder is made when it starts."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在 Codex App 里新开对话。不选文件夹时放在 App 存放“无项目”对话的位置；新建的文件夹会在对话开始时创建。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Codex App でチャットを開始します。フォルダを選ばない場合は、App がプロジェクトなしのチャットを置く場所に入ります。新しいフォルダはチャット開始時に作成されます。"
+          }
+        }
+      }
+    },
     "Temporary Session": {
       "extractionState": "manual",
       "localizations": {

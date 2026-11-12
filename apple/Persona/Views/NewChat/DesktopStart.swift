@@ -5,11 +5,13 @@ import Foundation
 /// session goes to the app's scratch folder, which the computer picks), browsing starts in the folder that holds the
 /// app's projects, and a new folder may be named there (the computer makes it when the session starts).
 nonisolated enum DesktopStart {
-    /// The folder that holds most of the folders of the Claude desktop app's sessions among `sessions` (one computer's),
-    /// as the computer places the scratch folder; ties go to the first by name. nil when it has none.
-    static func projectsFolder(_ sessions: [Session]) -> String? {
+    /// The folder that holds most of the folders of the desktop app's sessions among `sessions` (one computer's): Claude's
+    /// (as the computer places the scratch folder), or with `codex` the Codex App's projects (its chats in no project, in
+    /// <home>/Documents/Codex/<date>/<name>, left out). Ties go to the first by name. nil when it has none.
+    static func projectsFolder(_ sessions: [Session], codex: Bool = false) -> String? {
         var count: [String: Int] = [:]
-        for s in sessions where s.agentSurface == "desktop" && s.isClaude && s.cwd.hasPrefix("/") {
+        for s in sessions where s.agentSurface == "desktop" && (codex ? s.isCodex && !AppGroups.isCodexChatFolder(s.cwd) : s.isClaude)
+            && s.cwd.hasPrefix("/") {
             let parent = (s.cwd as NSString).deletingLastPathComponent
             guard !parent.isEmpty, parent != "/" else { continue }
             count[parent, default: 0] += 1

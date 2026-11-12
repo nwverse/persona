@@ -306,7 +306,8 @@ struct NewChatView: View {
                             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                                 if desktopScratch {
                                     Text("Temporary Session").font(Theme.Font.heading)
-                                    Text("Grouped together in the Claude app's sidebar").font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
+                                    Text(codex ? String(localized: "Among the Codex App's chats in no project") : String(localized: "Grouped together in the Claude app's sidebar"))
+                                        .font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
                                 } else {
                                     Text(cwd.isEmpty ? String(localized: "Choose Directory") : (cwd as NSString).lastPathComponent).font(Theme.Font.heading)
                                     if !cwd.isEmpty {
@@ -346,7 +347,11 @@ struct NewChatView: View {
                         }
                     }
                 } header: { Text("Folder [Task Views 52daa7]") } footer: {
-                    if desktopStart { Text("Starts in Claude's desktop app. With no folder it goes to one temporary folder beside the app's projects; a new folder is made when it starts.") }
+                    if desktopStart && codex {
+                        Text("Starts in the Codex App. With no folder it goes where the App keeps chats in no project; a new folder is made when it starts.")
+                    } else if desktopStart {
+                        Text("Starts in Claude's desktop app. With no folder it goes to one temporary folder beside the app's projects; a new folder is made when it starts.")
+                    }
                 }
                 if let repo, !repo.path.isEmpty, !desktopScratch {
                     NewAgentWorktreeSection(repo: repo, on: $inWorktree, branch: $worktreeBranch,
@@ -505,8 +510,8 @@ struct NewChatView: View {
                 .padding(.bottom, Theme.Space.s)
             }
             .task(id: machineID) { await loadMachine() }
-            .task(id: "\(machineID)|\(desktopStart)") {
-                desktopProjects = desktopStart ? DesktopStart.projectsFolder(model.sessionsByMachine[ref] ?? []) ?? "" : ""
+            .task(id: "\(machineID)|\(desktopStart)|\(codex)") {
+                desktopProjects = desktopStart ? DesktopStart.projectsFolder(model.sessionsByMachine[ref] ?? [], codex: codex) ?? "" : ""
             }
             .task(id: machineID) { await workspaceCatalog.refresh([ref.group]) { model.api($0) } }
             // A provider added from a grayed-out launcher's help (Add Provider): this computer's list again.

@@ -70,14 +70,49 @@ final class DesktopStartUITests: XCTestCase {
         }
     }
 
-    /// The MacBook, and its claude-desktop launcher from the launcher list.
-    @MainActor private func pickMacBook() {
+    /// The MacBook, and a launcher of its from the launcher list (claude-desktop unless said).
+    @MainActor private func pickMacBook(_ name: String = "claude-desktop") {
         see(app.buttons["newChat.directory"], "the directory row", timeout: 15)
         see(app.buttons["newChat.machine.macbook"], "MacBook card").tap()
-        see(app.buttons["newChat.launcher"], "the launcher row", timeout: 15).tap()
-        see(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "claude-desktop")).firstMatch, "claude-desktop").tap()
-        let launcher = see(app.buttons["newChat.launcher"], "the launcher row")
-        XCTAssertTrue(launcher.label.contains("claude-desktop"), "launcher row: \(launcher.label)")
+        // Below the fold once Recent has cards (a list only has the rows it shows).
+        let row = app.buttons["newChat.launcher"]
+        for _ in 0..<6 where !(row.exists && row.isHittable) {
+            app.swipeUp()
+            _ = row.waitForExistence(timeout: 1.5)
+        }
+        see(row, "the launcher row", timeout: 15).tap()
+        // The picker's row, not a Recent card that names the launcher too (its label starts with the folder).
+        let pick = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
+        see(pick, name).tap()
+        // Back on the sheet: the Folder row (each test checks it) says which launcher it is for.
+        see(app.buttons["newChat.directory"], "the directory row")
+    }
+
+    /// The Codex App's launcher with no folder picked: among the App's chats in no project, sent with no folder and with its
+    /// first message (a Codex start needs one).
+    @MainActor func testTheCodexAppWithNoFolderStartsAChatInNoProject() throws {
+        launch()
+        pickMacBook("codex-app")
+        let row = app.buttons["newChat.directory"]
+        let end = Date().addingTimeInterval(10)
+        while Date() < end, !row.label.contains("Codex App") { usleep(300_000) }
+        XCTAssertTrue(row.label.contains("Temporary Session") && row.label.contains("Codex App"), "directory row: \(row.label)")
+        let prompt = app.textViews["newChat.prompt"].exists ? app.textViews["newChat.prompt"] : app.textFields["newChat.prompt"]
+        for _ in 0..<4 where !prompt.isHittable { app.swipeUp() }
+        see(prompt, "the first message").tap()
+        prompt.typeText("Fix the CSV export")
+        app.swipeDown()
+        shot("codex-temporary")
+        see(app.buttons["Start Chat"], "Start Chat").tap()
+        let end2 = Date().addingTimeInterval(10)
+        var start: [String: Any] = [:]
+        while Date() < end2, start.isEmpty {
+            let started = (try call("/mock/started")["started"] as? [[String: Any]]) ?? []
+            start = started.last(where: { $0["launcher"] as? String == "codex-app" }) ?? [:]
+            if start.isEmpty { usleep(300_000) }
+        }
+        XCTAssertEqual(start["cwd"] as? String ?? "", "", "\(start)")
+        XCTAssertEqual(start["prompt"] as? String, "Fix the CSV export", "\(start)")
     }
 
     /// The desktop app's launcher with no folder picked: a temporary session, ready to start, sent with no folder.

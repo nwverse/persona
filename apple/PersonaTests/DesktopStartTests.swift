@@ -12,12 +12,13 @@ struct DesktopStartTests {
     }
 
     @Test func theLauncherIsTheOneWhoseSourceIsTheDesktopApp() throws {
-        let json = #"[{"name":"claude-desktop","base_url":"","model":"","source":"claude_desktop","agent":"claude"},{"name":"glm","base_url":"https://g","model":"glm-5","source":"zshrc"},{"name":"old","base_url":""}]"#
+        let json = #"[{"name":"claude-desktop","base_url":"","model":"","source":"claude_desktop","agent":"claude"},{"name":"glm","base_url":"https://g","model":"glm-5","source":"zshrc"},{"name":"old","base_url":""},{"name":"codex-app","base_url":"","source":"codex_app","agent":"codex"}]"#
         let ls = try JSON.decoder.decode([Launcher].self, from: Data(json.utf8))
-        #expect(ls.map(\.startsInDesktopApp) == [true, false, false])
-        #expect(ls.map(\.source) == ["claude_desktop", "zshrc", nil])
-        // Run Agent Here types the launcher into a shell: not the one that starts in the app.
-        #expect(ls.map(NodeMenu.launchableHere) == [false, true, true])
+        #expect(ls.map(\.startsInDesktopApp) == [true, false, false, true])
+        #expect(ls.map(\.source) == ["claude_desktop", "zshrc", nil, "codex_app"])
+        #expect(ls[3].isCodex) // the Codex App's is a Codex launcher: it starts with its first message
+        // Run Agent Here types the launcher into a shell: not one that starts in an app.
+        #expect(ls.map(NodeMenu.launchableHere) == [false, true, true, false])
     }
 
     @Test func browsingStartsWhereMostOfTheAppsProjectsAre() {
@@ -36,6 +37,21 @@ struct DesktopStartTests {
         // A tie goes to the first by name, as on the computer.
         #expect(DesktopStart.projectsFolder([Self.session("e", cwd: "/w/B/e"), Self.session("f", cwd: "/w/A/f")]) == "/w/A")
         #expect(DesktopStart.projectsFolder([Self.session("g", surface: "cli", cwd: "/w/A/g")]) == nil)
+    }
+
+    /// The Codex App's projects: its chats in a project, not those in no project (in the App's own dated folders), not
+    /// Claude's.
+    @Test func browsingForTheCodexAppStartsWhereItsProjectsAre() {
+        let sessions = [
+            Self.session("p1", agent: "codex", cwd: "/Users/u/Documents/ChatGPT/billing"),
+            Self.session("p2", agent: "codex", cwd: "/Users/u/Documents/ChatGPT/tools"),
+            Self.session("n1", agent: "codex", cwd: "/Users/u/Documents/Codex/2026-11-06/w-i"),
+            Self.session("n2", agent: "codex", cwd: "/Users/u/Documents/Codex/2026-11-06/cha-k"),
+            Self.session("n3", agent: "codex", cwd: "/Users/u/Documents/Codex/2026-11-06/pei-z"),
+            Self.session("c1", cwd: "/Users/u/Code/a"), Self.session("c2", cwd: "/Users/u/Code/b"), Self.session("c3", cwd: "/Users/u/Code/c"),
+        ]
+        #expect(DesktopStart.projectsFolder(sessions, codex: true) == "/Users/u/Documents/ChatGPT")
+        #expect(DesktopStart.projectsFolder(sessions) == "/Users/u/Code")
     }
 
     @Test func aNewFolderIsOneNameInTheFolderBrowsed() {
