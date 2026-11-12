@@ -121815,6 +121815,29 @@
       },
       "extractionState" : "manual"
     },
+    "Show Less [Bubble Fold]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show Less"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "折りたたむ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收起"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Show Lines Above" : {
       "localizations" : {
         "zh-Hans" : {
@@ -121925,6 +121948,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "查看更多信息"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Show More [Bubble Fold]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show More"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "展開"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "展开"
           }
         }
       },

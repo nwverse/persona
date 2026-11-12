@@ -383,6 +383,9 @@ struct UserBubbleBody: View {
     /// The comment blocks the message led with (`MessageComments.inBubble`), and the plain quote before them.
     var comments: [MessageComment] = []
     var lead: String?
+    /// Folds the words past the web's lines (`BubbleFold`, #5676): the chat's bubbles. nil: whole (the lifted copy, the
+    /// first message of a conversation starting).
+    var fold: BubbleFoldKey? = nil
     /// The new conversation layout (#1666, `ChatLayout`): the user's box is pale blue under the primary text color
     /// (`Theme.UserBubbleInk`).
     @Environment(\.chatLayout) private var layout
@@ -399,12 +402,16 @@ struct UserBubbleBody: View {
     }
 
     private func words(_ ink: Theme.UserBubbleInk) -> some View {
-        PathText(text: text, refs: paths, link: ink.link)
-            .font(Theme.Font.body).lineHeight(.body).foregroundStyle(ink.words)
-            .selectableInLift(text, as: .plain(ink.words)) // #603
-            #if os(macOS)
-            .textSelection(.enabled) // drag to select and ⌘C, as on the web (#2542)
-            #endif
+        BubbleFold(text: text, fold: fold, tint: ink.link) { shown in
+            // Folded, only the start is drawn: the paths in it.
+            PathText(text: shown, refs: paths.isEmpty || shown == text ? paths : paths.filter { NSMaxRange($0.range) <= (shown as NSString).length },
+                     link: ink.link)
+                .font(Theme.Font.body).lineHeight(.body).foregroundStyle(ink.words)
+                .selectableInLift(text, as: .plain(ink.words)) // #603
+                #if os(macOS)
+                .textSelection(.enabled) // drag to select and ⌘C, as on the web (#2542)
+                #endif
+        }
     }
 
     private func quoted(_ ink: Theme.UserBubbleInk) -> some View {

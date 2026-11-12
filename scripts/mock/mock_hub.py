@@ -12862,6 +12862,50 @@ if os.environ.get("MOCK_PEER_FOLD") == "1":
     mock_peer_fold()
 
 
+# MOCK_LONG_INPUT=1: your own long message folds (#5676): an Agent chat with a long pasted report (past 14 lines on a
+# phone), a twelve-line one that stays whole, and the same report at the end of Persona's conversation. MOCK_LONG_INPUT=perf:
+# forty exchanges, each opened by a long pasted report, for the chat's scrolling frames (docs/apple/performance.md P12).
+# Synthetic text.
+LONG_INPUT = "a1f3c2d4-0000-4000-8000-000005676a00"
+LONG_REPORT = ("车道 sample-lane：A、C 的 PR 开好了，请批截图（只改 hub 文案 / hub 行为，网页和 App 代码没动）。\n"
+               "A #1201（issue #1188）市场读取报错说清原因 + i18n：填错地址时不再说「版本号是 0」，改成「这个地址返回的不是扩展市场…"
+               "仓库请填 owner/repo」「返回的是网页…」「要更新的 hub」，代理 / 登录页回的 JSON 会引用它的原话；限流、404、要 token 也走 i18n。\n"
+               "截图（改前 main / 改后，中英日、深浅、宽窄）：本机 .lane/shots/a/sheet-*.png。\n"
+               "C #1203（issue #1190）新 hub 第一次开市场不再显示假的「读不到官方扩展 / 去填 token」：首个请求等官方市场第一次读完（最多 10 秒）。"
+               "截图（全新 hub 第一次打开，改前 / 改后）：.lane/shots/c/sheet-c-wide.png、sheet-c-narrow.png。\n"
+               "B 还在跑：扩展装好后列表第一次刷新慢 3 秒，原因是目录缓存过期判断用了本地时间；改成 hub 时间后本地复现不了了，等测试包上手机再确认。\n"
+               "D 卡住：要你决定「扩展更新提示」放设置页还是放收件箱。两种做法的样稿在 .lane/shots/d/，我倾向放设置页（不打扰）。\n"
+               "下一步：批了就合 A、C；B 等测试包；D 等决定。最后一行在这里。")
+LONG_TWELVE = "\n".join("第 %d 行：短短一句。" % (n + 1) for n in range(12))
+LONG_REPLY = "收到。A、C 的截图我都看过了，没问题，可以合。B 等测试包；D 我倾向放设置页，理由和你一样。"
+
+
+def mock_long_input(perf):
+    if perf:
+        items = []
+        for n in range(40):
+            m = 60 * 24 - n * 30
+            items.append(it("user", "text", m + 2, text="第 %d 份报告：\n" % (n + 1) + LONG_REPORT))
+            items.append(it("assistant", "text", m, text=LONG_REPLY))
+        ITEMS[LONG_INPUT] = items
+    else:
+        ITEMS[LONG_INPUT] = [
+            it("user", "text", 30, text="各个车道的进展贴给你，帮我看哪些能合"),
+            it("assistant", "text", 29, text="好的，你贴过来，我一条条看。"),
+            it("user", "text", 12, text=LONG_TWELVE),
+            it("assistant", "text", 11, text="这条不长，不用折。"),
+            it("user", "text", 6, text=LONG_REPORT),
+            it("assistant", "text", 5, text=LONG_REPLY),
+        ]
+        ITEMS[ASK1] = ITEMS[ASK1] + [it("user", "text", 3, text=LONG_REPORT), it("assistant", "text", 2, text=LONG_REPLY)]
+    SESSIONS.append(sess("macbook", LONG_INPUT, "车道任务跟进", "/Users/me/code/shop-app", "done", "read", "shop-app", 20, "lanes", 1, 5,
+                         LONG_REPLY))
+
+
+if os.environ.get("MOCK_LONG_INPUT") in ("1", "perf"):
+    mock_long_input(os.environ.get("MOCK_LONG_INPUT") == "perf")
+
+
 # MOCK_REPLY_BREAKS=1: a reply written line by line (#2088): bold lines with steps right under them, one list numbered
 # on from 5, and a bold line with its sentence on the next line; in an Agents chat and at the end of Persona's
 # conversation. Synthetic text.
