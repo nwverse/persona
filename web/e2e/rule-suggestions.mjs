@@ -64,9 +64,9 @@ const HELD = "todo_review"; // the PR check's decision: held for the briefing, a
 }
 
 const WORDS = {
-  en: { always: "Always", notNow: "Not now", creates: "Always adds a standing authorization", trust: "Always remembers this kind of task", none: "Always stores no rule and turns nothing on", made: "Standing authorization added.", where: "Standing authorizations", madeTrust: "Remembered: tasks like this now start without asking.", whereTrust: "Remembered auto-start rules", madeNone: "No rule was stored and nothing was turned on.", hidden: "Not suggested again for 30 days.", briefing: "With the next briefing", pushed: "nothing was pushed" },
-  "zh-Hans": { always: "总是", notNow: "暂不", creates: "新增一条长期授权", trust: "会记住这类任务", none: "不会存下规则，也不会开启任何设置", made: "已新增长期授权。", where: "长期授权", madeTrust: "已记住：这类任务以后不再询问，直接开始。", whereTrust: "记住的", madeNone: "没有存下规则，也没有开启任何设置。", hidden: "30 天内不再建议。", briefing: "随下次简报送达", pushed: "没有推送提醒" },
-  ja: { always: "常に", notNow: "今はしない", creates: "継続的な承認を追加します", trust: "この種類のタスクを記憶します", none: "ルールは保存されず、設定もオンになりません", made: "継続的な承認を追加しました。", where: "継続的な承認", madeTrust: "記憶しました。この種類のタスクは確認なしで開始されます。", whereTrust: "", madeNone: "ルールは保存されず、設定もオンになっていません。", hidden: "30 日間は提案しません。", briefing: "次のブリーフィングで届きます", pushed: "通知は送っていません" },
+  en: { open: "Open", always: "Always", notNow: "Not now", creates: "Always adds a standing authorization", trust: "Always remembers this kind of task", none: "Always stores no rule and turns nothing on", made: "Standing authorization added.", where: "Standing authorizations", madeTrust: "Remembered: tasks like this now start without asking.", whereTrust: "Remembered auto-start rules", madeNone: "No rule was stored and nothing was turned on.", hidden: "Not suggested again for 30 days.", briefing: "With the next briefing", pushed: "nothing was pushed" },
+  "zh-Hans": { open: "打开", always: "总是", notNow: "暂不", creates: "新增一条长期授权", trust: "会记住这类任务", none: "不会存下规则，也不会开启任何设置", made: "已新增长期授权。", where: "长期授权", madeTrust: "已记住：这类任务以后不再询问，直接开始。", whereTrust: "记住的", madeNone: "没有存下规则，也没有开启任何设置。", hidden: "30 天内不再建议。", briefing: "随下次简报送达", pushed: "没有推送提醒" },
+  ja: { open: "開く", always: "常に", notNow: "今はしない", creates: "継続的な承認を追加します", trust: "この種類のタスクを記憶します", none: "ルールは保存されず、設定もオンになりません", made: "継続的な承認を追加しました。", where: "継続的な承認", madeTrust: "記憶しました。この種類のタスクは確認なしで開始されます。", whereTrust: "", madeNone: "ルールは保存されず、設定もオンになっていません。", hidden: "30 日間は提案しません。", briefing: "次のブリーフィングで届きます", pushed: "通知は送っていません" },
 };
 
 async function open(browser, theme, lang, width = 1280, height = 900) {
@@ -87,12 +87,23 @@ const shot = async (page, name, target) => {
   else await page.screenshot({ path: join(shots, `${name}.png`) });
 };
 
-/** The main chat with the Needs you tray open, once every card with a suggestion drew its line. */
+/** Opens every folded row of the tray (#5569: a row with something to answer is one line until opened). */
+async function openRows(page) {
+  await page.locator("button[data-needs-row]").first().waitFor({ state: "visible", timeout: 15000 }).catch(() => {});
+  for (let i = 0; i < 30; i++) {
+    const folded = page.locator('button[data-needs-row][aria-expanded="false"]').first();
+    if (!(await folded.count())) break;
+    await folded.click();
+  }
+}
+
+/** The main chat with the Needs you tray open and its rows opened, once every card with a suggestion drew its line. */
 async function openTray(page, where) {
   await page.goto(`${base}/persona/${assistant.main}`);
   const entry = page.locator('[data-tray-entry="needs"]');
   await entry.waitFor({ state: "visible", timeout: 20000 }).catch(() => fail(`${where}: the main chat has no Needs you entry`));
   if ((await entry.getAttribute("aria-expanded")) !== "true") await entry.click();
+  await openRows(page);
   await page.locator("[data-rule-suggestion]").first().waitFor({ state: "visible", timeout: 15000 }).catch(() => fail(`${where}: no card in Needs you carries a suggested rule's line`));
   await page.waitForFunction(() => document.querySelectorAll("[data-rule-suggestion]").length >= 3, null, { timeout: 10000 }).catch(() => {});
 }
@@ -124,9 +135,6 @@ async function fits(page, l, where) {
   check(m.buttons.length === 2 && m.buttons.every((b) => !b.wraps && b.h <= 34 && b.right <= m.width + 0.5), `${where}: the two buttons are not single-line inside the screen (${JSON.stringify(m.buttons)})`);
 }
 
-/** The result that took a line's place: the next thing after the same card. */
-const resultAfter = (page, cardSelector) => page.locator(`${cardSelector} ~ [data-rule-result]`).first();
-
 const browser = await chromium.launch(executable ? { executablePath: executable } : { channel: "chrome" });
 try {
   for (const [theme, lang] of [["light", "en"], ["dark", "en"], ["light", "zh-Hans"], ["light", "ja"]]) {
@@ -157,7 +165,18 @@ try {
     await shot(page, `needs-you-${theme}-${lang}`);
     ok(`${where}: the open plan, the decision and the passed-up question each carry a line saying what Always stores, with ${w.always} / ${w.notNow}`);
 
-    // 2. the decision held for the briefing: its card says so, with what that means
+    // 2. the decision held for the briefing: its folded row says so, and its card with what that means
+    {
+      const head = page.locator(`[data-needs-row="task:${HELD}"] > button[aria-expanded]`);
+      await head.click(); // fold it again
+      const folded = page.locator(`button[data-needs-row="task:${HELD}"]`);
+      await folded.waitFor({ state: "visible", timeout: 5000 }).catch(() => fail(`${where}: the held decision's row does not fold`));
+      check((await folded.textContent()).includes(w.briefing), `${where}: the folded row of the held decision does not say it comes with the briefing: ${await folded.textContent()}`);
+      const others = await page.$$eval("button[data-needs-row]", (xs, word) => xs.filter((x) => x.textContent.includes(word)).length, w.briefing);
+      check(others === 1, `${where}: ${others} folded rows say they come with the briefing`);
+      await shot(page, `held-folded-${theme}-${lang}`, folded);
+      await folded.click();
+    }
     const held = page.locator(`[data-needs-row="task:${HELD}"]`);
     await held.waitFor({ state: "visible", timeout: 10000 }).catch(() => fail(`${where}: the held decision is not in Needs you`));
     const mark = held.locator("[data-for-briefing]");
@@ -211,7 +230,7 @@ try {
     const merge = line(page, "standing_authorization");
     await merge.getByRole("button", { name: w.always, exact: true }).click();
     await page.waitForFunction(() => !document.querySelector(`[data-rule-suggestion="standing_authorization"]`), null, { timeout: 10000 }).catch(() => fail(`${where}: Always did not clear the line`));
-    const result = resultAfter(page, `[data-needs-row="task:${HELD}"]`);
+    const result = page.locator(`[data-needs-row="task:${HELD}"] [data-rule-result]`).first();
     await result.waitFor({ state: "visible", timeout: 10000 }).catch(() => fail(`${where}: nothing said what Always made`));
     const text = await result.textContent();
     check(text.includes(w.made) && text.includes(w.where), `${where}: the result does not say what was made and where it is listed: ${text}`);
@@ -259,7 +278,8 @@ try {
     if ((await entry.getAttribute("aria-expanded")) !== "true") await entry.click();
     const again = page.locator(`[data-needs-row="task:${HELD}"]`);
     await again.waitFor({ state: "visible", timeout: 10000 });
-    await again.locator("button", { hasText: /\S/ }).first().click(); // its title opens the task
+    if (await again.evaluate((el) => el.matches('button[aria-expanded="false"]'))) await again.click();
+    await page.locator(`[data-needs-row="task:${HELD}"]`).getByRole("button", { name: w.open, exact: true }).first().click(); // Open: the task's panel
     const banner = page.locator('[data-testid="todo-ask"] [data-for-briefing="mark"]').first();
     await banner.waitFor({ state: "visible", timeout: 15000 }).catch(() => fail(`${where}: the task panel's ask banner has no held-for-briefing mark`));
     check((await banner.textContent()) === w.briefing && (await banner.getAttribute("title")).includes(w.pushed), `${where}: the banner's mark says ${await banner.textContent()}`);

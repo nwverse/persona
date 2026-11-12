@@ -40,6 +40,7 @@ import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
 import persona.core.domain.tasks.moveTo
 import persona.core.domain.tasks.TodoListFilter
@@ -145,6 +146,8 @@ fun TodosScreen(
 
     val sessionMap = remember(sessions) { sessions.associateBy { it.key } }
     val sessionLookup: (SessionKey) -> Session? = remember(sessionMap) { { key: SessionKey -> sessionMap[key] } }
+    val hubFeatures = tasks?.features?.collectAsState()
+    val seenOn = hubFeatures?.value?.contains("todo_seen") == true
 
     val searched = remember(todos, query) {
         if (query.isBlank()) todos
@@ -201,6 +204,26 @@ fun TodosScreen(
     val feedback = LocalAppFeedback.current
     val haptics = rememberHaptics()
     val locale = LocalConfiguration.current.locales[0]
+    fun seenFailed(e: Exception) {
+        if (feedback?.failure(e) != true) onError(res.getString(R.string.agents_todo_seen_failed, e.message.orEmpty()))
+    }
+    val gotIt: (Todo, Long) -> Unit = gotIt@{ todo, after ->
+        val store = tasks ?: return@gotIt
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            // The local move finishes before the click returns; the hub write does not hold Undo (#5707, principle 7).
+            val undo = FeedbackAction(res.getString(R.string.agents_todo_seen_undo)) {
+                scope.launch {
+                    try { store.setTodoSeen(todo.id, false) }
+                    catch (e: CancellationException) { throw e }
+                    catch (e: Exception) { seenFailed(e) }
+                }
+            }
+            feedback?.notice(res.getString(R.string.agents_todo_seen_moved), undo)
+            try { store.setTodoSeen(todo.id, true, after) }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) { seenFailed(e) }
+        }
+    }
     fun moveFailed(e: Exception) {
         if (feedback?.failure(e) != true) onError(res.getString(R.string.agents_todo_calendar_move_failed, e.message.orEmpty()))
     }
@@ -406,6 +429,9 @@ fun TodosScreen(
                                 onDone = setDone,
                                 onDelete = delete,
                                 onRestore = { restored = restores.restore(group.lead.id, System.currentTimeMillis()) },
+                                onSeen = if (seenOn && section == TriageSection.JustDone) ({
+                                    gotIt(group.lead, group.triage.getValue(group.lead.id).last)
+                                }) else null,
                             )
                             if (open) {
                                 for (m in group.members.drop(1)) {
@@ -479,6 +505,7 @@ private fun TodoTriageRow(
     onDone: (Todo, Boolean) -> Unit,
     onDelete: (Todo) -> Unit,
     onRestore: () -> Unit,
+    onSeen: (() -> Unit)?,
 ) {
     val res = agentResources()
     // a failed start waiting on the owner reads open, says why in red, and its checkbox closes it (#3713)
@@ -586,7 +613,9 @@ private fun TodoTriageRow(
                         )
                     }
                     Spacer(Modifier.weight(1f))
-                    if (triage.section == TriageSection.Shelved) {
+                    if (onSeen != null) {
+                        JTextButton(stringResource(R.string.agents_todo_seen), onSeen)
+                    } else if (triage.section == TriageSection.Shelved) {
                         JTextButton(stringResource(R.string.agents_todo_restore), onRestore, icon = PhIcons.ArrowUUpLeft)
                     } else if (!finished && todo.currentAgents.isNotEmpty()) {
                         Text(pluralStringResource(R.plurals.agents_todo_agents, todo.currentAgents.size, todo.currentAgents.size),
