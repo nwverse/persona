@@ -121,4 +121,6 @@ func TestGoldenEngineHandoff(t *testing.T) {
 		{SessionID: handoffCodex, Agent: "codex", After: switchedAt, Until: back}}, "codex", "claude", false))
 	goldenNode(t, "engine_handoff.delta", note([]handoffSpan{{SessionID: handoffCodex, Agent: "codex", After: switchedAt}}, "codex", "claude", true))
 	goldenNode(t, "engine_handoff.delta_empty", note([]handoffSpan{{SessionID: handoffClaude, Agent: "claude", After: back, Until: back}}, "claude", "codex", true))
+	// The message the switch types: the note in its block, then the user's words.
+	goldenNode(t, "engine_handoff.message", handoffMessage("The note.\n", "codex", "claude", "gpt-5.5", true, "Is the cookie fixed now?"))
 }

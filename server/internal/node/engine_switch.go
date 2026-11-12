@@ -5,16 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"slices"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/proto"
-	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // Switching a running terminal Agent between Claude Code and Codex (#5054, docs/integrations/claude-integration.md
@@ -85,16 +81,6 @@ func (n *Node) engineOwnLauncher(id, engine string) (string, bool) {
 	return "codex", false
 }
 
-// asEngineSwitchError is asSwitchError for a switch to the other engine: a check's refusal of its own (switch_*) as it
-// is, another as switch_unsupported with its words.
-func asEngineSwitchError(err error) error {
-	var re *rpc.Error
-	if errors.As(err, &re) && strings.HasPrefix(re.Code, "switch_") {
-		return err
-	}
-	return engineUnsupported(err.Error())
-}
-
 // engineUnsupported is the refusal of an engine switch for a session that cannot have one, why in the node's words.
 func engineUnsupported(why string) error {
 	return refusal(proto.CodeSwitchUnsupported, "only a Claude Code or Codex Agent running in a terminal Persona drives can switch to the other engine: "+why, nil)
@@ -142,7 +128,7 @@ type enginePlan struct {
 }
 
 // planEngineSwitch checks the switch ps of session id to the engine ps.Agent and works out how to carry it out: the
-// session (engineSwitchSession), its own launcher, the conversation's directory, the launcher picked and the parked
+// session (switchSession), its own launcher, the conversation's directory, the launcher picked and the parked
 // session to resume, when there is one that can be.
 func (n *Node) planEngineSwitch(ctx context.Context, id string, ps proto.PendingSwitch) (*enginePlan, error) {
 	to := ps.Agent
@@ -155,7 +141,7 @@ func (n *Node) planEngineSwitch(ctx context.Context, id string, ps proto.Pending
 	if err := validEngineEffort(to, ps.Effort); err != nil {
 		return nil, err
 	}
-	a, h, ref, err := n.engineSwitchSession(ctx, id)
+	a, h, ref, err := n.switchSession(ctx, id, true)
 	if err != nil {
 		return nil, err
 	}
@@ -178,7 +164,7 @@ func (n *Node) planEngineSwitch(ctx context.Context, id string, ps proto.Pending
 	} else {
 		p.cwd = n.codexCwd(id)
 	}
-	if !isDir(p.cwd) {
+	if !dirExists(p.cwd) {
 		return nil, engineUnsupported("Persona cannot tell which folder its conversation belongs to")
 	}
 	if err := n.checkEngineLauncher(ctx, ps.Launcher, to, ps.Model); err != nil {
@@ -220,23 +206,6 @@ func validEngineEffort(to, effort string) error {
 		return fmt.Errorf("unknown effort level %q", effort)
 	}
 	return validModes("", effort)
-}
-
-// isDir: path is an existing directory.
-func isDir(path string) bool {
-	if path == "" {
-		return false
-	}
-	fi, err := os.Stat(path)
-	return err == nil && fi.IsDir()
-}
-
-// engineSwitchSession checks that session id is one a switch to the other engine can restart: a Claude Code or Codex
-// Agent running in a pane of a terminal host that can say what runs in it and start an agent there (switchSession,
-// with a Codex of its own allowed). Still refused: an assistant conversation, a runtime's or botmux's session, a
-// Codex thread an app or another program runs, an agent in a terminal only (opencode, pi without its extension).
-func (n *Node) engineSwitchSession(ctx context.Context, id string) (host.Agent, host.Host, host.PaneRef, error) {
-	return n.switchSessionOf(ctx, id, true)
 }
 
 // codexCwd is the directory Codex session id runs in: its record's, else the one its rollout's session_meta names.
@@ -315,7 +284,7 @@ func (n *Node) claudeParked(ctx context.Context, id string, ps proto.PendingSwit
 		return "", "", r.Error()
 	}
 	cwd = n.switchCwd(id, host.Agent{})
-	if !isDir(cwd) {
+	if !dirExists(cwd) {
 		return "", "", "its folder cannot be told"
 	}
 	dir, known := n.launcherClaudeDir(ctx, ps.Launcher)
@@ -348,7 +317,7 @@ func (n *Node) codexParked(ctx context.Context, id, launcher string) (cwd, why s
 		return "", "a resume of it may still be coming up"
 	}
 	cwd = n.codexCwd(id)
-	if !isDir(cwd) {
+	if !dirExists(cwd) {
 		return "", "its folder cannot be told"
 	}
 	return cwd, ""
@@ -392,21 +361,14 @@ func handoffSpans(legs []proto.EngineLeg, after int, cur, from string) []handoff
 	return append(out, handoffSpan{SessionID: cur, Agent: from, After: prev})
 }
 
-// engineMode is the permission mode the other engine starts in, from what session id runs in now (mode: a Claude
-// Code session's; a Codex one's is its record's): plan stays plan, bypassPermissions goes to Codex as its bypass flags,
-// the rest is the launcher's own.
-func (n *Node) engineMode(id string, p *enginePlan, mode string) string {
-	if p.from == "codex" {
-		if st, ok := n.state.get(id); ok && st.AppMode == "plan" {
-			return "plan"
-		}
-		return ""
-	}
+// engineMode is the permission mode engine to starts in, from mode, the one the session runs in now: plan stays plan,
+// bypassPermissions goes to Codex as its bypass flags, the rest is the launcher's own.
+func engineMode(to, mode string) string {
 	switch mode {
 	case "plan":
 		return mode
 	case proto.ModeBypass:
-		if p.to == "codex" {
+		if to == "codex" {
 			return mode
 		}
 	}
@@ -455,15 +417,17 @@ func (n *Node) applyEngineSwitch(ctx context.Context, id, pane, from string, ps 
 	if err != nil {
 		n.logf("session %s: switch to %s (launcher %s) dropped: %v", id, engineName(ps.Agent), ps.Launcher, err)
 		n.putPendingSwitch(id, nil)
-		return true, asEngineSwitchError(err)
+		return true, asSwitchError(err, engineUnsupported)
 	}
 	prev, had := n.state.get(id)
 	var r resumed // what a Claude Code agent runs with: its modes, the model to come back on (launcher_switch.go)
 	var back modelExecution
+	modeNow := prev.AppMode // a Codex agent's mode is its record's
 	if from == "claude" {
 		r, back = n.resumeWith(id, sendOpts{}), n.ranExecution(id, prev)
+		modeNow = r.mode
 	}
-	mode := n.engineMode(id, plan, r.mode)
+	mode := engineMode(ps.Agent, modeNow)
 	// The last look before the first Ctrl+C: the checks took a while, and a turn may have started, a dialog come up or
 	// someone typed at the computer meanwhile.
 	if why := n.engineBusy(ctx, id, from); why != "" {
@@ -531,15 +495,14 @@ func (n *Node) carryOutEngine(ctx context.Context, c *engineCarry) (string, erro
 	if quit, err := n.quitAgent(ctx, c.id, a.PaneID); err != nil || !quit {
 		return "", refusal(proto.CodeSwitchNotStopped, fmt.Sprintf("the agent did not quit (%v); it runs on %s as before", err, p.own), nil)
 	}
-	shells, dir, err := n.shellAfterQuitFor(ctx, c.id, p.from, a, h, ref)
+	shells, dir, err := n.shellAfterQuit(ctx, c.id, p.from, a, h, ref)
 	if err != nil {
 		n.logf("session %s: switch: %v", c.id, err)
 		return "", refusal(proto.CodeSwitchFailedStopped, fmt.Sprintf("the agent quit, but its terminal did not come back to a shell prompt: %v", err), nil)
 	}
 	n.carryTodo(ctx, h, ref, a)
 	if p.parked != "" {
-		block := handoffBlock(c.delta, p.from, p.to, p.model, true)
-		id, err := n.startEngine(ctx, c, true, block+c.text, shells, dir)
+		id, err := n.startEngine(ctx, c, true, handoffMessage(c.delta, p.from, p.to, p.model, true, c.text), shells, dir)
 		if err == nil {
 			return id, nil
 		}
@@ -550,7 +513,7 @@ func (n *Node) carryOutEngine(ctx context.Context, c *engineCarry) (string, erro
 				engineName(p.to), err), nil)
 		}
 	}
-	id, startErr := n.startEngine(ctx, c, false, handoffBlock(c.full, p.from, p.to, p.model, false)+c.text, shells, dir)
+	id, startErr := n.startEngine(ctx, c, false, handoffMessage(c.full, p.from, p.to, p.model, false, c.text), shells, dir)
 	if startErr == nil {
 		return id, nil
 	}
@@ -571,20 +534,6 @@ func (n *Node) carryOutEngine(ctx context.Context, c *engineCarry) (string, erro
 		c.ps.Launcher, startErr, p.own), nil)
 }
 
-// startCtx is the context of a start in the switch's pane: the pane adopted with the shells in front of it, its host
-// the start's, the conversation's history to write on the new record, cd first for a Claude Code start whose shell is
-// not in cwd, and switchStartWait to come up in.
-func (n *Node) startCtx(ctx context.Context, p *enginePlan, legs []proto.EngineLeg, shells []string, dir, cwd string) (context.Context, context.CancelFunc) {
-	sctx := withAdoptedPane(withStartHost(ctx, p.h.Kind()), &host.Created{SlotID: p.a.TabID, SpaceID: p.a.WorkspaceID, Pane: p.ref}, shells)
-	if legs != nil {
-		sctx = withEngineHistory(sctx, legs)
-	}
-	if dir == "" || filepath.Clean(dir) != filepath.Clean(cwd) {
-		sctx = withCdFirst(sctx) // the shell is elsewhere: --resume finds the conversation by its folder (Codex runs in Dir)
-	}
-	return context.WithTimeout(sctx, switchStartWait)
-}
-
 // startEngine starts the other engine in the switch's pane with prompt as its first message: the parked session
 // resumed (resume), else a fresh one. It returns the new session's id. What it wrote of a session that did not come up
 // is put back (the parked session's record) or loses the history it was given (a fresh one's), so the list does not
@@ -595,7 +544,8 @@ func (n *Node) startEngine(ctx context.Context, c *engineCarry, resume bool, pro
 	if resume {
 		cwd = p.parkedCwd
 	}
-	sctx, cancel := n.startCtx(ctx, p, c.legs, shells, dir, cwd)
+	// The conversation's history goes on the new record (control.go, codex_start.go).
+	sctx, cancel := switchStartCtx(withEngineHistory(ctx, c.legs), p.a, p.h, p.ref, shells, dir, cwd)
 	defer cancel()
 	ws := p.a.WorkspaceID
 	if resume {
@@ -627,7 +577,7 @@ func (n *Node) startEngine(ctx context.Context, c *engineCarry, resume bool, pro
 	return id, nil
 }
 
-// resumeParkedCodex resumes the parked Codex thread in the switch's pane (ctx: startCtx's) through the launcher
+// resumeParkedCodex resumes the parked Codex thread in the switch's pane (ctx: startEngine's) through the launcher
 // picked, with prompt as its message: `<launcher words> resume <id> -- <prompt>` through codex-start, in the thread's
 // directory, with the mode, model and effort of the switch. Its record then names that launcher and the history.
 func (n *Node) resumeParkedCodex(ctx context.Context, c *engineCarry, prompt string) error {
@@ -636,25 +586,9 @@ func (n *Node) resumeParkedCodex(ctx context.Context, c *engineCarry, prompt str
 	if path := n.codexPath(id); path != "" && n.codices != nil && n.codexHeldNow(path) {
 		return errors.New("a Codex has the thread open")
 	}
-	launch, err := n.launcherFor(n.startKind(ctx))
+	launch, argv, err := n.codexResumeArgv(ctx, ps.Launcher, c.mode, p.resume)
 	if err != nil {
 		return err
-	}
-	argv, ok := n.codexLauncher(ctx, ps.Launcher)
-	if !ok {
-		return fmt.Errorf("launcher %s does not run Codex", ps.Launcher)
-	}
-	if argv, err = n.codexReadonlyArgs(ps.Launcher, argv, c.mode); err != nil {
-		return err
-	}
-	if c.mode == proto.ModeBypass {
-		argv = n.codexBypassArgv(ps.Launcher, argv)
-	}
-	if p.resume.Model != "" {
-		argv = append(withoutModelArgs(argv), "--model", p.resume.Model)
-	}
-	if p.resume.Effort != "" {
-		argv = append(argv, "-c", "model_reasoning_effort="+p.resume.Effort)
 	}
 	prev, had := n.state.get(id)
 	if had {
@@ -686,7 +620,7 @@ func (n *Node) resumeParkedCodex(ctx context.Context, c *engineCarry, prompt str
 // record's model and mode.
 func (n *Node) comeBack(ctx context.Context, c *engineCarry, shells []string, dir string) error {
 	p := c.plan
-	sctx, cancel := n.startCtx(ctx, p, nil, shells, dir, p.cwd)
+	sctx, cancel := switchStartCtx(ctx, p.a, p.h, p.ref, shells, dir, p.cwd)
 	defer cancel()
 	if p.from == "claude" {
 		n.state.restoreLaunch(c.id, c.prev, c.had, p.own)
@@ -694,21 +628,32 @@ func (n *Node) comeBack(ctx context.Context, c *engineCarry, shells []string, di
 		n.state.restoreLaunch(c.id, c.prev, c.had, p.own) // the start wrote a new record, whether it came up or not
 		return err
 	}
-	launch, err := n.launcherFor(n.startKind(sctx))
+	launch, argv, err := n.codexResumeArgv(sctx, p.own, c.prev.AppMode, modelExecution{Model: c.prev.Model})
 	if err != nil {
 		return err
 	}
-	argv, ok := n.codexLauncher(sctx, p.own)
-	if !ok {
-		return fmt.Errorf("launcher %s does not run Codex", p.own)
-	}
-	if argv, err = n.codexReadonlyArgs(p.own, argv, c.prev.AppMode); err != nil {
-		return err
-	}
-	if c.prev.Model != "" {
-		argv = append(withoutModelArgs(argv), "--model", c.prev.Model)
-	}
 	return n.resumeCodex(sctx, launch, c.id, sessionState{Cwd: p.cwd}, argv, "", p.a.WorkspaceID, "")
+}
+
+// codexResumeArgv is the host a resume of a Codex thread starts on (ctx's) and the words it runs through launcher
+// (resumeCodex adds `resume <id>`): in permission mode mode (plan read-only, bypassPermissions without approvals or
+// sandbox) with model execution e.
+func (n *Node) codexResumeArgv(ctx context.Context, launcher, mode string, e modelExecution) (host.Launcher, []string, error) {
+	launch, err := n.launcherFor(n.startKind(ctx))
+	if err != nil {
+		return nil, nil, err
+	}
+	argv, ok := n.codexLauncher(ctx, launcher)
+	if !ok {
+		return nil, nil, fmt.Errorf("launcher %s does not run Codex", launcher)
+	}
+	if argv, err = n.codexReadonlyArgs(launcher, argv, mode); err != nil {
+		return nil, nil, err
+	}
+	if mode == proto.ModeBypass {
+		argv = n.codexBypassArgv(launcher, argv)
+	}
+	return launch, codexExecutionArgs(argv, e), nil
 }
 
 // engineSwitched writes what a switch carried out leaves: the new session newID carries the conversation's history and
@@ -766,26 +711,8 @@ func (n *Node) codexHolds(path string) bool {
 	if path == "" || n.codices == nil {
 		return false
 	}
-	n.codices.mu.Lock()
-	scan, checked := n.codices.scan, n.codices.checked
-	n.codices.mu.Unlock()
-	var procs []codexProcess
-	switch {
-	case checked != nil:
-		procs, _ = checked()
-	case scan != nil:
-		procs = scan()
-	}
-	procs = slices.DeleteFunc(procs, func(p codexProcess) bool { return p.endpoint != "" })
-	open, _ := scanOpenRollouts(procs)
-	for _, paths := range open {
-		for _, q := range paths {
-			if filepath.Base(q) == filepath.Base(path) {
-				return true
-			}
-		}
-	}
-	return false
+	open, _ := n.codexOpenNow(path, true)
+	return open
 }
 
 // joinStretches gives the rows of list whose record carries earlier stretches (chains) those stretches, and returns
@@ -795,9 +722,7 @@ func (n *Node) codexHolds(path string) bool {
 // shows its first stretch's title, unless it has a manual one of its own.
 func joinStretches(list []proto.Session, chains map[string][]proto.EngineLeg) map[string]bool {
 	var rows []int
-	index := make(map[string]int, len(list))
 	for i := range list {
-		index[list[i].SessionID] = i
 		if legs := chains[list[i].SessionID]; legs != nil {
 			list[i].SetEngineHistory(legs)
 		}
@@ -807,6 +732,10 @@ func joinStretches(list []proto.Session, chains map[string][]proto.EngineLeg) ma
 	}
 	if len(rows) == 0 {
 		return nil
+	}
+	index := make(map[string]int, len(list)) // only now: this runs on every list, and most have no such row
+	for i := range list {
+		index[list[i].SessionID] = i
 	}
 	last := func(i int) time.Time { legs := list[i].EngineHistory(); return legs[len(legs)-1].Until }
 	sort.SliceStable(rows, func(x, y int) bool { return last(rows[x]).After(last(rows[y])) })

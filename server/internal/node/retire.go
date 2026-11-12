@@ -240,9 +240,7 @@ func (n *Node) resumeOtherWith(ctx context.Context, id string, st sessionState, 
 		if argv, err = n.codexReadonlyArgs(st.Launcher, argv, st.AppMode); err != nil {
 			return err // Refuse conflicting permissions before creating a workspace, tab or attachment.
 		}
-		if st.Model != "" {
-			argv = append(withoutModelArgs(argv), "--model", st.Model)
-		}
+		argv = codexExecutionArgs(argv, modelExecution{Model: st.Model})
 	}
 	paths, err := n.saveImages(images)
 	if err != nil {

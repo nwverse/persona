@@ -270,8 +270,8 @@ func handoffLedger(items []proto.Item) handoffWork {
 	commandOf := map[string]int{}
 	for _, it := range items {
 		switch {
-		case it.Role == "assistant" && it.Kind == proto.KindToolUse:
-			var input map[string]any
+		case it.Role == "assistant" && it.Kind == proto.KindToolUse && (handoffFileTools[it.ToolName] || handoffCommandTools[it.ToolName]):
+			var input map[string]any // decoded for these calls only: most of a conversation's are reads and searches
 			_ = json.Unmarshal(it.ToolInput, &input)
 			switch {
 			case handoffFileTools[it.ToolName]:

@@ -79,16 +79,20 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 		if a, ok := n.agent(id); ok && a.Agent != "" {
 			kind = a.Agent
 		}
+		// The switch the user picked, which their own message carries out (launcher_switch.go, engine_switch.go), read
+		// once for the turn. One kept with the record waits for the hub's copy of it after a node restart.
+		var ps *proto.PendingSwitch
 		if opts.ApplySwitch && (kind == "claude" || kind == "codex") {
+			_ = n.state.loaded(ctx)
+			ps = n.pendingSwitch(id)
+		}
+		if ps != nil && ps.Agent != "" {
 			// The user's own message carries out the switch to the other engine they picked (engine_switch.go): the
 			// agent is quit and the other engine started in the same terminal with the message behind a handoff, before
 			// a Codex's app-server would take the message. While the agent is busy the message goes to it as always and
 			// the switch waits; a failed switch is dropped with nothing typed.
-			_ = n.state.loaded(ctx)
-			if ps := n.pendingSwitch(id); ps != nil && ps.Agent != "" {
-				if handled, err := n.applyEngineSwitch(ctx, id, pane, kind, *ps, text, images, opts); handled {
-					return err
-				}
+			if handled, err := n.applyEngineSwitch(ctx, id, pane, kind, *ps, text, images, opts); handled {
+				return err
 			}
 		}
 		if kind == "codex" && n.codexJoined(id) {
@@ -98,22 +102,19 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 		if err := n.checkPaneFor(ctx, pane, kind, opts); err != nil { // sendsafe.go
 			return err
 		}
-		if kind == "claude" && opts.ApplySwitch {
+		if kind == "claude" && ps != nil && ps.Agent == "" { // one to the other engine waits, above
 			// The user's own message carries out the switch to another launcher they picked (launcher_switch.go): the
 			// agent is quit and resumed there, in the same terminal, and the message goes to it. While the agent is busy
 			// the message goes on the launcher it runs on and the switch waits; a failed switch is dropped with nothing
-			// typed. A switch kept with the record waits for the hub's copy of it after a node restart.
-			_ = n.state.loaded(ctx)
-			if ps := n.pendingSwitch(id); ps != nil && ps.Agent == "" { // one to the other engine waits, above
-				switched := false
-				if pane, switched, err = n.applySwitch(ctx, id, pane, *ps); err != nil {
+			// typed.
+			switched := false
+			if pane, switched, err = n.applySwitch(ctx, id, pane, *ps); err != nil {
+				return err
+			}
+			// The new claude came up behind a dialog of its own (start returns early then): the text would answer it.
+			if switched {
+				if err := n.checkPane(ctx, pane, "claude", ""); err != nil {
 					return err
-				}
-				// The new claude came up behind a dialog of its own (start returns early then): the text would answer it.
-				if switched {
-					if err := n.checkPane(ctx, pane, "claude", ""); err != nil {
-						return err
-					}
 				}
 			}
 		}

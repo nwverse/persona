@@ -1,7 +1,6 @@
 package node
 
 import (
-	"html"
 	"slices"
 	"strings"
 	"time"
@@ -111,24 +110,10 @@ func (n *Node) handoffItems(sp handoffSpan) ([]proto.Item, error) {
 	return picked, nil
 }
 
-// engineSwitchKind is the kind of the <persona-context> block a handoff is carried in (handoffBlock).
-const engineSwitchKind = "engine-switch"
-
-// handoffBlock is the handoff text as the block put in front of the user's message: a <persona-context
-// kind="engine-switch"> naming the engines (from, to: "claude" / "codex"), the model the new engine runs ("" when not
-// known) and whether the conversation's earlier session of to was resumed. The apps draw the switch divider from it
-// and show the text behind "View handoff context"; the model reads the text.
-func handoffBlock(text, from, to, model string, resumed bool) string {
-	var b strings.Builder
-	b.WriteString(`<persona-context kind="` + engineSwitchKind + `" title="Handoff" from="` + html.EscapeString(from) + `" to="` + html.EscapeString(to) + `"`)
-	if model != "" {
-		b.WriteString(` model="` + html.EscapeString(model) + `"`)
-	}
-	if resumed {
-		b.WriteString(` resumed="1"`)
-	}
-	b.WriteString(">\n")
-	b.WriteString(prompts.ContextBody(strings.TrimSpace(text))) // whatever the text, nothing in it ends the block
-	b.WriteString("\n</persona-context>\n\n")
-	return b.String()
+// handoffMessage is the user's message (message) behind the handoff text, as a switch types it in front of the other
+// engine (prompts.EngineHandoffMessage): from and to are the engines ("claude" / "codex"), model the model the new
+// engine runs ("" when not known), resumed whether the conversation's earlier session of to was resumed.
+func handoffMessage(text, from, to, model string, resumed bool, message string) string {
+	return prompts.RenderEngineHandoffMessage(prompts.EngineHandoffMessage{From: from, To: to, Model: model, Resumed: resumed,
+		Text: strings.TrimSpace(text), Message: message})
 }

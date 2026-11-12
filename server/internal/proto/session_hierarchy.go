@@ -66,6 +66,13 @@ type EngineLeg struct {
 	Until     time.Time `json:"until"`
 }
 
+// SameEngineHistory: a and b name the same stretches.
+func SameEngineHistory(a, b []EngineLeg) bool {
+	return slices.EqualFunc(a, b, func(x, y EngineLeg) bool {
+		return x.SessionID == y.SessionID && x.Agent == y.Agent && x.Until.Equal(y.Until)
+	})
+}
+
 // SessionChildren is the rollup a parent row carries of the children folded under it (SessionHierarchy.Children).
 type SessionChildren struct {
 	Total    int `json:"total"`
@@ -145,9 +152,7 @@ func (s *Session) EngineHistory() []EngineLeg {
 // SetEngineHistory sets the conversation's earlier stretches (nil: none), with no new hierarchy when it already has
 // them.
 func (s *Session) SetEngineHistory(legs []EngineLeg) {
-	if slices.EqualFunc(s.EngineHistory(), legs, func(a, b EngineLeg) bool {
-		return a.SessionID == b.SessionID && a.Agent == b.Agent && a.Until.Equal(b.Until)
-	}) {
+	if SameEngineHistory(s.EngineHistory(), legs) {
 		return
 	}
 	h := s.hierarchy()

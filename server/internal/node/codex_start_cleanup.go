@@ -20,9 +20,6 @@ type codexAbandonedStart struct {
 	launch    host.Launcher
 	created   *host.Created
 	workspace string
-	// adopted: the start ran in a pane it did not open (a switch from Claude Code, engine_switch.go). That pane is the
-	// user's terminal and is never closed: the switch quits what the start left in it (clearPane).
-	adopted bool
 }
 
 // closeAbandonedCodex serializes cleanup only when failed panes are pending. Independent starts do not hold
@@ -66,9 +63,6 @@ func (n *Node) closeAbandonedCodex(ctx context.Context, key string) error {
 
 // closeCodexStart stops one abandoned start independently of other starts in the same directory.
 func closeCodexStart(ctx context.Context, start codexAbandonedStart) error {
-	if start.adopted {
-		return nil
-	}
 	org, ok := start.launch.(host.Organizer)
 	var err error
 	if !ok {

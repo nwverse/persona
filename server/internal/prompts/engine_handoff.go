@@ -82,3 +82,19 @@ type EngineHandoffTranscript struct {
 
 // RenderEngineHandoff is agents/engine_handoff.
 func RenderEngineHandoff(h EngineHandoff) string { return render("agents/engine_handoff", h) }
+
+// EngineHandoffMessage is the user's message as a switch to the other engine types it (agents/engine_handoff_message):
+// behind a <persona-context kind="engine-switch"> block holding the handoff note (Text; nothing in it ends the block,
+// ContextBody) and naming the engines (From, To: "claude" / "codex"), the model the new engine runs (Model, "" when
+// not known) and whether the conversation's earlier session of To was resumed. The apps draw the switch divider from
+// the block and show its text behind "View handoff context"; the model reads the text.
+type EngineHandoffMessage struct {
+	From, To, Model string
+	Resumed         bool
+	Text, Message   string
+}
+
+// RenderEngineHandoffMessage is agents/engine_handoff_message.
+func RenderEngineHandoffMessage(m EngineHandoffMessage) string {
+	return render("agents/engine_handoff_message", m)
+}

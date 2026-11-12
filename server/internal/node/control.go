@@ -155,14 +155,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		if resume != "" { // a Codex thread is resumed above: this id is not one
 			return nil, refusal(codexResumeRefused, "找不到这个 Codex 会话的记录，没法接着它：请在电脑上恢复（codex resume）。", nil)
 		}
-		if execution.Model != "" {
-			argv = append(withoutModelArgs(argv), "--model", execution.Model)
-		}
-		if execution.Effort != "" {
-			// The purpose's explicit effort takes precedence over launcher defaults.
-			argv = append(argv, "-c", "model_reasoning_effort="+execution.Effort)
-		}
-		return n.startCodex(ctx, launch, cwd, launcher, argv, prompt, ws, tabName, mode)
+		return n.startCodex(ctx, launch, cwd, launcher, codexExecutionArgs(argv, execution), prompt, ws, tabName, mode)
 	}
 	if kind != "claude" { // start_agent.go
 		if mode != "" || effort != "" {

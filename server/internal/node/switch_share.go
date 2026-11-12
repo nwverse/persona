@@ -172,9 +172,9 @@ func (s *switchShare) listed(seen map[string]bool) []proto.Session {
 
 // keep takes the record v of session id that Node from could not send its hub, when a switch of it is under way, or
 // v is the record of the session a switch to the other engine starts (written by the switch, which outlived from's
-// connection): for the Node whose state has loaded now, after what it
-// is being given already, or held until one has. A record its own Node could not send is held for the next one: that
-// Node's connection has gone too, and it takes no more. false: not a switch's, not taken.
+// connection): for the Node whose state has loaded now, after what it is being given already, or held until one has.
+// A record its own Node could not send is held for the next one: that Node's connection has gone too, and it takes no
+// more. false: not a switch's, not taken.
 func (s *switchShare) keep(from *Node, id string, v sessionState) bool {
 	s.mu.Lock()
 	// A switch to the other engine (engine_switch.go) writes the record of the session it starts too, under another id:

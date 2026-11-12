@@ -242,7 +242,7 @@ func (n *Node) planSwitch(ctx context.Context, id string, ps proto.PendingSwitch
 	if err := validModes("", ps.Effort); err != nil {
 		return nil, err
 	}
-	a, h, ref, err := n.switchSession(ctx, id)
+	a, h, ref, err := n.switchSession(ctx, id, false)
 	if err != nil {
 		return nil, err
 	}
@@ -270,28 +270,26 @@ func (n *Node) planSwitch(ctx context.Context, id string, ps proto.PendingSwitch
 
 // switchSession checks that session id is one a switch can restart: a Claude Code Agent running in a pane of a
 // terminal host that can say what runs in it and start an agent there. It returns the agent, its host and its pane.
-func (n *Node) switchSession(ctx context.Context, id string) (host.Agent, host.Host, host.PaneRef, error) {
-	return n.switchSessionOf(ctx, id, false)
-}
-
-// switchSessionOf is switchSession; codex: a Codex Agent running in such a pane passes too (a switch to the other
-// engine, engine_switch.go), never a Codex thread an app-server or another program runs.
-func (n *Node) switchSessionOf(ctx context.Context, id string, codex bool) (host.Agent, host.Host, host.PaneRef, error) {
+// engine: a switch to the other engine (engine_switch.go), for which a Codex Agent running in such a pane passes too,
+// and whose refusals say so (engineUnsupported). Still refused then: an assistant conversation, a runtime's or
+// botmux's session, a Codex thread an app-server or another program runs, an agent in a terminal only (opencode, pi
+// without its extension).
+func (n *Node) switchSession(ctx context.Context, id string, engine bool) (host.Agent, host.Host, host.PaneRef, error) {
 	var a host.Agent
 	var ref host.PaneRef
 	if !validID(id) {
 		return a, nil, ref, fmt.Errorf("invalid session id %q", id)
 	}
 	unsupported := switchUnsupported
-	if codex {
+	if engine {
 		unsupported = engineUnsupported
 	}
 	switch {
 	case n.isAssistantSession(id) || n.runtimeAssistant(id):
 		return a, nil, ref, unsupported("an assistant conversation switches in its own chip")
-	case !codex && (n.externalCodex(id) || n.codexPath(id) != "" || n.traexPath(id) != ""):
+	case !engine && (n.externalCodex(id) || n.codexPath(id) != "" || n.traexPath(id) != ""):
 		return a, nil, ref, unsupported("this is a Codex session")
-	case codex && (n.externalCodex(id) || n.traexPath(id) != ""):
+	case engine && (n.externalCodex(id) || n.traexPath(id) != ""):
 		return a, nil, ref, unsupported("this Codex session runs outside a terminal Persona drives")
 	}
 	if h, _, known := n.runtimes.belongs(id); h != nil || known {
@@ -307,7 +305,7 @@ func (n *Node) switchSessionOf(ctx context.Context, id string, codex bool) (host
 	if !live {
 		return a, nil, ref, n.noPaneForModes(id) // a claude in a terminal Persona does not drive
 	}
-	if a.Agent != "" && a.Agent != "claude" && (!codex || a.Agent != "codex") {
+	if a.Agent != "" && a.Agent != "claude" && (!engine || a.Agent != "codex") {
 		return a, nil, ref, unsupported(a.Agent + " runs in this terminal")
 	}
 	kind := host.ParsePane(a.PaneID).Kind
@@ -363,13 +361,14 @@ func (n *Node) switchCwd(id string, a host.Agent) string {
 
 // asSwitchError is err, a check's refusal while a message carries a switch out, as a refusal of the switch: one of
 // its own (switch_*) as it is; another (a provider's secrets that could not be fetched, a session no longer running)
-// as switch_unsupported with its words, so the client keeps the message in the box as for the others.
-func asSwitchError(err error) error {
+// as switch_unsupported with its words (unsupported: switchUnsupported, or engineUnsupported for a switch to the other
+// engine), so the client keeps the message in the box as for the others.
+func asSwitchError(err error, unsupported func(why string) error) error {
 	var re *rpc.Error
 	if errors.As(err, &re) && strings.HasPrefix(re.Code, "switch_") {
 		return err
 	}
-	return switchUnsupported(err.Error())
+	return unsupported(err.Error())
 }
 
 // checkSwitchLauncher checks that launcher can resume session id: it is on this computer, runs Claude Code, takes
@@ -723,7 +722,7 @@ func (n *Node) applySwitch(ctx context.Context, id, pane string, ps proto.Pendin
 	if err != nil {
 		n.logf("session %s: switch to launcher %s dropped: %v", id, ps.Launcher, err)
 		n.putPendingSwitch(id, nil)
-		return "", false, asSwitchError(err)
+		return "", false, asSwitchError(err, switchUnsupported)
 	}
 	prev, had := n.state.get(id)
 	r := n.resumeWith(id, sendOpts{}) // its modes
@@ -782,17 +781,13 @@ func (n *Node) carryOut(ctx context.Context, id, own string, ps proto.PendingSwi
 	if quit, err := n.quitAgent(ctx, id, a.PaneID); err != nil || !quit {
 		return "", refusal(proto.CodeSwitchNotStopped, fmt.Sprintf("the agent did not quit (%v); it runs on %s as before", err, own), nil)
 	}
-	shells, dir, err := n.shellAfterQuit(ctx, id, a, h, ref)
+	shells, dir, err := n.shellAfterQuit(ctx, id, "claude", a, h, ref)
 	if err != nil {
 		n.logf("session %s: switch: %v", id, err)
 		return "", refusal(proto.CodeSwitchFailedStopped, fmt.Sprintf("the agent quit, but its terminal did not come back to a shell prompt: %v", err), nil)
 	}
 	start := func(launcher, effort string, execution modelExecution, shells []string, dir string) (*proto.Session, error) {
-		sctx := withAdoptedPane(withStartHost(ctx, h.Kind()), &host.Created{SlotID: a.TabID, SpaceID: a.WorkspaceID, Pane: ref}, shells)
-		if dir == "" || filepath.Clean(dir) != filepath.Clean(plan.cwd) {
-			sctx = withCdFirst(sctx) // the shell is elsewhere: --resume finds the conversation by its folder
-		}
-		sctx, cancel := context.WithTimeout(sctx, switchStartWait)
+		sctx, cancel := switchStartCtx(ctx, a, h, ref, shells, dir, plan.cwd)
 		defer cancel()
 		return n.start(sctx, plan.cwd, launcher, "", id, a.WorkspaceID, mode, effort, "", "", "claude", execution)
 	}
@@ -819,6 +814,17 @@ func (n *Node) carryOut(ctx context.Context, id, own string, ps proto.PendingSwi
 	}
 	n.logf("session %s: back on launcher %s", id, own)
 	return "", refusal(proto.CodeSwitchFailed, fmt.Sprintf("the agent did not come up on launcher %s (%v); it is back on %s", ps.Launcher, startErr, own), nil)
+}
+
+// switchStartCtx is the context of a start in a switch's pane (ref on h, agent a's): the pane adopted with the shells
+// in front of it, its host the start's, cd first when the shell (in dir) is not in cwd, and switchStartWait to come up
+// in.
+func switchStartCtx(ctx context.Context, a host.Agent, h host.Host, ref host.PaneRef, shells []string, dir, cwd string) (context.Context, context.CancelFunc) {
+	sctx := withAdoptedPane(withStartHost(ctx, h.Kind()), &host.Created{SlotID: a.TabID, SpaceID: a.WorkspaceID, Pane: ref}, shells)
+	if dir == "" || filepath.Clean(dir) != filepath.Clean(cwd) {
+		sctx = withCdFirst(sctx) // the shell is elsewhere: --resume finds the conversation by its folder (Codex runs in Dir)
+	}
+	return context.WithTimeout(sctx, switchStartWait)
 }
 
 // switched clears what was kept for session id's switch to ps once its agent runs on the new launcher: the switch (the
@@ -860,30 +866,10 @@ func switchUnderWay() error {
 	return refusal(proto.CodeSwitchUnderWay, "the agent is moving to another launcher right now: try again once it runs", nil)
 }
 
-// shellAfterQuit waits, once session id's agent left its pane a, until only shells are in front of the pane and no
-// claude has the conversation open any more (Claude Code writes into its transcript as it exits), and returns those
-// shells and the pane's directory as the host lists it now ("" when it does not say).
-func (n *Node) shellAfterQuit(ctx context.Context, id string, a host.Agent, h host.Host, ref host.PaneRef) ([]string, string, error) {
-	return n.shellAfterQuitFor(ctx, id, "claude", a, h, ref)
-}
-
-// shellAfterQuitFor is shellAfterQuit for an agent of engine: for a Codex, until no Codex CLI has its thread's rollout
-// open any more (codexHolds) instead.
-func (n *Node) shellAfterQuitFor(ctx context.Context, id, engine string, a host.Agent, h host.Host, ref host.PaneRef) ([]string, string, error) {
-	stillOpen := func() error {
-		if n.openElsewhereRefusal(id) != nil {
-			return errors.New("a claude still has the conversation open")
-		}
-		return nil
-	}
-	if engine == "codex" {
-		stillOpen = func() error {
-			if n.codexHolds(n.codexPath(id)) {
-				return errors.New("a Codex still has the thread open")
-			}
-			return nil
-		}
-	}
+// shellAfterQuit waits, once session id's agent (of engine) left its pane a, until only shells are in front of the
+// pane and nothing has the conversation open any more (quitStillOpen), and returns those shells and the pane's
+// directory as the host lists it now ("" when it does not say).
+func (n *Node) shellAfterQuit(ctx context.Context, id, engine string, a host.Agent, h host.Host, ref host.PaneRef) ([]string, string, error) {
 	f, ok := h.(host.ForegroundNamer)
 	if !ok {
 		return nil, "", fmt.Errorf("%s cannot say what runs in %s", h.Kind(), a.PaneID)
@@ -895,20 +881,36 @@ func (n *Node) shellAfterQuitFor(ctx context.Context, id, engine string, a host.
 		case err != nil:
 		case len(names) == 0 || !allShells(names):
 			err = fmt.Errorf("%q runs in front of %s", names, a.PaneID)
-		case stillOpen() != nil:
-			err = stillOpen()
 		default:
-			dir := ""
-			if p, err := n.listedPane(ctx, a.PaneID); err == nil {
-				dir = paneDir(p)
+			if err = n.quitStillOpen(id, engine); err == nil {
+				dir := ""
+				if p, err := n.listedPane(ctx, a.PaneID); err == nil {
+					dir = paneDir(p)
+				}
+				return names, dir, nil
 			}
-			return names, dir, nil
 		}
 		if time.Now().After(deadline) || ctx.Err() != nil {
 			return nil, "", err
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
+}
+
+// quitStillOpen is why session id's conversation is still open after its agent (of engine) quit, nil when it is not:
+// a claude has it open (Claude Code writes into its transcript as it exits), or for a Codex, a Codex CLI has its
+// thread's rollout open (codexHolds).
+func (n *Node) quitStillOpen(id, engine string) error {
+	if engine == "codex" {
+		if n.codexHolds(n.codexPath(id)) {
+			return errors.New("a Codex still has the thread open")
+		}
+		return nil
+	}
+	if n.openElsewhereRefusal(id) != nil {
+		return errors.New("a claude still has the conversation open")
+	}
+	return nil
 }
 
 // clearPane brings the shell back in front of pane a after a start that did not come up there: a claude it left
@@ -932,5 +934,5 @@ func (n *Node) clearPane(ctx context.Context, id string, a host.Agent, h host.Ho
 		}
 	}
 	_ = n.refreshHosts(ctx)
-	return n.shellAfterQuit(ctx, id, a, h, ref)
+	return n.shellAfterQuit(ctx, id, "claude", a, h, ref)
 }

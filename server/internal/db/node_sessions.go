@@ -59,14 +59,8 @@ func (d *DB) PutNodeSession(ctx context.Context, machine, id string, s NodeSessi
 	if err != nil {
 		return err
 	}
-	var pendingSwitch json.RawMessage // SQL NULL for none: the key holds a JSON null
-	if len(s.PendingSwitch) > 0 && string(s.PendingSwitch) != "null" {
-		pendingSwitch = s.PendingSwitch
-	}
-	var engineHistory json.RawMessage // SQL NULL for none, as pending_switch
-	if len(s.EngineHistory) > 0 && string(s.EngineHistory) != "null" {
-		engineHistory = s.EngineHistory
-	}
+	// SQL NULL for none: the key holds a JSON null.
+	pendingSwitch, engineHistory := jsonOrNil(s.PendingSwitch), jsonOrNil(s.EngineHistory)
 	_, err = d.pool.Exec(ctx, `WITH saved AS (
 		INSERT INTO node_sessions (machine_id, session_id, pane, launcher, cwd, started_at, tasks, updated_at, creation_id, incarnation)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, now(), $15, $16)
@@ -114,6 +108,14 @@ type nodeModel struct {
 	EngineHistory    json.RawMessage `json:"engine_history"`
 }
 
+// jsonOrNil is raw, or nil when it holds nothing (empty, or a JSON null).
+func jsonOrNil(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	return raw
+}
+
 // NodeSessions returns a machine's sessions from the last 60 days.
 func (d *DB) NodeSessions(ctx context.Context, machine string) (map[string]NodeSession, error) {
 	rows, err := d.pool.Query(ctx, nodeSessionsSQL, machine)
@@ -132,15 +134,7 @@ func (d *DB) NodeSessions(ctx context.Context, machine string) (map[string]NodeS
 		s.Model, s.ModelFingerprint, s.ModelEffort, s.AppMode, s.AppEffort = m.Model, m.ModelFingerprint, m.ModelEffort, m.AppMode, m.AppEffort
 		s.Guest, s.GuestKind = m.Guest, m.GuestKind
 		s.ConfigDir = m.ConfigDir
-		if len(m.UltracodeProcess) > 0 && string(m.UltracodeProcess) != "null" {
-			s.UltracodeProcess = m.UltracodeProcess
-		}
-		if len(m.PendingSwitch) > 0 && string(m.PendingSwitch) != "null" {
-			s.PendingSwitch = m.PendingSwitch
-		}
-		if len(m.EngineHistory) > 0 && string(m.EngineHistory) != "null" {
-			s.EngineHistory = m.EngineHistory
-		}
+		s.UltracodeProcess, s.PendingSwitch, s.EngineHistory = jsonOrNil(m.UltracodeProcess), jsonOrNil(m.PendingSwitch), jsonOrNil(m.EngineHistory)
 		if m.StartedAtUnknown {
 			s.StartedAt = time.Time{}
 		}

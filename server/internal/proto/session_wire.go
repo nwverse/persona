@@ -271,20 +271,7 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 			w.close()
 		}
 		if len(h.EngineHistory) > 0 {
-			w.key(`"engine_history":`)
-			w.b = append(w.b, '[')
-			for i, l := range h.EngineHistory {
-				if i > 0 {
-					w.b = append(w.b, ',')
-				}
-				w.open()
-				w.str(`"session_id":`, l.SessionID, false)
-				w.str(`"agent":`, l.Agent, false)
-				w.time(`"until":`, l.Until)
-				w.close()
-			}
-			w.b = append(w.b, ']')
-			w.first = false
+			w.value(`"engine_history":`, &h.EngineHistory)
 		}
 	}
 	w.boolean(legacyStartedMember, s.StartedByPersona, false) // sessionWire's legacy key (compatibility.go)

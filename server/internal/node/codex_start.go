@@ -146,6 +146,18 @@ func (n *Node) codexBypassArgv(launcher string, argv []string) []string {
 	return codexBypassArgs(argv)
 }
 
+// codexExecutionArgs is a Codex launcher's words argv running model execution e: its model in place of any the words
+// name, and its effort, which as the purpose's explicit choice takes precedence over the launcher's defaults.
+func codexExecutionArgs(argv []string, e modelExecution) []string {
+	if e.Model != "" {
+		argv = append(withoutModelArgs(argv), "--model", e.Model)
+	}
+	if e.Effort != "" {
+		argv = append(argv, "-c", "model_reasoning_effort="+e.Effort)
+	}
+	return argv
+}
+
 // startCodex starts a Codex launcher in a new tab with the first message and returns its session once the thread is
 // known. In a pane it was given (adoptedPane: a switch from Claude Code, engine_switch.go) it starts there, and a start
 // that fails leaves that pane open: what it left in front is for the caller to clear.
@@ -209,8 +221,13 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 		if strings.TrimSpace(shown) == "" { // a screen Codex draws from the top of a tall pane: the bottom rows are blank
 			shown, _ = n.readPane(ctx, pane, "visible", 30)
 		}
-		start := codexAbandonedStart{launch: launch, created: created, workspace: ws, adopted: adoptedPane(ctx) != nil}
-		cleanupErr := closeCodexStart(ctx, start)
+		start := codexAbandonedStart{launch: launch, created: created, workspace: ws}
+		var cleanupErr error
+		// A pane it did not open (a switch from Claude Code, engine_switch.go) is the user's terminal and is never
+		// closed: the switch quits what the start left in it (clearPane).
+		if adoptedPane(ctx) == nil {
+			cleanupErr = closeCodexStart(ctx, start)
+		}
 		if cleanupErr != nil {
 			n.mu.Lock()
 			if n.codexAbandoned == nil {
@@ -423,8 +440,9 @@ type codexStartFile struct {
 }
 
 // CodexStart is `personad codex-start <file>`: it reads a codexStartFile (and removes it), changes to its directory,
-// then runs its words with the message as one more argument after "--", in place of itself. No shell sees either. The file's agent replaces a
-// HERDR_AGENT the shell had: appended, the inherited one would come first, and that is the one getenv and herdr read.
+// then runs its words with the message as one more argument after "--", in place of itself. No shell sees either. The
+// file's agent replaces a HERDR_AGENT the shell had: appended, the inherited one would come first, and that is the one
+// getenv and herdr read.
 func CodexStart(args []string) error {
 	if len(args) != 1 {
 		return errors.New(codexStartError + " usage: personad codex-start <file>")

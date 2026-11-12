@@ -198,28 +198,17 @@ func (s *stateFile) setUltracode(id string, rec ultracodeRecord) bool {
 // record, under the lock, as setUltracode does; false when the session has no record (not Persona's, or not loaded
 // yet): nothing is written for it.
 func (s *stateFile) setPendingSwitch(id string, ps *proto.PendingSwitch) bool {
-	s.mu.Lock()
-	v, ok := s.Sessions[id]
-	if !ok {
-		s.mu.Unlock()
-		return false
-	}
-	if v.PendingSwitch == nil && ps == nil {
-		s.mu.Unlock()
+	return s.update(id, func(v *sessionState) bool {
+		if v.PendingSwitch == nil && ps == nil {
+			return false
+		}
+		if ps != nil {
+			c := *ps
+			ps = &c
+		}
+		v.PendingSwitch = ps
 		return true
-	}
-	if ps != nil {
-		c := *ps
-		ps = &c
-	}
-	v.PendingSwitch = ps
-	s.Sessions[id] = v
-	persist := s.persist
-	s.mu.Unlock()
-	if persist != nil {
-		persist(id, v)
-	}
-	return true
+	})
 }
 
 // restoreLaunch puts back what a start that failed to carry out a launcher switch wrote over (start writes a whole new
@@ -268,8 +257,8 @@ func (s *stateFile) adoptSwitch(id string, v sessionState) {
 	}
 }
 
-// update changes session id's record with change under the lock, as setPendingSwitch does, and writes it through when
-// change says it changed; false when the session has no record: nothing is written for it.
+// update changes session id's record with change under the lock and writes it through when change says it changed;
+// false when the session has no record: nothing is written for it.
 func (s *stateFile) update(id string, change func(v *sessionState) bool) bool {
 	s.mu.Lock()
 	v, ok := s.Sessions[id]
@@ -307,11 +296,10 @@ func (s *stateFile) putBack(id string, prev sessionState, had bool) {
 	})
 }
 
-// setEngineHistory sets the conversation's earlier stretches on session id's record (nil: none); false when it has no
-// record.
-func (s *stateFile) setEngineHistory(id string, legs []proto.EngineLeg) bool {
-	return s.update(id, func(v *sessionState) bool {
-		if sameLegs(v.EngineHistory, legs) {
+// setEngineHistory sets the conversation's earlier stretches on session id's record (nil: none), when it has one.
+func (s *stateFile) setEngineHistory(id string, legs []proto.EngineLeg) {
+	s.update(id, func(v *sessionState) bool {
+		if proto.SameEngineHistory(v.EngineHistory, legs) {
 			return false
 		}
 		v.EngineHistory = slices.Clone(legs)
@@ -335,13 +323,6 @@ func (s *stateFile) engineHistories() map[string][]proto.EngineLeg {
 		out[id] = v.EngineHistory
 	}
 	return out
-}
-
-// sameLegs: a and b name the same stretches.
-func sameLegs(a, b []proto.EngineLeg) bool {
-	return slices.EqualFunc(a, b, func(x, y proto.EngineLeg) bool {
-		return x.SessionID == y.SessionID && x.Agent == y.Agent && x.Until.Equal(y.Until)
-	})
 }
 
 func (s *stateFile) get(id string) (sessionState, bool) {
