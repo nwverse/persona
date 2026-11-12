@@ -36,7 +36,7 @@ export function Rail({ providers, view, onView, disabled, quotas }: { providers:
           <span aria-hidden className="absolute bottom-[3px] h-[3px] w-[22px] overflow-hidden rounded-full" style={{ backgroundColor: "color-mix(in srgb, currentColor 18%, transparent)" }}>
             <span
               data-weekly-remaining={quota.remaining}
-              className={cx("block h-full rounded-full", quota.tone === "red" ? "bg-red" : quota.tone === "orange" ? "bg-orange" : "bg-current")}
+              className={cx("block h-full rounded-full", quota.tone === "red" ? "bg-red" : quota.tone === "orange" ? "bg-orange" : "bg-accent")}
               style={{ width: `${quota.remaining}%` }}
             />
           </span>

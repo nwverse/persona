@@ -1121,20 +1121,25 @@ func mustManagedForNodes(t *testing.T, s *Service, ctx context.Context) []proto.
 
 func TestAskLauncherModelsAddsOnlyExactCatalogPrices(t *testing.T) {
 	s, f, _ := modelService(t)
+	own := &proto.ModelPrice{Input: 9, Output: 99}
 	f.agentModels = map[string][]proto.AgentModel{"relay": {
 		{ID: "opus", Resolved: "claude-opus-5-5"},
-		{ID: "claude-opus-5-6"},
-		{ID: "private-model"},
+		{ID: "other-alias", Resolved: "claude-opus-5-5", Price: own},
+		{ID: "claude-opus-5-6", Price: own},
+		{ID: "private-model", Price: &proto.ModelPrice{Input: 4}},
 	}}
 	res, err := s.askLauncherModels(context.Background(), "server", "relay", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Models) != 3 || res.Models[0].Price == nil || res.Models[0].Price.Input != 4 || res.Models[0].Price.Output != 20 {
+	if len(res.Models) != 4 || res.Models[0].Price == nil || res.Models[0].Price.Input != 4 || res.Models[0].Price.Output != 20 {
 		t.Fatalf("exact model price: %+v", res.Models)
 	}
-	if res.Models[1].Price != nil || res.Models[2].Price != nil {
-		t.Fatalf("an inherited or unknown model gained a price: %+v", res.Models)
+	if got := res.Models[1].Price; got == own || got == nil || got.Input != 4 || got.Output != 20 {
+		t.Fatalf("an external price survived or replaced the exact reference price: %+v", res.Models)
+	}
+	if res.Models[2].Price != nil || res.Models[3].Price != nil {
+		t.Fatalf("an inherited or unknown model kept or gained a non-catalog price: %+v", res.Models)
 	}
 }
 

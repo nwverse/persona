@@ -343,13 +343,11 @@ func (s *Service) askLauncherModels(ctx context.Context, machine, name string, r
 	}
 	res = s.presetModels(ctx, machine, name, res)
 	for i, m := range res.Models {
-		if m.Price != nil {
-			continue
-		}
 		id := m.ID
 		if m.Resolved != "" {
 			id = m.Resolved
 		}
+		res.Models[i].Price = nil
 		if c, ok := catalogModel(id); ok && c.InheritedFrom == "" {
 			res.Models[i].Price = c.Price
 		}

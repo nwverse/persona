@@ -295,7 +295,7 @@ func withProviderModels(res proto.LauncherModels, l storedLauncher) proto.Launch
 		}
 		seen[m.ID] = true
 		res.Models = append(res.Models, proto.AgentModel{ID: m.ID, Name: cmp.Or(m.Name, m.ID), Description: cmp.Or(l.DisplayName, l.Name),
-			Efforts: m.Efforts, DefaultEffort: m.DefaultEffort, Price: m.Price})
+			Efforts: m.Efforts, DefaultEffort: m.DefaultEffort})
 	}
 	return res
 }

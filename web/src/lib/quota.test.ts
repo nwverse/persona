@@ -34,7 +34,8 @@ describe("launcher quota", () => {
     ] } };
     expect(weeklyQuota(answer)).toMatchObject({ remaining: 23, tone: "orange", window: { label: "每周", resets_at: "2099-01-01T00:00:00Z" } });
     expect(weeklyQuota({ quota: { gateway: "g", budget: [{ label: "weekly", used_ratio: 0.95 }] } })).toMatchObject({ remaining: 5, tone: "red" });
-    expect(weeklyQuota({ quota: { gateway: "g", budget: [{ label: "weekly", used_ratio: 0.1, exhausted: true }] } })).toMatchObject({ remaining: 90, tone: "red" });
+    expect(weeklyQuota({ quota: { gateway: "g", budget: [{ label: "weekly", used_ratio: 0.1, exhausted: true }] } })).toMatchObject({ remaining: 0, tone: "red" });
+    expect(weeklyQuota({ quota: { gateway: "g", budget: [{ label: "weekly", used: 8, limit: 10 }] } })).toMatchObject({ remaining: 20, tone: "orange" });
     expect(weeklyQuota({ quota: { gateway: "g", budget: [{ label: "monthly", used_ratio: 0.5 }] } })).toBeUndefined();
     expect(weeklyQuota({ unsupported: true, error: "no" })).toBeUndefined();
   });

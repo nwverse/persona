@@ -136,6 +136,11 @@ describe("the model panel", () => {
     expect(document.body.querySelector('[data-rail-cell="codex"] [data-weekly-remaining]')).toBeNull();
   });
 
+  it("uses the accent tone for a healthy weekly quota", async () => {
+    await open({ quotas: { claude: { quota: { gateway: "g", budget: [{ label: "weekly", used_ratio: 0.5 }] } } } });
+    expect(document.body.querySelector('[data-rail-cell="claude"] [data-weekly-remaining]')?.className).toContain("bg-accent");
+  });
+
   it("shows a known model's price tier and per-million flyout details, with nothing when price is unknown", async () => {
     const priced = claude({ models: [
       { id: "opus", name: "Opus 5.5", efforts: EFFORTS, price: { input: 4, output: 20, cache_read: 0.2 } },

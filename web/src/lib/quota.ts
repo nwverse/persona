@@ -135,14 +135,16 @@ export function weeklyQuota(answer: LauncherQuotaAnswer | undefined): WeeklyQuot
   const q = answer?.quota;
   if (!q) return undefined;
   const windows = [...(q.budget ?? []), ...(q.pools ?? []).flatMap((p) => p.windows ?? [])];
-  let found: QuotaWindow | undefined;
+  let found: { window: QuotaWindow; used: number } | undefined;
   for (const w of windows) {
-    if (!/week|周|週/i.test(w.label) || w.used_ratio === undefined || !Number.isFinite(w.used_ratio)) continue;
-    if (!found || (w.exhausted && !found.exhausted) || (w.exhausted === found.exhausted && w.used_ratio > (found.used_ratio ?? -Infinity))) found = w;
+    if (!/week|周|週/i.test(w.label)) continue;
+    let used = w.used_ratio !== undefined && Number.isFinite(w.used_ratio) ? w.used_ratio : undefined;
+    if (used === undefined && w.used !== undefined && w.limit !== undefined && Number.isFinite(w.used) && w.used >= 0 && Number.isFinite(w.limit) && w.limit > 0) used = w.used / w.limit;
+    if (used === undefined) continue;
+    if (!found || (w.exhausted && !found.window.exhausted) || (w.exhausted === found.window.exhausted && used > found.used)) found = { window: w, used };
   }
   if (!found) return undefined;
-  const used = found.used_ratio!;
-  return { window: found, remaining: 100 - quotaPercent(used), tone: quotaTone(used, found.exhausted) };
+  return { window: found.window, remaining: found.window.exhausted ? 0 : 100 - quotaPercent(found.used), tone: quotaTone(found.used, found.window.exhausted) };
 }
 
 /** Nothing to show beyond the key's use: the key has no ceiling. */

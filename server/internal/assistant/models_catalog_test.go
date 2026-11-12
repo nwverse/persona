@@ -161,8 +161,11 @@ func TestCatalogPricesAreExactOnly(t *testing.T) {
 		t.Fatalf("enrichment inherited a price: %+v", got)
 	}
 	own := &proto.ModelPrice{Input: 9, Output: 99}
-	if got := enrichModel(proto.ProviderModel{ID: "claude-opus-5-5", Price: own}); got.Price != own {
-		t.Fatalf("the gateway's own price was replaced: %+v", got)
+	if got := enrichModel(proto.ProviderModel{ID: "claude-opus-5-5", Price: own}); got.Price == own || got.Price == nil || got.Price.Output != 20 {
+		t.Fatalf("a non-catalog price survived or replaced the exact reference price: %+v", got)
+	}
+	if got := enrichModel(proto.ProviderModel{ID: "private-model", Price: own}); got.Price != nil {
+		t.Fatalf("an unknown model kept a non-catalog price: %+v", got)
 	}
 }
 
