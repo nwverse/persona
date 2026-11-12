@@ -199,6 +199,9 @@ struct HomeWidgetView: View {
         }
         .privacySensitive(kind.isPrivate)
         .widgetURL(HomeLink.url(kind, c))
+        #if WIDGET_EXTENSION
+        .environment(\.locale, LanguageStore.drawingLocale) // the app's interface language (docs/apple/ios.md「Interface language」)
+        #endif
         .containerBackground(for: .widget) { HomeWidgetTokens.surface }
     }
 
@@ -219,14 +222,14 @@ struct HomeWidgetView: View {
     @ViewBuilder private func home(_ c: HomeContext) -> some View {
         let p = entry.pictures
         switch kind {
-        case .agents: AgentsWidget(c: c, family: family, pictures: p)
-        case .today: TodayWidget(c: c, family: family, pictures: p)
-        case .todos: TodosWidget(c: c, family: family, pictures: p)
-        case .usage: UsageWidget(c: c, family: family, pictures: p)
-        case .computers: ComputersWidget(c: c, family: family, pictures: p)
-        case .record: RecordWidget(c: c, family: family, pictures: p)
-        case .health: HealthWidget(c: c, family: family, pictures: p)
-        case .inbox: InboxWidget(c: c, family: family, pictures: p)
+        case .agents: HomeAgentsWidget(c: c, family: family, pictures: p)
+        case .today: HomeTodayWidget(c: c, family: family, pictures: p)
+        case .todos: HomeTodosWidget(c: c, family: family, pictures: p)
+        case .usage: HomeUsageWidget(c: c, family: family, pictures: p)
+        case .computers: HomeComputersWidget(c: c, family: family, pictures: p)
+        case .record: HomeRecordWidget(c: c, family: family, pictures: p)
+        case .health: HomeHealthWidget(c: c, family: family, pictures: p)
+        case .inbox: HomeInboxWidget(c: c, family: family, pictures: p)
         }
     }
 }
@@ -234,7 +237,7 @@ struct HomeWidgetView: View {
 // MARK: - Agents
 
 /// How many agents need you, big; the one waiting longest beside it; the rest in a word.
-private struct AgentsWidget: View {
+private struct HomeAgentsWidget: View {
     var c: HomeContext
     var family: WidgetFamily
     var pictures: HomeFacePictures?
@@ -245,7 +248,7 @@ private struct AgentsWidget: View {
     private var lead: (n: Int, words: String, color: Color)? {
         if counts.needsYou > 0 { return (counts.needsYou, StateName.needsYou.text, HomeWidgetTokens.needsYou.dot) }
         if counts.working > 0 { return (counts.working, StateName.working.text, HomeWidgetTokens.working.dot) }
-        if counts.done > 0 { return (counts.done, interfaceText("Just Finished [Home Widgets]"), HomeWidgetTokens.done.dot) }
+        if counts.done > 0 { return (counts.done, interfaceText("Just Finished [Home Widgets]"), HomeWidgetTokens.done.dot) } // perf-ok: drawn once per timeline entry, in the widget extension
         return nil
     }
 
@@ -253,7 +256,7 @@ private struct AgentsWidget: View {
     private var rest: String {
         var parts: [String] = []
         if counts.needsYou > 0, counts.working > 0 { parts.append(StateName.count(.working, counts.working)) }
-        if counts.done > 0, counts.needsYou + counts.working > 0 { parts.append(interfaceText("\(counts.done) just finished [Home Widgets]")) }
+        if counts.done > 0, counts.needsYou + counts.working > 0 { parts.append(interfaceText("\(counts.done) just finished [Home Widgets]")) } // perf-ok: drawn once per timeline entry, in the widget extension
         return parts.joined(separator: " · ")
     }
 
@@ -278,7 +281,7 @@ private struct AgentsWidget: View {
                     stats
                     Spacer().frame(height: HomeWidgetTokens.row * 1.5)
                     VStack(alignment: .leading, spacing: HomeWidgetTokens.row) {
-                        ForEach(c.agentRows.prefix(5)) { AgentRowView(row: $0, now: c.date) }
+                        ForEach(c.agentRows.prefix(5)) { HomeAgentRowView(row: $0, now: c.date) }
                     }
                     Spacer(minLength: 0)
                 }
@@ -304,7 +307,7 @@ private struct AgentsWidget: View {
     private func focus(_ row: HomeSnapshot.AgentRow) -> some View {
         VStack(alignment: .leading, spacing: HomeWidgetTokens.hair) {
             if let words = row.ask ?? row.detail {
-                Text(verbatim: words).font(HomeWidgetTokens.captionStrong).lineLimit(1).homeTone(AgentRowView.color(row.state))
+                Text(verbatim: words).font(HomeWidgetTokens.captionStrong).lineLimit(1).homeTone(HomeAgentRowView.color(row.state))
             }
             Text(verbatim: row.title).font(HomeWidgetTokens.headline).lineLimit(2).homeInk(.primary)
             Text(verbatim: [row.place, row.since.map { homeAgo($0, now: c.date) }].compactMap { $0 }.joined(separator: " · "))
@@ -317,7 +320,7 @@ private struct AgentsWidget: View {
         HStack(alignment: .top, spacing: HomeWidgetTokens.flush) {
             stat(counts.needsYou, StateName.needsYou.text, HomeWidgetTokens.needsYou.dot)
             stat(counts.working, StateName.working.text, HomeWidgetTokens.working.dot)
-            stat(counts.done, interfaceText("Just Finished [Home Widgets]"), HomeWidgetTokens.done.dot)
+            stat(counts.done, interfaceText("Just Finished [Home Widgets]"), HomeWidgetTokens.done.dot) // perf-ok: drawn once per timeline entry, in the widget extension
         }
     }
 
@@ -331,7 +334,7 @@ private struct AgentsWidget: View {
 }
 
 /// An agent in the large widget's list: its state's dot, its title, what it waits for or does, how long.
-private struct AgentRowView: View {
+private struct HomeAgentRowView: View {
     var row: HomeSnapshot.AgentRow
     var now: Date
 
@@ -366,7 +369,7 @@ private struct AgentRowView: View {
 // MARK: - Today
 
 /// The calendar's page for today: the date, then what comes next.
-private struct TodayWidget: View {
+private struct HomeTodayWidget: View {
     var c: HomeContext
     var family: WidgetFamily
     var pictures: HomeFacePictures?
@@ -377,14 +380,14 @@ private struct TodayWidget: View {
             VStack(alignment: .leading, spacing: 0) {
                 dateHead(compact: true)
                 Spacer(minLength: HomeWidgetTokens.tight)
-                if let next = c.nextEvent { EventView(event: next, lines: 2) } else { none }
+                if let next = c.nextEvent { HomeEventView(event: next, lines: 2) } else { none }
             }
         case .systemMedium:
             HStack(alignment: .top, spacing: HomeWidgetTokens.halves) {
                 dateHead(compact: false).frame(width: HomeWidgetTokens.ringHero, alignment: .leading)
                     .frame(maxHeight: .infinity, alignment: .top)
                 VStack(alignment: .leading, spacing: HomeWidgetTokens.row) {
-                    ForEach(Array(c.events.prefix(3).enumerated()), id: \.offset) { EventView(event: $0.element, lines: 1) }
+                    ForEach(Array(c.events.prefix(3).enumerated()), id: \.offset) { HomeEventView(event: $0.element, lines: 1) }
                     if c.events.isEmpty { none }
                     Spacer(minLength: 0)
                     if c.events.count > 3 { more(c.events.count - 3) }
@@ -399,7 +402,7 @@ private struct TodayWidget: View {
                     Spacer()
                     corner
                 }
-                if c.events.isEmpty { Spacer(); none; Spacer() } else { DayTimeline(c: c) }
+                if c.events.isEmpty { Spacer(); none; Spacer() } else { HomeDayTimeline(c: c) }
             }
         }
     }
@@ -435,12 +438,12 @@ private struct TodayWidget: View {
     }
 
     private func more(_ n: Int) -> some View {
-        Text(verbatim: interfaceText("\(n) more events [Home Widgets]")).font(HomeWidgetTokens.caption).homeInk(.tertiary)
+        Text("\(n) more events [Home Widgets]").font(HomeWidgetTokens.caption).homeInk(.tertiary)
     }
 }
 
 /// An event: the coral bar, its title, its time.
-private struct EventView: View {
+private struct HomeEventView: View {
     var event: HomeSnapshot.Event
     var lines: Int
 
@@ -465,7 +468,7 @@ private struct EventView: View {
 
 /// The rest of the day as the calendar's day view: an hour a line, each event a block as long as it lasts, a red
 /// line at now.
-private struct DayTimeline: View {
+private struct HomeDayTimeline: View {
     var c: HomeContext
     @Environment(\.widgetRenderingMode) private var mode
 
@@ -535,7 +538,7 @@ private struct DayTimeline: View {
 // MARK: - To-dos
 
 /// Today's to-dos: how many, big (Reminders'); the medium and large ones tick them off.
-private struct TodosWidget: View {
+private struct HomeTodosWidget: View {
     var c: HomeContext
     var family: WidgetFamily
     var pictures: HomeFacePictures?
@@ -565,7 +568,7 @@ private struct TodosWidget: View {
                 }
                 .frame(width: HomeWidgetTokens.ringHero, alignment: .leading)
                 VStack(alignment: .leading, spacing: HomeWidgetTokens.gap) {
-                    ForEach(todos.items.prefix(4)) { TodoRow(todo: $0) }
+                    ForEach(todos.items.prefix(4)) { HomeTodoRow(todo: $0) }
                     if todos.items.isEmpty { allDoneFace }
                     Spacer(minLength: 0)
                 }
@@ -579,22 +582,22 @@ private struct TodosWidget: View {
                     Spacer()
                     if open > 0 { HomeHero(text: "\(open)", font: HomeWidgetTokens.heroSmall) }
                 }
-                ForEach(todos.items.prefix(8)) { TodoRow(todo: $0, large: true) }
+                ForEach(todos.items.prefix(8)) { HomeTodoRow(todo: $0, large: true) }
                 if todos.items.isEmpty { Spacer(); allDoneFace; Spacer() }
                 Spacer(minLength: 0)
-                if todos.count > 8 { Text(verbatim: interfaceText("\(todos.count - 8) more [Home Widgets]")).font(HomeWidgetTokens.caption).homeInk(.tertiary) }
+                if todos.count > 8 { Text("\(todos.count - 8) more [Home Widgets]").font(HomeWidgetTokens.caption).homeInk(.tertiary) }
             }
         }
     }
 
     /// The widget's mark, a filled orange disc as Reminders' lists have.
-    private var badge: some View { TodoBadge() }
+    private var badge: some View { HomeTodoBadge() }
 
     private var name: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Today's To-Dos [Home Widgets]").font(HomeWidgetTokens.headline).lineLimit(1).homeInk(.primary)
             if todos.overdue > 0 {
-                Text(verbatim: interfaceText("\(todos.overdue) overdue [Home Widgets]")).font(HomeWidgetTokens.captionStrong).homeTone(HomeWidgetTokens.overdue)
+                Text("\(todos.overdue) overdue [Home Widgets]").font(HomeWidgetTokens.captionStrong).homeTone(HomeWidgetTokens.overdue)
             } else if family == .systemSmall, let first = todos.items.first {
                 Text(verbatim: first.title).font(HomeWidgetTokens.caption).lineLimit(1).homeInk(.secondary)
             }
@@ -615,7 +618,7 @@ private struct TodosWidget: View {
 
 /// The To-dos widget's mark, a filled orange disc as Reminders' lists have; the mark knocked out of the disc so it
 /// still reads where the system paints the disc in one color.
-private struct TodoBadge: View {
+private struct HomeTodoBadge: View {
     @Environment(\.widgetRenderingMode) private var mode
     var body: some View {
         let full = mode == .fullColor
@@ -633,7 +636,7 @@ private struct TodoBadge: View {
 
 /// A to-do with its box. Ticked on the widget it shows done at once; refused by the hub, it says so in red (the box
 /// becomes a button with the ticking PR, docs/apple/home-widgets.md「Ticking off a to-do」).
-private struct TodoRow: View {
+private struct HomeTodoRow: View {
     var todo: HomeSnapshot.Todo
     var large = false
 
@@ -684,7 +687,7 @@ private struct TodoRow: View {
 // MARK: - Usage
 
 /// How full the subscription windows are, as rings; the large one adds today's tokens by the hour.
-private struct UsageWidget: View {
+private struct HomeUsageWidget: View {
     var c: HomeContext
     var family: WidgetFamily
     var pictures: HomeFacePictures?
@@ -713,17 +716,17 @@ private struct UsageWidget: View {
                 case .systemMedium:
                     Spacer(minLength: 0)
                     HStack(alignment: .top, spacing: HomeWidgetTokens.flush) {
-                        ForEach(c.accounts.prefix(3)) { AccountRings(account: $0).frame(maxWidth: .infinity) }
+                        ForEach(c.accounts.prefix(3)) { HomeAccountRings(account: $0).frame(maxWidth: .infinity) }
                     }
                     Spacer(minLength: 0)
                 default:
                     Spacer().frame(height: HomeWidgetTokens.row)
                     tokensHero
                     Spacer().frame(height: HomeWidgetTokens.row)
-                    if !usage.hourly.isEmpty { HourChart(hours: usage.hourly, now: c.date) }
+                    if !usage.hourly.isEmpty { HomeHourChart(hours: usage.hourly, now: c.date) }
                     Spacer(minLength: HomeWidgetTokens.row)
                     HStack(alignment: .top, spacing: HomeWidgetTokens.flush) {
-                        ForEach(c.accounts.prefix(3)) { AccountRings(account: $0).frame(maxWidth: .infinity) }
+                        ForEach(c.accounts.prefix(3)) { HomeAccountRings(account: $0).frame(maxWidth: .infinity) }
                     }
                 }
             }
@@ -742,7 +745,7 @@ private struct UsageWidget: View {
                 }
                 .frame(width: HomeWidgetTokens.ringHero * 0.76, height: HomeWidgetTokens.ringHero * 0.76)
                 VStack(alignment: .leading, spacing: 0) {
-                    if let w { Text(verbatim: WindowName.of(w)).font(HomeWidgetTokens.captionStrong).lineLimit(1).homeInk(.secondary) }
+                    if let w { Text(verbatim: HomeWindowName.of(w)).font(HomeWidgetTokens.captionStrong).lineLimit(1).homeInk(.secondary) }
                     if let reset = w?.resetsAt {
                         Text("Resets \(Date(timeIntervalSince1970: reset), format: .dateTime.hour().minute()) [Home Widgets]")
                             .font(HomeWidgetTokens.caption).lineLimit(1).minimumScaleFactor(HomeWidgetTokens.heroMinScale).homeInk(.tertiary)
@@ -770,9 +773,9 @@ private struct UsageWidget: View {
     }
 }
 
-/// A window's length in the interface language: "5 hours" / "5 小时" in full, the system's short form ("5h") where that
+/// A window's length in the interface language, in full ("5 hours", or its Chinese and Japanese words), the system's short form ("5h") where that
 /// does not fit; the hub's own label ("5h") only for a window of unknown length.
-enum WindowName {
+enum HomeWindowName {
     static func of(_ w: HomeSnapshot.Window, short: Bool = false) -> String {
         guard w.minutes > 0 else { return w.label }
         let d = Duration.seconds(Double(w.minutes) * 60)
@@ -786,12 +789,12 @@ enum WindowName {
 }
 
 /// An account's windows in words, in full when they fit, else in the system's short form.
-private struct WindowList: View {
+private struct HomeWindowList: View {
     var account: HomeSnapshot.Account
     var body: some View {
         ViewThatFits(in: .horizontal) {
-            Text(verbatim: WindowName.list(account, short: false))
-            Text(verbatim: WindowName.list(account, short: true))
+            Text(verbatim: HomeWindowName.list(account, short: false))
+            Text(verbatim: HomeWindowName.list(account, short: true))
         }
         .font(HomeWidgetTokens.caption).lineLimit(1).homeInk(.secondary)
     }
@@ -799,7 +802,7 @@ private struct WindowList: View {
 
 /// An account as two rings, one in the other (the shortest window inside), its fullest percent in the middle, its
 /// name under them: the system's Fitness rings.
-private struct AccountRings: View {
+private struct HomeAccountRings: View {
     var account: HomeSnapshot.Account
 
     var body: some View {
@@ -808,21 +811,21 @@ private struct AccountRings: View {
         VStack(spacing: HomeWidgetTokens.tight) {
             ZStack {
                 ForEach(Array(windows.enumerated()), id: \.offset) { i, w in
-                    HomeRing(fraction: w.percent / 100, color: UsageWidget.color(w.percent), width: HomeWidgetTokens.ringStrokeSmall)
+                    HomeRing(fraction: w.percent / 100, color: HomeUsageWidget.color(w.percent), width: HomeWidgetTokens.ringStrokeSmall)
                         .padding(CGFloat(i) * (HomeWidgetTokens.ringStrokeSmall + HomeWidgetTokens.hair))
                 }
                 Text(verbatim: "\(Int(fullest?.percent ?? 0))").font(HomeWidgetTokens.ringNumberSmall).monospacedDigit().homeInk(.primary)
             }
             .frame(width: HomeWidgetTokens.ringMedium, height: HomeWidgetTokens.ringMedium)
             Text(verbatim: account.name).font(HomeWidgetTokens.captionStrong).lineLimit(1).homeInk(.primary)
-            WindowList(account: account)
+            HomeWindowList(account: account)
         }
         .opacity(account.stale ? HomeWidgetTokens.staleOpacity : 1)
     }
 }
 
 /// Today's tokens by the hour, midnight to now (Screen Time's chart): the current hour in the widget's blue.
-private struct HourChart: View {
+private struct HomeHourChart: View {
     var hours: [Int]
     var now: Date
 
@@ -866,7 +869,7 @@ private struct HourChart: View {
 
 /// Each computer as a ring, as Batteries shows devices: its load, colored by what its agents do; gray dashes when it
 /// is offline.
-private struct ComputersWidget: View {
+private struct HomeComputersWidget: View {
     var c: HomeContext
     var family: WidgetFamily
     var pictures: HomeFacePictures?
@@ -893,7 +896,7 @@ private struct ComputersWidget: View {
                 case .systemMedium:
                     Spacer(minLength: 0)
                     HStack(alignment: .top, spacing: HomeWidgetTokens.flush) {
-                        ForEach(list.prefix(4)) { ComputerRing(machine: $0, side: HomeWidgetTokens.ringMedium, named: true).frame(maxWidth: .infinity) }
+                        ForEach(list.prefix(4)) { HomeComputerRing(machine: $0, side: HomeWidgetTokens.ringMedium, named: true).frame(maxWidth: .infinity) }
                     }
                     Spacer(minLength: 0)
                 default:
@@ -904,8 +907,8 @@ private struct ComputersWidget: View {
                     Grid(alignment: .leading, horizontalSpacing: HomeWidgetTokens.halves, verticalSpacing: HomeWidgetTokens.row * 2.5) {
                         ForEach(Array(stride(from: 0, to: min(6, list.count), by: 2)), id: \.self) { i in
                             GridRow {
-                                ComputerLine(machine: list[i])
-                                if i + 1 < list.count { ComputerLine(machine: list[i + 1]) } else { Color.clear }
+                                HomeComputerLine(machine: list[i])
+                                if i + 1 < list.count { HomeComputerLine(machine: list[i + 1]) } else { Color.clear }
                             }
                         }
                     }
@@ -916,7 +919,7 @@ private struct ComputersWidget: View {
     }
 
     @ViewBuilder private func cell(_ cells: [HomeSnapshot.Machine], _ i: Int) -> some View {
-        if i < cells.count { ComputerRing(machine: cells[i], side: HomeWidgetTokens.ringSmall, named: false) } else { Color.clear.frame(width: HomeWidgetTokens.ringSmall, height: HomeWidgetTokens.ringSmall) }
+        if i < cells.count { HomeComputerRing(machine: cells[i], side: HomeWidgetTokens.ringSmall, named: false) } else { Color.clear.frame(width: HomeWidgetTokens.ringSmall, height: HomeWidgetTokens.ringSmall) }
     }
 
     private var summary: some View {
@@ -924,7 +927,7 @@ private struct ComputersWidget: View {
         let working = list.map(\.working).reduce(0, +)
         return HStack(alignment: .firstTextBaseline, spacing: HomeWidgetTokens.gap) {
             HomeHero(text: "\(online)", font: HomeWidgetTokens.heroMedium)
-            Text(verbatim: interfaceText("of \(list.count) online [Home Widgets]")).font(HomeWidgetTokens.headline).homeInk(.primary)
+            Text("of \(list.count) online [Home Widgets]").font(HomeWidgetTokens.headline).homeInk(.primary)
             Spacer()
             if working > 0 { Text(verbatim: StateName.count(.working, working)).font(HomeWidgetTokens.captionStrong).homeTone(HomeWidgetTokens.working.dot) }
         }
@@ -933,10 +936,10 @@ private struct ComputersWidget: View {
 
 /// What a computer is doing, in a word and a color: needs you, working, idle or offline.
 private func computerState(_ m: HomeSnapshot.Machine) -> (words: String, color: Color?) {
-    if !m.online { return (interfaceText("Offline [Home Widgets]"), nil) }
+    if !m.online { return (interfaceText("Offline [Home Widgets]"), nil) } // perf-ok: drawn once per timeline entry, in the widget extension
     if m.needsYou > 0 { return (StateName.count(.needsYou, m.needsYou), HomeWidgetTokens.needsYou.dot) }
     if m.working > 0 { return (StateName.count(.working, m.working), HomeWidgetTokens.working.dot) }
-    return (interfaceText("Idle [Home Widgets]"), nil)
+    return (interfaceText("Idle [Home Widgets]"), nil) // perf-ok: drawn once per timeline entry, in the widget extension
 }
 
 private func computerSymbol(_ m: HomeSnapshot.Machine) -> String {
@@ -949,14 +952,14 @@ private func computerSymbol(_ m: HomeSnapshot.Machine) -> String {
 
 /// A computer's ring: its mark inside, its load around, the state's color. Without its name under it (the small
 /// widget), VoiceOver still reads which computer it is, what it does and its load.
-private struct ComputerRing: View {
+private struct HomeComputerRing: View {
     var machine: HomeSnapshot.Machine
     var side: CGFloat
     var named: Bool
 
     var body: some View {
         let state = computerState(machine)
-        let spoken = [machine.name, state.words, machine.online ? machine.load.map { interfaceText("Load \($0)% [Home Widgets]") } : nil]
+        let spoken = [machine.name, state.words, machine.online ? machine.load.map { interfaceText("Load \($0)% [Home Widgets]") } : nil] // perf-ok: drawn once per timeline entry, in the widget extension
             .compactMap { $0 }.joined(separator: ", ")
         VStack(spacing: HomeWidgetTokens.tight) {
             ZStack {
@@ -980,12 +983,12 @@ private struct ComputerRing: View {
 }
 
 /// The large widget's computer: its ring, its name, what it does and its load.
-private struct ComputerLine: View {
+private struct HomeComputerLine: View {
     var machine: HomeSnapshot.Machine
     var body: some View {
         let state = computerState(machine)
         HStack(spacing: HomeWidgetTokens.gap * 1.5) {
-            ComputerRing(machine: machine, side: HomeWidgetTokens.ringMedium, named: false)
+            HomeComputerRing(machine: machine, side: HomeWidgetTokens.ringMedium, named: false)
             VStack(alignment: .leading, spacing: 0) {
                 Text(verbatim: machine.name).font(HomeWidgetTokens.headline).lineLimit(1).homeInk(machine.online ? .primary : .tertiary)
                 Group {
@@ -993,7 +996,7 @@ private struct ComputerLine: View {
                 }
                 .font(HomeWidgetTokens.caption).lineLimit(1)
                 if machine.online, let load = machine.load {
-                    Text(verbatim: interfaceText("Load \(load)% [Home Widgets]")).font(HomeWidgetTokens.caption).lineLimit(1).homeInk(.tertiary)
+                    Text("Load \(load)% [Home Widgets]").font(HomeWidgetTokens.caption).lineLimit(1).homeInk(.tertiary)
                 }
             }
             Spacer(minLength: 0)
@@ -1005,7 +1008,7 @@ private struct ComputerLine: View {
 
 /// One big red button: a tap starts a meeting recording (the Record control's intent, which runs in the app and starts
 /// the recording's Live Activity). While recording: the time running, and Stop.
-private struct RecordWidget: View {
+private struct HomeRecordWidget: View {
     var c: HomeContext
     var family: WidgetFamily
     var pictures: HomeFacePictures?
@@ -1018,7 +1021,7 @@ private struct RecordWidget: View {
                 VStack(alignment: .leading, spacing: 0) {
                     HomeHeader(title: HomeKind.record.title, color: HomeWidgetTokens.recording, mood: recording == nil ? nil : .working, pictures: pictures)
                     Spacer(minLength: 0)
-                    RecordDisc(side: HomeWidgetTokens.recordHero * (recording == nil ? 0.82 : 0.6), recording: recording != nil)
+                    HomeRecordDisc(side: HomeWidgetTokens.recordHero * (recording == nil ? 0.82 : 0.6), recording: recording != nil)
                     Spacer(minLength: 0)
                     words(lines: 1)
                 }
@@ -1027,7 +1030,7 @@ private struct RecordWidget: View {
         } else {
             button {
                 HStack(spacing: HomeWidgetTokens.halves) {
-                    RecordDisc(side: HomeWidgetTokens.recordMedium, recording: recording != nil)
+                    HomeRecordDisc(side: HomeWidgetTokens.recordMedium, recording: recording != nil)
                     VStack(alignment: .leading, spacing: HomeWidgetTokens.tight) {
                         words(lines: 2)
                         if recording == nil {
@@ -1060,7 +1063,7 @@ private struct RecordWidget: View {
             } else {
                 Text("Record a Meeting [Home Widgets]").font(HomeWidgetTokens.headline).lineLimit(1).homeInk(.primary)
                 if let now = c.eventNow {
-                    Text(verbatim: interfaceText("Named “\(now.title)” [Home Widgets]")).font(HomeWidgetTokens.caption).lineLimit(lines).homeInk(.secondary)
+                    Text("Named “\(now.title)” [Home Widgets]").font(HomeWidgetTokens.caption).lineLimit(lines).homeInk(.secondary)
                 } else if family != .systemSmall {
                     Text("Named after the event on your calendar now [Home Widgets]").font(HomeWidgetTokens.caption).lineLimit(lines).homeInk(.secondary)
                 }
@@ -1070,7 +1073,7 @@ private struct RecordWidget: View {
 }
 
 /// The Record button: the system's recording red with the waveform; a stop square while recording.
-private struct RecordDisc: View {
+private struct HomeRecordDisc: View {
     var side: CGFloat
     var recording: Bool
     @Environment(\.widgetRenderingMode) private var mode
@@ -1094,7 +1097,7 @@ private struct RecordDisc: View {
 // MARK: - Health
 
 /// Today's steps, big, against the week's average; sleep and the resting heart beside them.
-private struct HealthWidget: View {
+private struct HomeHealthWidget: View {
     var c: HomeContext
     var family: WidgetFamily
     var pictures: HomeFacePictures?
@@ -1124,7 +1127,7 @@ private struct HealthWidget: View {
                     Spacer().frame(height: HomeWidgetTokens.row)
                     steps(font: HomeWidgetTokens.hero, bar: false)
                     Spacer().frame(height: HomeWidgetTokens.row)
-                    if !h.week.isEmpty { WeekChart(days: h.week, average: h.stepsAverage, now: c.date) }
+                    if !h.week.isEmpty { HomeWeekChart(days: h.week, average: h.stepsAverage, now: c.date) }
                     Spacer(minLength: HomeWidgetTokens.row)
                     HStack(alignment: .top) { sleep; Spacer(); heart }
                 }
@@ -1140,7 +1143,7 @@ private struct HealthWidget: View {
             }
             if let steps = h.steps, let avg = h.stepsAverage, avg > 0 {
                 if bar { HomeBar(fraction: Double(steps) / Double(max(steps, avg)), color: HomeWidgetTokens.steps) }
-                Text(verbatim: interfaceText("7-day average \(avg.formatted()) [Home Widgets]")).font(HomeWidgetTokens.caption).lineLimit(1).homeInk(.secondary)
+                Text("7-day average \(avg.formatted()) [Home Widgets]").font(HomeWidgetTokens.caption).lineLimit(1).homeInk(.secondary)
             }
         }
     }
@@ -1148,13 +1151,13 @@ private struct HealthWidget: View {
     @ViewBuilder private var sleep: some View {
         if let hours = h.sleepHours {
             measure(HomeWidgetTokens.sleepSymbol, Duration.seconds(hours * 3600).formatted(.units(allowed: [.hours, .minutes], width: .narrow)),
-                    interfaceText("Asleep [Home Widgets]"), HomeWidgetTokens.sleep)
+                    interfaceText("Asleep [Home Widgets]"), HomeWidgetTokens.sleep) // perf-ok: drawn once per timeline entry, in the widget extension
         }
     }
 
     @ViewBuilder private var heart: some View {
         if let bpm = h.restingHeartRate {
-            measure(HomeWidgetTokens.healthSymbol, "\(bpm)", interfaceText("Resting bpm [Home Widgets]"), HomeWidgetTokens.heart)
+            measure(HomeWidgetTokens.healthSymbol, "\(bpm)", interfaceText("Resting bpm [Home Widgets]"), HomeWidgetTokens.heart) // perf-ok: drawn once per timeline entry, in the widget extension
         }
     }
 
@@ -1170,7 +1173,7 @@ private struct HealthWidget: View {
 }
 
 /// Steps a day this week, today lit, the average a dashed line.
-private struct WeekChart: View {
+private struct HomeWeekChart: View {
     var days: [Int]
     var average: Int?
     var now: Date
@@ -1217,7 +1220,7 @@ private struct WeekChart: View {
 // MARK: - Inbox
 
 /// How many messages need you, big; the newest beside it.
-private struct InboxWidget: View {
+private struct HomeInboxWidget: View {
     var c: HomeContext
     var family: WidgetFamily
     var pictures: HomeFacePictures?
@@ -1246,12 +1249,12 @@ private struct InboxWidget: View {
                     Spacer().frame(height: HomeWidgetTokens.row)
                     HStack(alignment: .firstTextBaseline, spacing: HomeWidgetTokens.gap) {
                         HomeHero(text: "\(inbox.needsYou)", font: HomeWidgetTokens.heroMedium, color: HomeWidgetTokens.inbox.dot)
-                        Text(verbatim: interfaceText("\(inbox.needsYou) messages need you [Home Widgets]")).font(HomeWidgetTokens.headline).lineLimit(1).homeInk(.primary)
+                        Text("\(inbox.needsYou) messages need you [Home Widgets]").font(HomeWidgetTokens.headline).lineLimit(1).homeInk(.primary)
                         Spacer()
                     }
                     Spacer().frame(height: HomeWidgetTokens.row)
                     VStack(alignment: .leading, spacing: HomeWidgetTokens.row + HomeWidgetTokens.tight) {
-                        ForEach(inbox.latest.prefix(5)) { MessageRow(message: $0) }
+                        ForEach(inbox.latest.prefix(5)) { HomeMessageRow(message: $0) }
                     }
                     Spacer(minLength: 0)
                 }
@@ -1278,14 +1281,14 @@ private struct InboxWidget: View {
             }
             Text(verbatim: m.summary).font(HomeWidgetTokens.body).lineLimit(2).homeInk(.secondary)
             if inbox.latest.count > 1 {
-                Text(verbatim: interfaceText("\(inbox.latest.count - 1) more [Home Widgets]")).font(HomeWidgetTokens.caption).homeInk(.tertiary)
+                Text("\(inbox.latest.count - 1) more [Home Widgets]").font(HomeWidgetTokens.caption).homeInk(.tertiary)
             }
         }
     }
 }
 
 /// A message in the large widget: who (a monogram), what it says, when.
-private struct MessageRow: View {
+private struct HomeMessageRow: View {
     var message: HomeSnapshot.Message
     @Environment(\.widgetRenderingMode) private var mode
 
@@ -1429,22 +1432,22 @@ struct HomeLockView: View {
             let n = c.agentCounts
             if n.needsYou > 0 { return StateName.count(.needsYou, n.needsYou) }
             if n.working > 0 { return StateName.count(.working, n.working) }
-            return interfaceText("Nothing needs you [Home Widgets]")
+            return interfaceText("Nothing needs you [Home Widgets]") // perf-ok: drawn once per timeline entry, in the widget extension
         case .today:
-            guard let next = c.nextEvent else { return interfaceText("No more events today [Home Widgets]") }
+            guard let next = c.nextEvent else { return interfaceText("No more events today [Home Widgets]") } // perf-ok: drawn once per timeline entry, in the widget extension
             return Date(timeIntervalSince1970: next.start).formatted(.dateTime.hour().minute()) + " " + next.title
         case .todos:
-            return interfaceText("\(c.snapshot.todos?.count ?? 0) to-dos today [Home Widgets]")
+            return interfaceText("\(c.snapshot.todos?.count ?? 0) to-dos today [Home Widgets]") // perf-ok: drawn once per timeline entry, in the widget extension
         case .usage:
-            return c.accounts.first?.name ?? interfaceText("\(homeShort(c.snapshot.usage?.tokensToday ?? 0)) tokens today [Home Widgets]")
+            return c.accounts.first?.name ?? interfaceText("\(homeShort(c.snapshot.usage?.tokensToday ?? 0)) tokens today [Home Widgets]") // perf-ok: drawn once per timeline entry, in the widget extension
         case .computers:
-            return interfaceText("\(c.machines.filter(\.online).count) of \(c.machines.count) online [Home Widgets]")
+            return interfaceText("\(c.machines.filter(\.online).count) of \(c.machines.count) online [Home Widgets]") // perf-ok: drawn once per timeline entry, in the widget extension
         case .record:
-            return interfaceText("Record a Meeting [Home Widgets]")
+            return interfaceText("Record a Meeting [Home Widgets]") // perf-ok: drawn once per timeline entry, in the widget extension
         case .health:
-            return interfaceText("\(c.snapshot.health?.steps ?? 0) steps [Home Widgets]")
+            return interfaceText("\(c.snapshot.health?.steps ?? 0) steps [Home Widgets]") // perf-ok: drawn once per timeline entry, in the widget extension
         case .inbox:
-            return interfaceText("\(c.snapshot.inbox?.needsYou ?? 0) messages need you [Home Widgets]")
+            return interfaceText("\(c.snapshot.inbox?.needsYou ?? 0) messages need you [Home Widgets]") // perf-ok: drawn once per timeline entry, in the widget extension
         }
     }
 
@@ -1458,14 +1461,14 @@ struct HomeLockView: View {
             return (c.snapshot.todos?.items ?? []).prefix(2).map(\.title)
         case .usage:
             guard let a = c.accounts.first else { return [] }
-            return [WindowName.list(a, short: true)]
+            return [HomeWindowName.list(a, short: true)]
         case .computers:
             return c.machines.prefix(2).map { $0.name + " · " + computerState($0).words }
         case .record:
-            return c.eventNow.map { [interfaceText("Named “\($0.title)” [Home Widgets]")] } ?? []
+            return c.eventNow.map { [interfaceText("Named “\($0.title)” [Home Widgets]")] } ?? [] // perf-ok: drawn once per timeline entry, in the widget extension
         case .health:
             guard let hrs = c.snapshot.health?.sleepHours else { return [] }
-            return [Duration.seconds(hrs * 3600).formatted(.units(allowed: [.hours, .minutes], width: .narrow)) + " " + interfaceText("Asleep [Home Widgets]")]
+            return [Duration.seconds(hrs * 3600).formatted(.units(allowed: [.hours, .minutes], width: .narrow)) + " " + interfaceText("Asleep [Home Widgets]")] // perf-ok: drawn once per timeline entry, in the widget extension
         case .inbox:
             return c.snapshot.inbox?.latest.prefix(1).map { $0.sender + ": " + $0.summary } ?? []
         }
@@ -1476,7 +1479,7 @@ struct HomeLockView: View {
         case .agents:
             let n = c.agentCounts
             let parts = [n.needsYou > 0 ? StateName.count(.needsYou, n.needsYou) : nil, n.working > 0 ? StateName.count(.working, n.working) : nil].compactMap { $0 }
-            return parts.isEmpty ? interfaceText("Nothing needs you [Home Widgets]") : parts.joined(separator: " · ")
+            return parts.isEmpty ? interfaceText("Nothing needs you [Home Widgets]") : parts.joined(separator: " · ") // perf-ok: drawn once per timeline entry, in the widget extension
         default:
             return lockTitle
         }

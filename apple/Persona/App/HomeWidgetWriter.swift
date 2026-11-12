@@ -44,6 +44,30 @@ final class HomeWidgetWriter {
         self.store = store
     }
 
+    /// Whether the hub knows this device has the widgets (nil: not told since launch).
+    private var toldHub: Bool?
+
+    /// Tells the hub whether any of the widgets is on this device's screens (`widgets` in its prefs), when that changed
+    /// since it last told it: the hub wakes the app for them while it is not open (#5721). From the foreground.
+    func tellHub() {
+        guard let api = AppModel.shared.api, !api.config.isDemo else { return }
+        let kinds = Set(HomeKind.allCases.map(\.widgetKind))
+        WidgetCenter.shared.getCurrentConfigurations { result in
+            guard case .success(let infos) = result else { return }
+            let has = infos.contains { kinds.contains($0.kind) }
+            Task { @MainActor in
+                let writer = HomeWidgetWriter.shared
+                guard writer.toldHub != has else { return }
+                do {
+                    try await api.setHasWidgets(device: PushRegistrar.deviceID, has)
+                    writer.toldHub = has
+                } catch {
+                    HomeSnapshotStore.log.error("telling the hub about the widgets: \(error.localizedDescription, privacy: .public)")
+                }
+            }
+        }
+    }
+
     /// Asks for a write within `pause`.
     func schedule() {
         guard pending == nil else { return }
@@ -118,7 +142,7 @@ final class HomeWidgetWriter {
     }
 }
 
-private extension JSONEncoder {
+nonisolated private extension JSONEncoder {
     static var sorted: JSONEncoder {
         let e = JSONEncoder()
         e.outputFormatting = .sortedKeys
@@ -135,6 +159,9 @@ enum HomeWidgetLink {
 }
 
 extension AppModel {
+    /// What the widgets' writer writes (`HomeWidgetWriter.source`).
+    func homeSnapshotSource() -> HomeSnapshot? { homeSnapshot() }
+
     /// Where a widget's tap lands: Agents and the Inbox on their tabs, the Record widget on the recordings; the others
     /// on the app as it was (their pages come with their widgets).
     func openWidget(_ kind: HomeKind) {
@@ -182,7 +209,7 @@ extension AppModel {
 /// `AgentsNeedsYou`), then who works (longest first), then who finished and is unread (newest first); only what the
 /// tab's badge counts (`TabBadges.place`: no muted agents, no quiet task's agents). Past `HomeSnapshot.Agents.cap` rows
 /// are counted, not listed.
-nonisolated enum HomeAgents {
+enum HomeAgents {
     static func build(needsYou: [AgentsNeedsYou.Row], sessions: [Session], place: (SessionKey) -> TabBadges.Place,
                       session: (SessionKey) -> Session?, machineName: (String) -> String?,
                       isTask: (SessionKey) -> Bool) -> HomeSnapshot.Agents {

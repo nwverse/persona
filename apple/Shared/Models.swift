@@ -2236,6 +2236,11 @@ nonisolated struct FleetLookPut: Encodable, Sendable {
     var look: FleetLook
 }
 
+/// Whether this device has Persona's Home Screen widgets, alone (the PUT merges): the hub wakes it for them (#5721).
+nonisolated struct WidgetsPut: Encodable, Sendable {
+    var widgets: Bool
+}
+
 /// The managers whose pushes this device doesn't want, alone (APIClient.setMutedManagers): a write of the whole prefs
 /// never carries them, so a page that saved other choices can't bring back one muted elsewhere.
 nonisolated struct MutedManagersPut: Encodable, Sendable {

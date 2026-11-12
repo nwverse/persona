@@ -115,7 +115,12 @@ Widgets/faces/<id>_<rev>/    the chosen package's pictures, one per state, at th
   `persona.widgets.refresh`, about every 30 minutes while a widget is on a screen); and when the hub's widget push
   wakes it (#5721). That push is sent within seconds when Needs You changes; other changes are coalesced to at most one
   every 15 minutes per device. The app writes only when the bytes changed, then reloads only the kinds whose part
-  changed (`WidgetCenter.reloadTimelines(ofKind:)`): WidgetKit budgets reloads.
+  changed (`WidgetCenter.reloadTimelines(ofKind:)`): WidgetKit budgets reloads. The writer is `HomeWidgetWriter`; what
+  the watch's summary follows asks it for a write (`AppModel.summariesChanged`), and a recording that starts or stops
+  writes at once (`RecordingActivity`).
+- **Waking the app** (#5721): from the foreground the app tells the hub whether any of the widgets is on a screen
+  (`widgets` in its device prefs, `HomeWidgetWriter.tellHub`); the hub's silent `persona_wake: "widgets"` push then
+  connects it for 25 seconds, and it writes before it lets go.
 - **Off the main thread** (P1): encoding and writing run in the background, with the file protected until first
   unlock, as `FleetLookStore`'s.
 - **Stale**: the timeline adds an entry at `HomeSnapshot.staleAfter` (30 minutes after the write). From then on the
@@ -135,16 +140,19 @@ or a recording is running, high when a meeting starts within 15 minutes, low oth
 
 ## Screenshots
 
-The gallery draws every widget at its size in light, dark, tinted, clear and Lock Screen, with made-up data
-(`HomeSamples`): `-showHomeWidgets` in a Debug build (a DEBUG launch argument, in `release.sh`'s list). A view outside a
-widget gets no container background, family, margins or tint from the system, so the gallery supplies stand-ins for
-them. Tinted and clear there are close to iOS, not exact. The Home Screen shots on each PR are the proof.
+The gallery draws every widget at its Home Screen sizes in light and dark with made-up data (`HomeSamples`):
+`-showHomeWidgets YES` in a Debug build. A view outside a widget gets no container background, family, margins or tint
+from the system, so the gallery supplies stand-ins for them. For the Home Screen itself, `-showHomeWidgetSample YES`
+writes the same made-up snapshot instead of the app's, so the widgets added to a simulator's Home Screen show it
+without a hub; those shots, on each PR, are the proof (both DEBUG launch arguments, in `release.sh`'s list).
 
 ## Phases
 
-1. **The snapshot and the first widgets**: `HomeSnapshot` and its writer in the app, the package pictures, the
-   Agents, Inbox and Record widgets (Home Screen), the gallery, tests (snapshot round trip, counts equal to the app's,
-   staleness, moods).
+1. **The snapshot and the first widgets**: `HomeSnapshot` and its writer in the app, the package pictures at the
+   widgets' sizes (the Live Activity's faces, `FleetFaces.widgetSizes`), the Agents, Inbox and Record widgets (Home
+   Screen), the gallery, `HomeWidgetTests` (Needs You replayed from `spec/fixtures/needs-you/cases.json` against the
+   Agents badge, rows past the cap, the file read back only in its shape, which kinds reload, writes only on change,
+   moods).
 2. **The rest of the Home Screen**: Today, To-dos (with ticking off), Usage, Computers, Health.
 3. **Lock Screen, settings and the Smart Stack**: the accessory families, Edit Widget (entities for computers and
    accounts read from the snapshot), relevance, background refresh, and the hub's push (#5721, its own PR).

@@ -1865,6 +1865,11 @@ nonisolated struct APIClient: Sendable {
     func setFleetLook(device: String, _ look: FleetLook) async throws {
         _ = try await request("PUT", "/api/v1/devices/\(device)/prefs", body: FleetLookPut(look: look))
     }
+    /// Whether this device has the Home Screen widgets, alone: while its app is not open, the hub wakes it to write them
+    /// again when the agents' counts change (#5721). An older hub keeps the field and does nothing with it.
+    func setHasWidgets(device: String, _ has: Bool) async throws {
+        _ = try await request("PUT", "/api/v1/devices/\(device)/prefs", body: WidgetsPut(widgets: has))
+    }
     func setNotifyPrefs(device: String, _ prefs: NotifyPrefs) async throws -> NotifyPrefs {
         try JSON.decoder.decode(NotifyPrefs.self, from: try await request("PUT", "/api/v1/devices/\(device)/prefs", body: prefs))
     }
