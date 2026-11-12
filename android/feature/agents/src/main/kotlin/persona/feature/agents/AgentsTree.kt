@@ -176,6 +176,59 @@ internal fun agentTreeEntries(
     return nested
 }
 
+/**
+ * Where a line of By Repository sits in its repository's card on Glass (iOS `repoCard`, #4338 A7): [first] its header
+ * (the card's top), [last] the card's last line, [level] levels in from the card's side. The header is level 0, a working
+ * tree's line 1, and the agents' rows sit at their line's level; a repository that holds its agents itself (its main
+ * checkout alone, or quiet) has them a level in under its header, as iOS.
+ */
+internal data class RepoCardSlot(val first: Boolean, val last: Boolean, val level: Int)
+
+/** The card slot of every line inside a repository's card, by [AgentTreeEntry.key]; computers and sections have none. */
+internal fun repoCardSlots(entries: List<AgentTreeEntry>): Map<String, RepoCardSlot> {
+    val slots = LinkedHashMap<String, RepoCardSlot>()
+    var base = -1
+    var holdsRows = false
+    var lastKey: String? = null
+    fun close() {
+        lastKey?.let { slots[it] = slots.getValue(it).copy(last = true) }
+        lastKey = null
+        base = -1
+    }
+    for (entry in entries) {
+        val repo = (entry as? TreeGroupEntry)?.group?.repo
+        if (repo == RepoLevel.Repository) {
+            close()
+            base = entry.treeDepth
+            holdsRows = (entry as TreeGroupEntry).group.rows.isNotEmpty()
+        } else if (entry is TreeMachineEntry || entry is TreeGroupEntry && repo == null) {
+            close()
+            continue
+        }
+        if (base < 0) continue
+        val level = when {
+            repo == RepoLevel.Repository -> 0
+            entry is TreeGroupEntry -> entry.treeDepth - base
+            else -> entry.treeDepth - base + if (holdsRows) 1 else 0
+        }
+        slots[entry.key] = RepoCardSlot(first = repo == RepoLevel.Repository, last = false, level = level)
+        lastKey = entry.key
+    }
+    close()
+    return slots
+}
+
+/** How deep a line sits in the flattened tree (a computer's heading: 0). */
+private val AgentTreeEntry.treeDepth: Int get() = when (this) {
+    is TreeMachineEntry -> 0
+    is TreeGroupEntry -> depth
+    is TreeRowEntry -> depth
+    is TreeTabEntry -> depth
+    is TreeShowAllEntry -> depth
+    is TreeIdleEntry -> depth
+    is TreeChildrenEntry -> depth
+}
+
 /** A computer in the filter strip: how many of its sessions the list would show. */
 @Immutable
 internal data class MachineCount(val machine: Machine, val count: Int)

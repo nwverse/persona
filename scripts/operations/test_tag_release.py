@@ -145,9 +145,11 @@ class TagReleaseTests(unittest.TestCase):
         self.assertEqual(calls[0][:3], ["gh", "release", "view"])
         self.assertEqual(calls[1][:3], ["gh", "release", "upload"])
         self.assertNotIn("create", calls[1])
-        self.assertTrue(calls[1][-1].endswith("/" + artifact.name))
+        self.assertEqual(calls[1][-1].endswith("/" + artifact.name), True)
         self.assertNotIn("#", calls[1][-1])
-        with patch.object(tag_release.subprocess, "run", side_effect=run), patch.object(tag_release.subprocess, "check_output", side_effect=[json.dumps({"tagName": "v1.0.0", "isDraft": False, "assets": []}), "[]"]):
+        with patch.object(tag_release.subprocess, "run", side_effect=run), patch.object(tag_release.subprocess, "check_output", side_effect=[json.dumps({"tagName": "v1.0.0", "isDraft": False, "assets": []}), json.dumps({"assets": [{"name": artifact.name, "digest": "sha256:" + digest}]})]):
+            tag_release.upload("example/project", "v1.0.0", assets)
+        with patch.object(tag_release.subprocess, "run", side_effect=run), patch.object(tag_release.subprocess, "check_output", side_effect=[json.dumps({"tagName": "v1.0.0", "isDraft": False, "assets": []}), json.dumps({"assets": []})]):
             with self.assertRaisesRegex(tag_release.ConfigError, "verification"):
                 tag_release.upload("example/project", "v1.0.0", assets)
 
