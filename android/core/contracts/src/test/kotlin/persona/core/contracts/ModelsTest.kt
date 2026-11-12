@@ -177,4 +177,25 @@ class ModelsTest {
         assertEquals("请求使用 Persona · mail send", (ix.copy(toolName = "mcp__persona__mail_send", summary = null).headline).zhAny())
         assertEquals("Codex 请求使用 github · create issue", (ix.copy(agent = "codex", summary = null).headline).zhAny())
     }
+
+    @Test fun screenDialogDecodesCommandAskFieldsAndKeepsOldHubsCompatible() {
+        val ix = JsonCodec.decodeFromString<Interaction>(
+            """{"id":"ix_command","kind":"screen","dialog":{"question":"Do you want to proceed?",""" +
+                """"command":"rm -rf build","description":"Remove generated files","warning":"Dangerous rm operation","""+
+                """"risk":"delete","deadline":"Automatically denied in 1:44","deadline_action":"deny","""+
+                """"deadline_at":"2026-11-12T11:00:00+08:00","rev":"abc","options":[{"key":"1","label":"Yes"},{"key":"2","label":"No"}]}}""",
+        )
+        val dialog = ix.dialog!!
+        assertEquals("rm -rf build", dialog.command)
+        assertEquals("Remove generated files", dialog.description)
+        assertEquals("Dangerous rm operation", dialog.warning)
+        assertEquals("delete", dialog.risk)
+        assertEquals("Automatically denied in 1:44", dialog.deadline)
+        assertEquals("deny", dialog.deadlineAction)
+        assertEquals(java.time.Instant.parse("2026-11-12T03:00:00Z"), parseTime(dialog.deadlineAt))
+        assertEquals(ix, JsonCodec.decodeFromString<Interaction>(JsonCodec.encodeToString(ix)))
+        val old = JsonCodec.decodeFromString<Interaction>("""{"id":"old","kind":"screen","dialog":{"question":"Continue?"}}""").dialog!!
+        assertNull(old.command); assertNull(old.description); assertNull(old.warning); assertNull(old.risk)
+        assertNull(old.deadline); assertNull(old.deadlineAction); assertNull(old.deadlineAt)
+    }
 }

@@ -60,6 +60,11 @@ data class Machine(
     @SerialName("node_mismatch") val nodeMismatch: Boolean? = null,
     /** The terminal engine chosen for this machine (docs/integrations/engines.md); hubs send it always, herdr when never chosen. */
     @SerialName("engine") val engine: String = "herdr",
+    /**
+     * The terminal hosts this machine enables side by side (#2576 / #3302); empty when none are enabled; null from an older
+     * hub that only sent [engine]. Resume in Terminal (#5565) reads the empty set as "no terminal engine".
+     */
+    @SerialName("engine_hosts") val engineHosts: List<String>? = null,
     /** What the node found there; empty from older hubs and nodes, and while the machine is offline. */
     @SerialName("engines") val engines: List<DetectedEngine> = emptyList(),
     /** The hub is installing its own personad build there ("Redeploy"). */
@@ -455,6 +460,8 @@ data class Session(
     @SerialName("starting") val starting: Boolean = false,
     /** Why starting it failed; the session is offline and sends get the same error. */
     @SerialName("start_error") val startError: String? = null,
+    /** Codex is open in its pane and has no thread until its first message. */
+    @SerialName("awaiting_first_message") val awaitingFirstMessage: Boolean = false,
     /**
      * The channels messages came into this conversation from, newest first (`wechat`, `feishu`; docs/extensions/channels.md
      * "Source marks"): the conversation list draws the latest's mark. Older hubs never send it.
@@ -573,11 +580,12 @@ data class Session(
     val canDelete: Boolean get() = !assistant && !starting && status in setOf("offline", "done", "idle", "unknown", "interrupted")
     val updated: Instant? get() = parseTime(updatedAt)
     /**
-     * Its workflows still running, newest first. A summary row (`summary=1`) has no [workflows]: its [workflowProgress],
-     * the newest running run without its agents and phases, stands for them (#5888).
+     * Its workflows still running, newest first. On a summary row (`summary=1`, one with [waiting]) its [workflowProgress],
+     * the newest running run without its agents and phases, stands for them (#5888), even when the row kept an older
+     * complete row's [workflows] (`keepingDetails`): fresh summary counts win, as in `backgroundWork()`.
      */
-    val runningWorkflows: List<Workflow> get() = workflows?.filter { it.isRunning }
-        ?: listOfNotNull(workflowProgress?.takeIf { it.isRunning })
+    val runningWorkflows: List<Workflow> get() = if (waiting != null) listOfNotNull(workflowProgress?.takeIf { it.isRunning })
+        else workflows.orEmpty().filter { it.isRunning }
     /**
      * How much runs in the background without counting a workflow twice: its other background tasks and its running
      * workflows. An older hub sends no [workflows]: every background entry counts, as before.
@@ -824,6 +832,14 @@ data class ScreenDialog(
     @SerialName("multi") val multi: Boolean = false,
     /** The submit row's own label ("Submit", or "Next" when another question follows). */
     @SerialName("submit") val submit: String? = null,
+    /** Claude Code's command prompt, read off the terminal (#5265); absent on older hubs and other dialogs. */
+    @SerialName("command") val command: String? = null,
+    @SerialName("description") val description: String? = null,
+    @SerialName("warning") val warning: String? = null,
+    @SerialName("risk") val risk: String? = null,
+    @SerialName("deadline") val deadline: String? = null,
+    @SerialName("deadline_action") val deadlineAction: String? = null,
+    @WireTime @SerialName("deadline_at") val deadlineAt: String? = null,
 )
 
 /** Something a permission card asks to fill in before approving (`proto.Field`, a password); see [Interaction.fields]. */

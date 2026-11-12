@@ -225,9 +225,13 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * shares with the stopped line's Resume, Codex threads counted as stopped Agents, and a stable Terminal handler so the
  * header still draws only when it changes). And 31 B because #5579 and #5860 landed together (#5879): #5579 was measured
  * on main at 9223f7f92 (+228 B) and #5860 merged before it, on whose main at bae989cf42 (ja 474,213 B) it costs +262 B;
- * ja 474,475 B on main at 624f81dde, with 0 B of room.
+ * ja 474,475 B on main at 624f81dde, with 0 B of room. And 79 B for the GitHub star prompts (#5761: ja 474,554 B against
+ * 474,421 B on main at 47c38a3466, +133 B, of which 54 B fit the room main had: the readiness answer and an Agent this
+ * browser started share one on-demand import of the rule, lib/star-prompt-load.ts, which a failed load only skips, and
+ * the sidebar's milestone line is a lazy component; the rule, the pill, the line and their strings stay off the first
+ * screen).
  */
-export const FIRST_SCREEN_BUDGET = 474_475;
+export const FIRST_SCREEN_BUDGET = 474_554;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
