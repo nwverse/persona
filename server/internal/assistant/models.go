@@ -134,6 +134,8 @@ var modelPurposes = []ModelPurpose{
 	{ID: assistantwire.PurposeSubscriptionRecipe, Group: "group_processing", Kind: "api", Parent: "kb"},
 	// Answers to the questions asked in an attended meeting (meeting_ask.go): one call with no tools, from meeting material only.
 	{ID: purposeMeetingAnswer, Group: "group_processing", Kind: "api", Parent: "kb"},
+	// The next-message suggestion over an empty composer (suggest_next.go, #4644): one short call with no tools after a turn.
+	{ID: purposeSuggestNext, Group: "group_processing", Kind: "api", Parent: "kb"},
 	// Scheduled tasks (the morning briefing…) run in the assistant's directory with its instructions, memory and tools: they are the
 	// assistant's conversations, on the main chat's model, not new Agents (#1544; #697 had them under Agents, plain Claude Code
 	// by default, which is not logged in on every hub machine).

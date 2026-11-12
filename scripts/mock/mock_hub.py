@@ -682,6 +682,8 @@ SESSIONS = [
                     + ([{"id": "wdemo1", "kind": "workflow", "description": "widget-audit", "run_id": "wf_demo1", "started_at": ago(minutes=14)}]
                        if os.environ.get("MOCK_WORKFLOWS") in ("1", "legacy") else []),
          **({"workflows": MOCK_WORKFLOW_RUNS} if os.environ.get("MOCK_WORKFLOWS") == "1" else {}),
+         # MOCK_BRANCH=1: the git branch its folder is on (#5421: the chat's top bar shows it on a wide screen)
+         **({"branch": "feat/hourly-widget"} if os.environ.get("MOCK_BRANCH") else {}),
          # MOCK_QUEUE=1: input typed while it works and not taken yet (POST …/queue edits it)
          **({"queued": ["顺便把 README 里的截图也换成新的小组件", "改完以后跑一遍 UI 测试，把失败的截图发给我"]}
             if os.environ.get("MOCK_QUEUE") else {})),
@@ -708,6 +710,13 @@ SESSIONS = [
     sess("macbook", RECIPE, "菜谱网站加搜索", "/Users/me/code/recipes", "offline", "offline", "", 0, "", 0, 60 * 26,
          "搜索做好了，支持按食材和用时筛选。", space_kind=None, space_id=None, space_name=None, slot_id=None, slot_name=None),
 ]
+
+if os.environ.get("MOCK_NEXT_SUGGESTIONS") == "1":  # see NEXT_SUGGESTIONS
+    for _s in SESSIONS:
+        if _s["session_id"] == ORDERS:
+            _s.update(status="idle", state="idle", activity=None, suggestion="好，改完跑一遍压测对比一下")
+        elif _s["session_id"] == REVIEW:
+            _s["suggestion"] = "按这两条建议改一下命名"
 
 # #2430 agent-details: what the node reads off a transcript for the "Show details on agent rows" line and the usage row
 # below the composer (#5056) — the model id as Claude Code records it, the latest reply's input tokens, the model's window.
@@ -1716,6 +1725,15 @@ if os.environ.get("MOCK_PERSONA_QUEUE") == "1":
     ASSISTANT[0].update({"state": "working", "status": "working", "queued_relayed": 1,
                          "queued": list(PERSONA_QUEUE_MESSAGES)})
 
+# MOCK_NEXT_SUGGESTIONS=1 (#4644, docs/assistant/assistant.md "Next-message suggestions"): the switch is on and sessions carry
+# the suggestion as the manager lists them: the main Persona chat and the Codex session (stopped) the suggest.next model's,
+# the PR review agent (Claude Code in a terminal) Claude Code's own, and the morning briefing chat a risky one
+# (suggestion_risky: filled in, no one-tap send).
+NEXT_SUGGESTIONS = os.environ.get("MOCK_NEXT_SUGGESTIONS") == "1"
+if NEXT_SUGGESTIONS:
+    ASSISTANT[0]["suggestion"] = "先处理第一件，其余两件下午再说"
+    ASSISTANT[1].update(suggestion="把会议纪要发给参会的人", suggestion_risky=True)
+
 # MOCK_ORIGINS=1 (#3264, docs/protocol/protocol.md "Origin of assistant chats"): conversations the hub opened by itself — the inbox's AI twin,
 # scheduled tasks, a Feishu /agent, one another conversation started — next to the user's own; one of them runs, one
 # waits for the user. The sidebar keeps them out of "Recent" under "Automatic conversations".
@@ -2143,6 +2161,8 @@ ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "A
                     # supervised task reach its supervisor (#4293), off by default; closed sessions archive themselves
                     # after this many idle days (#3618), 0 is never. Left out with MOCK_LEGACY_HUB.
                     "agent_tasks": False, "inbox_signals": False, "archive_closed_days": 3,
+                    # The manager's next-message suggestions (#4644), off by default; MOCK_NEXT_SUGGESTIONS=1 starts on.
+                    "next_suggestions": os.environ.get("MOCK_NEXT_SUGGESTIONS") == "1",
                     # The main chat follows up its own tasks instead of the background supervisor (#4927), off by
                     # default. Left out with MOCK_LEGACY_HUB.
                     "main_supervises_own_tasks": False,
@@ -2175,7 +2195,7 @@ def assistant_state(space="", archived=False):
     if not os.environ.get("MOCK_LEGACY_HUB"):
         out.update(agent_tasks=cfg["agent_tasks"], inbox_signals=cfg["inbox_signals"], archive_closed_days=cfg["archive_closed_days"],
                    idle_close_hours=cfg["idle_close_hours"], kb_topics=cfg["kb_topics"],
-                   main_supervises_own_tasks=cfg["main_supervises_own_tasks"])
+                   main_supervises_own_tasks=cfg["main_supervises_own_tasks"], next_suggestions=cfg["next_suggestions"])
         if BACKGROUND_SUPERVISOR and not space:  # once the hub has made it (#4927)
             out.update(background_supervisor=BACKGROUND_SUPERVISOR, background_supervisor_machine_id=cfg["machine_id"])
     if cfg["notes"] is not None:
@@ -13344,6 +13364,10 @@ for attempt in 0..<3 {{
         _seq[0] += 1
         _x.update(seq=_seq[0], id=f"{uuid.UUID(int=_seq[0])}#0")
 
+# MOCK_FOLD_DELAY=<seconds>: opening a fold (its steps fetched by from_seq / through_seq) answers that late, as the hub
+# does over a phone's network: what the steps push in comes a moment after the tap, not in the same frame (#3757).
+FOLD_DELAY = float(os.environ.get("MOCK_FOLD_DELAY", "0"))
+
 # MOCK_RICH=1: a reply with a link in Chinese prose (full-width brackets right after it), a three-column table whose
 # last column is long Chinese text, and a seven-column table that cannot fit (RichReplyTests).
 RICH = "a1f3c2d4-0000-4000-8000-00000000000a"
@@ -17179,7 +17203,8 @@ def agent_live(step, n):
 
 
 # MOCK_TOOL_TURN=1 (#3005): an agent in the middle of a turn of shell calls with long outputs, a message of the user's
-# queued behind it, history above it. GET /mock/tool_turn?step=… moves it on one push at a time, as the hub pushes them:
+# queued behind it, twelve finished exchanges above it (each with a work line). GET /mock/tool_turn?step=… moves it on one
+# push at a time, as the hub pushes them:
 #   call     a new call starts (its tool_use alone: running)
 #   result   the running call's result lands
 #   answer   the agent's answer lands and the turn is over (the agent idle)
@@ -17225,11 +17250,16 @@ if TOOL_TURN:
                          "subs", 1, 0, "Find the PR that closed it", state_since=ago(minutes=7),
                          queued=["顺便看一下静音开关那条还缺什么"]))
     _earlier = []
-    for _q, _a in (("把收件箱的折叠改一下", "收件箱的折叠改好了：已处理的分组默认收起，网页和 iOS 都在里面。"),
-                   ("网页那边部署了吗", "部署了，网页已经是新版本，iOS 跟下次 TestFlight 走。")):
-        _earlier += [it("user", "text", 30, text=_q)] + tool("Bash", {"command": "git log --oneline -3", "description": "Recent commits"},
-                                                              "abc1234 fix(web): fold handled groups\nbcd2345 docs: inbox folds", 30) \
-            + [it("assistant", "text", 29, text=_a + "\n\n" + "\n".join("- 第 %d 项：已经核对过，没有遗留问题。" % _k for _k in range(1, 9)))]
+    # Ten older exchanges first, each with a work line of its own: work lines all the way back, to open one in the middle
+    # of the chat and at its oldest end (KeepTappedRowTests).
+    _asks = [("第 %d 处改动：顺便看一下这一块的写法有没有问题？" % _k, "看过了，第 %d 处没有问题，两处重复的判断已经合并。" % _k, 240 - _k * 20)
+             for _k in range(1, 11)]
+    _asks += [("把收件箱的折叠改一下", "收件箱的折叠改好了：已处理的分组默认收起，网页和 iOS 都在里面。", 30),
+              ("网页那边部署了吗", "部署了，网页已经是新版本，iOS 跟下次 TestFlight 走。", 30)]
+    for _q, _a, _m in _asks:
+        _earlier += [it("user", "text", _m, text=_q)] + tool("Bash", {"command": "git log --oneline -3", "description": "Recent commits"},
+                                                              "abc1234 fix(web): fold handled groups\nbcd2345 docs: inbox folds", _m) \
+            + [it("assistant", "text", _m - 1, text=_a + "\n\n" + "\n".join("- 第 %d 项：已经核对过，没有遗留问题。" % _k for _k in range(1, 9)))]
     ITEMS[TOOL_TURN_SID] = _earlier + [it("user", "text", 7, text="来源订阅的需求推进情况如何")]
     for _n in range(3):
         ITEMS[TOOL_TURN_SID] += list(tool_turn_call(_n))
@@ -20583,6 +20613,7 @@ class H(BaseHTTPRequestHandler):
                 LOG.write("  items after_seq=%d\n" % a); LOG.flush()
                 return self.send_json({"items": lazy_images([x for x in items if x["seq"] > a]), "more_after": False, **span(items, a, max(a, last))})
             if "through_seq" in q:  # opening a fold
+                if FOLD_DELAY: time.sleep(FOLD_DELAY)
                 frm, thru = int(q.get("from_seq", ["0"])[0]), int(q["through_seq"][0])
                 inside = [x for x in items if frm <= x["seq"] <= thru]
                 out = {"items": lazy_images(inside[:1000]), "more": len(inside) > 1000}
@@ -22007,6 +22038,8 @@ class H(BaseHTTPRequestHandler):
                 ASSISTANT_CONFIG["main_supervises_own_tasks"] = body["main_supervises_own_tasks"]
             if isinstance(body.get("kb_topics"), bool):
                 ASSISTANT_CONFIG["kb_topics"] = body["kb_topics"]
+            if isinstance(body.get("next_suggestions"), bool):
+                ASSISTANT_CONFIG["next_suggestions"] = body["next_suggestions"]
             if body.get("machine_id"):
                 if not any(m["id"] == body["machine_id"] for m in MACHINES):
                     return self.send_json({"error": "unknown machine"}, 400)
@@ -23457,6 +23490,7 @@ if os.environ.get("MOCK_AGENT_PLANS") == "1":
         if _s["session_id"] == TESTS:
             _s["plan"] = {"done": 1, "total": 4, "at": ago(minutes=10)}
     MOCK_HELP.append("MOCK_AGENT_PLANS=1  小组件的 Agent 计划 3/5（在复现崩溃），网络层测试的 Agent 1/4（#5302）")
+MOCK_HELP.append("MOCK_BRANCH=1  macbook 上「给天气 App 加主屏幕小组件」的文件夹在 git 分支 feat/hourly-widget 上，聊天顶栏宽屏时显示它（#5421）")
 MOCK_HELP.append("MOCK_GOAL=1|stopped  macbook 上「给天气 App 加主屏幕小组件」有一个进行中的 goal（带最近一次检查的理由），「检查 PR #42 的改动」的 goal 已达成；stopped 时小组件那个 goal 用完了 token 预算（#2420）")
 
 # ---------- MOCK_EXTENSIONS: a hub from #1844 on (docs/extensions/extensions.md "Naming and compatibility") ----------
