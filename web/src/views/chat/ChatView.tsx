@@ -467,6 +467,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const [rewindLive] = useState(() => liveValue(rewindOff));
   useLayoutEffect(() => rewindLive.set(rewindOff), [rewindLive, rewindOff]);
   const canRewind = canCompose && !assistant;
+  // Legacy terminals retain both choices. Native rewind needs explicit file-restoration support.
+  const rewindCode = session?.capabilities?.rewind_code ?? !session?.capabilities?.rewind;
   // Edit last message (#2945) and ↑ in an empty box (#4503), Slack's way: ↑, Esc twice or the safeguards card's button put
   // the last prompt in the box with an "Editing" bar, and the conversation-only rewind to before it runs when the edit is
   // sent (commitEdit), so starting or cancelling an edit changes nothing on the computer. One edit, of this conversation:
@@ -548,9 +550,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       images: () => items.current.filter((i) => i.kind === "image"),
       fork: canFork ? (itemId: string) => void forkAt(mid, sid, itemId, Boolean(assistant), session?.space, session?.manager) : undefined,
       assistant: Boolean(assistant),
-      rewind: canRewind ? { block: rewindLive, run: (messageId, text, restore) => rewindTo(mid, sid, draftKey, items.current, messageId, text, restore) } : undefined,
+      rewind: canRewind ? { block: rewindLive, code: rewindCode, run: (messageId, text, restore) => rewindTo(mid, sid, draftKey, items.current, messageId, text, restore) } : undefined,
     }),
-    [draftKey, title, canCompose, canFork, canRewind, rewindLive, mid, sid, assistant, persona.name],
+    [draftKey, title, canCompose, canFork, canRewind, rewindCode, rewindLive, mid, sid, assistant, persona.name],
   );
   // the assistant works on any computer, so its @ menu offers workspaces too
   const mention = useMemo(() => ({ cwd: session?.cwd, self: draftKey, files: () => chatFiles(items.current), workspaces: Boolean(assistant) }), [session?.cwd, draftKey, assistant]);
@@ -959,7 +961,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       keepOutgoing(key, { id, text: out.text, images: out.images, at: p.at, launcher, model });
       try {
         // the bubble stays as sending while a gap (a hub restart) is waited out; the id is the op id too
-        const reply = await inSendOrder(key, () => apiOp<{ session?: Session } | undefined>(`${sessionPath(mid, sid)}/messages`, {
+        const reply = await inSendOrder(key, () => apiOp<{ session?: Session; waits_on_computer?: boolean } | undefined>(`${sessionPath(mid, sid)}/messages`, {
           ...flight.request,
           method: "POST",
           opId: id,
@@ -973,6 +975,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
         const acceptedAt = Date.now();
         acceptOutgoing(key, id, acceptedAt);
         setPending((ps) => ps.map((x) => (x.id === id ? { ...x, posting: false, acceptedAt } : x)));
+        // a terminal Agent waiting on a question at the computer reads it only after that is answered (#5890)
+        if (reply?.waits_on_computer) toast(t("lib-outbox.waits_on_computer"), "info");
         // a Codex's first message: the answer is the thread it began, where the conversation goes on (lib/codex-waiting.ts)
         const began = reply?.session;
         if (began?.session_id && began.session_id !== sid) {
