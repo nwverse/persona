@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -150,7 +151,7 @@ func TestScriptPathsUnchangedOffWindows(t *testing.T) {
 	}
 }
 
-// scriptPath on Windows: forward slashes, double quotes only for an apostrophe nothing in the path expands around.
+// scriptPath on Windows: forward slashes, and an apostrophe as '"'"' so no backslash is left in the quoting.
 func TestScriptPathWindowsQuoting(t *testing.T) {
 	old := shellScriptGOOS
 	shellScriptGOOS = "windows"
@@ -158,11 +159,53 @@ func TestScriptPathWindowsQuoting(t *testing.T) {
 	for in, want := range map[string]string{
 		`C:\Persona\personad.exe`:    `'C:/Persona/personad.exe'`,
 		`C:\Program Files\Persona`:   `'C:/Program Files/Persona'`,
-		`C:\Users\O'Example\profile`: `"C:/Users/O'Example/profile"`,
-		`C:\Users\O'Ex$ample`:        `'C:/Users/O'\''Ex$ample'`, // the known limit: still a backslash
+		`C:\Users\O'Example\profile`: `'C:/Users/O'"'"'Example/profile'`,
+		`C:\Users\O'Ex$am"p!e`:       `'C:/Users/O'"'"'Ex$am"p!e'`,
 	} {
 		if got := scriptPath(in); got != want {
 			t.Errorf("scriptPath(%q) = %s, want %s", in, got, want)
 		}
+		checkScriptWords(t, scriptPath(in), slashed(in))
+	}
+}
+
+// The launcher and sign-in checks run `cd <dir> && <launcher> --settings <file> …` in the login shell: the temporary
+// directory, the settings file and a managed launcher's personad are all native paths.
+func TestLauncherInDirScriptWindowsPaths(t *testing.T) {
+	const bin = `C:\Program Files\Persona\personad.exe`
+	const dir = `C:\Users\O'Example\AppData\Local\Temp\persona-auth-1`
+	settings := dir + `\auth-settings.json`
+	n := windowsScriptNode(t, bin, "work")
+	script, ok := strings.CutSuffix(n.launcherInDirScript("work", dir, scriptSettingsFlag(settings)+" auth status --json"), " </dev/null")
+	if !ok {
+		t.Fatalf("not reading from /dev/null: %s", script)
+	}
+	cd, run, ok := strings.Cut(script, " && ")
+	if !ok {
+		t.Fatalf("no cd: %s", script)
+	}
+	checkScriptWords(t, cd, "cd", slashed(dir))
+	checkScriptWords(t, run, slashed(bin), "launch", "work", "--settings", slashed(settings), "auth", "status", "--json")
+}
+
+// On Windows the assistant's claude names its profile with forward slashes and every other start with backslashes:
+// read back from the running claudes, they are one directory.
+func TestScannedConfigDirsWindowsAreOneDirectory(t *testing.T) {
+	old := claudeScanGOOS
+	claudeScanGOOS = "windows"
+	t.Cleanup(func() { claudeScanGOOS = old })
+	const native = `C:\Users\Example User\.persona\profiles\claude`
+	n := &Node{home: t.TempDir(), paths: map[string]string{}, cdirs: newClaudeDirs()}
+	scanned := map[int]procEnv{1: {ConfigDir: native}, 2: {ConfigDir: slashed(native)}}
+	if runtime.GOOS == "windows" { // filepath.Clean drops a trailing \ only there
+		scanned[3] = procEnv{ConfigDir: slashed(native) + "/"}
+	}
+	n.cdirs.scan = func() map[int]procEnv { return scanned }
+	n.refreshClaudeDirs()
+	if !slices.Equal(n.cdirs.found, []string{native}) {
+		t.Fatalf("found %q, want only %q", n.cdirs.found, native)
+	}
+	if got := scannedConfigDir("darwin", "/Users/a/b/"); got != "/Users/a/b/" {
+		t.Fatalf("off Windows the directory changed: %q", got)
 	}
 }

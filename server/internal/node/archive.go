@@ -215,7 +215,7 @@ var codexArchiveCommand = func(ctx context.Context, n *Node, launcher, home, sub
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.CommandContext(ctx, shell, "-ic", codexSubcommandShell(n.launcherForScript(launcher), sub), "persona", thread)
+	cmd := exec.CommandContext(ctx, shell, "-ic", codexSubcommandShell(n.launcherCommand(launcher), sub), "persona", thread)
 	cmd.Dir = home
 	cmd.Env = identity.Environment(os.Environ(), "CODEX_HOME="+home)
 	killGroupOnCancel(cmd)
