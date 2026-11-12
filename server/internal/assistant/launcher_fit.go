@@ -59,7 +59,7 @@ func (s *Service) fitLauncher(ctx context.Context, m Device, own startPick, para
 		}
 		return "", "", nil
 	}
-	list, known := s.launchersHere(ctx, m.ID)
+	list, known := s.launchersHere(withUnhidden(ctx, name), m.ID) // a hidden default still runs (#4659)
 	if !known {
 		return "", "", nil
 	}
