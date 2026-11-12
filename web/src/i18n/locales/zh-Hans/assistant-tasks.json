@@ -79,7 +79,6 @@
   "summary_collapse": "收起",
   "receipt_restarting": "「{title}」正在重新开",
   "receipt_restarted": "「{title}」重试后开起来了",
-  "receipt_failed_above": "「{title}」没开起来，见上方任务卡",
   "outcome_failed": "{title}没开起来",
   "outcome_done": "{title} 完成",
   "outcome_stopped": "{title} 停下了，还没完成",

@@ -111,10 +111,11 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(entries().map((button) => button.getAttribute("data-tray-entry"))).toEqual(["needs", "running"]);
     expect(entries().map((button) => button.textContent)).toEqual([label.needs, `${label.running}1`]);
     expect(host.querySelector("section")).toBeNull();
-    // the plan's one Agent; the task line of a planned task adds none
+    // the plan's one Agent; the task line of a planned task adds none; the task's conclusion is its own card (#5569)
     expect(host.querySelectorAll("[data-handoff-cards]")).toHaveLength(1);
     expect(host.querySelectorAll("[data-handoff-card]")).toHaveLength(1);
-    expect(host.textContent).not.toContain("Demo result");
+    expect(host.querySelectorAll("[data-receipt]")).toHaveLength(1);
+    expect(host.textContent).toContain("Demo result");
     act(() => entry("running").click());
     expect(entry("running").getAttribute("aria-expanded")).toBe("true");
     expect(host.querySelectorAll("[data-task-slot]")).toHaveLength(1);
