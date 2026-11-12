@@ -153,8 +153,9 @@ func (s *Service) refreshTranscriptionReady(ctx context.Context) {
 			v, ok := s.settingsLastGood(probeCtx)
 			if ok {
 				info, err := s.trans.TranscriptionInfo(probeCtx, meetingTranscriptionExtensionOf(v))
+				// meeting-minutes.md "Which one transcribes": protocol 1 with live and no setup.
 				ready = err == nil && info.Protocol == extwire.TranscriptionProtocol && info.Setup == "" &&
-					slices.Contains(info.Features, extwire.TranscriptionLive) && slices.Contains(info.Features, extwire.TranscriptionReplay)
+					slices.Contains(info.Features, extwire.TranscriptionLive)
 			}
 			cancel()
 		}

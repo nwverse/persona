@@ -185,7 +185,6 @@ func TestMeetingTranscriptionReadiness(t *testing.T) {
 		{"unavailable", good, errors.New("offline")},
 		{"setup", extwire.TranscriptionInfo{Protocol: 1, Features: good.Features, Setup: extwire.TSetupLiveUpstream}, nil},
 		{"protocol", extwire.TranscriptionInfo{Protocol: 2, Features: good.Features}, nil},
-		{"missing replay", extwire.TranscriptionInfo{Protocol: 1, Features: []string{extwire.TranscriptionLive}}, nil},
 		{"missing live", extwire.TranscriptionInfo{Protocol: 1, Features: []string{extwire.TranscriptionReplay}}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -208,6 +207,12 @@ func TestMeetingTranscriptionReadiness(t *testing.T) {
 				t.Fatal("expired cache did not refresh")
 			}
 		})
+	}
+	// A contribution without replay transcribes live; its live sentences become final (meeting-minutes.md "How it ends").
+	f.set(extwire.TranscriptionInfo{Protocol: 1, Features: []string{extwire.TranscriptionLive}}, nil)
+	s.transcriptionReadinessChanged()
+	if !s.transcriptionReadyNow() {
+		t.Fatal("a contribution with live and no replay is not ready")
 	}
 	s.SetExtensions(nil)
 	if s.transcriptionReadyNow() {
