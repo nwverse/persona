@@ -1447,16 +1447,18 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // Close Plan in the pill's flyout hides it until the plan changes (cindy's PinnedPlanPanel)
   const [planClosed, closePlan] = usePlanClosed(`${mid}/${sid}`, plan);
   const lastLine = lines[lines.length - 1];
-  // "Retry" on the error banner and the failure note: sends "continue" alone, not what is in the box
-  const retry = useCallback(() => void deliver({ text: t("chat-chatview.continue_text"), images: [] }, uuid()), [deliver]);
+  // "Retry" on the error banner and the failure note: sends "continue" alone, not what is in the box. Whether it went:
+  // deliver can refuse without leaving a bubble (the setup gate, a row that cannot send, a refused launcher switch)
+  const retry = useCallback(() => deliver({ text: t("chat-chatview.continue_text"), images: [] }, uuid()), [deliver]);
   // the failure notice "Retry" was pressed on: kept here, not in the note, so it stays gone while the session goes through
   // needs-you and back before the hub clears it (iOS ChatView @State retried)
   const [retriedOn, setRetried] = useState<{ chat: string; reason?: string }>();
   const retried = retriedOn?.chat === `${mid}/${sid}` ? retriedOn.reason : undefined;
   const failureNote = Boolean(session && !assistant && showsFailureNote(session, { retried }));
-  // a turn that failed on the refusal fallback's missing model (#2528): "Continue" would send it to the same model
+  // a turn that failed on the refusal fallback's missing model (#2528): "Continue" would send it to the same model; the
+  // main conversation's setup gate would only open its missing step, as it does for the refused-send card's Send again
   const canRetry =
-    lastLine?.kind === "apiError" && state !== "working" && !outgoing && sessionCan(session, "send") && session?.turn_error_code !== FALLBACK_UNAVAILABLE;
+    lastLine?.kind === "apiError" && state !== "working" && !outgoing && sessionCan(session, "send") && session?.turn_error_code !== FALLBACK_UNAVAILABLE && !gate.blocked;
   // The model error the chat stopped on (cindy's ErrorBanner, #5313): its last line, over the composer with Retry and ✕,
   // and left out of the chat meanwhile. Not once it is dismissed (remembered in this browser), Retry was pressed on it
   // (gone at once, before "continue" reaches the transcript), something is on its way or being worked on, or the host's
@@ -1469,15 +1471,43 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const tailKey = tailError ? `${errorChat}|${errorKey(tailError)}` : "";
   const bannerError =
     tailError && !working && canCompose && !stoppedLine && !failureNote && errorKey(tailError) !== errorClosed && tailKey !== errorRetried ? tailError : undefined;
+  // the banner's buttons go with it: the keyboard goes back to the composer, not on a touch screen alone (that would raise
+  // the keyboard). Called on a press, by when the composer's box (declared below) is there.
+  const backToComposer = () => {
+    if (fine) composerBox.current?.querySelector("textarea")?.focus({ preventScroll: true });
+  };
+  // gone at once; a retry that did not go brings it back, as nothing else on the page could retry then
   const retryError = () => {
-    if (tailKey) setErrorRetried(tailKey);
-    retry();
+    const key = tailKey;
+    if (key) setErrorRetried(key);
+    backToComposer();
+    return retry().then((went) => {
+      if (!went && key) setErrorRetried((k) => (k === key ? undefined : k));
+      return went;
+    });
   };
   const dismissBanner = () => {
     if (!tailError) return;
     dismissError(errorChat, errorKey(tailError));
     setErrorClosed(errorKey(tailError));
+    backToComposer();
   };
+  // A new banner is brought into view in the box over the composer, which scrolls from its top when what is in it is
+  // taller than the dock may be (a short phone, the main conversation's setup card and action bar above it): the chat no
+  // longer shows the error. Once per error, so a reader scrolling that box is left alone; the chat itself never moves.
+  const dockAbove = useRef<HTMLDivElement>(null);
+  const bannerKey = bannerError ? errorKey(bannerError) : "";
+  useLayoutEffect(() => {
+    const box = dockAbove.current;
+    const el = bannerKey ? box?.querySelector("[data-error-banner]") : null;
+    if (!box || !el) return;
+    const b = box.getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    const up = r.top - b.top;
+    const down = r.bottom - b.bottom;
+    if (up < 0) box.scrollTop += up;
+    else if (down > 0) box.scrollTop += Math.min(down, up);
+  }, [bannerKey]);
   // Claude Code's "while you were away" recap, open in full while it is the newest thing and not closed: the chat's last
   // line, in the flow with the agent's words (#1360: above the composer it covered the end of the reply)
   const recapKey = `${mid}/${sid}`;
@@ -1694,6 +1724,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
                         sid={sid}
                         streaming={(d.line.kind === "segment" || d.line.kind === "supervision") && d.line.live ? tr.streaming || undefined : undefined}
                         expandFold={tr.expandFold}
+                        fix={d.line.id === lastLine?.id ? turnFix : undefined}
                         limit={d.line.kind === "apiError" && d.line.id === limitOn ? limitLine : undefined}
                         assistant={assistant}
                         offscreen={offscreen(d.line)}
@@ -1756,7 +1787,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
         {/* everything over the composer: it shrinks and scrolls before the composer does (the composer grew, and its
             cards, task questions and notes stood taller than the dock, drawn up over the chat or pushing it to nothing);
             the box clips what is in it, so its children keep a little room for their shadows (p-1; -m-1 gives it back) */}
-        <div data-chat-dock-above data-scroll-box className="-m-1 flex min-h-0 shrink flex-col gap-2 overflow-y-auto overscroll-contain p-1 empty:hidden">
+        <div ref={dockAbove} data-chat-dock-above data-scroll-box className="-m-1 flex min-h-0 shrink flex-col gap-2 overflow-y-auto overscroll-contain p-1 empty:hidden">
         {/* a phone on its side: the plan's pill, the run's status and the queue share one line. One wrapper either way
             (no box of its own otherwise), so the pill and a flyout pinned on it stay when the phone turns */}
         {(pills || running || (short && queue)) && (
@@ -1789,8 +1820,13 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           <FailureNote
             session={session}
             onRetry={() => {
-              setRetried({ chat: `${mid}/${sid}`, reason: failureReason(session) });
-              retryError();
+              const chat = `${mid}/${sid}`;
+              const reason = failureReason(session);
+              setRetried({ chat, reason });
+              // a retry that did not go brings the note back
+              void retryError().then((went) => {
+                if (!went) setRetried((r) => (r?.chat === chat && r.reason === reason ? undefined : r));
+              });
             }}
           />
         )}
@@ -1805,7 +1841,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
             assistant={assistant}
             limit={bannerError.id === limitOn ? limitLine : undefined}
             fix={turnFix}
-            onRetry={canRetry ? retryError : undefined}
+            onRetry={canRetry ? () => void retryError() : undefined}
             onEditLastMessage={onEditLastMessage}
             onDismiss={dismissBanner}
           />

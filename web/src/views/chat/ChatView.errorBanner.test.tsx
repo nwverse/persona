@@ -7,9 +7,12 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Item, Session } from "../../lib/types";
 
+// a mouse (fine pointer) or a touch screen alone, per test
+const media = vi.hoisted(() => ({ fine: false }));
 vi.hoisted(() => {
   const g = globalThis as Record<string, unknown>;
-  g.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+  // read on each look: the app keeps one list per query
+  g.matchMedia = (q: string) => ({ get matches() { return q === "(any-pointer: fine)" && media.fine; }, addEventListener() {}, removeEventListener() {} });
   g.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
   g.IntersectionObserver = class { observe() {} unobserve() {} disconnect() {} takeRecords() { return []; } };
 });
@@ -19,7 +22,7 @@ const captured = vi.hoisted(() => ({ session: undefined as Session | undefined }
 
 vi.mock("./Composer", async (importOriginal) => ({
   ...await importOriginal<typeof import("./Composer")>(),
-  Composer: () => null,
+  Composer: () => <textarea aria-label="composer" />,
 }));
 // one transcript for every render; a test swaps its items and draws again
 const transcript = vi.hoisted(() => ({ items: [] as unknown[], loading: false, firstRead: true, error: "", hasMore: false, streaming: "" }));
@@ -60,7 +63,14 @@ vi.mock("../assistant/Tasks", () => ({
   TaskQuestions: () => null,
 }));
 
+// a refused send's toast: no toast stack is drawn here
+vi.mock("../../ui/atoms", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../../ui/atoms")>(),
+  toast: vi.fn(),
+}));
+
 const { ChatView } = await import("./ChatView");
+const { toast } = await import("../../ui/atoms");
 const { getState, setOutbox } = await import("../../lib/store");
 const { resetOutboxClaimsForTests, resetRestoredForTests } = await import("../../lib/outbox");
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -72,6 +82,7 @@ const failedTurn = [msg("u1", 1, "user", "接着把命名改完"), msg("e1", 2, 
 
 const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { "Content-Type": "application/json" } });
 let bodies: { client_msg_id: string; text: string }[];
+let reply: () => Response;
 let host: HTMLDivElement;
 let root: Root;
 const flush = async () => {
@@ -91,11 +102,15 @@ beforeEach(() => {
   resetOutboxClaimsForTests();
   for (const key of Object.keys(getState().outbox)) setOutbox(key, []);
   captured.session = IDLE;
+  media.fine = false;
+  reply = () => json({});
+  vi.mocked(toast).mockClear();
   transcript.items = failedTurn;
   bodies = [];
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-    if (String(input).endsWith("/messages") && init?.body) bodies.push(JSON.parse(String(init.body)));
-    return Promise.resolve(json({}));
+    if (!String(input).endsWith("/messages") || !init?.body) return Promise.resolve(json({}));
+    bodies.push(JSON.parse(String(init.body)));
+    return Promise.resolve(reply());
   }));
   host = document.createElement("div");
   document.body.append(host);
@@ -161,6 +176,20 @@ describe("the error an Agent's chat stopped on", () => {
     expect(inChat()).toBeNull();
   });
 
+  it("comes back when Retry did not go, so the chat can still be retried", async () => {
+    await draw();
+    // the node refused the launcher switch the message was to carry out: nothing went, no bubble is left (#5035)
+    reply = () => json({ error: "切换没成功", code: "switch_failed", delivered: "none" }, 409);
+    await act(async () => button(banner(), "重试")!.click());
+    await flush();
+    expect(bodies.map((b) => b.text)).toEqual(["继续"]);
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining("切换没成功"), "error");
+    expect(host.querySelector("[data-user-bubble][data-send-state]")).toBeNull();
+    expect(banner()).not.toBeNull();
+    expect(button(banner(), "重试")).toBeDefined();
+    expect(inChat()).toBeNull();
+  });
+
   it("leaves the host's failure note to say why the turn stopped: one card over the composer", async () => {
     captured.session = { ...IDLE, failure_reason: "⚠️ API Error: 529 overloaded" };
     await draw();
@@ -168,9 +197,51 @@ describe("the error an Agent's chat stopped on", () => {
     expect(banner()).toBeNull();
     expect(inChat()).not.toBeNull();
   });
+
+  it("stays away after the failure note's Retry: the note goes, 继续 is sent, and no banner takes its place", async () => {
+    captured.session = { ...IDLE, failure_reason: "⚠️ API Error: 529 overloaded" };
+    await draw();
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="chat-failure-retry"]')!.click());
+    await flush();
+    expect(bodies.map((b) => b.text)).toEqual(["继续"]);
+    expect(host.querySelector('[data-testid="chat-failure"]')).toBeNull();
+    expect(banner()).toBeNull();
+  });
+
+  it("is a status of its own, and its buttons hand the keyboard back to the composer with a mouse only", async () => {
+    await draw();
+    expect(banner()!.getAttribute("role")).toBe("status");
+    // a touch screen alone: no keyboard raised
+    act(() => banner()!.querySelector<HTMLButtonElement>('[aria-label="关闭错误提示"]')!.click());
+    await flush();
+    expect(document.activeElement).not.toBe(host.querySelector("textarea"));
+    localStorage.clear();
+    act(() => root.unmount());
+    root = createRoot(host);
+    media.fine = true;
+    await draw();
+    const close = banner()!.querySelector<HTMLButtonElement>('[aria-label="关闭错误提示"]')!;
+    close.focus();
+    act(() => close.click());
+    await flush();
+    expect(document.activeElement).toBe(host.querySelector("textarea"));
+  });
 });
 
 describe("the error the Persona conversation stopped on", () => {
+  it("reads the same in the chat after ✕: the hub's Fix it stays, without Retry", async () => {
+    captured.session = { ...IDLE, turn_error_code: "auth_failed" };
+    transcript.items = [msg("u1", 1, "user", "帮我看看今天的会"), msg("e1", 2, "assistant", "API Error: 401 authentication_error")];
+    await draw(true);
+    expect(banner()!.textContent).toContain("模型没接好：Key 不对");
+    expect(banner()!.textContent).toContain("去修");
+    act(() => banner()!.querySelector<HTMLButtonElement>('[aria-label="关闭错误提示"]')!.click());
+    await flush();
+    expect(inChat()!.textContent).toContain("模型没接好：Key 不对");
+    expect(inChat()!.textContent).toContain("去修");
+    expect(button(inChat(), "重试")).toBeUndefined();
+  });
+
   it("is the banner over the composer too, and not in the chat", async () => {
     await draw(true);
     expect(banner()).not.toBeNull();

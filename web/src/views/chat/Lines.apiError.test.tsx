@@ -112,6 +112,9 @@ describe("the error the chat stopped on, over the composer (#5313)", () => {
   it("is the same card with ✕ in its top corner: cindy's 28 px round button, labelled", () => {
     const html = banner(gpu, false);
     expect(html).toContain("data-error-banner");
+    // out of the transcript, it is announced as a status of its own; the record in the chat is not
+    expect(html).toMatch(/<div[^>]*data-error-banner=""[^>]*role="status"/);
+    expect(inline(gpu)).not.toContain('role="status"');
     expect(html).toMatch(/<button[^>]*aria-label="关闭错误提示"[^>]*title="关闭错误提示"[^>]*class="touch-hit -mt-1 -mr-1 flex size-7 shrink-0 items-center justify-center rounded-full text-ink-2/);
   });
 

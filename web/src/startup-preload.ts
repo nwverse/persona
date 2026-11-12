@@ -180,9 +180,12 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * imports are renamed back). And 141 B for the error banner over the composer (#5313: ja 595,389 B against 595,044 B
  * on main at 4b72a763c, +345 B, of which 204 B fit the room main had: which error a chat stopped on and the rules that
  * keep it there or in the chat, its dismissal kept per conversation, the notice's ✕ and 28 px buttons, the failure note
- * and the refused-send card drawn as the same notice, and their words). Raise it on purpose, in the change that needs it.
+ * and the refused-send card drawn as the same notice, and their words), and 145 B for its review fixes (ja 595,534 B
+ * against 595,375 B with main merged at 43f2bc18b, +159 B, 14 B of it in the room there was: a Retry that did not go
+ * bringing the banner or the failure note back, the banner scrolled into view in its box once, the keyboard back to the
+ * composer, the hub's fix on the last line's record). Raise it on purpose, in the change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 595_389;
+export const FIRST_SCREEN_BUDGET = 595_534;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").

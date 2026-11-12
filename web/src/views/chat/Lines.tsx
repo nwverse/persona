@@ -29,6 +29,9 @@ export interface LineProps {
   expandFold: (f: Item) => Promise<void>;
   /** A Persona conversation: a model error's text may name a fix in Persona's settings. */
   assistant?: boolean;
+  /** The hub's word on what to fix for the turn's model error (the session's turn_error_code): the chat's last line only,
+   *  so its record reads as its banner did. */
+  fix?: { title: string; detail: string; action: string } | null;
   /** The session is waiting out a subscription usage limit: the last error card says that, not that the turn was interrupted. */
   limit?: string;
   /** Inside an opened supervision trace, show complete injected inputs. */
@@ -46,7 +49,7 @@ export const ChatLineView = memo(function ChatLineView(props: LineProps) {
   );
 });
 
-function LineBody({ line, mid, sid, streaming, expandFold, assistant, limit, trace, offscreen }: LineProps) {
+function LineBody({ line, mid, sid, streaming, expandFold, assistant, fix, limit, trace, offscreen }: LineProps) {
   switch (line.kind) {
     case "supervision":
       return <SupervisionLine line={line} mid={mid} sid={sid} streaming={streaming} expandFold={expandFold} assistant={assistant} />;
@@ -74,8 +77,8 @@ function LineBody({ line, mid, sid, streaming, expandFold, assistant, limit, tra
       // a record in the chat, as cindy's ErrorMessageCard: Retry and Edit last message belong to the banner over the
       // composer (ErrorBanner), while this error is the one the chat stopped on
       if (limit) return <UsageLimitLine text={limit} />;
-      // the text-derived fix points at Persona's model settings: only for Persona's own conversations
-      return <APIErrorCard info={line.info} count={line.count} at={line.item.ts} fix={assistant ? turnErrorFix(line.info.code) : null} />;
+      // the fix points at Persona's model settings: only for Persona's own conversations
+      return <APIErrorCard info={line.info} count={line.count} at={line.item.ts} fix={assistant ? (fix ?? turnErrorFix(line.info.code)) : null} />;
   }
 }
 
@@ -333,8 +336,10 @@ function APIErrorCard({ info, count, at, onRetry, onEditLastMessage, fix, onDism
   const reason = (fix ? fix.title : info.reason) || t("chat-lines.reply_failed");
   return (
     <ErrorNotice
-      // the banner over the composer is the one with ✕ (ErrorBanner)
+      // the banner over the composer is the one with ✕ (ErrorBanner); it says the error out of the transcript, so it is a
+      // status of its own, as the usage limit and the failure note are
       data-error-banner={onDismiss ? "" : undefined}
+      role={onDismiss ? "status" : undefined}
       message={reason}
       description={sub || undefined}
       onDismiss={onDismiss}
