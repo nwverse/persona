@@ -24,8 +24,10 @@ That evening it briefly became view-only (abc18a9: removed key bar, typing and c
 - Each frame uses synchronized output (`ESC[?2026h … ESC[?2026l`), ending with cursor position and visibility (`ESC[45;16H ESC[?25h`): **there is a cursor**, with live typing echo.
 - Few sequences: CUP, ED(2J), SGR (full forms such as `0;1;38;5;N;49m`), DECTCEM, 2026, OSC 8 links (`ESC]8;;url ESC\`, passed through unchanged).
 - **`--cols/--rows` must equal pane dimensions**: smaller crops the top-left (not reflow); larger adds blank space. Without flags, uses the caller's terminal size.
-  Pane size comes from `rect` in `pane.layout`; resizing a pane makes herdr send another `full` frame, but still at the dimensions specified when observing, so after `layout.updated` the node
-  must reopen observe at the new size.
+  The node takes the size from the pane's terminal (`herdr.Client.TermSize`: `pane.process_info`'s shell → its tty's window size; macOS through `sysctl kern.proc.pid`, Linux through `/proc`, no process started),
+  with `rect` in `pane.layout` as the fallback. The layout alone is right only while a herdr client is attached: with none it reports herdr's headless default (120×40) while the pane keeps the last client's size,
+  and observing at 120×40 a pane that is really 193×59 lost the right edge and the bottom rows (measured, herdr 0.9.3, #5409). Resizing a pane makes herdr send another `full` frame, but still at the dimensions
+  specified when observing, so the node checks the size every 2 s and reopens observe at the new size.
 - Observers see the screen currently displayed in the pane: if someone scrolls up on the computer (herdr scroll offset), observers see that scrolled content too; same for alternate screen (whatever herdr displays).
 - OSC 52 (clipboard write) and bells from the program are handled by herdr and **never appear in the stream**; title comes from `terminal_title` in `pane.get`.
   Tested on herdr 0.9.5 on 2026-11-04 for observe, control and `terminal attach`; see section 18.
@@ -181,8 +183,10 @@ and keys go directly into the terminal. Settings › Terminal Size can switch ba
 - `herdr terminal session control <pane> --cols C --rows R`: pipes for stdin/stdout, no PTY; **shares the slot with `terminal attach`**.
   Immediately resizes the pane to C × R (`viewport_rows` in `pane get` and Claude separator width both change). stdout is the same `terminal.frame` as observe.
   One JSON per stdin line: `{"type":"terminal.input","text":"…"}` (or base64 `bytes`), `{"type":"terminal.resize","cols":C,"rows":R}`, `{"type":"terminal.release"}`.
-- **All disconnects automatically restore size**: stdin EOF, `kill -TERM`, `kill -9`, `release` all restore the original dimensions (172×45), with Claude redrawing at computer width.
-  Thus a crashed node or hub (node is its child, so stdin closes too) never leaves the pane stuck at phone width.
+- **Disconnects restore the size only while a herdr client is attached**: stdin EOF, `kill -TERM`, `kill -9`, `release` all restore the original dimensions (172×45), with Claude redrawing at computer width,
+  when the computer's herdr window (or any other herdr client) is attached. **With no client attached, herdr leaves the pane at the controller's size** (measured in a throwaway herdr 0.9.3 session:
+  123×44 → 57×41 under control → still 57×41 after release; with a client attached, back to 123×44), until a client attaches and lays every pane out again (#5339).
+  `pane.layout` does not say what to go back to then: with no client it reports herdr's headless default (120×40) while the pane keeps the last client's size.
 - Slot occupied (Ovis, another herdr client): without `--takeover`, immediately returns `{"type":"terminal.closed","reason":"terminal attach failed: … already has an attached client; retry with --takeover"}`;
   with `--takeover`, claims the slot and the old client exits after `terminal attach taken over`. We receive the same reason if someone takes it from us.
 - A resize gives a full frame after about 6 ms; **same-size resize also gives a full frame**, with no SIGWINCH to the program (dimensions unchanged). The node uses this to obtain a fresh full frame when deltas exceed 256 KB,
@@ -206,8 +210,16 @@ App ◀──terminal (frames, same as mirror), terminal_control {state}── h
 - Size: terminal view computes columns × rows from font size (`onGrid`), uses the first immediately (subscription waits for it), then debounces keyboard changes, rotation and font pinching 250 ms before sending (`terminal_input` with `control`).
 - One driving device per terminal: latest control subscription takes over; previous device gets `taken` and becomes view-only. Other devices can still watch (phone-sized frames).
 - Hub serializes watch/unwatch per session (`callLock`), asking the node for the currently desired state each time; the final call leaves the hub's desired result.
-- Release: App leaves Terminal tab / backgrounds / is killed → `terminal_unsubscribe` or WebSocket closes → no driver at the hub: switch to mirroring if viewers remain, otherwise `terminal.unwatch` → node closes stdin → herdr restores.
+- Release: App leaves Terminal tab / backgrounds / is killed → `terminal_unsubscribe` or WebSocket closes → no driver at the hub: switch to mirroring if viewers remain, otherwise `terminal.unwatch` → node resizes the pane back, then closes stdin.
   Phone disappearing without TCP close is detected by hub WebSocket ping (every 20 s, 15 s timeout). Node also has a lease: hub sends `terminal.keepalive` every 20 s; 75 s without it releases control.
+- **Size after release** (#5339): before taking the pane the node reads the size its programs see from the pane's tty (`herdr.Client.TermSize`: `pane.process_info`'s shell → its terminal's window size;
+  `pane.layout` when that fails). Letting go (unwatch, a watch that replaces the control, the lease, the hub connection ending) first sends `terminal.resize` to that size, then closes stdin (`Control.CloseAt`); frames after that are not forwarded.
+  - **A herdr client attached** (the computer's window, a web Full view): herdr then lays the pane out at that client's size, as before; if several are attached, the most recently active one's (section 24).
+  - **No client attached**: the pane keeps the size it had before the phone took it, not the phone's.
+  - **Phone to phone** (the same phone subscribing again, another phone taking over): the next control inherits the first recorded size and the first lets go without resizing, so Claude is not redrawn at computer width in between.
+    If the next control then fails to start, the node takes the pane at the recorded size and lets go at once (no takeover: a slot someone else holds is left alone).
+  - **Taken over by another client** (Ovis, `terminal attach`) or ended by herdr: nothing is resized; the client holding the slot owns the size.
+  - Only a node killed outright (stdin closed with no resize first) still leaves the phone's size, until a herdr client attaches.
 - Slot occupied: node returns `attach_busy`; hub sends `busy` to App and mirrors first. App dialog "Another program on the computer is using this terminal" → Take Over resubscribes with `takeover`; View Only mirrors.
   Control taken away: node sends `terminal.end {control, taken}`, hub tells App `taken` and switches to mirror; App shows View Only · Take Over to reclaim it.
 - Old node (ignores `control`, mirrors without `control: true`) / old herdr (no `session control`): hub reports `unsupported`, App mirrors. Old hub without `terminal_control` feature: App sends no control.
@@ -487,6 +499,7 @@ No new polling: `lookAt` (node's `session.snapshot` on each herdr change) alread
 `panes.list` reads this cache, taking a snapshot only if over 3 seconds old (or host never captured). Response grouped by host:
 `{hosts: [{kind, stream, control, new_tab, workspaces, tabs, panes}]}`; panes include `agent` / `status` (host-reported) / `title` / `cwd` / `session_id` (with Agent session) / `terminal` (address above).
 Hub: `GET /api/v1/machines/{mid}/panes`, feature `terminal_panes`.
+A pane with no Agent carries `foreground`, the program in front as the host names it (`zsh` at its prompt, `vim`, `npm`…; herdr `pane.process_info`, asked for each such pane on every list, at most 1.5 s, nothing on the screen read; #4754). A pane Persona opened for an Agent that has stopped (its `persona_tab` mark, no Agent in it now) carries `agent_session`, the stopped Agent's session (#4754): clients label it as that Agent's terminal, and **Close finished terminals** (`POST /api/v1/machines/{mid}/panes/close_finished`, `docs/protocol/protocol.md`) closes those the user confirms.
 
 ### New terminal: `panes.new` (optional, explicit action)
 
@@ -517,7 +530,7 @@ A pane terminal is a full shell on that computer, stricter than an Agent-session
 
 ### Not implemented
 
-- iOS has no standalone terminal yet (session terminal only, `terminal_subscribe` uses session id). Protocol already suffices: same API/address. Android has it (#2972): Terminal in Agents List Settings, see `docs/android/android.md` ("App shell and direct page entry").
+- iOS: **Agents › ⋯ (list menu) › Terminals**, and **Terminals** on a computer's page (#4754, `apple/Persona/Views/Chats/TerminalsView.swift`): every pane of each computer, the Agents' under their titles, plain ones labelled Terminal with their `foreground` program and folder, a stopped Agent's left behind as "Finished: <title>". A plain pane opens in the existing terminal cover by its `pane:` address (watch and type); an Agent's, and a stopped Agent's, by its session, whose terminal page offers Resume (#4328). Each computer's header menu has New Terminal per workspace and Close Finished Terminals (preview, then confirm); a plain pane closes by swipe or long press, after a confirmation. Android has it too (#2972): Terminal in Agents List Settings, see `docs/android/android.md` ("App shell and direct page entry").
 - Close panes/tabs, rename, split: outside this version, do it on the computer when needed.
 - Hosts without sessions or herdr (Paseo, botmux): no panes, empty list.
 - ⌘K palette now searches panes too (#2330, `docs/web/web.md`, "Pages"): reads each online computer's `panes.list` once on opening, lists ordinary shells and sessionless panes (Agent panes with sessions already appear as session results); terminal page Jump To unchanged.
@@ -632,8 +645,8 @@ Same shape as Moshi `worktree/prepare` + `worktree/create`.
   - **Conflicts Orca does not fail on are stopped by the node**: for a branch checked out in another worktree, or a folder that exists (an empty one too), Orca 1.4 does not fail but quietly makes `<branch>-2` in `<name>-2` (measured on Orca 1.4.250 on 2026-11-05; `branchIntent` does not prevent it).
     So the node reads `git worktree list --porcelain` first (and creates nothing when it cannot), answers "branch … is already checked out at …" for a branch in use, and refuses an existing checkout path (an empty directory git could use, Orca cannot); Orca is not called in either case.
     An answer on another branch all the same (checked out elsewhere meanwhile, or Orca's own folder setting taken) is an error naming what Orca made and where (nothing is deleted), not a success.
-- **Old herdr without `worktree`**: node falls back to `git worktree add` (existing local branch unchanged, otherwise `-b` from repository HEAD, no `--force`), then `workspace create` for an ordinary workspace in checkout (no herdr grouping).
-  If checkout succeeds but workspace creation fails, keep checkout and explain in error. Other hosts (herdr-core, botmux) don't support it; menu hidden.
+- **Old herdr without `worktree`, and Herdr App**: node falls back to `git worktree add` (existing local branch unchanged, otherwise `-b` from repository HEAD, no `--force`), then the host opens an ordinary workspace in the checkout (no native worktree grouping).
+  If checkout succeeds but workspace creation fails, keep checkout and explain in error. Other hosts (Tern, botmux) don't support it; menu hidden.
 - **Capability**: each host in `GET /machines/{mid}/panes` adds boolean `worktree` alongside `new_tab`; older nodes without it hide menu.
 - **Default path**: herdr convention `<worktrees.directory>/<repo name>/<branch slug>`, reading `[worktrees] directory` from the config file herdr reads (`$HERDR_CONFIG_PATH`, else `$XDG_CONFIG_HOME/herdr/config.toml`, else `~/.config/herdr/config.toml`, `%APPDATA%\herdr\config.toml` on Windows), default `~/.herdr/worktrees`; `~`/relative paths resolved against user home.
   Slug matches herdr: lowercase, consecutive non-ASCII-alphanumeric characters become one `-`, stripped from ends (`Feat/A_b.c` → `feat-a-b-c`, `fix/中文` → `fix`, demonstrating CJK stripping). Measured on herdr 0.9.5 on 2026-11-05; `herdr.WorktreeSlug` and web `branchSlug` both tested.

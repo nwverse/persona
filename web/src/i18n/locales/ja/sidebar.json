@@ -19,6 +19,7 @@
   "persona_chats": "Personaのチャット",
   "new_chat": "新規チャット",
   "all_chats": "すべてのチャット",
+  "recent_chats": "最近",
   "pages": "ページ",
   "grouping_header": "エージェントのグループ分け",
   "new_agent": "新規エージェント",
@@ -26,6 +27,8 @@
   "show_all": "すべて表示",
   "pinned_section": "ピン留め",
   "directions": "常駐",
+  "direction_tasks": "{name}のタスク",
+  "task_agents": "{name}のエージェント",
   "launching": "起動中",
   "launch_untitled": "新しいエージェント",
   "launch_failed": "起動に失敗",
@@ -146,5 +149,6 @@
   "switcher_label_waiting": "{name}、アシスタントを切り替え。ほかのアシスタントに対応待ちがあります",
   "switcher_count": "対応待ち {count} 件",
   "leader_working": "作業中 {count}",
-  "leader_needs_you": "対応待ち {count}"
+  "leader_needs_you": "対応待ち {count}",
+  "codex_waiting": "最初のメッセージ待ち"
 }

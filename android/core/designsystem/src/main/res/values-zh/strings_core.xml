@@ -99,6 +99,7 @@
     <string name="designsystem_core_agents_no_todo">没有待办</string>
     <string name="designsystem_core_agents_manual">手动开的</string>
     <string name="designsystem_core_agents_quiet_spaces">空闲的空间</string>
+    <string name="designsystem_core_agents_started_tab">发起者</string>
     <plurals name="designsystem_core_count_needs_you">
         <item quantity="other">%1$d 个需要你</item>
     </plurals>
@@ -318,7 +319,7 @@
     <string name="designsystem_core_headline_screen">终端等你处理</string>
     <string name="designsystem_core_headline_needs_you">需要你</string>
     <string name="designsystem_core_ask_question">在问你</string>
-    <string name="designsystem_core_ask_permission">需要你授权</string>
+    <string name="designsystem_core_ask_permission">在等你批准</string>
     <string name="designsystem_core_ask_plan">计划等你审批</string>
     <string name="designsystem_core_ask_screen">终端等你处理</string>
     <string name="designsystem_core_ask_elicitation">MCP 请求</string>
@@ -451,6 +452,6 @@
     <string name="designsystem_core_always_scope_commands">这段对话里的所有命令</string>
     <string name="designsystem_core_always_scope_read_directory">这段对话中，这个目录里的所有读取操作</string>
     <string name="designsystem_core_always_scope_edit_directory">这段对话中，这个目录里的所有文件编辑</string>
-    <string name="designsystem_core_always_scope_tool">这段对话里对这个工具的所有调用</string>
+    <string name="designsystem_core_always_scope_tool">这段对话里的所有「%1$s」调用</string>
     <string name="designsystem_core_always_scope_approved">批准的范围在这段对话中持续有效</string>
 </resources>

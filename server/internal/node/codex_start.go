@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -20,16 +21,17 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/screen"
+	"github.com/nwverse/persona/server/internal/shellcmd"
 )
 
 // Starting a Codex from the phone (docs/integrations/codex.md "Starting from the phone"). A Codex launcher (plain `codex`, or an alias whose
-// command is codex) runs in a new herdr tab with the first message as its prompt argument: Codex makes the thread
+// command is codex) runs in a new herdr tab with an optional first message as its prompt argument: Codex makes the thread
 // itself — on the shared app-server daemon for a plain 0.163, where #220 joins it (codex_daemon.go); in its own process
 // for 0.153 or a launcher with -c, on the terminal route. Neither the message nor the launcher's words (an alias can
-// carry a key) go through a shell or onto the screen: they are written to a file only the user can read, the tab runs
-// `personad codex-start <file>`, and that execs the words with the message as one argument after "--". The start answers once the new thread is known — the rollout in that directory, begun after the
+// carry a key) are parsed as shell code or typed onto the screen: they are written to a file only the user can read, the tab runs
+// `personad codex-start <file>`, and that runs the words with any message as one argument after "--". A start with a message answers once the new thread is known — the rollout in that directory, begun after the
 // launch, whose first message is exactly this one — with that thread's id, so the phone opens the session that is
-// there; it fails, with what the tab shows, when none comes in time.
+// there; it fails, with what the tab shows, when none comes in time. Without a message it returns a waiting row (codex_waiting.go).
 
 // codexStartWait is how long a start waits for Codex's thread (a trust dialog, a slow ~/.zshrc, the first turn).
 var codexStartWait = 60 * time.Second
@@ -111,11 +113,46 @@ func codexOwnProcess(argv []string) string {
 	return ""
 }
 
+// A managed launcher's -- can precede every caller argument. Defer injection until Launch has assembled its argv.
+const codexBypassEnv = "PERSONA_CODEX_BYPASS_PERMISSIONS"
+
+func codexBypassArgs(argv []string) []string {
+	end := slices.Index(argv, "--")
+	if end < 0 {
+		end = len(argv)
+	}
+	for i := 0; i < end; i++ {
+		if argv[i] == "--dangerously-bypass-approvals-and-sandbox" || argv[i] == "--yolo" {
+			return argv
+		}
+		if codexValueFlags[argv[i]] {
+			i++
+		}
+	}
+	return slices.Insert(slices.Clone(argv), end, "--dangerously-bypass-approvals-and-sandbox")
+}
+
 // startCodex starts a Codex launcher in a new tab with the first message and returns its session once the thread is
-// known.
+// known. With no message it returns the waiting row once Codex's input box is up (codex_waiting.go).
 func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launcher string, argv []string, prompt, ws, tabName, mode string) (*proto.Session, error) {
-	if strings.TrimSpace(prompt) == "" {
-		return nil, refusal("codex_needs_prompt", "新建 Codex 会话要连第一条消息一起发：Codex 收到第一条消息才建会话。", nil)
+	waiting := strings.TrimSpace(prompt) == ""
+	if waiting {
+		prompt = ""
+	}
+	if mode == "bypassPermissions" {
+		if managed, ok := n.managedLauncher(launcher); ok && len(argv) >= 3 && slices.Equal(argv[:3], []string{n.bin, "launch", launcher}) {
+			// Only this wrapper executes managed Args; a same-name shell alias takes precedence.
+			args := append(slices.Clone(managed.Args), argv[3:]...)
+			if len(codexBypassArgs(args)) != len(args) {
+				if slices.Contains(managed.Args, "--") {
+					argv = append([]string{codexBypassEnv + "=1"}, argv...)
+				} else {
+					argv = codexBypassArgs(argv)
+				}
+			}
+		} else {
+			argv = codexBypassArgs(argv)
+		}
 	}
 	key := cwd + "\x00" + launcher
 	if err := n.closeAbandonedCodex(ctx, key); err != nil {
@@ -164,7 +201,18 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 		return nil, err
 	}
 	defer done()
-	id, err := n.waitCodexThread(ctx, pane, cwd, prompt, began)
+	var id string
+	if waiting {
+		err = n.waitCodexBox(ctx, pane)
+		if errors.Is(err, errCodexBoxLate) {
+			// Codex runs but its box has not come up yet: the row all the same, and its tab stays. Nothing is queued in it
+			// that could run later; the first message waits for the box itself (codexBoxFor).
+			n.logf("codex %s: its input box did not come within %s; offering the row anyway", pane, codexStartWait)
+			err = nil
+		}
+	} else {
+		id, err = n.waitCodexThread(ctx, pane, cwd, prompt, began)
+	}
 	if err != nil {
 		shown, _ := n.readPane(ctx, pane, "recent-unwrapped", 30)
 		if strings.TrimSpace(shown) == "" { // a screen Codex draws from the top of a tall pane: the bottom rows are blank
@@ -190,9 +238,12 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 		}
 		return nil, fmt.Errorf("%w\n%s", err, lastLines(shown, 12))
 	}
+	if waiting {
+		return n.openCodexWait(ctx, pane, cwd, launcher, mode, began), nil
+	}
 	n.bindPane(pane, id)
 	st := sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: began.UTC()}
-	if mode == "plan" { // Other modes still come from the launcher's arguments, not this request.
+	if mode == "plan" {
 		st.AppMode = mode
 	}
 	n.state.put(id, st)
@@ -375,8 +426,8 @@ type codexStartFile struct {
 	IsolateHooks bool `json:"isolate_hooks,omitempty"`
 }
 
-// CodexStart is `personad codex-start <file>`: it reads a codexStartFile (and removes it), then runs its words with the
-// message as one more argument after "--", in place of itself. Neither is parsed as shell code. The file's agent replaces a
+// CodexStart is `personad codex-start <file>`: it reads a codexStartFile (and removes it), then runs its words in place
+// of itself, with any message as one more argument after "--". Neither is parsed as shell code. The file's agent replaces a
 // HERDR_AGENT the shell had: appended, the inherited one would come first, and that is the one getenv and herdr read.
 func CodexStart(args []string) error {
 	if len(args) != 1 {
@@ -396,7 +447,7 @@ func CodexStart(args []string) error {
 	if f.Agent != "" {
 		env = append(withoutEnv(env, []string{herdrAgentEnv}), herdrAgentEnv+"="+f.Agent)
 	}
-	for len(words) > 0 && assignRe.MatchString(words[0]) {
+	for len(words) > 0 && shellcmd.AssignRe.MatchString(words[0]) {
 		env = append(env, words[0])
 		words = words[1:]
 	}
