@@ -379,15 +379,18 @@ func (s *Service) decoratedSession(machine, sid string) (proto.Session, bool) {
 	return proto.Session{}, false
 }
 
-// decorateTodos puts on machine mid's sessions the todo each works for and whether it is quiet.
+// decorateTodos keeps active work and completed ownership separate, with quiet still decided by its own report.
 func (s *Service) decorateTodos(mid string, list []proto.Session) {
 	r := &s.fleet.rep
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	for i := range list {
 		key := [2]string{mid, list[i].SessionID}
+		list[i].Todo, list[i].CompletedTodo = nil, nil
 		if l, ok := r.links[key]; ok {
 			list[i].Todo = &proto.TodoRef{ID: l.TodoID, Title: l.Title}
+		} else if l, ok := r.completed[key]; ok {
+			list[i].CompletedTodo = &proto.TodoRef{ID: l.TodoID, Title: l.Title}
 		}
 		list[i].Quiet = r.quiet[key]
 	}

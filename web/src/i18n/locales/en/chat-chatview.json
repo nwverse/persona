@@ -131,5 +131,6 @@
   "search_not_found": "Can't find this one in the chat right now. You can go back to where you were.",
   "search_origin_changed": "Where you were has changed. Carry on from here.",
   "search_return": "Back to where you were",
-  "search_menu": "Search in chat"
+  "search_menu": "Search in chat",
+  "todo_completed_label": "To-do: {title} · Completed"
 }

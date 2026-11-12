@@ -8,6 +8,10 @@ does not settle that closeout. Reuse explicit task routing, show what the next m
 rounds, and refresh the pending card only after delivery and recording. A parked review likewise takes precedence
 over stopped/seen turn signals: seeing a turn cannot complete the task.
 
+Keep completed session ownership separate from active task membership. Filling active `session.todo` with a closed
+task would make older consumers treat history as current work. The optional `completed_todo` display reference keeps
+the Web menu useful without changing active links, supervision, counts or quiet rules.
+
 ## Live acceptance must distinguish a lookup POST from a mutation (#5753)
 
 The live composer driver rejected the app's normal `POST /api/v1/launchers/catalog`, although the handler is a

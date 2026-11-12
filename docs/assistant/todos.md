@@ -16,6 +16,12 @@ To-dos belong to the assistant (`todos.go`, `todo_decisions.go`, `todo_sessions.
   `POST /api/v1/sessions` and `POST /api/v1/sessions/{mid}/{sid}/messages` with `todo_id` first ask the assistant (`assistant.todo_handoff`): does the to-do exist, is it done (if handoff is disallowed, it supplies 404/409 and the message, echoed by hub), prepend decisions to the Agent's message and project context for new Agents, all in one call. After handoff, ask assistant to link it (`assistant.todo_link`; assistant determines both linked title and to-do title); workspace renames through hub notify assistant (`todos.space_renamed`). Protocol in `docs/protocol/protocol.md`, "Bus".
 - **When assistant is disconnected** (hub just started, assistant process restarting): to-do APIs return `503 assistant_offline`, "The assistant is temporarily unavailable. Try again later"; create/send with `todo_id` also return 503 (to-do existence unknown). Session-list to-do/quiet markers keep hub's last report (absent in the first second or two after hub starts before assistant reports). Hub emits no events during this period, so automatic linking, marker reconciliation and decision records wait for the next session list or answer after reconnection; workspaces renamed through hub are not migrated.
 
+Completed ownership is display-only (#5929): `TodoReport.completed` names the most recently completed, non-dismissed
+to-do for each session without an active link. Session lists expose it as `completed_todo: {id,title}`, separate from
+the existing active `todo`. The Web chat menu labels it Completed and opens the to-do; it offers no fresh-link prompt.
+Active task routing, supervision, counts and the existing quiet grace period still read only their original active
+links/quiet report. Unknown optional fields are ignored by older clients; native menus are not changed by this fix.
+
 ## Permission of a planned task
 
 A writable task that `task_plan` leaves without a `permission` gets one on the hub before the plan is saved, so the

@@ -131,5 +131,6 @@
   "search_not_found": "这条记录暂时无法定位，可返回搜索前位置",
   "search_origin_changed": "原来的记录已变化，请继续浏览当前记录",
   "search_return": "返回搜索前位置",
-  "search_menu": "会话内搜索"
+  "search_menu": "会话内搜索",
+  "todo_completed_label": "待办：{title} · 已完成"
 }

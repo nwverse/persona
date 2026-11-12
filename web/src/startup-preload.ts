@@ -229,8 +229,10 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * And 243 B for the explicit task-decision chat address (#5929): ja 474,611 B against 474,368 B on clean 549191b9e.
  * This is the round-aware route and its visible, localized explanation, retaining the baseline's 107 B of room;
  * no unrelated first-screen imports are added.
+ * And 151 B for the same issue's completed-task ownership menu and its localized label: ja 474,762 B; active task
+ * membership remains separate from the display-only reference, and the same 107 B of room remains.
  */
-export const FIRST_SCREEN_BUDGET = 474_718;
+export const FIRST_SCREEN_BUDGET = 474_869;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
