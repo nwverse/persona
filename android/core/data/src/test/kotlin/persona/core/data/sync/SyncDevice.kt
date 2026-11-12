@@ -366,5 +366,7 @@ internal class HubReply(reply: SyncReply) : java.io.IOException(
     override val status: Int? = reply.status.takeUnless { reply.cut }
     override val code: String? = reply.body.str("code").takeUnless { reply.cut }
     val body = reply.body
-    val cutOff = reply.cut || reply.status in setOf(502, 503, 504)
+    /** As HubChatTransport.cutOff: a 5xx from something in front of the hub; the hub's own (a code, `delivered`) is an answer. */
+    val cutOff = reply.cut || reply.status in setOf(502, 503, 504) &&
+        reply.body.str("code").isNullOrEmpty() && reply.body["delivered"] == null
 }

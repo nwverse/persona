@@ -36,14 +36,14 @@ object AssistantTaskCards {
     /**
      * Explicit hub housekeeping, drafts and assistant-to-Agent instructions live behind the trays. With [inline] (Glass,
      * #4339 C13) the conversation draws the hub's records as iOS's `FeedLine` does: receipts, reviews, reports, Persona's
-     * hand-offs to tasks and the hub's notice lines are lines of it, and only what has another place stays behind: plans
-     * and task cards (the dispatched line, [DispatchHint], and Needs you) and message cards (Needs you).
+     * hand-offs to tasks, message cards and the hub's notice lines are lines of it, and only plans and task cards stay
+     * behind (the dispatched line, [DispatchHint], and Needs you stand for them).
      */
     fun isBackgroundEvent(item: FeedItem, inline: Boolean = false): Boolean = if (inline) item.kind in inlineHidden
         else (item.kind in lifecycle && !interruptShown(item) && !isBackgroundSupervisorReview(item)) ||
             item.kind in setOf("notice", "message") || (item.kind == "routed" && item.field("from") == "assistant")
 
-    private val inlineHidden = setOf("plan", "task", "message")
+    private val inlineHidden = setOf("plan", "task")
 
     /**
      * A review the background supervisor wrote (#5084, docs/assistant/unified-entry.md "Background supervisor"): the hub

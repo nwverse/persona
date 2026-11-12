@@ -145,6 +145,10 @@
       "sf": "arrow.down",
       "phosphor": "arrow-down"
     },
+    "draftReply": {
+      "sf": "pencil.and.scribble",
+      "phosphor": "note-pencil"
+    },
     "edit": {
       "sf": "pencil",
       "phosphor": "pencil-simple"
@@ -237,9 +241,17 @@
       "sf": "target",
       "phosphor": "target"
     },
+    "groupChat": {
+      "sf": "rectangle.3.group.bubble",
+      "phosphor": "chats-circle"
+    },
     "handToAI": {
       "sf": "paperplane",
       "phosphor": "paper-plane-tilt"
+    },
+    "handledElsewhere": {
+      "sf": "checkmark.bubble",
+      "phosphor": "checks"
     },
     "health": {
       "sf": "heart",

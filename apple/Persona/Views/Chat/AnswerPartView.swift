@@ -92,7 +92,7 @@ struct AssistantTextPart: View, Equatable {
         VStack(alignment: .leading, spacing: Theme.Space.sm) {
             AnswerPartWords(text: text, key: key, message: message)
                 .contentShape(.rect)
-                .messageLongPress(id: item.id, card: true, part: true) {
+                .messageLongPress(id: item.id, card: true, part: index) {
                     AnswerPartsLift(item: item, message: message, pressed: index)
                 }
             if let whole {
@@ -128,31 +128,42 @@ private struct AnswerPartWords: View {
 }
 
 /// The lifted copy of a long answer drawn in parts (#5221): all of its parts again, each `Part.gap` under the one
-/// before, as the chat stacks them (so it looks as the answer did whole, `AnswerPartsLookTests`), its words selectable as
-/// one text (the whole answer's), the pressed part marked for the lift to put it where it was (`MessageLift.part`).
-/// Drawn only while lifted: all of it is laid out then, as a whole answer's copy always was.
+/// before, as the chat stacks them (so it looks as the answer did whole, `AnswerPartsLookTests`), the pressed part
+/// marked for the lift to put it where it was (`MessageLift.part`). Lifted, it is a lazy stack: only the parts near the
+/// screen are laid out, the others as the copy scrolls to them (laying out all of a long report at once is the cost
+/// #4970 took out of the chat). To select its words it lays out all of them
+/// (`MessageMenu.liftWhole`): the text view over them, laid out from the whole answer's text, follows every line.
 struct AnswerPartsLift: View {
     var item: Item
     /// The answer's row memo key (`RowMemo.key`).
     var message: String
     var pressed: Int
+    @Environment(\.liftWhole) private var whole
 
     var body: some View {
         let parts = AnswerPartMemo.parts(item.text ?? "")
-        VStack(alignment: .leading, spacing: 0) {
-            if parts.isEmpty { // not in parts after all: the answer as one
-                AnswerPartWords(text: RowMemo.assistant(message) { _ in AssistantRowText(item.text ?? "") }, key: message, message: message)
-                    .liftPressedPart(true)
-            }
-            ForEach(parts.indices, id: \.self) { n in
-                let key = AnswerPartMemo.key(message, n)
-                let text = RowMemo.assistant(key) { _ in AssistantRowText(parts[n].text) }
-                AnswerPartWords(text: text, key: key, message: message)
-                    .liftPressedPart(n == pressed)
-                    .padding(.top, n == 0 ? 0 : parts[n].gap)
-            }
+        if whole || parts.isEmpty {
+            VStack(alignment: .leading, spacing: 0) { rows(parts, whole: true) }
+                .markdownSoftBreakMode(.lineBreak)
+                .selectableInLift(item.text ?? "", as: .reply(quiet: false))
+        } else {
+            LazyVStack(alignment: .leading, spacing: 0) { rows(parts, whole: false) }
+                .scrollTargetLayout()
+                .markdownSoftBreakMode(.lineBreak)
         }
-        .markdownSoftBreakMode(.lineBreak)
-        .selectableInLift(item.text ?? "", as: .reply(quiet: false))
+    }
+
+    @ViewBuilder private func rows(_ parts: [AnswerParts.Part], whole: Bool) -> some View {
+        if parts.isEmpty { // not in parts after all: the answer as one
+            AnswerPartWords(text: RowMemo.assistant(message) { _ in AssistantRowText(item.text ?? "") }, key: message, message: message)
+                .liftPressedPart(true, whole: true)
+        }
+        ForEach(parts.indices, id: \.self) { n in
+            let key = AnswerPartMemo.key(message, n)
+            let text = RowMemo.assistant(key) { _ in AssistantRowText(parts[n].text) }
+            AnswerPartWords(text: text, key: key, message: message)
+                .liftPressedPart(n == pressed, whole: whole)
+                .padding(.top, n == 0 ? 0 : parts[n].gap)
+        }
     }
 }
