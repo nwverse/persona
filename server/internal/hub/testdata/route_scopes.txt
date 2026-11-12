@@ -286,6 +286,7 @@ agents.read          GET /api/v1/sessions/{mid}/{sid}/screen
 -                    GET /api/v1/sessions/{mid}/{sid}/share-preview/{preview_id}
 -                    GET /api/v1/skills
 -                    GET /api/v1/subscriptions
+-                    GET /api/v1/subscriptions/-/graph
 -                    GET /api/v1/subscriptions/catalog
 -                    GET /api/v1/subscriptions/summary
 -                    GET /api/v1/subscriptions/{id}
