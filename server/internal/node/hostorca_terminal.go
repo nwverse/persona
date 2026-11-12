@@ -75,7 +75,7 @@ func (h *orcaHost) front(ctx context.Context, paneKey string, prompt bool) (orca
 	if err != nil {
 		return t, host.Mark(fmt.Errorf("orca: cannot tell what runs in %s: %w", paneKey, err), host.ErrNotDelivered)
 	}
-	if len(procs[paneKey]) == 0 {
+	if len(h.procsIn(procs, paneKey)) == 0 {
 		return t, host.Mark(fmt.Errorf("orca: %w %s", errNotInFront, paneKey), host.ErrNotDelivered)
 	}
 	var st *orcart.AgentStatus
@@ -293,6 +293,11 @@ func (h *orcaHost) Close(ctx context.Context, pane host.PaneRef, _, _ string) er
 	t, err := h.terminal(ctx, pane.ID, false)
 	if err == nil {
 		err = h.onTerminal(ctx, t, true, func(tg orcart.Target) error { return h.c.Close(ctx, tg) })
+	}
+	if err == nil {
+		h.mu.Lock()
+		delete(h.made, pane.ID)
+		h.mu.Unlock()
 	}
 	if errors.Is(err, errNoOrcaTerminal) || orcart.IsCode(err, "terminal_handle_stale") ||
 		orcart.IsCode(err, "terminal_gone") || orcart.IsCode(err, "terminal_exited") {

@@ -62,6 +62,7 @@ func (n *Node) waitReady(ctx context.Context, pane string, probe *startProbe) (*
 	sawClaude := false      // herdr has named claude in the pane
 	var goneSince time.Time // since when herdr has named no agent there after sawClaude, with only a shell in front
 	shellSaid := ""         // a not-found line the tab's shell printed after the command, of something else than it
+	gone := false           // at the last look the pane's host listed no such pane (errNoOrcaTerminal)
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
@@ -69,6 +70,7 @@ func (n *Node) waitReady(ctx context.Context, pane string, probe *startProbe) (*
 		case <-time.After(500 * time.Millisecond):
 		}
 		screen, err := n.readPane(ctx, pane, "visible", 60)
+		gone = paneGone(err)
 		if err != nil {
 			continue
 		}
@@ -92,6 +94,7 @@ func (n *Node) waitReady(ctx context.Context, pane string, probe *startProbe) (*
 			return nil, errors.New(reason)
 		}
 		a, err := n.paneAgent(ctx, pane)
+		gone = paneGone(err)
 		if err != nil || a.Agent != "claude" {
 			// The tab's shell could not run the command (a launcher its rc files do not define, a claude not on its
 			// PATH): it said so right after it and is back at its prompt, and claude will not come (#1642).
@@ -152,6 +155,10 @@ func (n *Node) waitReady(ctx context.Context, pane string, probe *startProbe) (*
 	}
 	if !running && shellSaid != "" {
 		return nil, fmt.Errorf("claude did not start within %s: after the command the tab's shell printed %q", startWait, shellSaid)
+	}
+	if !running && gone {
+		// Not a slow shell: the node lost the pane (closed, or its engine moved it where the node does not find it, #5547).
+		return nil, fmt.Errorf("claude did not start within %s: the new tab's pane could not be found any more", startWait)
 	}
 	if !running {
 		return nil, fmt.Errorf("claude did not start within %s: the tab's shell had not run it yet (is the machine busy?)", startWait)
@@ -372,3 +379,6 @@ func lastLines(s string, n int) string {
 	}
 	return strings.Join(lines, "\n")
 }
+
+// paneGone: the pane's host lists no such pane (Orca's errNoOrcaTerminal), rather than failing to answer.
+func paneGone(err error) bool { return errors.Is(err, errNoOrcaTerminal) }

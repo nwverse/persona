@@ -483,6 +483,21 @@ func (f *Fake) SetAgentStatus(handle string, running bool, status string) {
 	f.mu.Unlock()
 }
 
+// Orphan does to a terminal what Orca does about 2 s after terminal.create in a worktree its UI is not showing: the
+// UI does not adopt it, so it becomes a background terminal, orphaned, its tabId and leafId rewritten to
+// "pty:<worktreeId>@@<suffix>". Its handle and incarnation stay (#5547). It returns the new pane key.
+func (f *Fake) Orphan(handle string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	t := f.termLocked(handle)
+	if t == nil {
+		return ""
+	}
+	key := fmt.Sprintf("pty:%v@@%x", t["worktreeId"], fnv32([]byte(handle)))
+	t["tabId"], t["leafId"], t["orphaned"] = key, key, true
+	return key + ":" + key
+}
+
 // SetRevision sets a worktree's topology revision (terminal.list's topologyRevisions).
 func (f *Fake) SetRevision(worktree string, rev int) {
 	f.mu.Lock()
