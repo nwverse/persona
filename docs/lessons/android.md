@@ -4,6 +4,14 @@
 
 #4124 added a `Boolean` after `JSectionHeader`'s composable slot. A caller passing the slot as a trailing lambda then bound it to the `Boolean`, and `main` stopped compiling for every Android build. No hosted CI runs on PRs, so the module's own build passing was not enough. Before merging a change to a `core/designsystem` component's parameters, compile `:app:compileDebugKotlin` (every feature's main code) and the test code of the modules that call it. Keep a composable slot last; `scripts/app/android_slot_order.py` checks that (#4146).
 
+## Adaptive evidence must survive serialization, re-chunking and cleanup
+
+A new `@Serializable` type in an Android module also needs `org.jetbrains.kotlin.plugin.serialization` in that module. The encoder's missing-serializer exception can otherwise disappear behind a `runCatching`, leaving an empty evidence file while production calls look successful. Robolectric also returns PID 0 by default: use `ShadowProcess.setPid` for tests of real positive-PID validation rather than weakening the production check.
+
+When a lazy item is a row chunked by the current column count, a width change can expose the new row key together with the old absolute item index. Keep the previous stable key, index, pixel offset and grid start, and restore the previous row's leftmost machine after re-chunking; testing only unchanged-column keys does not catch this. Cover 1→2→3→1 columns with a nonzero offset. Shared Go wire golden files contain wire input, not a client's presentation fixture: register the input through the production encoder and keep ordering, metrics and expected card presentation under Android test resources.
+
+A live scene has not passed until its own cleanup has passed. Poll assertions for fresh Compose/probe evidence, print the final PASS only after cleanup, and preserve the original failure while making any additional cleanup failure visible. Shell cleanup must check its own ADB/reverse/mock/clock operations too; `|| true` and a PASS printed before the EXIT trap hide real leftover device state.
+
 ## Receipt navigation inside task details (#3841)
 
 A receipt reused inside task details must not invoke the same task-sheet destination again: assigning the same Compose state produces no visible change. Resolve the task's existing lead binding and open its Agent page after dismissing the sheet. Keep missing-target feedback inside that sheet; generic operation feedback discards arbitrary exception messages and a snackbar behind a modal does not prove the explanation is visible. Exercise the receipt button independently of the footer and verify the real navigation stack in addition to callback tests.
