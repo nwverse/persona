@@ -44,8 +44,9 @@ Chat page:
 - A long finished answer in an Agent chat (from 6,000 bytes or 80 lines) is several lazy rows, about 24 lines each (`AnswerParts`, `AssistantTextPart`, #4970):
   one row of a 30,000-character report was laid out whole, twice, on opening and redrew every table's decoration on each scrolled frame. Cuts fall only
   between plain blocks whose reply-theme margins are fixed (paragraph, ATX heading, fenced code, table), each part drawn the gap MarkdownUI would put
-  there; lists, quotes, display math and HTML comments are never cut. A long press on any part acts on the whole answer; its file chips sit under the last
-  part. Persona's own conversation (boxed answers) and the Mac keep one row. `AnswerPartsLookTests` checks the parts draw the same pixels as the whole.
+  there; lists, quotes, display math and HTML comments are never cut. A long press on any part lifts the whole answer and acts on all of it: Copy, Select
+  Text, Quote and Forward (#5221, `AnswerPartsLift`: the parts stacked again, one text to select, placed from where the pressed part is); its file chips sit
+  under the last part. Persona's own conversation (boxed answers) and the Mac keep one row. `AnswerPartsLookTests` checks the parts draw the same pixels as the whole.
 - Expanded work is one card: each step remains a separate lazy-loaded chat row (a turn may have hundreds; one giant view would hang), with each row drawing a card slice
   (`WorkCardSlice`: top corners on first step, bottom corners on Collapse N steps, backgrounds extending halfway into spacing to join neighbors), thin separators starting at the text column; tool rows 44pt high.
   **Liquid Glass (default) has no card** (requested 2026-10-31: cards did not match chat home, `StyleSpec.workList = .timeline`): steps sit directly on the page, with a thin left vertical line from first step
@@ -328,6 +329,7 @@ Chat page:
   Repeated identical errors separated only by Continue-like retries merge with count (`ChatView.foldAPIErrors`). Retry (sends "继续", "Continue") only when last item, idle Agent and transient.
   Currently text parsing; Claude Code also provides `apiErrorStatus`, `error`, `requestId` fields, preferred once hub reads them. DEBUG `-showErrorDetails YES` opens by default.
   Screenshots mock `MOCK_API_ERRORS=1`, assistant main and review chats.
+- Refusal fallback (#4489, the iOS half of #2528; web #4487, Android #4488): a notice with `model_refusal` is a line of its own after the exchange (`RefusalNotice`; `ChatStore` puts it with the turn's trailing rows, never in the work row): the upstream refused, which model Claude Code switched from and to (or that no switch is recorded), "later turns may keep using it" for scope `session`, the category, the explanation and the refusal's own words. Models go by their short names (`SessionModes.modelName`), where the web shows ids. While the session has `model_fallback`, a card above the composer (`ModelFallbackCard`, a `ReadinessCard`) names both models and the error since: a terminal session gets only the "type /model in Claude Code" step; a Persona conversation gets **Back to Configured Model** (`POST …/restore-model`, refusals said in words by `ModelFallbackText.restoreError`), and the main conversation also **New Main Chat**. While `model_restore` is pending the card says only that the next start uses the configured model, and names it. The API error card offers no Retry while `turn_error_code` is `model_fallback_unavailable`. Items keep the refusal's words as their text, never an older hub's whole record line (`Item.publicRefusal`); `ChatCache` went to `chats-v17` so notices cached without `model_refusal` are dropped. Tests: `ModelFallbackTests`, `ModelFallbackUITests` (mock `MOCK_MODEL_FALLBACK=1 MOCK_MAIN_ACTIONS=1`).
 - Claude suggestions (`SuggestionPill`): session `suggestion`, not working, empty input shows "✦ Suggestion … Use" above (AI purple, not accent), also placeholder;
   tap fills editable input, long-press Send now. Typing hides it. Headless assistant has no TUI/suggestions; mock `MOCK_SUGGESTION=1`, review session.
 - Sending clears input immediately and displays Sending bubble (`ChatStore.pending`), request background; same text in transcript
@@ -337,7 +339,9 @@ Chat page:
 - Monospace (files, diffs, terminal, `MonoTextView`): non-scrolling UITextView measured to longest line inside UIScrollView, no wrapping, both-axis scroll and selection.
 - Long-press messages (`MessageMenu.swift`, `MessageLift.swift`, #603): as in Telegram, the chat dims and blurs a little and the pressed message
   is drawn again above it (an answer on a card of its own), with the action bar right next to it (Copy / Select text / Quote / Share, own also Edit);
-  a message taller than the screen shows the part around the press and scrolls inside, the bar always on screen. A tap or a pull down puts it back.
+  a message taller than the screen shows the part around the press and scrolls inside, the bar always on screen; a long answer drawn in parts shows
+  from the pressed part's start (or from what was at the screen's top, when that part starts above it) to the screen's edge (#5221). A tap or a pull
+  down puts it back.
   In Persona's conversation the page draws it (`MessageLiftHost`, #3188), over the floating top bar, which dims and blurs with
   the chat: drawn inside the chat it ran under it. While its words are selected, a handle held at a long message's top or bottom edge
   scrolls it on, the selection following.

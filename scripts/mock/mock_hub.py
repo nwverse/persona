@@ -709,9 +709,9 @@ SESSIONS = [
          "搜索做好了，支持按食材和用时筛选。", space_kind=None, space_id=None, space_name=None, slot_id=None, slot_name=None),
 ]
 
-# #2430 agent-details: what the node reads off a transcript for the "Show details on agent rows" line and the session header's
-# context bar — the model id as Claude Code records it, the latest reply's input tokens, the model's window. Some
-# sessions say nothing (no reply yet, a model the node does not know), as real ones do.
+# #2430 agent-details: what the node reads off a transcript for the "Show details on agent rows" line and the usage row
+# below the composer (#5056) — the model id as Claude Code records it, the latest reply's input tokens, the model's window.
+# Some sessions say nothing (no reply yet, a model the node does not know), as real ones do.
 _CONTEXT = {
     WIDGET: ("claude-opus-5-5", 78_000, 200_000),            # 39% used, 61% left
     TESTS: ("claude-sonnet-5-5", 31_000, 200_000),           # 16% used
@@ -1270,6 +1270,24 @@ AGY_SESSION = "a6700000-1111-4000-8000-000000000006"
 NO_SPACE = dict(space_kind=None, space_id=None, space_name=None, space_index=None, slot_id=None, slot_name=None,
                 slot_index=None, pane_id=None, tab_id=None, workspace_id=None, launcher=None)
 _desktop_caps = {"read": True, "send": True}
+# MOCK_CODEX_WAITING=1 (#4961, docs/integrations/codex.md "Starting without a first message"): the Codex launchers say the
+# computer opens Codex with no first message (prompt_optional), a Codex start without one answers with a waiting row,
+# and one such row is listed already; its first message makes it the thread, in the same pane.
+MOCK_CODEX_WAITING = os.environ.get("MOCK_CODEX_WAITING") == "1"
+CODEX_WAITING = "c0de0000-0000-4000-8000-000000000001"
+CODEX_WAITING_CAPS = {"read": True, "send": True, "terminal": True}
+if MOCK_CODEX_WAITING:
+    SESSIONS.append(sess("macbook", CODEX_WAITING, "weather-app", "/Users/me/code/weather-app", "idle", "idle", "weather-app", 7, "codex", 3, 1,
+                         "", agent="codex", launcher="codex", awaiting_first_message=True, capabilities=CODEX_WAITING_CAPS))
+
+
+def codex_launcher(name="codex", model="gpt-5.5"):
+    l = {"name": name, "model": model, "agent": "codex", "agent_type": "codex"}
+    if MOCK_CODEX_WAITING:
+        l["prompt_optional"] = True
+    return l
+
+
 if os.environ.get("MOCK_MODE_CAPS"):
     _desktop_caps["modes"] = False
 if os.environ.get("MOCK_SOURCES"):
@@ -5985,6 +6003,15 @@ if MOCK_TASKS:
             _feed("feed_r3", 3.5, "report", "todo_task_tests", {"kind": "question", "text": "统一用 snake_case 还是 camelCase 命名新接口？", "later": True}),
             _feed("feed_r2", 3, "routed", "todo_task_tests", {"text": "用协议注入，先改网络层那 6 个文件", "interrupted": True, "from": "assistant"}),
         ]
+    # MOCK_BACKGROUND_SUPERVISOR=1 (#5082): the reviews in the main chat's feed are the background supervisor's (`by`),
+    # so the chat shows each as its line; without MOCK_TASKS_REPORTS there is one, the release notes accepted.
+    if BACKGROUND_SUPERVISOR:
+        if not any(_i["kind"] == "review" for _i in TASK_FEED[ASK1]):
+            TASK_FEED[ASK1].append(_feed("feed_bg1", 18, "review", "todo_task_release", {
+                "title": "整理发布说明", "verdict": "accepted", "note": "写在 docs/release-notes.md，7 个 PR 都在里面"}))
+        for _i in TASK_FEED[ASK1]:
+            if _i["kind"] == "review":
+                _i["body"]["by"] = "background"
     # MOCK_BRIEFS=1 (#3822, docs/assistant/unified-entry.md "Briefs"): tasks carry the brief they are held to. The open
     # plan's task has a real one (the owner's own words, long enough to be cut, the goal, criteria, time and what is out
     # of bounds). The widget fix has a real one too, taken over twice (a lineage of three), with one scope change and an
@@ -10682,9 +10709,9 @@ _CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"]
 LAUNCHER_MODELS = {
     "claude": {"agent": "claude", "models": [
         {"id": "default", "name": "Default (recommended)", "description": "Use the default model (currently claude-opus-5-5)", "resolved": "claude-opus-5-5", "default": True, "efforts": _CLAUDE_EFFORTS},
-        {"id": "fable", "name": "Fable", "description": "Fable 5.1 · Most capable for your hardest and longest-running tasks", "resolved": "claude-fable-5-1", "efforts": _CLAUDE_EFFORTS},
-        {"id": "opus", "name": "Opus 5.5", "description": "Opus 5.5 · Best for everyday complex work", "resolved": "claude-opus-5-5", "efforts": _CLAUDE_EFFORTS},
-        {"id": "sonnet", "name": "Sonnet 5.5", "description": "Sonnet 5.5 · Fast and capable", "resolved": "claude-sonnet-5-5", "efforts": ["low", "medium", "high", "max"]},
+        {"id": "fable", "name": "Fable", "description": "Fable 5.1 · Most capable for your hardest and longest-running tasks", "resolved": "claude-fable-5-1", "efforts": _CLAUDE_EFFORTS, "price": {"input": 10, "output": 50, "cache_read": 0.25}},
+        {"id": "opus", "name": "Opus 5.5", "description": "Opus 5.5 · Best for everyday complex work", "resolved": "claude-opus-5-5", "efforts": _CLAUDE_EFFORTS, "price": {"input": 4, "output": 20, "cache_read": 0.2}},
+        {"id": "sonnet", "name": "Sonnet 5.5", "description": "Sonnet 5.5 · Fast and capable", "resolved": "claude-sonnet-5-5", "efforts": ["low", "medium", "high", "max"], "price": {"input": 2, "output": 10, "cache_read": 0.1}},
         {"id": "haiku", "name": "Haiku 5.5", "description": "Haiku 5.5 · Fastest for quick answers", "resolved": "claude-haiku-5-5"},
         {"id": "gateway/glm-5.3", "name": "glm-5.3", "description": "From gateway", "efforts": ["low", "medium", "high"]},
         {"id": "gateway/deepseek-v4", "name": "deepseek-v4", "description": "From gateway", "efforts": ["low", "medium", "high"]},
@@ -10813,6 +10840,10 @@ LAUNCHER_QUOTAS = {  # as a quota plugin would answer (docs/extensions/extension
              "models": [{"model": "example-flash", "windows": [_w("TPM", 0.02, 8400, 500000, "tokens")]}]},
             {"name": "供应商 B", "state": "unsupported", "detail": "上游没有额度接口，只有网关统计"}]},
 }
+if os.environ.get("MOCK_MODEL_PANEL_USAGE"):
+    # A critical weekly bar beside cc_main's / cc_team's ordinary ones (#5056); all values are synthetic.
+    LAUNCHER_QUOTAS["claude"] = {"gateway": "example-subscription", "pools": [
+        {"name": "示例订阅", "state": "available", "windows": [_w("每周", 0.95, resets=later(hours=36))]}]}
 # "Add provider" › "Add from plugin" (docs/extensions/extensions.md "Model providers"): the providers made-up plugins offer (GET /api/v1/launchers/presets).
 LAUNCHER_PRESETS = [
     {"id": "example-gateway/team", "plugin": "example-gateway", "name": "示例网关 · 团队", "description": "团队共用的 Claude Code 网关，按 Key 计费",
@@ -10940,8 +10971,9 @@ def machine_launchers(mid=""):
     """GET /api/v1/machines/{mid}/launchers's launchers: claude, sonnetcc and codex ("Create from the phone"; not on the
     Mac Studio under MOCK_NEW_AGENT_PANEL), and under MOCK_PROVIDERS the managed providers Agents can start, each with its
     display name."""
-    out = [{"name": "claude", "model": "opus"}, {"name": "sonnetcc", "model": "sonnet"},
-           {"name": "codex", "model": "gpt-5.5", "agent": "codex", "agent_type": "codex"}]
+    out = [{"name": "claude", "model": "opus"}, {"name": "sonnetcc", "model": "sonnet"}, codex_launcher()]
+    if os.environ.get("MOCK_MODEL_PANEL_USAGE"):
+        out += [{"name": "cc_main", "model": "opus"}, {"name": "cc_team", "model": "example-pro"}]
     if NEW_AGENT_PANEL and mid == "studio":
         out = [l for l in out if l["name"] != "codex"]
     if MOCK_PROVIDERS:
@@ -11628,6 +11660,57 @@ if os.environ.get("MOCK_SUBAGENT_CARDS") == "1":
     mock_subagent_cards()
 
 
+# MOCK_PLAN_CARDS=1: the plan as cindy draws it (#5156, web): an agent at work on a five-step plan (two done, one in
+# progress, two to go) after a long earlier answer, so scrolled up its card is out of view and the pill above the
+# composer shows; a second agent whose plan is all done (the pill is gone, the card says 5/5); and the Persona chat
+# "整理这个季度的读书笔记" with a plan of its own in its last turn.
+PLANRUN = "a1f3c2d4-0000-4000-8000-0000000c1e21"
+PLANDONE = "a1f3c2d4-0000-4000-8000-0000000c1e22"
+
+
+def mock_plan_cards():
+    steps = ["新建横屏的布局文件", "把温度和降雨概率并排放", "适配小号和中号两种尺寸，长标题在中号里换成两行，不再截断",
+             "跑快照测试", "在模拟器上截深浅色的图"]
+    plan = lambda states: {"todos": [{"content": c, "status": st, "activeForm": c} for c, st in zip(steps, states)]}
+    _p = [it("user", "text", 40, text="小组件横屏的时候为什么会挤在一起？")]
+    _p.append(it("assistant", "text", 39, text="\n\n".join([
+        "横屏时小组件的宽度变大、高度变小，现在的布局是竖着排的：温度在上，降雨概率在下，高度不够就被压在一起。",
+        "改成横屏时并排放：左边温度，右边接下来几小时的降雨概率，两块各占一半宽度，高度就够了。"] * 4)))
+    _p.append(it("user", "text", 20, text="那就按这个改，改完跑一下快照测试"))
+    _p.append(it("assistant", "text", 19.9, text="好，我分五步来。"))
+    _p += tool("TodoWrite", plan(["in_progress", "pending", "pending", "pending", "pending"]), "Todos have been modified successfully.", 19.8)
+    _p += tool("Write", {"file_path": "/Users/me/code/weather/WeatherWidget/LandscapeView.swift", "content": "import SwiftUI\n\nstruct LandscapeView: View { … }"}, "ok", 18)
+    _p += tool("TodoWrite", plan(["completed", "in_progress", "pending", "pending", "pending"]), "Todos have been modified successfully.", 17.5)
+    _p += tool("Edit", {"file_path": "/Users/me/code/weather/WeatherWidget/LandscapeView.swift", "old_string": "VStack {", "new_string": "HStack {"}, "ok", 12)
+    _p += tool("TodoWrite", plan(["completed", "completed", "in_progress", "pending", "pending"]), "Todos have been modified successfully.", 11.5)
+    _p.append(it("assistant", "text", 6, text="横屏的布局写好了，在适配中号的长标题。"))
+    _p.append(it("assistant", "tool_use", 1, tool_use_id="toolu_planrun", tool_name="Bash",
+                 tool_input={"command": "xcodebuild build -scheme WeatherWidget -quiet", "description": "编译小组件"}))
+    ITEMS[PLANRUN] = _p
+    SESSIONS.append(sess("macbook", PLANRUN, "小组件的横屏布局", "/Users/me/code/weather", "working", "working", "weather", 1, "plan", 9, 0,
+                         "横屏的布局写好了，在适配中号的长标题。"))
+    _d = [it("user", "text", 30, text="把小组件的横屏布局做完，跑快照测试")]
+    _d += tool("TodoWrite", plan(["in_progress", "pending", "pending", "pending", "pending"]), "Todos have been modified successfully.", 29.8)
+    _d += tool("Bash", {"command": "xcodebuild test -scheme WeatherWidget -quiet", "description": "跑快照测试"}, "Executed 52 tests, with 0 failures", 22)
+    _d += tool("TodoWrite", plan(["completed"] * 5), "Todos have been modified successfully.", 21)
+    _d.append(it("assistant", "text", 20, text="横屏布局做完了：温度和降雨概率并排，小号和中号都适配了，52 个快照测试全部通过，深浅色的截图在 `Screenshots/` 里。"))
+    ITEMS[PLANDONE] = _d
+    SESSIONS.append(sess("macbook", PLANDONE, "横屏布局做完了", "/Users/me/code/weather", "done", "done", "weather", 1, "plan", 9, 20,
+                         "横屏布局做完了。"))
+    # a Persona chat's own plan: everyday steps, no engineering words
+    reading = lambda states: {"todos": [{"content": c, "status": st, "activeForm": c} for c, st in zip(
+        ["找出这个季度读完的 30 本书", "每本写三句话的要点", "按主题分成几组", "做成一页目录发给你"], states)]}
+    ITEMS[ASK4] = ITEMS[ASK4] + (
+        [it("user", "text", 3, text="把这个季度的读书笔记整理成一页目录")]
+        + [it("assistant", "text", 2.9, text="好的，我分四步来。")]
+        + tool("TodoWrite", reading(["completed", "in_progress", "pending", "pending"]), "Todos have been modified successfully.", 2.8)
+        + [it("assistant", "text", 2, text="30 本书都找齐了，正在给每本写要点，写完按主题分组。")])
+
+
+if os.environ.get("MOCK_PLAN_CARDS") == "1":
+    mock_plan_cards()
+
+
 # MOCK_SUBAGENT_REPORTS=1: long subagent reports start folded (#6381): a background subagent's report in its card and in
 # its notice, and a hand-back that an older node handed on as a message from "general-purpose" (Claude Code's frame
 # first, the report indented under it). The launch receipt is Claude Code 2.1.319's ("the agentId below" before the id)
@@ -11716,6 +11799,28 @@ LIFT_KEY = "a1f3c2d4-0000-4000-8000-0000000c1e0c"
 # lifted and selected, the quote stays folded (or open, as it was in the chat) and its hidden lines are not selected.
 LIFT_FOLD = "a1f3c2d4-0000-4000-8000-0000000c1e0d"
 LIFT_ASK_KEY = "b2e4d6f8-0000-4000-8000-0000000c1e0c"
+# An answer long enough to be drawn in parts (#4970, `AnswerParts`: 95 lines, three parts): a long press on its middle
+# part lifts, copies and selects all of it (#5221). Its first and last sentences are in its first and last parts.
+LIFT_SPLIT = "a1f3c2d4-0000-4000-8000-0000000c1e0e"
+
+
+def lift_split_answer():
+    topics = [("范围", "这次只迁移订单、库存和结算三张表，用户表和日志表留在旧库，下个季度再动。"),
+              ("步骤", "先双写一周，再把读切到新库，最后停掉旧库的写入；每一步都有开关，可以单独回退。"),
+              ("风险", "最大的风险是结算表的历史数据里有重复的流水号，迁移脚本遇到会停下来，等人工确认。"),
+              ("验证", "每天对一次账：两边的行数、金额合计和最近一小时的流水逐条比对，差异写进日报。"),
+              ("回滚", "回滚只需要把读开关切回旧库，双写期间两边的数据一致，不需要再搬数据。"),
+              ("后续", "旧库保留三十天只读，确认没有人再查之后再下线，下线前会再提醒一次。")]
+    sections = []
+    for n, (name, lead) in enumerate(topics, 1):
+        sections.append(f"### {n}. {name}\n\n第 {n} 节的说明：{lead}"
+                        "这一节的细节都写在迁移手册里，下面只列要点，方便你快速核对。The steps keep the old reader working until every client moved.")
+        sections.append("\n".join(f"- 要点 {n}.{k}：检查第 {k} 项，结果记在 `notes/migration-{n}-{k}.md` 里，有异常就停下来。" for k in range(1, 4)))
+        sections.append(f"```sh\nscripts/migrate.sh --step {n} --dry-run\nscripts/migrate.sh --step {n} --verify\n```")
+        sections.append(f"第 {n} 节小结：这一步预计半天，做完在群里说一声，我再接着做下一节。"
+                        "如果中间有任何一项对不上，就先停在这一步，不要往下走，等我们一起看过日志再决定。")
+    return ("## 迁移总结\n\n开头第一句：这份总结按六个部分说明这次迁移，先说范围，再说步骤、风险、验证、回滚和后续。\n\n"
+            + "\n\n".join(sections) + "\n\n以上是这次迁移的全部总结，有问题随时找我。")
 LIFT_KEY_MINE = "你先把管理密钥存到本机文件，我跑命令读一下。放在 ~/.config/example-gateway/management.key，权限设成 600，别打印到日志里。"
 LIFT_KEY_ANSWER = ("管理 Key 已经存到本机（hub）了：\n`/home/me/.config/example-gateway/management.key`\n\n"
                    "- 文件权限 600，内容 64 位，没有换行，以 `cb3b` 开头、`047f` 结尾。\n"
@@ -11794,6 +11899,8 @@ def mock_message_lift():
     ITEMS[LIFT_ASK_KEY] = [it("user", "text", 6, text=LIFT_KEY_MINE), it("assistant", "text", 5, text=LIFT_KEY_ANSWER)]
     ASSISTANT.append(assistant_sess(LIFT_ASK_KEY, "保存管理密钥", 5, "存好之后要删掉这个文件就跟我说一声。"))
     SESSIONS.append(sess("macbook", LIFT_MIX, "定时核对", repo, "done", "done", "shop-app", 17, "lift", 3, 7, "下一次核对在整点之后五分钟。"))
+    ITEMS[LIFT_SPLIT] = [it("user", "text", 6, text="把这次数据迁移的安排整理成一份总结"), it("assistant", "text", 4, text=lift_split_answer())]
+    SESSIONS.append(sess("macbook", LIFT_SPLIT, "迁移总结", repo, "done", "done", "shop-app", 17, "lift", 6, 4, "以上是这次迁移的全部总结，有问题随时找我。"))
 
 
 if os.environ.get("MOCK_MESSAGE_LIFT") == "1":
@@ -20846,6 +20953,17 @@ class H(BaseHTTPRequestHandler):
                         push_machine(q["machine_id"])
                 # MOCK_QUEUE_SENDS=1: one to a working agent joins its own queue (#3022), as Claude Code holds it.
                 s = next((x for x in SESSIONS if len(parts) >= 7 and x["machine_id"] == parts[4] and x["session_id"] == parts[5]), None)
+                if s is not None and s.get("awaiting_first_message"):  # MOCK_CODEX_WAITING: the row becomes the thread it began
+                    SESSIONS.remove(s)
+                    START_IDS[0] += 1
+                    thread = dict(s, session_id="019a2b3c-0000-7000-8000-%012d" % START_IDS[0], status="working", state="working",
+                                  title=(body.get("text") or "").split("\n")[0][:60] or s["title"], updated_at=ago(minutes=0))
+                    thread.pop("awaiting_first_message", None)
+                    thread.pop("capabilities", None)
+                    ITEMS[thread["session_id"]] = [it("user", "text", 0, text=body.get("text") or "")]
+                    SESSIONS.append(thread)
+                    push_machine(thread["machine_id"])
+                    return self.send_json({"ok": True, "session": decorated_session(thread)})
                 if os.environ.get("MOCK_QUEUE_SENDS") and s and s["state"] == "working" and not s.get("assistant"):
                     s["queued"] = (s.get("queued") or []) + [claude_queued(s["machine_id"], body.get("text"), body.get("images") or [])]
                     push_machine(s["machine_id"])
@@ -21297,8 +21415,17 @@ class H(BaseHTTPRequestHandler):
                 push_machine(resume["machine_id"])
                 return self.send_json({"session": with_fold(decorated_session(resume))})
             codex = body.get("launcher") == "codex"  # the node starts Codex with its first message and answers with its thread
-            if codex and (body.get("async") or not (body.get("prompt") or "").strip()):
+            if codex and (body.get("async") or not (body.get("prompt") or "").strip() and not MOCK_CODEX_WAITING):
                 return self.send_json({"error": "新建 Codex 会话要连第一条消息一起发：Codex 收到第一条消息才建会话。", "code": "codex_needs_prompt"}, 400)
+            if codex and not (body.get("prompt") or "").strip():  # MOCK_CODEX_WAITING: Codex open, waiting for its first message
+                START_IDS[0] += 1
+                cwd = body.get("cwd", "")
+                w = sess(body["machine_id"], "c0de0000-0000-4000-8000-%012d" % (100 + START_IDS[0]), cwd.rsplit("/", 1)[-1] or "codex", cwd,
+                         "idle", "idle", cwd.rsplit("/", 1)[-1] or "new", 9, body.get("tab_name") or "codex", 20 + len(STARTED), 0, "",
+                         agent="codex", launcher="codex", awaiting_first_message=True, capabilities=CODEX_WAITING_CAPS)
+                SESSIONS.append(w)
+                push_machine(w["machine_id"])
+                return self.send_json({"session": decorated_session(w)})
             n = len(STARTED)
             START_IDS[0] += 1
             s = sess(body["machine_id"], "d4e6f8a0-0000-4000-8000-%012d" % START_IDS[0], (body.get("prompt") or "新会话").split("\n")[0], body.get("cwd", ""),
@@ -22544,7 +22671,7 @@ def work_timeline_live(send, mid, sid):
     threading.Thread(target=run, daemon=True).start()
 
 
-MOCK_HELP.append("MOCK_WORK_TIMELINE=1  工作摘要展开成 cindy 的时间线（#5155）：天气 Agent（WORKTL）一轮做完、一轮在做，中间有叙述、有字和没字的思考；Persona 主对话同样一轮做完一轮在做；声明了 session_live 的连接订阅这两个会话时每 5 秒推一次「在思考」")
+MOCK_HELP.append("MOCK_WORK_TIMELINE=1  work summaries that open to cindy's timeline (#5155): the weather Agent (WORKTL) and the Persona main conversation each have a finished and a live turn, with narration between runs of steps and thoughts with and without words; a connection that declared session_live and subscribes to either is told every 5 s that it is thinking")
 
 
 # ---------- MOCK_CHAT_CARDS: a crowded composer on a phone (#1996) ----------
@@ -23573,6 +23700,112 @@ MOCK_HELP.append("MOCK_ULTRACODE=1  Claude Code 的 ultracode 开关（#3428）�
 MOCK_HELP.append("MOCK_CUSTOM_MODELS=1|forgetfail|empty|fail  手动输入模型 ID（#1644）：features 带 typed_models；Claude Code / Codex 的模型列表后面带输入过的 ID（custom），"
                  "DELETE …/models/custom?model= 忘掉；新建和 …/modes 用了列表里没有的 ID 就记下。forgetfail：忘掉回 500；empty：Claude Code 的列表是空的；"
                  "fail：读不到列表（502）。GET /mock/custom_models 看记着的，?reset=1 复原")
+
+# A Persona chat's own model (#5033, docs/assistant/model-config.md "A conversation's own model"): MOCK_MODEL_PICK=1
+# advertises `assistant_model_pick`; the main chat's launchers (`?purpose=assistant`) are plain claude, the locked
+# sonnetcc, a Messages-protocol direct API ("Team API", which has no /model list) and codex, with the default and an
+# `unavailable` list (a Responses direct API, a provider out of the computer's scope); PUT / DELETE
+# /api/v1/assistant/conversations/{id}/model keep or drop `model_pick` on the conversation (the out-of-scope one is 409
+# launcher_out_of_scope, an unknown one 409 launcher_missing, another agent than the chat's 409 launcher_other_kind, a
+# model with sonnetcc 400). =picked: the second chat starts
+# with a pick. GET /mock/model_pick: the requests; ?reset=1 drops every pick.
+MODEL_PICK_MODE = os.environ.get("MOCK_MODEL_PICK", "")
+MODEL_PICK_LOG = []
+MODEL_PICK_LAUNCHERS = [
+    {"name": "claude", "model": "opus", "source": "builtin"},
+    {"name": "sonnetcc", "model": "sonnet", "source": "zshrc"},
+    {"name": "team-api", "display_name": "Team API", "model": "claude-sonnet-5-5", "source": "persona"},
+    {"name": "codex", "model": "gpt-5.5", "agent": "codex", "agent_type": "codex", "source": "builtin"},
+]
+MODEL_PICK_REASONS = {
+    "api_protocol": {"en": "This direct API speaks the Responses protocol, which can't run Persona chats",
+                     "zh-Hans": "这个直连 API 用的是 Responses 协议，跑不了 Persona 对话",
+                     "ja": "この直接 API は Responses プロトコルのため、Persona のチャットを実行できません"},
+    "launcher_out_of_scope": {"en": "This provider is only for MacBook, not this computer",
+                              "zh-Hans": "这个服务商只给 MacBook 用，不在这台电脑上",
+                              "ja": "このプロバイダーは MacBook 専用で、このコンピューターでは使えません"},
+    "launcher_other_kind": {"en": "This conversation runs on another agent; start a new conversation to use this launcher",
+                            "zh-Hans": "这个对话跑在另一种 Agent 上，要用这个启动器得新开对话",
+                            "ja": "この会話は別のエージェントで動いています。このランチャーを使うには新しい会話を始めてください"},
+}
+if MODEL_PICK_MODE:
+    LAUNCHER_MODELS["team-api"] = {"agent": "claude", "models": []}
+
+
+def model_pick_reset():
+    for s in ASSISTANT:
+        s.pop("model_pick", None)
+    if MODEL_PICK_MODE == "picked":
+        for s in ASSISTANT:
+            if s["session_id"] == ASK2:
+                s["model_pick"] = {"launcher": "team-api", "effort": "medium"}
+
+
+def model_pick_route(handler, p, body):
+    """MOCK_MODEL_PICK: the main chat's launchers with `unavailable`, PUT / DELETE …/conversations/{id}/model. False otherwise."""
+    if not MODEL_PICK_MODE: return False
+    query = parse_qs(urlparse(handler.path).query)
+    lang = cron_lang(handler.headers.get("Accept-Language"))
+    if p == "/mock/model_pick":
+        if query.get("reset"):
+            model_pick_reset()
+            push_machine(ASSISTANT_CONFIG["machine_id"])
+        return handler.send_json({"requests": MODEL_PICK_LOG}) or True
+    if handler.command == "GET" and re.fullmatch(r"/api/v1/machines/[^/]+/launchers", p) and query.get("purpose") == ["assistant"]:
+        return handler.send_json({
+            "launchers": [dict(l) for l in MODEL_PICK_LAUNCHERS],
+            "default": {"provider": "claude", "model": "opus", "effort": "high"},
+            "unavailable": [
+                {"name": "gpt-direct", "display_name": "GPT direct", "kind": "api", "api": "responses", "code": "api_protocol", "reason": MODEL_PICK_REASONS["api_protocol"][lang]},
+                {"name": "far-gw", "display_name": "Far gateway", "kind": "launcher", "code": "launcher_out_of_scope", "reason": MODEL_PICK_REASONS["launcher_out_of_scope"][lang]},
+            ]}) or True
+    m = re.fullmatch(r"/api/v1/assistant/conversations/([^/]+)/model", p)
+    if not m or handler.command not in ("PUT", "DELETE"): return False
+    s = next((x for x in ASSISTANT if x["session_id"] == m.group(1)), None)
+    if s is None: return handler.send_json({"error": "conversation not found"}, 404) or True
+    req = json.loads(body or b"{}") if handler.command == "PUT" else {}
+    MODEL_PICK_LOG.append({"method": handler.command, "session_id": s["session_id"], **{k: req[k] for k in ("launcher", "model", "effort") if k in req}})
+    if handler.command == "DELETE":
+        s.pop("model_pick", None)
+        push_machine(s["machine_id"])
+        return handler.send_json({"ok": True}) or True
+    launcher = req.get("launcher") or ""
+    if launcher == "far-gw":
+        return handler.send_json({"error": MODEL_PICK_REASONS["launcher_out_of_scope"][lang], "code": "launcher_out_of_scope"}, 409) or True
+    if launcher not in {l["name"] for l in MODEL_PICK_LAUNCHERS}:
+        return handler.send_json({"error": "%s is not on this computer" % launcher, "code": "launcher_missing"}, 409) or True
+    picked = next((l.get("agent_type") or "claude" for l in MODEL_PICK_LAUNCHERS if l["name"] == launcher), "claude")
+    if picked != (s.get("agent") or "claude"):
+        return handler.send_json({"error": MODEL_PICK_REASONS["launcher_other_kind"][lang], "code": "launcher_other_kind"}, 409) or True
+    if launcher == "sonnetcc" and req.get("model"):
+        return handler.send_json({"error": "sonnetcc sets its own model"}, 400) or True
+    pick = {k: req[k] for k in ("launcher", "model", "effort") if req.get(k)}
+    s["model_pick"] = pick
+    push_machine(s["machine_id"])
+    return handler.send_json({"ok": True, "model_pick": pick}) or True
+
+
+if MODEL_PICK_MODE:
+    model_pick_reset()
+
+_plugins_route_without_model_pick = plugins_route
+
+
+def plugins_route(handler, p, body):
+    return model_pick_route(handler, p, body) or _plugins_route_without_model_pick(handler, p, body)
+
+
+_features_without_model_pick = features
+
+
+def features():
+    return _features_without_model_pick() + (["assistant_model_pick"] if MODEL_PICK_MODE else [])
+
+
+MOCK_HELP.append("MOCK_MODEL_PICK=1|picked  Persona 对话自己的模型（#5033）：features 带 assistant_model_pick；主对话的启动器（?purpose=assistant）带默认和 unavailable"
+                 "（一个 Responses 直连 API、一个不对这台电脑开放的服务商）；PUT / DELETE /api/v1/assistant/conversations/{id}/model 记下或清掉 model_pick。"
+                 "picked：第二个对话一开始就有自己的选择。GET /mock/model_pick 看请求，?reset=1 复原")
+
 
 # Switching a running Agent to another provider (#5035, docs/protocol/protocol.md "Switching a running Agent to another
 # provider"): MOCK_LAUNCHER_SWITCH=1 advertises `launcher_switch`, gives every computer a second Claude Code launcher

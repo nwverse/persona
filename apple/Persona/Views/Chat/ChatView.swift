@@ -244,6 +244,18 @@ struct ChatView: View {
         ComputerActivity.latest(in: store.items, chat: shownKey.machineRef, machines: model.namedMachines)
     }
     private var session: Session? { model.session(key) }
+    /// The pane of a Codex opened with no first message (Session.awaitingFirstMessage): once its first message goes in,
+    /// from here or its terminal, its row goes and the thread's comes in that pane, and the page follows it there.
+    @State private var codexWaitingPane: String?
+    /// The waiting row the pane was noted for: the page follows only while it still shows that row (not after moving to
+    /// another session, whose page a thread in that pane must not take over).
+    @State private var codexWaitingID: String?
+    private var codexThread: SessionKey? {
+        guard let pane = codexWaitingPane, codexWaitingID == key.sessionID else { return nil }
+        return model.sessionsByMachine[key.machineRef]?.first {
+            $0.paneID == pane && $0.sessionID != key.sessionID && $0.isCodex && $0.awaitingFirstMessage != true && $0.state.isLive
+        }?.key
+    }
     /// The manager the links tapped here read through: the session's, else (a conversation not listed yet) the inbox
     /// item's it was opened from or the one the Persona page shows it for; nil for the default's.
     private var linkManager: String? {
@@ -1373,8 +1385,10 @@ struct ChatView: View {
         case .apiError(let item, let info, let count):
             // Retry only when the error is the last thing, the agent is not working (someone may have retried already) and
             // trying again can help (not a login or a bad request).
+            // Not when the fallback model is missing (#4489): Continue would go to the same model.
             APIErrorCard(info: info, count: count, at: item.ts,
                          retry: info.transient != false && !status.isActive && currentLines().last?.id == line.id
+                             && model.session(key)?.turnErrorCode != ModelFallbackText.unavailableCode
                              ? { model.sendNow(key, text: "继续") } : nil) // i18n-ignore
         case .userImages(_, let items):
             // Close to the bubble below it, like the photos on a message being sent (the list's spacing is 14).
@@ -2040,6 +2054,14 @@ struct ChatView: View {
             footerRoom.fixedHeader = h
             footerRoom.chrome = style == .dev && !sideBars ? chrome : nil
         }
+        .onChange(of: session?.awaitingFirstMessage == true ? session?.paneID : nil, initial: true) { _, pane in
+            if let pane { codexWaitingPane = pane; codexWaitingID = key.sessionID }
+        }
+        .onChange(of: codexThread) { _, next in
+            guard let next else { return }
+            codexWaitingPane = nil
+            switchTo(next)
+        }
         .environment(\.chatLayout, layout)
         .environment(\.openSubagent, actions.openSubagent)
         .environment(\.openPlan, actions.openPlan)
@@ -2643,6 +2665,13 @@ struct ChatView: View {
                     EmptyStateView(symbol: Theme.Icon.conversation, title: String(localized: "No messages"),
                                    message: String(localized: "This Agent stopped before it left any messages."))
                         .flippedBack().accessibilityIdentifier("chat-empty-placeholder")
+                } else if model.session(key)?.awaitingFirstMessage == true {
+                    // A Codex opened with no first message (docs/integrations/codex.md「Starting without a first message」):
+                    // it waits for one, sent from here or typed in its terminal. Said once, here, as the web's note.
+                    let computer = model.machine(key.machineRef)?.title ?? key.machineID
+                    EmptyStateView(symbol: Theme.Icon.conversation, title: String(localized: "No messages yet"),
+                                   message: String(localized: "Codex is open on \(computer). Send its first message below, or type it in its terminal."))
+                        .flippedBack().accessibilityIdentifier("chat.codexWaiting")
                 } else {
                     EmptyStateView(symbol: Theme.Icon.conversation, title: String(localized: "No messages yet"), message: String(localized: "Send a message to get started."))
                         .flippedBack().accessibilityIdentifier("chat-empty-placeholder")
@@ -4883,6 +4912,11 @@ struct Composer: View, Equatable {
             // A resume turned ultracode off (#1307): one line to turn it back on, or dismiss.
             if let s = model.session(key), Ultracode.lostShown(s, features: model.features(key.group)) {
                 UltracodeLostNote(key: key, session: s)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+            // After an upstream refusal the session runs on a fallback model (#4489): which, and the way back.
+            if let s = model.session(key), s.modelFallback != nil {
+                ModelFallbackCard(key: key, session: s, working: status.isActive)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             if isMain {

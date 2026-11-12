@@ -67,7 +67,7 @@ describe("the workers and the one shown", () => {
     openPanel({ kind: "team", mid: "mac", sid: "lead" });
     expect(teamPanelOf(getPanel(), "mac", "lead")).toBeTruthy();
     expect(teamPanelOf(getPanel(), "mac", "other")).toBeUndefined();
-    openPanel({ kind: "plan", mid: "mac", sid: "lead" });
+    openPanel({ kind: "files", mid: "mac", sid: "lead", cwd: "/code" });
     expect(teamPanelOf(getPanel(), "mac", "lead")).toBeUndefined();
   });
 });

@@ -107,6 +107,13 @@ export interface Subagent {
   tokens?: number;
 }
 
+/** Session.model_pick (#5033): model absent is the launcher's default, effort absent the one it runs with. */
+export interface ModelPick {
+  launcher: string;
+  model?: string;
+  effort?: string;
+}
+
 /** Session.pending_switch (#5035). */
 export interface PendingSwitch {
   launcher: string;
@@ -217,6 +224,10 @@ export interface Session {
   cwd: string;
   status: string;
   starting?: boolean;
+  /** A Codex opened with no first message: it runs in its terminal but has no thread yet, so this row's id is the
+   *  computer's, not the thread's. Its first message (text only) goes in here or in the terminal; then the row goes and
+   *  the thread's comes, in the same pane (docs/integrations/codex.md "Starting without a first message"). */
+  awaiting_first_message?: boolean;
   start_error?: string;
   /** The failed start's coded refusal (launcher_missing, claude_missing…) and its details; start_error is the hub's sentence for it. */
   start_error_code?: string;
@@ -239,6 +250,10 @@ export interface Session {
   /** The client the agent runs in: "desktop" (its desktop app) or "cli" (its command line); absent when unknown (#6390). */
   agent_surface?: string;
   launcher?: string;
+  /** A Persona chat's own pick (feature `assistant_model_pick`, #5033): the launcher, model and effort its next messages
+   *  run on, kept on the hub for every device. Absent: it follows the default (the main chat) or keeps what it runs
+   *  (docs/assistant/model-config.md "A conversation's own model"). */
+  model_pick?: ModelPick;
   /** A switch of this running Claude Code Agent to another launcher (feature `launcher_switch`, #5035) that its next
    *  message carries out: the launcher, the model and effort picked (absent: the launcher's default, the effort it runs
    *  with now). `launcher` above stays the one it runs on until then (docs/protocol/protocol.md "Switching a running Agent
@@ -767,6 +782,9 @@ export interface Launcher {
   /** What it starts when not Claude Code ("codex"); agent_type: what the hub's machine config says it runs. */
   agent?: string;
   agent_type?: string;
+  /** A Codex launcher the computer starts with no first message too; absent from an older computer, whose Codex
+   *  starts need one. */
+  prompt_optional?: boolean;
   /** How its last check or start went on the computer the list is for (GET /machines/{mid}/launchers,
    *  docs/server/launcher-health.md); absent: never checked, a failure too old to count, or an older hub. */
   health?: LauncherHealth;
@@ -797,6 +815,9 @@ export interface AssistantInfo {
   leaders?: string[];
   /** "Fold background rounds" in effect (#4314, docs/assistant/assistant.md "Background rounds"); absent from an older hub, which means on. */
   main_background_folded?: boolean;
+  /** The background supervisor's conversation (#4927, lib/background-supervisor.ts): its session id once the hub made
+   *  it; absent before that and from an older hub. Read-only. */
+  background_supervisor?: string;
   conversations: Session[];
 }
 

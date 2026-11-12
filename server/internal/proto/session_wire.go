@@ -21,7 +21,7 @@ import (
 // fields differ from them (a field added, renamed, retyped or retagged by a change that did not update this file),
 // appendSession leaves every session to the reflect encoder: the session is sent whole, only slower, until its line
 // here and this hash are brought up to date. TestSessionWireMatchesReflect fails meanwhile and prints the new hash.
-const sessionWireLayout = 0x375815a2ca60a60b
+const sessionWireLayout = 0x3564cfad5cfc0506
 
 var sessionWireCurrent = sessionLayout() == sessionWireLayout && hierarchyLayout() == hierarchyWireLayout
 
@@ -136,6 +136,9 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 		w.value(`"service_tiers":`, s.ServiceTiers)
 	}
 	w.str(`"space":`, s.Space, true)
+	if s.ModelPick != nil {
+		w.value(`"model_pick":`, s.ModelPick)
+	}
 	if s.ArchiveChangedAt != nil {
 		w.time(`"archive_changed_at":`, *s.ArchiveChangedAt)
 	}
@@ -166,6 +169,7 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 	w.boolean(`"woke_by_task":`, s.WokeByTask, true)
 	w.boolean(`"starting":`, s.Starting, true)
 	w.boolean(`"quiet":`, s.Quiet, true)
+	w.boolean(`"awaiting_first_message":`, s.AwaitingFirstMessage, true)
 	w.integer(`"queued_relayed":`, int64(s.QueuedRelayed), true)
 	w.time(`"seen_at":`, s.SeenAt) // time.Time is a struct, never empty, so omitempty keeps it
 	w.time(`"state_since":`, s.StateSince)

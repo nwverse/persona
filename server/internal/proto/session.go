@@ -168,6 +168,11 @@ type Session struct {
 	// Space is the assistant's space it runs in: "health" for the health space's (docs/assistant/health.md), "" for the
 	// assistant's own. Set by the hub on the assistant's conversations.
 	Space string `json:"space,omitempty"`
+	// ModelPick is the launcher / model / effort picked for one of the assistant's conversations, which its next
+	// messages run on (#5033, docs/assistant/model-config.md "A conversation's own model"); nil follows Model
+	// configuration › Main chat (the main conversation, a scheduled task's) or what the conversation runs. Set by the
+	// manager.
+	ModelPick *ModelPick `json:"model_pick,omitempty"`
 	// ArchiveChangedAt is the manager's last explicit archive/restore visibility change; nil when there was none. The
 	// hub uses it only to order its legacy delete tombstones against that report. A pointer, not a time.Time: the 16
 	// bytes it saves keep Session in its size class (session_size_test.go).
@@ -232,6 +237,11 @@ type Session struct {
 	// those told only there (#1731): set by the hub, also once the task is done. Clients leave it out of task
 	// notifications and global badges; the Agents page shows it as always.
 	Quiet bool `json:"quiet,omitempty"`
+	// AwaitingFirstMessage: a Codex Persona opened with no first message (node/codex_waiting.go): Codex runs in its
+	// terminal but has no thread until it gets one, so this row is keyed by an id of the node's, not the thread's.
+	// It takes the first message (text only) and opens its terminal; once the thread exists the row goes and the
+	// thread's comes, in the same pane (docs/integrations/codex.md "Starting without a first message").
+	AwaitingFirstMessage bool `json:"awaiting_first_message,omitempty"`
 	// QueuedRelayed: the last this many of Queued are messages from other conversations that an assistant
 	// conversation's manager holds until its turn ends (docs/assistant/assistant.md "Queue while running"); the apps
 	// show them but take back, delete, move and send now only the others (#4342). A uint16 here sits in the padding
@@ -505,6 +515,14 @@ type Direction struct {
 	By      string     `json:"by"`
 	At      time.Time  `json:"at"`
 	EndedAt *time.Time `json:"ended_at,omitempty"`
+}
+
+// ModelPick is what an assistant conversation was set to run on in the apps (PUT
+// /api/v1/assistant/conversations/{id}/model): a launcher and, when one was picked, its model and reasoning effort.
+type ModelPick struct {
+	Launcher string `json:"launcher"`
+	Model    string `json:"model,omitempty"`
+	Effort   string `json:"effort,omitempty"`
 }
 
 // ServiceTier is a speed advertised by the native Codex model catalog.

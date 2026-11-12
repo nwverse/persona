@@ -19,7 +19,9 @@ import { acknowledgeLaunch } from "../../lib/new-agent";
 import { useRuntimeSession } from "../../lib/runtime-session";
 import { ArchivedNotice, SessionDetailNotice } from "../../ui/SessionDetailNotice";
 import { REVIEW_FEATURE } from "../../lib/session-review";
-import { getSession, getState, hubHas, listenSession, refresh, refreshTodos, saveMutes, useStore, viewSession } from "../../lib/store";
+import { isBackgroundSupervisor } from "../../lib/background-supervisor";
+import { getSession, getState, hubHas, listenSession, refresh, refreshTodos, saveMutes, upsertSession, useStore, viewSession } from "../../lib/store";
+import { codexThreadOf, waitsForFirstMessage } from "../../lib/codex-waiting";
 import { foldRows } from "../../lib/folded-rows";
 import { PREVIEW_FEATURE } from "../../lib/preview";
 import { agentsWorking, buildTaskIndex, stableSubagents, STOP_LOOP_MESSAGE, subagentCall, subagentCardKey, terminalCalls, type TaskIndex } from "../../lib/tasks";
@@ -57,8 +59,9 @@ import { CloseoutCard } from "./CloseoutCard";
 import { shownCloseout } from "../../lib/closeout";
 import { AWAIT_MS, awaitingTurn, DOCK_MAX, turnStart } from "./dock";
 import { HEADER_SLOT, HEADER_SLOT_END, HEADER_SLOT_START } from "./header";
+import { contextUsage } from "../../lib/context-usage";
 import { ContextMeter } from "./ContextMeter";
-import { AgentModelPill } from "./ModelPill";
+import { AgentModelPill, AssistantModelPill } from "./ModelPill";
 import { switchRefused } from "../../lib/session-models";
 import { NARROW, NO_HOVER, PHONE, SHORT, useFinePointer, useMedia } from "../../lib/viewport";
 import { UserBubble } from "./SegmentView";
@@ -67,8 +70,7 @@ import { ActivityChips, GoalChip } from "./Activity";
 import { CommentMarks } from "./CommentMarks";
 import { isWorker, recordTeam, shownWorker, teamPanelOf, teamWorkers, useTeamReveal, workerCount } from "../../lib/team";
 import { RunningStatusBar } from "./RunningStatusBar";
-import { latestPlan, PlanPill, usePlanOutOfView } from "./PlanCard";
-import { publishPlan } from "../../lib/plan-store";
+import { latestPlan, usePlanClosed, usePlanOutOfView } from "./latest-plan";
 import { ChatContext, LiveClockContext, type ChatContextValue } from "./chat-context";
 import { addFreshWords, resetFreshWords } from "./fresh-words";
 import { backgroundLine, backgroundWaitLine, waitingOnWorkflow, workflowAgentFor, workflowCalls, workflowCallsKey } from "../../lib/workflows";
@@ -102,7 +104,7 @@ import { chatFiles } from "../../lib/mentions";
 import { sameMessage } from "../../lib/queue";
 import { OutboxBubbles } from "./OutboxBubbles";
 import { MainRuntimeSlot } from "../assistant/MainRuntimeSlot";
-import { AssistantFace, AssistantLauncherChip, CompactionStrip, useAssistantMenu } from "../assistant/AssistantChat";
+import { AssistantFace, CompactionStrip, useAssistantMenu } from "../assistant/AssistantChat";
 import { Segmented } from "../assistant/parts";
 import { PageBoundary } from "../PageBoundary";
 import { ViewLayer } from "../session/ViewLayer";
@@ -135,6 +137,8 @@ const SharingDialog = lazyOverlay(() => import("../../sharing/SharingDialog").th
 const TerminalPanel = lazy(() => loadTerminal().then((m) => ({ default: m.TerminalPanel })));
 // only on an Agent's page opened from a conversation's hand-off card (#5096): not part of the first screen
 const HandoffBack = lazy(() => import("./HandoffBack").then((m) => ({ default: m.HandoffBack })));
+// the plan's pill and its flyout load once a plan wants it shown, off the first screen
+const PlanPill = lazy(() => import("./PlanCard").then((m) => ({ default: m.PlanPill })));
 
 const NO_FEED: FeedItem[] = [];
 // A worker's card as its own conversation shows it (#5180): without the fold that makes it "From worker" on its lead's page.
@@ -258,6 +262,17 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const subagents = stableSubagents(lastSubagents.current, listed);
   lastSubagents.current = subagents;
   const machineName = useStore((s) => machineWithHub(mid, s.machines));
+  // A Codex opened with no first message (lib/codex-waiting.ts): once its thread comes (the message went in from here
+  // or its terminal) the row goes and the thread's comes in the same pane, and this page follows it there.
+  const waitsFirst = waitsForFirstMessage(session);
+  const [waitingRow, setWaitingRow] = useState<Session>();
+  useEffect(() => {
+    if (waitsFirst && session) setWaitingRow(session);
+  }, [waitsFirst, session]);
+  const becameThread = useStore((s) => (waitingRow && waitingRow.session_id === sid ? codexThreadOf(s.sessions[mid] ?? [], waitingRow)?.session_id : undefined));
+  useEffect(() => {
+    if (becameThread && inPage) navigate({ name: "session", mid, sid: becameThread }, true);
+  }, [becameThread, inPage, mid]);
   // a lead's Team panel (#5180, lib/team.ts): opened and closed by itself with cindy's timing; never in a worker's own
   // conversation (embedded) or a Persona chat
   const leads = !embedded && !assistant;
@@ -905,7 +920,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       keepOutgoing(key, { id, text: out.text, images: out.images, at: p.at, launcher, model });
       try {
         // the bubble stays as sending while a gap (a hub restart) is waited out; the id is the op id too
-        await inSendOrder(key, () => apiOp(`${sessionPath(mid, sid)}/messages`, {
+        const reply = await inSendOrder(key, () => apiOp<{ session?: Session } | undefined>(`${sessionPath(mid, sid)}/messages`, {
           method: "POST",
           opId: id,
           // a switch to another launcher the user picked for this Agent goes with their own message from here, and only
@@ -916,6 +931,12 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
         const acceptedAt = Date.now();
         acceptOutgoing(key, id, acceptedAt);
         setPending((ps) => ps.map((x) => (x.id === id ? { ...x, posting: false, acceptedAt } : x)));
+        // a Codex's first message: the answer is the thread it began, where the conversation goes on (lib/codex-waiting.ts)
+        const began = reply?.session;
+        if (began?.session_id && began.session_id !== sid) {
+          upsertSession({ ...began, machine_id: mid });
+          if (inPage) navigate({ name: "session", mid, sid: began.session_id }, true);
+        }
         return true;
       } catch (e) {
         // An ultracode change waits for the turn (docs/protocol/protocol.md "Claude Code ultracode"): the node holds messages back
@@ -947,7 +968,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `failed` reads only stable setters and these
-    [mid, sid, session, assistant, follow],
+    [mid, sid, session, assistant, follow, inPage],
   );
 
   /** Keeps a message that did not go as a failed bubble where it was sent, with why, "Retry" and "Delete", the box empty
@@ -1419,11 +1440,11 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   }, []);
   const rounds = useMemo(() => segs.filter((x) => x.user).length, [segs]);
 
-  // the newest plan of the chat (lib/work-groups.ts planSteps): while its card is out of view, a pill above the composer
+  // the newest plan of the chat (PlanCard.tsx planCardStep draws its card): while that card is out of view, a pill above the composer
   const plan = useMemo(() => latestPlan(segs), [segs]);
   const planOut = usePlanOutOfView(scroller, plan?.id);
-  // the side panel's Plan follows this chat's newest plan (#5602)
-  useEffect(() => publishPlan(mid, sid, plan ? { todos: plan.todos, live: lastLive } : undefined), [mid, sid, plan, lastLive]);
+  // Close Plan in the pill's flyout hides it until the plan changes (cindy's PinnedPlanPanel)
+  const [planClosed, closePlan] = usePlanClosed(`${mid}/${sid}`, plan);
   const lastLine = lines[lines.length - 1];
   // "Retry" on an API error card: only when it is the last thing, the agent is not working (someone may have retried already)
   const retry = useCallback(() => void deliver({ text: t("chat-chatview.continue_text"), images: [] }, uuid()), [deliver]);
@@ -1487,8 +1508,11 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     const live = lines.flatMap((l) => l.kind === "supervision" ? l.lines : [l]).findLast((l) => l.kind === "segment" && l.live);
     return (live?.kind === "segment" ? turnStart(live.seg) : undefined) ?? stateSince;
   }, [lines, stateSince]);
-  const planPill = plan && planOut && (lastLive || !planProgress(plan.todos).allDone) ? (
-    <PlanPill todos={plan.todos} onClick={() => openPanel({ kind: "plan", mid, sid })} />
+  // as cindy's: gone once every step is done or a later message of the user's started another turn
+  const planPill = plan && planOut && !plan.superseded && !planClosed && !planProgress(plan.todos).allDone ? (
+    <Suspense key={plan.id} fallback={null}>
+      <PlanPill todos={plan.todos} live={lastLive} onClose={closePlan} />
+    </Suspense>
   ) : null;
   // Persona's own chats too (#3654), and from the moment the message is in, not from the hub's next push
   const background = useMemo(() => backgroundLine(session), [session]);
@@ -1499,14 +1523,15 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       <QueueStrip session={session} draftKey={draftKey} canEdit={canCompose} compact={short} persona={assistant ? persona.name : undefined} onWithdrawn={withdrawn}
         photosOf={assistant ? queuedPhotos : undefined} />
     ) : null;
-  // with the plan's pill showing, "Jump to bottom" goes beside it (over the chat, they hid each other)
+  // with the plan's pill showing, "Jump to bottom" goes beside it (over the chat, they hid each other); the pill keeps
+  // one wrapper either way, so a flyout pinned open on it stays when the reader scrolls
   const jumpInDock = Boolean(planPill);
-  const pills = jumpInDock && away ? (
-    <div className="flex shrink-0 items-center justify-center gap-2">
+  const pills = planPill ? (
+    <div className="flex shrink-0 items-center justify-center gap-2" data-plan-pills>
       {planPill}
-      <JumpPill label={jumpLabel(newSince)} onClick={toEnd} inline />
+      {away && <JumpPill label={jumpLabel(newSince)} onClick={toEnd} inline />}
     </div>
-  ) : planPill;
+  ) : null;
   // the header and the composer are memoized (a transcript push changes neither): what they get stays the same object
   // until it changes. The assistant's face reads only the last item's role and kind (lib/persona.ts personaState).
   const stopLoop = useCallback(() => void deliver({ text: STOP_LOOP_MESSAGE, images: [] }, uuid()), [deliver]);
@@ -1519,8 +1544,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // the main conversation's /clear (#5095, lib/main-clear.ts): Persona's other conversations take no commands
   const commands = useMemo(() => (assistant ? (clears ? mainCommands() : []) : agentCommands(AGENT_COMMANDS, session)), [assistant, clears, session]);
   const footer = useMemo(() => (session ? <ComposerFooter session={session} assistant={assistant} /> : null), [session, assistant]);
-  // an Agent's model pill (#5032); a Persona conversation keeps its launcher chip in the footer for now (#5033)
-  const trailing = useMemo(() => (session && !assistant ? <AgentModelPill session={session} /> : null), [session, assistant]);
+  // the model pill: an Agent's (#5032), a Persona conversation's (#5033, its pick kept for the conversation)
+  const trailing = useMemo(() => (session ? assistant ? <AssistantModelPill session={session} /> : <AgentModelPill session={session} /> : null), [session, assistant]);
 
   // the header's Team button (#5180): on a lead with workers, at every width (a phone has no other way to the panel); its dot
   // says a worker needs you while the panel is shut
@@ -1607,6 +1632,12 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
                 not under a notice that the chat's details are missing */}
             {((!tr.hasMore && !tr.loading && (tr.items.length > 0 || (!tr.error && !starting && !session?.start_error && !noDetails))) || opening) && <div className="text-center text-[11.5px] text-ink-3">{session?.cwd && !assistant ? t("chat-chatview.started_in", { path: shortPath(session.cwd) }) : t("chat-chatview.chat_start")}</div>}
             {opening && <DayLine date={startOfDay(Date.now())} />}
+            {waitsFirst && !tr.items.length && (
+              // a Codex opened with no first message (lib/codex-waiting.ts): it waits for one, from here or its terminal
+              <p data-testid="codex-waiting" className="rounded-control bg-inset px-3 py-2 text-[13px] leading-relaxed text-ink-2">
+                {t("chat-chatview.codex_waiting", { computer: machineName })}
+              </p>
+            )}
             {tr.loading && !tr.items.length && !opening && (
               <div className="flex justify-center py-16">
                 <Loading label={starting ? t("chat-chatview.preparing") : t("chat-chatview.loading_chat")} />
@@ -1708,20 +1739,14 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
             cards, task questions and notes stood taller than the dock, drawn up over the chat or pushing it to nothing);
             the box clips what is in it, so its children keep a little room for their shadows (p-1; -m-1 gives it back) */}
         <div data-chat-dock-above data-scroll-box className="-m-1 flex min-h-0 shrink flex-col gap-2 overflow-y-auto overscroll-contain p-1 empty:hidden">
-        {short ? (
-          // a phone on its side: the plan's pill, the run's status and the queue share one line
-          (pills || running || queue) && (
-            <div className="flex shrink-0 items-center gap-2">
-              {pills && <div className="shrink-0">{pills}</div>}
-              {running && <div className="shrink-0">{running}</div>}
-              {queue && <div className="min-w-0 flex-1">{queue}</div>}
-            </div>
-          )
-        ) : (
-          <>
-            {pills}
-            {running}
-          </>
+        {/* a phone on its side: the plan's pill, the run's status and the queue share one line. One wrapper either way
+            (no box of its own otherwise), so the pill and a flyout pinned on it stay when the phone turns */}
+        {(pills || running || (short && queue)) && (
+          <div className={short ? "flex shrink-0 items-center gap-2" : "contents"}>
+            {pills && <div className={short ? "shrink-0" : "contents"}>{pills}</div>}
+            {running && <div className={short ? "shrink-0" : "contents"}>{running}</div>}
+            {short && queue && <div className="min-w-0 flex-1">{queue}</div>}
+          </div>
         )}
         {assistant && (
           <>
@@ -1767,7 +1792,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
         ) : (
         <Composer
           draftKey={draftKey}
-          placeholder={offlineLine ? offlineLine : refusedNoRow ? t(gone ? "chat-chatview.session_gone_placeholder" : "chat-chatview.connecting_placeholder") : viewOnlyRow(session) ? t("chat-chatview.view_only") : state === "working" || state === "needs_you" ? t("chat-chatview.queue_placeholder") : assistant ? t("chat-chatview.ask_placeholder", { name: persona.name }) : state === "offline" ? t("chat-chatview.resume_placeholder") : t("chat-chatview.agent_placeholder")}
+          placeholder={offlineLine ? offlineLine : waitsFirst ? t("chat-chatview.codex_first_placeholder") : refusedNoRow ? t(gone ? "chat-chatview.session_gone_placeholder" : "chat-chatview.connecting_placeholder") : viewOnlyRow(session) ? t("chat-chatview.view_only") : state === "working" || state === "needs_you" ? t("chat-chatview.queue_placeholder") : assistant ? t("chat-chatview.ask_placeholder", { name: persona.name }) : state === "offline" ? t("chat-chatview.resume_placeholder") : t("chat-chatview.agent_placeholder")}
           machineId={mid}
           uploadDest={session?.space === "health" ? "health" : undefined}
           working={state === "working" || awaiting}
@@ -1790,6 +1815,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           trailing={trailing}
           voice={voiceEntry.offer}
         />
+        )}
+        {!stoppedLine && session && !assistant && contextUsage(session) !== null && (
+          <div data-composer-usage className="flex items-center justify-end px-2 pt-0.5"><ContextMeter session={session} /></div>
         )}
         </div>
       </div>
@@ -1900,17 +1928,15 @@ function JumpPill({ label, onClick, inline }: { label: string; onClick: () => vo
 }
 
 export function ComposerFooter({ session, assistant }: { session: Session; assistant?: boolean }) {
-  // the launcher and model are the composer's model pill (an Agent's, #5032) or the launcher chip (a Persona
-  // conversation's): they switch there, so the line keeps only where the chat comes from and runs
+  // the launcher, model and effort are the composer's model pill (an Agent's, #5032; a Persona conversation's, #5033):
+  // they switch there, so the line keeps only where the chat comes from and runs
   const parts = [sourceSubtitle(session), ...(assistant ? [] : [shortPath(session.cwd)])].filter(Boolean);
   const info = useMenu();
-  // a Persona conversation (the main one too) switches its modes whatever its state: the hub applies them (#2416). An
-  // Agent's effort (a Codex thread's too) is on its model pill
+  // a Persona conversation (the main one too) switches its permission mode whatever its state: the hub applies it (#2416)
   const modes = assistant || (hasModes(session) && stateOf(session) !== "offline");
   return (
     <span className="flex min-w-0 items-center gap-2">
-      {modes && <ModeChips session={session} assistant={assistant} withInfo={parts.length > 0} />}
-      {assistant && <AssistantLauncherChip session={session} />}
+      {modes && <ModeChips session={session} assistant={assistant} />}
       {parts.length > 0 && <span className="min-w-0 truncate max-sm:hidden" title={[sourceSubtitle(session), session.cwd].filter(Boolean).join(" · ")}>{parts.join(" · ")}</span>}
       {/* phone width (#3533): the line would show a letter or two, so it is a button that lists the parts in full */}
       {parts.length > 0 && <IconButton icon="info" label={t("chat-chatview.session_info")} onClick={info.open} active={Boolean(info.anchor)} size={22} iconSize={13} className="sm:hidden" />}
@@ -2023,6 +2049,8 @@ export const Header = memo(function Header({
   // archived (the Archived page listed it, or it was archived here): the menu offers Restore instead of archive / delete
   const archived = useArchived(session?.machine_id ?? "", session?.session_id ?? "");
   const [dialog, setDialog] = useState<"info" | "rename" | "space" | "delete" | null>(null);
+  // the background supervisor is built in (#5082): not renamed here either, as in its row's menu
+  const builtIn = useStore((s) => isBackgroundSupervisor(s.assistant, session?.session_id));
   const muted = Boolean(session && !assistant && isMuted(session, mutes));
   const pinned = useStore((s) => Boolean(session && isPinned(session, s.pins)));
   // "Mute": the hub stops pushing this agent's "Needs you" / "Finished" (an agent's switch sits on top of its space's)
@@ -2141,7 +2169,7 @@ export const Header = memo(function Header({
         ...(feishu ? [{ key: "feishu", label: t("chat-chatview.open_in_lark"), icon: "external" as const, onSelect: () => openLink(feishu) }] : []),
         ...(onSearch ? [{ key: "search", label: t("chat-chatsearch.menu"), icon: "search" as const, onSelect: onSearch }] : []),
         { key: "info", label: t("chat-chatview.session_info"), icon: "info", onSelect: () => setDialog("info") },
-        ...(!main && sessionCan(session, "send") && (session.assistant || !session.source_kind) ? [{ key: "rename", label: t("chat-chatview.rename"), icon: "pencil" as const, onSelect: () => setDialog("rename") }] : []),
+        ...(!main && !builtIn && sessionCan(session, "send") && (session.assistant || !session.source_kind) ? [{ key: "rename", label: t("chat-chatview.rename"), icon: "pencil" as const, onSelect: () => setDialog("rename") }] : []),
         ...(!assistant && session.space_id && !session.source_kind ? [{ key: "space", label: t("chat-chatview.rename_space"), icon: "folder" as const, onSelect: () => setDialog("space") }] : []),
         ...(!assistant ? [{ key: "mute", label: muted ? t("chat-chatview.unmute") : t("chat-chatview.mute"), icon: muted ? ("bell" as const) : ("bellOff" as const), onSelect: () => void flipMute() }] : []),
         ...(!assistant ? [{ key: "pin", label: pinned ? t("chat-chatview.unpin") : t("chat-chatview.pin"), icon: "pin" as const, onSelect: () => void flipPin(session) }] : []),
@@ -2171,12 +2199,6 @@ export const Header = memo(function Header({
           <h1 className="truncate text-[14px] font-semibold text-ink">{title}</h1>
           {/* wide, the pill gives the dot's state its words, not a second dot (#3956: the state is said once) */}
           {session && !assistant && (state !== "idle" || awaiting) && <span className="hidden @min-[800px]:contents"><StatePill state={state} awaiting={awaiting} waiting={Boolean(session && backgroundWaiting(session))} dot={false} /></span>}
-          {/* narrow: the context bar gives way to the title too (#3532); "Session info" still has the token count. The header's own
-              width decides (a container), so a side panel beside the chat narrows it as a phone does; the pill and the
-              bar go below 800px, the chips' words below 640px, so the title keeps room in between (#3670) */}
-          {session && !assistant && <span className="hidden @min-[800px]:contents"><ContextMeter session={session} /></span>}
-          {/* 680–800px (an iPad in landscape with the sidebar open, #4443): the share alone, so what is left stays in sight */}
-          {session && !assistant && <span className="hidden @min-[680px]:contents @min-[800px]:hidden"><ContextMeter session={session} compact /></span>}
         </div>
         {sub && !todoLine && <div title={sub} className="truncate text-[11.5px] text-ink-3">{sub}</div>}
         {/* the todo it works for, up top (#1836): opens the todo, "Change to-do…" picks another */}
