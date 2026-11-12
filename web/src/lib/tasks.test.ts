@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseAPIError } from "./api-errors";
-import { agentStatus, agentsWorking, agentSummary, attachedAgentNotices, buildTaskIndex, loopCadence, loopLabel, loopNext, loopShortLabel, loopTask, stableSubagents, subagentEnded, taskBadge, taskPill, terminalCalls, wakeSummary } from "./tasks";
+import { agentStatus, agentSummary, attachedAgentNotices, buildTaskIndex, loopCadence, loopLabel, loopNext, loopShortLabel, loopTask, stableSubagents, subagentEnded, taskBadge, taskPill, terminalCalls, wakeSummary } from "./tasks";
 import type { Item, Subagent } from "./types";
 import type { Step } from "./turns";
 import * as tasksModule from "./tasks";
@@ -129,21 +129,6 @@ describe("a subagent call's card", () => {
     const done: Item = { ...res("42 passed"), ts: "2026-11-06T10:03:00Z" };
     expect(subagentEnded(done, { ...meta(false), updated_at: "2026-11-06T10:09:00Z" })).toBe(Date.parse("2026-11-06T10:03:00Z"));
     expect(subagentEnded(undefined, undefined)).toBeUndefined();
-  });
-
-  it("tells which subagents the agent waits on and what they do (#5602)", () => {
-    const a = (id: string, extra: Partial<Subagent>): Subagent => ({ id, session_id: `s@${id}`, running: true, tool_use_id: `c-${id}`, ...extra });
-    const list = [
-      a("x", { last_tool: { id: "t1", name: "Read", summary: "在读 a.go" }, updated_at: "2026-11-06T10:00:01Z" }),
-      a("y", { last_tool: { id: "t2", name: "Bash", summary: "跑测试" }, updated_at: "2026-11-06T10:00:05Z" }),
-      a("z", {}), // no call yet
-      a("bg", { background: true, last_tool: { id: "t3", name: "Bash", summary: "后台跑" } }),
-      a("done", { running: false }),
-      a("answered", { last_tool: { id: "t4", name: "Grep", summary: "在搜" } }),
-    ];
-    expect(agentsWorking(list, new Set(["c-answered"]))).toEqual({ count: 3, doing: ["跑测试", "在读 a.go"] });
-    expect(agentsWorking([a("bg", { background: true })], new Set())).toBeNull();
-    expect(agentsWorking(undefined, new Set())).toBeNull();
   });
 
   it("keeps the subagents array while only updated_at moved (#5602)", () => {

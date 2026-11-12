@@ -502,6 +502,14 @@ The changed-files card (`web/src/views/chat/TurnChanges.tsx`, #5157) and the err
 are ported from cindy's `TurnChangesCard.tsx` and `components/ui/error-notice.tsx` with changes: their layout, sizes and
 states; the counting, review targets and fold data are Persona's own.
 
+The web chat's run status bar (`web/src/views/chat/RunningStatusBar.tsx` and its speed card
+`web/src/views/chat/RunningSpeedCard.tsx`, #5312) is ported from cindy's `RunningStatusBar` (in `CCAgentSessionView.tsx`)
+and `RunningTokenRatePopover.tsx` with changes: their layout, state words, the Done pop and the card's sparkline. The
+speed history (`web/src/lib/token-rate.ts`) is ported from `packages/maker-shared/src/runningTokenRateHistory.ts` and
+`formatRecentOutputTokenRate`, with tests from cindy's, changed to measure generation from the status line's token count
+over time; the state words follow `localizeAgentStatus.ts` and `workingStatus.ts`, and are worked out from Persona's own
+transcript items (`web/src/lib/run-step.ts`).
+
 https://github.com/makecindy/cindy
 
 Licensed under the Apache License, Version 2.0 (the "License"); you may not use these files except in compliance with
