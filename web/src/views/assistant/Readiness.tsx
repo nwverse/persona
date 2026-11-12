@@ -1,6 +1,6 @@
 // What the main conversation still needs, above its composer (docs/assistant/onboarding.md 4.4): the first missing step as a card
 // (a title, one line why, one button), the "chat only" note, a refused start or send as a card with the original text under
-// "Details" (4.6), and the help those buttons and the local example questions open in place. "Add computer" and "Confirm computer" open the
+// "Error details" (4.6), and the help those buttons and the local example questions open in place. "Add computer" and "Confirm computer" open the
 // machines page's own flow (views/machines/AddComputer.tsx) in place where the hub has it (machines_add, machine_trust).
 import { useEffect, useState } from "react";
 import { canAddComputer, canConfirmComputer, pendingToConfirm } from "../../lib/add-computer";
@@ -179,7 +179,7 @@ export function ChatOnlyNote({ gate }: { gate: ReadinessGate }) {
 
 // ── a refused start or send ─────────────────────────────
 
-/** A start or a send that did not go: the hub's words, a button for its code, the original under "Details" (4.6). */
+/** A start or a send that did not go: the hub's words, a button for its code, the original under "Error details" (4.6). */
 /** `onRetry`: a send that did not go and is back in the box (#4270): a "Send again" button that sends the box again. */
 export function FailureCard({ failure, onClose, onHelp, onConfirm, onRetry }: { failure: CodedFailure; onClose: () => void; onHelp: (topic: HelpTopic) => void; onConfirm?: () => void; onRetry?: () => void }) {
   const action = failure.action && knownAction(failure.action) ? failure.action : undefined;
