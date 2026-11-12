@@ -560,8 +560,15 @@ in #5033.
   `UltraMark` (`ink-2`), a 14 px chevron (`ink-2`). Widths by the composer card (`@container/composer`): ≥ 600 px 72–320 px;
   < 600 px 148 px (name ≤ 108 px and truncating first, the effort only once the name has no room); < 520 px 12 px text, marks a step smaller; < 420 px 64 px, the
   tile and chevron only. States: loading (a 13 px `Spinner` and "Loading model…"), failed (the `warning` icon in `--red`),
-  pending (a 12 px clock first, the target engine's name in `ink-3`, a two-line tooltip), disabled (50% opacity, no
-  pointer), and a label (not a button) where nothing can be switched. The click keeps the caret in the message box.
+  pending (#5035, a switch to another launcher that the next message carries out: a 12 px clock in `ink-3` first, then
+  the target launcher's tile and its name in `ink-3` up to 96 px, hidden under 600 px, before the target's model and
+  effort; the engine's name in its place when the engine changes; the tooltip "Current: …" over "Next message: …"),
+  disabled (50% opacity, no pointer), and a label (not a button) where nothing can be switched. The click keeps the caret
+  in the message box.
+- Panel while a switch waits: one warning line at the top of the list (the panel's `note`: `warning` icon, 11 px,
+  `--orange`), "Switches on your next message: the Agent restarts on {launcher} and keeps this conversation"; a recorded
+  pick is confirmed by a toast ("Switch scheduled: …"). Cindy's "Switch Agent?" confirmation is for an engine change,
+  which Persona does not offer yet (#5054); a launcher switch keeps the conversation and its engine, so it asks nothing.
 - Panel (`web/src/ui/model-panel/`): opens above the pill, right edges aligned, 6 px gap, 8 px from the window's edges;
   300–460 px wide, a 428 px body (a 48 px rail of Recent, Favorites, All and one cell per provider beside the model list),
   search on top, "Configure models" at the bottom; two-line rows with hover-revealed Favorite and Customize; the model that
@@ -571,7 +578,8 @@ in #5033.
   `--effort-medium` #14B8A6, `--effort-high` #3B82F6, `--effort-xhigh` #4F46E5, `--effort-max` #8B5CF6, Codex's ultra on
   max) and `--fast` (#3B9EFF), used inside the flyout only: the pill never colours its effort or its bolt.
 - Deviations from Cindy: letter tiles instead of vendor logos; no price or quota data; ↑↓ also move between rows; providers
-  and engines that can't be switched to yet are listed with their rows off and the reason.
+  and engines that can't be switched to yet are listed with their rows off and the reason; a pending switch names the
+  launcher rather than the engine.
 
 ### 3.9 Empty states
 
@@ -726,6 +734,22 @@ A computer's dev server opened from a chat (a forwarded port, `docs/web/preview.
 ### 4.7 Tool execution collapsed (super rule 2)
 
 Tool execution is one summary line, never opens by itself, shows the latest text segment while running and the result when done, and expands by hand. Opened by hand, a step (and the summary itself) changes in place: the tapped row stays under the finger, what opens fades in, what closes goes at once, and the list holds still while the turn goes on (new steps, the answer, the next turn, the footer under the list changing) until the user scrolls, taps ↓ or sends (`toggleInPlace`, `ChatFollow.toggledRow`, #3005). iOS complies: `isOpen` ignores `live` (`apple/Persona/Views/Chat/ChatLines.swift:293`) and tool rows use `autoExpand: false`. The "latest segment only" half was not confirmed from code reading and needs a screenshot test.
+
+**The opened summary** (web, #5155; the owner asked on 2026-11-12 that it follow cindy's `WorkGroupBlock` and
+`createCompletedWorkGroup`). A summary that holds intermediate narration opens to cindy's timeline: the narration in
+order, and each run of work between two pieces of it an inner summary of its own, "Worked for 12s" from the words
+before it to the words after it, the live one "Working…" with its clock. Without intermediate narration it holds its
+rows directly. Inner summaries open together with the outer one and then keep their own open / closed state, so
+opening a summary shows every tool call. A thought with words is one row in the tool rows' chrome (16 px status slot
+with the sparkle, italic `thinking-ink` words on one line, the 18 px chevron slot), opening in place only when it does
+not fit or has a line break; a thought without words has no row. The live "Thinking" line with dots and a clock ends
+the innermost live summary, once. Durations read `6s`, `1m 5s`, `2m` in every language and, from an hour, the
+language's form that always keeps the minutes (`1h 0m`, `1 小时 0 分`, `1時間0分`). Copy follows cindy's catalog
+("Work details" without times, "Searched once", "Listed files once"). A diff count reads `+12 -3`; the in-place
+detail's divider is the tool ink at 20 %. The chat's items stand 14 px apart under 28 px of top padding. Held back by
+super rule 2: cindy's running preview of the latest five activities, its narration in the open while running, and its
+inner summaries folded by default (exception requested in #5162). Kept from Persona: a failed call's red ✕ and red
+output (#4303 outcomes, below), which cindy's rows lack.
 
 Subagent launch receipts, interim reports and final results belong under their launching tool, not in independent
 parent-chat message bubbles (#3378). Empty completion pointers update status without creating another report. The

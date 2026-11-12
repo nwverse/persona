@@ -242,7 +242,7 @@ func overlayAgentArchives(machine string, list []proto.Session, records map[stri
 			// new work. The durable restore remains pending until its write succeeds.
 			active := rec.active(list[i], mark)
 			list[i].Archived = rec.Archived && !pending[key] && !active
-			list[i].ArchiveChangedAt = rec.ChangedAt
+			list[i].ArchiveChangedAt = archiveChangedAt(rec.ChangedAt)
 		}
 	}
 	keys := make([]string, 0, len(records))
@@ -256,7 +256,7 @@ func overlayAgentArchives(machine string, list []proto.Session, records map[stri
 		rec := records[key]
 		s := rec.Session
 		s.Archived = rec.Archived
-		s.ArchiveChangedAt = rec.ChangedAt
+		s.ArchiveChangedAt = archiveChangedAt(rec.ChangedAt)
 		list = append(list, s)
 	}
 	return list
@@ -450,4 +450,12 @@ func (svc *Service) agentArchiveRoutes() {
 	svc.handle("POST /api/v1/sessions/{mid}/{sid}/unarchive", func(w http.ResponseWriter, r *http.Request) {
 		svc.setAgentSessionArchive(w, r, r.PathValue("mid"), false)
 	})
+}
+
+// archiveChangedAt is a record's change time as a session carries it (proto.Session.ArchiveChangedAt): nil for none.
+func archiveChangedAt(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
 }

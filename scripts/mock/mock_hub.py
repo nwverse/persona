@@ -11984,6 +11984,71 @@ if os.environ.get("MOCK_WORK_GROUPS") == "1":
     mock_work_groups()
 
 
+# MOCK_WORK_TIMELINE=1 (#5155): a work summary that opens to cindy's timeline. The weather agent (WORKTL) has a finished
+# turn whose work is narration with a run of steps between each piece (a long thought with words, one without, reads,
+# a search, commands, an edit), then a live turn: narration, a run, more narration and a call still running. Persona's
+# main conversation gets the same shape in everyday words (a finished trip plan, a live dinner booking). With a
+# connection that declared session_live, both sessions say they are thinking (work_timeline_live). Made-up content.
+WORKTL = "a1f3c2d4-0000-4000-8000-0000000c5155"
+
+
+def mock_work_timeline():
+    _w = [it("user", "text", 12, text="The widget refreshes late in the morning. Find out why and fix it.")]
+    _w.append(it("assistant", "thinking", 11.95, text="The refresh is late in the morning, so it is probably the timeline policy rather than the "
+                                                      "network: WidgetKit only reloads after the date the provider returns, and if that date is "
+                                                      "computed from the last entry instead of now, a long night pushes it past breakfast."))
+    _w += tool("Read", {"file_path": "/Users/me/code/weather/Widget/Provider.swift"}, "let next = Calendar.current.date(byAdding: .minute, value: 30, to: lastEntry)!", 11.9)
+    _w += tool("Grep", {"pattern": "policy:", "path": "Widget"}, "Widget/Provider.swift:12: policy: .after(next)", 11.85)
+    _w.append(it("assistant", "text", 11.8, text="The next refresh is counted from the last entry, not from now, so after a quiet night it lands late. Changing it to count from now."))
+    _w.append(it("assistant", "thinking", 11.75, text=""))
+    _w += tool("Edit", {"file_path": "/Users/me/code/weather/Widget/Provider.swift",
+                        "old_string": "let next = Calendar.current.date(byAdding: .minute, value: 30, to: lastEntry)!",
+                        "new_string": "let next = Calendar.current.date(byAdding: .minute, value: 15, to: now)!"}, "ok", 11.6)
+    _w += tool("Bash", {"command": "xcodebuild test -scheme WeatherWidget -quiet", "description": "Run the widget tests"},
+               "Test Suite 'All tests' passed.\n     Executed 48 tests, with 0 failures (0 unexpected) in 9.2 seconds", 11.1)
+    _w.append(it("assistant", "thinking", 11.05, text="Tests pass."))
+    _w.append(it("assistant", "text", 11, text="Fixed: the widget now schedules its next refresh 15 minutes from now, so a quiet night no longer "
+                                               "pushes the morning refresh late. All 48 tests pass."))
+    _w.append(it("user", "text", 1.5, text="Also make the fetch timeout a setting."))
+    _w.append(it("assistant", "thinking", 1.45, text="**Moving the timeout** — it is a literal in `Fetcher`; a setting means `WidgetSettings`."))
+    _w += tool("Grep", {"pattern": "timeout", "path": "Widget"}, "Widget/Fetcher.swift:8: let timeout = 10", 1.4)
+    _w.append(it("assistant", "text", 1.2, text="The timeout is hard-coded in `Fetcher.swift`. Moving it into `WidgetSettings`."))
+    _w += tool("Edit", {"file_path": "/Users/me/code/weather/Widget/Fetcher.swift", "old_string": "let timeout = 10",
+                        "new_string": "let timeout = WidgetSettings.fetchTimeout"}, "ok", 0.9)
+    _w.append(it("assistant", "text", 0.6, text="Now running the tests again."))
+    _w.append(it("assistant", "tool_use", 0.5, tool_use_id="toolu_wtl_run", tool_name="Bash",
+                 tool_input={"command": "xcodebuild test -scheme WeatherWidget -quiet", "description": "Run the widget tests"}))
+    ITEMS[WORKTL] = _w
+    SESSIONS.append(sess("macbook", WORKTL, "Widget refresh and timeout", "/Users/me/code/weather", "working", "working", "weather", 1,
+                         "timeline", 12, 0, "Now running the tests again.", state_since=ago(minutes=1.5)))
+
+    _a = [it("user", "text", 20, text="Plan a weekend at the coast for the two of us.")]
+    _a.append(it("assistant", "thinking", 19.95, text="**Two people, one weekend:** check the weather first, then trains, then somewhere to stay near the beach."))
+    _a += tool("WebSearch", {"query": "coast weather this weekend"}, "Saturday sunny 24°, Sunday cloudy 21°", 19.9)
+    _a.append(it("assistant", "text", 19.8, text="Saturday looks sunny, Sunday cloudier. Looking at trains for Saturday morning."))
+    _a.append(it("assistant", "thinking", 19.75, text=""))
+    _a += tool("WebSearch", {"query": "Saturday morning trains to the coast"}, "08:10, 09:40, 11:05", 19.6)
+    _a += tool("WebSearch", {"query": "small hotels near the beach"}, "Three places with rooms for Saturday", 19.4)
+    _a.append(it("assistant", "text", 19, text="Here is a plan: take the 09:40 train on Saturday, stay at a small hotel two streets from the "
+                                               "beach, and spend Sunday morning at the market before the 15:00 train home."))
+    _a.append(it("user", "text", 1.2, text="Book a table for dinner on Saturday."))
+    _a += tool("WebSearch", {"query": "seafood restaurants near the beach, Saturday 19:30"}, "Three places with tables at 19:30", 1.1)
+    _a.append(it("assistant", "text", 0.9, text="Three places have a table at 19:30. Checking which one is quieter."))
+    _a.append(it("assistant", "thinking", 0.85, text="The harbour one has the best reviews for a quiet dinner."))
+    _a += tool("WebFetch", {"url": "https://example.com/harbour-kitchen", "prompt": "Is it quiet in the evening?"}, "Quiet tables by the window", 0.8)
+    _a.append(it("assistant", "text", 0.7, text="The harbour restaurant is the quietest. Asking for a table by the window."))
+    _a.append(it("assistant", "tool_use", 0.6, tool_use_id="toolu_wtl_book", tool_name="WebFetch",
+                 tool_input={"url": "https://example.com/harbour-kitchen/book", "prompt": "A table for two at 19:30 on Saturday, by the window"}))
+    ITEMS[ASK1] = ITEMS[ASK1] + _a
+    ASSISTANT[0].update(state="working", status="working", state_since=ago(minutes=1.2), updated_at=ago(),
+                        last_text="The harbour restaurant is the quietest. Asking for a table by the window.")
+
+
+WORK_TIMELINE = os.environ.get("MOCK_WORK_TIMELINE") == "1"
+if WORK_TIMELINE:
+    mock_work_timeline()
+
+
 # MOCK_EDIT_DIFF=1 (#2915): one finished turn whose edits read as real diffs: an Edit that changes a word in two lines
 # of a block (context between and around them), a MultiEdit of two pieces, a Write (all additions) and an Edit of a
 # 56-line switch that changes its first and last lines (the unchanged middle folds; past 40 lines, Show All). The first
@@ -16566,6 +16631,54 @@ if os.environ.get("MOCK_CHURN") == "1":
     for _n, _x in enumerate(ITEMS[WIDGET]):  # seqs in transcript order again (the new ones were numbered last)
         _x["seq"] = _w[0]["seq"] + _n
 
+
+# MOCK_TALL_HISTORY=1: the weather chat with twelve tall exchanges in front, like an Agent chat used for a day of work
+# (#4788): long messages of the user's (Chinese and English, lists, paths), replies with headings and nested lists, and
+# tool calls whose results are screenshots. Rows of very different heights, so the lazy list's guesses are far off.
+# With MOCK_STREAM=1 the chat keeps working at its newest end (ScrollToBottomTests 13).
+if os.environ.get("MOCK_TALL_HISTORY") == "1":
+    _tall = []
+    for _k in range(12):
+        _m = 900 - _k * 40
+        _ask = "\n".join([
+            "第 %d 轮：请把下面几件事按顺序推进，做完一件回我一句。" % (_k + 1),
+            "1) 先看 `apps/weather/Sources/Forecast%d.swift` 里的重试逻辑：断网时 retry 没有上限，改成最多 3 次、指数退避。" % _k,
+            "2) Then check the widget timeline: it reloads every 5 minutes even when nothing changed, which drains the battery.",
+            "3) 截图对比：改前 / 改后各一张，深色和浅色都要，放到 `.shots/round-%d/` 下面，拼成一张给我看。" % (_k + 1),
+            "4) 跑相关测试（ForecastTests、WidgetTimelineTests），不用跑整套。",
+            "说明：如果第 2 件需要改接口，先停下来问我；其余的直接做，不用等我确认。",
+            "补充：上一轮的截图里标题被截断了（「天气预报 · 未来七…」），这次一起看一下是不是同一个原因。",
+        ])
+        _tall.append(it("user", "text", _m, text=_ask))
+        _tall.append(it("assistant", "thinking", _m - 1, text="先看重试逻辑，再看小组件的刷新，最后截图。"))
+        _tall += tool("Read", {"file_path": "/Users/me/code/weather/Sources/Forecast%d.swift" % _k}, "struct Forecast%d {}" % _k, _m - 1)
+        _shot = tool("Bash", {"command": "xcrun simctl io booted screenshot .shots/round-%d/after.png" % (_k + 1),
+                              "description": "截改后的图"}, "", _m - 2)
+        _tall += _shot
+        for _dark in (False, True):
+            _tall.append(it("user", "image", _m - 2, tool_use_id=_shot[0]["tool_use_id"],
+                            image={"mime": "image/png", "data": base64.b64encode(_page_png(360, 480, dark=_dark)).decode()}))
+        _tall.append(it("assistant", "text", _m - 3, text="\n".join([
+            "第 %d 轮做完了，按顺序说：" % (_k + 1),
+            "",
+            "**重试逻辑：** 改成最多 3 次，间隔 1 s、2 s、4 s；断网时第三次失败就停下，界面显示「暂时连不上」。",
+            "- 改了 `Forecast%d.swift` 和它的测试，`ForecastTests` 全过。" % _k,
+            "- 顺手把两处重复的超时判断合并成一个函数。",
+            "",
+            "**Widget timeline:** it now reloads only when the forecast changed or at the next hour, instead of every 5 minutes.",
+            "- Measured on the simulator: 12 reloads an hour before, 1–2 after.",
+            "- `WidgetTimelineTests` passes, including a new case for an unchanged forecast.",
+            "",
+            "**截图：** 改前 / 改后、深浅色各一张，拼图在上面。",
+            "- 标题截断是同一个原因：标题行没有给日期留位置，改成最多两行。",
+            "- 第 2 件没有动接口，所以没停下来问你。",
+            "",
+            "**接下来：** 等你看完截图，没问题我就开 PR；有要改的直接说。",
+        ])))
+    _w = ITEMS[WIDGET]
+    ITEMS[WIDGET] = _tall + _w
+    for _n, _x in enumerate(ITEMS[WIDGET]):  # transcript order: the tall history first
+        _x["seq"] = _n + 1
 
 # MOCK_COMPUTER=ready|permissions|locked: the hub's plugin cua is on (docs/extensions/computer-use.md) and macbook is turned on
 # in that state; Mac Studio is a Mac it is not on for yet. =off: on, but for no machine yet. Unset: the plugin is off.
@@ -21729,6 +21842,8 @@ class H(BaseHTTPRequestHandler):
                     subscribed.add(sid)
                     if LIVE_STATUS and "session_live" in asked:
                         live_status_subscribe(send, mid, sid)
+                    if WORK_TIMELINE and "session_live" in asked:
+                        work_timeline_live(send, mid, sid)
                     items = find_items(sid)
                     since = msg.get("since_seq") or 0
                     if GAP and sid == SESSIONS[0]["session_id"] and not GAP_STATE["started"]:
@@ -22373,6 +22488,26 @@ def live_status_subscribe(send, mid, sid):
 
 
 MOCK_HELP.append("MOCK_LIVE_STATUS=1  Claude 会话的实时状态行（session_live，#1963）：声明了 session_live 的连接订阅后按 MOCK_LIVE_STATUS_TICK 秒（默认 1）一条推 live（思考中、thought for、token 增长、动词变化），最后推 null、会话变空闲；结束后再订阅会重来一轮")
+
+
+def work_timeline_live(send, mid, sid):
+    """MOCK_WORK_TIMELINE: the two live sessions say they are thinking, every 5 s for 10 minutes or until the page goes."""
+    if sid not in (WORKTL, ASK1):
+        return
+
+    def run():
+        import time
+        for _ in range(120):
+            try:
+                send({"type": "live", "machine_id": mid, "session_id": sid,
+                      "live": {"verb": "Thinking", "thinking": True, "elapsed_s": 30, "at": utc_now()}})
+            except Exception:
+                return
+            time.sleep(5)
+    threading.Thread(target=run, daemon=True).start()
+
+
+MOCK_HELP.append("MOCK_WORK_TIMELINE=1  工作摘要展开成 cindy 的时间线（#5155）：天气 Agent（WORKTL）一轮做完、一轮在做，中间有叙述、有字和没字的思考；Persona 主对话同样一轮做完一轮在做；声明了 session_live 的连接订阅这两个会话时每 5 秒推一次「在思考」")
 
 
 # ---------- MOCK_CHAT_CARDS: a crowded composer on a phone (#1996) ----------
@@ -23400,6 +23535,110 @@ MOCK_HELP.append("MOCK_ULTRACODE=1  Claude Code 的 ultracode 开关（#3428）�
 MOCK_HELP.append("MOCK_CUSTOM_MODELS=1|forgetfail|empty|fail  手动输入模型 ID（#1644）：features 带 typed_models；Claude Code / Codex 的模型列表后面带输入过的 ID（custom），"
                  "DELETE …/models/custom?model= 忘掉；新建和 …/modes 用了列表里没有的 ID 就记下。forgetfail：忘掉回 500；empty：Claude Code 的列表是空的；"
                  "fail：读不到列表（502）。GET /mock/custom_models 看记着的，?reset=1 复原")
+
+# Switching a running Agent to another provider (#5035, docs/protocol/protocol.md "Switching a running Agent to another
+# provider"): MOCK_LAUNCHER_SWITCH=1 advertises `launcher_switch`, gives every computer a second Claude Code launcher
+# ("work", through a made-up gateway, with its own models) beside claude, the locked sonnetcc and codex, and takes
+# POST …/modes {launcher, model?, effort?}: another Claude launcher records `pending_switch` on the row (nothing typed;
+# codex is 409 switch_other_agent, a model with sonnetcc 409 switch_model_locked, an unknown one 409
+# switch_launcher_missing), the session's own drops it. The next message carries it out: the row's launcher (and model)
+# become the new ones and pending_switch goes. =pending: the PR review starts with a switch to work waiting; =refuse: a
+# message carrying a switch is refused (409 switch_busy, delivered none) and the switch keeps waiting; =pending,refuse
+# both. GET /mock/launcher_switch: the requests; ?reset=1 drops every pending switch (and puts =pending's back).
+LAUNCHER_SWITCH_MODE = os.environ.get("MOCK_LAUNCHER_SWITCH", "")
+LAUNCHER_SWITCH_LOG = []
+LAUNCHER_SWITCH_ALL = [{"name": "claude", "model": "opus"}, {"name": "work", "model": "glm-5.3"}, {"name": "sonnetcc", "model": "sonnet"},
+                       {"name": "codex", "model": "gpt-5.5", "agent": "codex", "agent_type": "codex"}]
+if LAUNCHER_SWITCH_MODE:
+    LAUNCHER_MODELS["work"] = {"agent": "claude", "models": [
+        {"id": "default", "name": "Default (recommended)", "description": "Use the gateway's default model (currently glm-5.3)", "resolved": "glm-5.3", "default": True, "efforts": ["low", "medium", "high"]},
+        {"id": "glm-5.3", "name": "glm-5.3", "description": "From the gateway", "efforts": ["low", "medium", "high"]},
+        {"id": "deepseek-v4", "name": "deepseek-v4", "description": "From the gateway", "efforts": ["low", "medium", "high"]},
+        {"id": "opus", "name": "Opus 5.5", "description": "Opus 5.5 · through the gateway", "resolved": "claude-opus-5-5", "efforts": _CLAUDE_EFFORTS},
+    ]}
+
+
+def launcher_switch_reset():
+    for s in SESSIONS:
+        s.pop("pending_switch", None)
+    if "pending" in LAUNCHER_SWITCH_MODE:
+        for s in SESSIONS:
+            if s["session_id"] == REVIEW:
+                s["pending_switch"] = {"launcher": "work", "model": "glm-5.3", "at": ago(minutes=2)}
+
+
+def launcher_switch_route(handler, p, body):
+    """MOCK_LAUNCHER_SWITCH: the second launcher, POST …/modes {launcher}, a message carrying the switch. False otherwise."""
+    if not LAUNCHER_SWITCH_MODE: return False
+    if p == "/mock/launcher_switch":
+        if "reset=1" in (handler.path.split("?", 1) + [""])[1]:
+            launcher_switch_reset()
+            for m in MACHINES: push_machine(m["id"])
+        return handler.send_json({"requests": LAUNCHER_SWITCH_LOG}) or True
+    if handler.command == "GET" and re.fullmatch(r"/api/v1/machines/[^/]+/launchers", p):
+        return handler.send_json({"launchers": launcher_health_list([dict(l) for l in LAUNCHER_SWITCH_ALL])}) or True
+    m = re.fullmatch(r"/api/v1/sessions/([^/]+)/([^/]+)/(modes|messages)", p)
+    if not m or handler.command != "POST": return False
+    s = next((x for x in SESSIONS if x["machine_id"] == m.group(1) and x["session_id"] == m.group(2)), None)
+    if s is None: return False
+    req = json.loads(body or b"{}")
+    if m.group(3) == "messages":
+        ps = s.get("pending_switch")
+        if not ps: return False
+        if "refuse" in LAUNCHER_SWITCH_MODE:
+            return handler.send_json({"error": "Agent 正在工作，等它停下再发，发出时会先切换到 %s" % ps["launcher"], "code": "switch_busy",
+                                      "delivered": "none"}, 409) or True
+        s["launcher"] = ps["launcher"]
+        s["model"] = ps.get("model") or LAUNCHER_MODELS.get(ps["launcher"], {}).get("models", [{}])[0].get("resolved", s.get("model"))
+        if ps.get("effort"): s["effort"] = ps["effort"]
+        s.pop("pending_switch", None)
+        push_machine(s["machine_id"])
+        return False  # the message goes on as any other
+    launcher = req.get("launcher") or ""
+    if not launcher: return False
+    LAUNCHER_SWITCH_LOG.append({"session_id": s["session_id"], **{k: req[k] for k in ("launcher", "model", "effort") if k in req}})
+    if launcher == (s.get("launcher") or "claude"):
+        s.pop("pending_switch", None)
+        push_machine(s["machine_id"])
+        rest = {k: v for k, v in req.items() if k in ("permission_mode", "effort", "model") and v}
+        if rest:
+            s.update(rest)
+            MODES_LOG.append({"session_id": s["session_id"], **rest})
+        return handler.send_json({}) or True
+    known = {l["name"]: l for l in LAUNCHER_SWITCH_ALL}
+    if launcher not in known:
+        return handler.send_json({"error": "这台电脑上没有启动器 %s" % launcher, "code": "switch_launcher_missing"}, 409) or True
+    if known[launcher].get("agent", "claude") != "claude":
+        return handler.send_json({"error": "%s 运行的不是 Claude Code" % launcher, "code": "switch_other_agent"}, 409) or True
+    if req.get("model") and LAUNCHER_MODELS.get(launcher, {}).get("locked"):
+        return handler.send_json({"error": "%s 固定了自己的模型，不能另选" % launcher, "code": "switch_model_locked"}, 409) or True
+    s["pending_switch"] = {"launcher": launcher, **{k: req[k] for k in ("model", "effort") if req.get(k)}, "at": ago(minutes=0)}
+    if req.get("permission_mode"): s["permission_mode"] = req["permission_mode"]
+    push_machine(s["machine_id"])
+    return handler.send_json({}) or True
+
+
+if LAUNCHER_SWITCH_MODE:
+    launcher_switch_reset()
+
+_plugins_route_without_launcher_switch = plugins_route
+
+
+def plugins_route(handler, p, body):
+    return launcher_switch_route(handler, p, body) or _plugins_route_without_launcher_switch(handler, p, body)
+
+
+_features_without_launcher_switch = features
+
+
+def features():
+    return _features_without_launcher_switch() + (["launcher_switch"] if LAUNCHER_SWITCH_MODE else [])
+
+
+MOCK_HELP.append("MOCK_LAUNCHER_SWITCH=1|pending|refuse|pending,refuse  运行中的 Agent 换服务商（#5035）：features 带 launcher_switch；每台电脑多一个 Claude Code 启动器 work（走网关，"
+                 "自己的模型列表）；POST …/modes {launcher} 换到另一个 Claude 启动器就记下 pending_switch（codex 回 409 switch_other_agent，"
+                 "sonnetcc 带模型回 409 switch_model_locked），换回自己的就清掉；下一条消息执行切换。pending：检查 PR 那个一开始就有待切换；"
+                 "refuse：带切换的消息回 409 switch_busy。GET /mock/launcher_switch 看请求，?reset=1 复原")
 
 # Agent session archives (docs/protocol/protocol.md "Agent session archives"; web "Archived agents"): MOCK_AGENT_ARCHIVES=1
 # advertises archives and "Archive and close" (=archive: archives only, as behind an older manager), with two agents
