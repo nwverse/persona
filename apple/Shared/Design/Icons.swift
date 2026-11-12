@@ -252,6 +252,8 @@ extension Theme {
         /// The queued messages given to the agent now, ahead of its next tool boundary (#6088).
         static let sendNow = "forward.end.fill"
         static let select = "selection.pin.in.out"
+        /// Select Messages… (#3838): pick several messages in a chat to forward together.
+        static let pickMessages = success
         static let insert = "text.cursor"
         static let view = "eye"
         /// Hide from a list (it stays where it is, out of sight).
@@ -677,6 +679,8 @@ extension Theme {
         /// A file edited in place (the Edit tools; Auto-Edit mode).
         static let editFile = "pencil.line"
         static let newFile = "doc.badge.plus"
+        /// New Folder in the file page's ＋ (#5828): the folder with a plus, as a new group.
+        static let newFolder = newGroup
         /// Files looked up by name or listed (Glob, LS).
         static let findFiles = "folder.badge.questionmark"
         /// Text searched for inside files (Grep).

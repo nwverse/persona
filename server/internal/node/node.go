@@ -1625,6 +1625,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.uploadCall(method, params)
 	case "file.rename", "file.move", "file.trash", "file.restore":
 		return n.fileEditCall(method, params)
+	case "file.mkdir", "file.write", "file.zip": // new folders, text files, zips (filemake.go)
+		return n.fileMake(ctx, method, params)
 	case "health.reports.list", "health.reports.delete":
 		return n.healthReportsCall(method, params)
 	case "file.chunk":

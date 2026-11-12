@@ -20561,7 +20561,8 @@ _features_without_file_ops = features
 
 def features():
     return (_features_without_file_ops() + (["upload_dir", "file_edit"] if FILE_OPS else [])
-            + (["file_info"] if os.environ.get("MOCK_FILE_LINKS") else []))
+            + (["file_info"] if os.environ.get("MOCK_FILE_LINKS") else [])
+            + (["file_mkdir", "file_write", "file_zip"] if FILE_OPS else []))
 
 
 def file_ops_key(mid, path, cwd):
@@ -20698,6 +20699,63 @@ def file_ops_route(h, p, body):
         restored.append({"path": path})
     fs_changed(mid, sorted(changed), True)
     return h.send_json({"restored": restored}) or True
+
+
+def file_make_route(h, p, body):
+    """POST /api/v1/machines/{mid}/files/{mkdir,write,zip} under MOCK_FILE_OPS (#5828): a folder in the tree, a text file
+    made or replaced, a real zip of tree entries kept in FILES at a temporary path for …/file/download."""
+    m = re.fullmatch(r"/api/v1/machines/([^/]+)/files/(mkdir|write|zip)", p)
+    if not (FILE_OPS and m): return False
+    mid, op = m.groups()
+    req = json.loads(body or b"{}")
+    FILE_OPS_LOG.append({"op": op, **{k: v for k, v in req.items() if k != "text"}})
+    cwd = req.get("cwd", "")
+    taken = lambda key: key in MOCK_TREE or key + "/" in MOCK_TREE
+    if op == "mkdir":
+        home, drel, err = file_ops_dir(mid, req.get("dir", ""), cwd)
+        if err: return h.send_json(*err) or True
+        name = req.get("name", "")
+        if taken(drel + name): return h.send_json({"error": "已经有了", "code": "exists", "name": name}, 409) or True
+        MOCK_TREE[drel + name + "/"] = None
+        fs_changed(mid, [(home + "/" + drel).rstrip("/")], True)
+        return h.send_json({"path": (home + "/" + drel + name)}) or True
+    if op == "write":
+        home, rel, err = file_ops_key(mid, req.get("path", ""), cwd)
+        if err: return h.send_json(*err) or True
+        text = req.get("text", "")
+        if req.get("create"):
+            if taken(rel): return h.send_json({"error": "已经有了", "code": "exists", "name": rel.rpartition("/")[2]}, 409) or True
+        elif rel not in MOCK_TREE:
+            return h.send_json({"error": "不存在", "code": "not_found"}, 404) or True
+        MOCK_TREE[rel] = text
+        fs_changed(mid, [(home + "/" + rel.rpartition("/")[0]).rstrip("/")], True)
+        return h.send_json({"path": home + "/" + rel, "size": len(text.encode()), "revision": "r%d" % len(FILE_OPS_LOG), "mtime": ago()}) or True
+    import io, zipfile
+    out, n = io.BytesIO(), 0
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+        for path in req.get("paths", []):
+            home, ab = mock_abs(mid, path, cwd)
+            rel = mock_rel(home, ab)
+            if rel is None: return h.send_json({"error": "不存在", "code": "not_found"}, 404) or True
+            base = rel.rstrip("/").rpartition("/")[0]
+            for k, v in MOCK_TREE.items():
+                if k == rel or k.startswith(rel if rel.endswith("/") else rel + "/"):
+                    name = k[len(base) + 1:] if base else k
+                    data = b"" if v is None else base64.b64decode(v[1]) if isinstance(v, tuple) else v.encode()
+                    z.writestr(name, data)
+                    n += 1
+    name = req.get("name") or "Archive.zip"
+    if not name.lower().endswith(".zip"): name += ".zip"
+    if req.get("dir"):
+        home, drel, err = file_ops_dir(mid, req["dir"], cwd)
+        if err: return h.send_json(*err) or True
+        final = file_ops_free(drel, name, "keep")
+        MOCK_TREE[drel + final] = ("application/zip", base64.b64encode(out.getvalue()).decode())
+        fs_changed(mid, [(home + "/" + drel).rstrip("/")], True)
+        return h.send_json({"path": home + "/" + drel + final, "name": final, "size": len(out.getvalue()), "files": n}) or True
+    temp = "/tmp/persona-zips/z-%d/%s" % (len(FILE_OPS_LOG), name)
+    FILES[temp] = out.getvalue()
+    return h.send_json({"path": temp, "name": name, "size": len(out.getvalue()), "files": n}) or True
 
 
 _features_without_plugins = features
@@ -22322,6 +22380,7 @@ class H(BaseHTTPRequestHandler):
                 lark_messaging.route(self, self.command, p, parse_qs(urlparse(self.path).query), self.last_body): return
         if pins_route(self, p): return
         if file_ops_route(self, p, self.last_body): return
+        if file_make_route(self, p, self.last_body): return
         if look_uploads_route(self, self.command, p, self.last_body): return
         if looks_route(self, self.command, p, self.last_body): return
         if recordings_route(self, self.command, p): return

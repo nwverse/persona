@@ -46,6 +46,14 @@ struct FilesPane: View {
     @State private var query = ""
     @FocusState private var findFocused: Bool
     @State private var finder = FilesFinder()
+    /// New Folder / New Text File waiting for a name (#5828).
+    @State private var naming: NewItem?
+    @State private var newItemName = ""
+
+    private enum NewItem: Identifiable {
+        case folder, text
+        var id: Self { self }
+    }
 
     private struct InfoTarget: Identifiable {
         var path: String
@@ -60,6 +68,12 @@ struct FilesPane: View {
     private var machine: MachineRef { MachineRef(group: group, id: machineID) }
     private var home: String? { model.machine(machine)?.home }
     private var canEdit: Bool { FolderEdits.available(model, group: group) }
+    /// The hub can make folders, write text files, zip (hello `file_mkdir`, `file_write`, `file_zip`; an unknown list
+    /// offers them and lets the answer tell).
+    private func hubHas(_ feature: String) -> Bool {
+        let f = model.features(group)
+        return f.isEmpty || f.contains(feature)
+    }
     private var writable: Bool { canEdit && FilesNavigation.writable(shown, home: home) }
     /// The session's folder (marked in the path bar); the machine page's home is no session's.
     private var sessionFolder: String? { cwd.hasPrefix("/") ? (cwd as NSString).standardizingPath : nil }
@@ -183,6 +197,21 @@ struct FilesPane: View {
             }
             Button("Cancel", role: .cancel) { renaming = nil }
         }
+        .alert(naming == .text ? String(localized: "New Text File") : String(localized: "New Folder"),
+               isPresented: Binding(get: { naming != nil }, set: { if !$0 { naming = nil } })) {
+            TextField("Name [Personal Agent Prefs d44e9b]", text: $newItemName)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .accessibilityIdentifier("files.new.field")
+            Button("Create") {
+                if let kind = naming { create(kind, name: newItemName) }
+                naming = nil
+            }
+            Button("Cancel", role: .cancel) { naming = nil }
+        } message: {
+            Text(naming == .text ? String(localized: "In “\(FolderEdits.folderName(FilesNavigation.tilde(shown, home: home)))”. It opens once it’s made.")
+                                 : String(localized: "In “\(FolderEdits.folderName(FilesNavigation.tilde(shown, home: home)))”."))
+        }
         .alert(trashTitle, isPresented: Binding(get: { !trashing.isEmpty }, set: { if !$0 { trashing = [] } })) {
             Button("Move to Trash", role: .destructive) {
                 let names = trashing
@@ -279,17 +308,28 @@ struct FilesPane: View {
                     .accessibilityIdentifier("files.select.done")
                 } else {
                     if writable {
+                        // ＋ (#5828): new folder and text file, then the uploads
                         Menu {
-                            Button { pickingFiles = true } label: { Label("Choose from Files", systemImage: Theme.Icon.file) }
-                            Button { pickingPhotos = true } label: { Label("Choose from Photos", systemImage: Theme.Icon.photos) }
-                        } label: { tool(Theme.Icon.upload) }
+                            Section {
+                                if hubHas("file_mkdir") {
+                                    Button { startNew(.folder) } label: { Label("New Folder", systemImage: Theme.Icon.newFolder) }
+                                }
+                                if hubHas("file_write") {
+                                    Button { startNew(.text) } label: { Label("New Text File", systemImage: Theme.Icon.newFile) }
+                                }
+                            }
+                            Section {
+                                Button { pickingPhotos = true } label: { Label("Upload from Photos", systemImage: Theme.Icon.photos) }
+                                Button { pickingFiles = true } label: { Label("Upload from Files", systemImage: Theme.Icon.upload) }
+                            }
+                        } label: { tool(Theme.Icon.add) }
                         #if os(macOS)
                         .menuStyle(.button)
                         .menuIndicator(.hidden)
                         #endif
                         .themedButton()
                         .clipShape(.circle)
-                        .accessibilityLabel("Upload to This Folder")
+                        .accessibilityLabel("New or Upload")
                         .accessibilityIdentifier("files.upload")
                     }
                     if canEdit, listing?.entries.isEmpty == false {
@@ -440,6 +480,13 @@ struct FilesPane: View {
                 .lineLimit(1)
                 .accessibilityIdentifier("files.select.count")
             Spacer(minLength: Theme.Space.s)
+            Button { downloadSelection() } label: {
+                Label("Download", systemImage: Theme.Icon.save).labelStyle(.iconOnly)
+            }
+            .themedButton()
+            .disabled(selection.isEmpty || !canDownloadSelection)
+            .accessibilityLabel("Download")
+            .accessibilityIdentifier("files.select.download")
             Button { moving = Array(selection).sorted() } label: {
                 Label("Move", systemImage: Theme.Icon.folder).lineLimit(1)
             }
@@ -528,6 +575,10 @@ struct FilesPane: View {
         .contextMenu {
             if !e.dir && e.linkBroken != true {
                 Button { save(e, full) } label: { Label("Save to Files", systemImage: Theme.Icon.save) }
+            } else if e.dir, hubHas("file_zip") {
+                Button { transfers.downloadZip([full], name: e.name + ".zip", cwd: cwd, machine: machine, model: model) } label: {
+                    Label("Download as Zip", systemImage: Theme.Icon.save)
+                }
             }
             Button { copy(full) } label: { Label("Copy Path", systemImage: Theme.Icon.copy) }
             Button { info = InfoTarget(path: full, entry: e) } label: { Label("Info [File Info]", systemImage: Theme.Icon.info) }
@@ -659,6 +710,55 @@ struct FilesPane: View {
             try? await Task.sleep(for: .seconds(2.5))
             if highlight == name { withAnimation(Theme.Motion.standard) { highlight = nil } }
         }
+    }
+
+    private func startNew(_ kind: NewItem) {
+        newItemName = kind == .folder ? String(localized: "untitled folder") : String(localized: "Untitled.txt")
+        naming = kind
+    }
+
+    /// Makes the folder or the empty text file in the folder shown, lists it marked; a text file opens.
+    private func create(_ kind: NewItem, name: String) {
+        let name = name.trimmingCharacters(in: .whitespaces)
+        if let problem = FolderEdits.nameProblem(name) {
+            model.toast = Toast(problem, style: .error)
+            return
+        }
+        guard let api = model.api(group) else { return }
+        let dir = shown
+        Task {
+            do {
+                switch kind {
+                case .folder: _ = try await api.makeDir(machine: machineID, dir: dir, cwd: cwd, name: name)
+                case .text: _ = try await api.writeFile(machine: machineID, path: (dir as NSString).appendingPathComponent(name), cwd: cwd, text: "", create: true)
+                }
+                Haptics.success()
+                await load()
+                show((dir as NSString).appendingPathComponent(name), dir: false)
+                if kind == .text { file = FileRef(group: group, machineID: machineID, path: (dir as NSString).appendingPathComponent(name), cwd: cwd) }
+            } catch {
+                if !error.isCancellation { model.toast = Toast(FolderEdits.message(error), style: .error) }
+            }
+        }
+    }
+
+    /// One file as it is; several, or a folder, zipped on the computer first (#5828).
+    private var canDownloadSelection: Bool {
+        let picked = (listing?.entries ?? []).filter { selection.contains($0.name) }
+        return picked.count == 1 && !picked[0].dir ? picked[0].linkBroken != true : hubHas("file_zip")
+    }
+
+    private func downloadSelection() {
+        let picked = (listing?.entries ?? []).filter { selection.contains($0.name) }
+        guard !picked.isEmpty else { return }
+        if picked.count == 1, !picked[0].dir {
+            save(picked[0], full(picked[0].name))
+        } else {
+            let name = picked.count == 1 ? picked[0].name + ".zip" : String(localized: "Archive.zip")
+            transfers.downloadZip(picked.map { full($0.name) }, name: name, cwd: cwd, machine: machine, model: model)
+        }
+        selecting = false
+        selection = []
     }
 
     private func copy(_ p: String) {

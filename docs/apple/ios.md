@@ -169,7 +169,21 @@ Chat page:
   - **Sent**: the block is a card at the top of the bubble, as a quote's, with the arrow, "Forwarded from Claude · chat",
     the computer and time, and four lines; a tap opens the original chat at the message (`AppModel.openLinked`), or the
     whole text when this app does not have that chat. Nothing is written to the original chat.
-  - Tests: `ForwardTests` (`spec/fixtures/forward`), `ForwardMessageTests` (the whole way on the mock hub, screenshots).
+  - **Several at once** (#3838, `MessagePick.swift`): Forward To's Select Messages…, under Share as Image, closes the
+    picker and starts selecting in the chat with the pressed message picked; the long-press bar is unchanged. Each
+    message (your own, a reply, a relayed or another session's; not steps, notices, injected lines or `/loop` ticks) gets
+    the Inbox Select's round mark on its leading edge, and a tap anywhere on it picks or unpicks it; nothing inside it
+    answers. A long answer's parts (#4970) pick as the one answer, its mark on the first. The footer gives way to `PickBar`: Cancel (the chat as it was: the box's words, quotes and photos are the
+    model's), "N Selected", and Forward N, off with none picked; a 31st pick shows a toast. Forward N opens Forward To
+    with the picked messages in the chat's order (`ForwardDraft.pieces`), without Share as Image or Select Messages….
+    They go over the target's box as one bar (`QuoteBar` groups forwards of one chat: "2 Forwarded Messages · chat", a
+    line each, one × for all) and are sent as one block each; the sent bubble shows them as one card
+    (`ForwardGroupBlock`: the chat and computer, then each message's author, time and two lines, a tap opening it; past
+    three, "N More"). Size: each cut at the smaller of 20,000 and 60,000 / N characters (`ForwardMessage.limit(count:)`),
+    at most 30; photos share the box's limit. Selecting ends once a target is picked; cancelling Forward To comes back
+    to the selection.
+  - Tests: `ForwardTests` (`spec/fixtures/forward`, `several.json`), `ForwardMessageTests` and `ForwardSeveralTests` (the
+    whole way on the mock hub, screenshots).
   - Screenshots `-showSampleComments YES` (two code comments and an element over the box); `MOCK_COMMENTS=1` gives the widget chat a review sent from the web, and Persona's main conversation a quote and a comment on its answer; end-to-end `CommentBubbleTests`.
 - Files: message paths and Read / Edit / Write tool paths become tappable file tags, read from the session's computer
   (`GET /api/v1/machines/{mid}/file`, at most 2 MB, iCloud directories denied), rendered Markdown / numbered code / images / PDF / directories.
@@ -1737,6 +1751,7 @@ The Files page (`Views/Session/FilesPane.swift`: an Agent's Files tab, and the c
 - **Find**: the field under the path bar finds names under the folder shown, folders included (`fs/find`: Git's files in a repository, else a bounded walk), every typed word in the name, best first (whole name, start, word start, anywhere; folders first, shorter paths first). The web's Files panel ranks by the same rule.
 - **Info** (long press › Info, ⋯ › Info for the folder shown; `FileInfoSheet.swift`): kind, location, size or item count, created / modified / attributes changed, permissions in words and as `rw-r--r-- · 644`, owner and group, Copy Path. A symlink adds what it says, its real location and **Go to Real Location**. No permissions on a Windows computer; an older hub or node shows what the listing had and says what to update (protocol.md "File details and links").
 - **Symlinks** in the list carry an arrow on the icon and "Link → target"; a broken one the error mark and "Link broken · target isn’t there" in red, and a tap opens Info instead. A tap on a working link opens what it leads to with the path bar on the link's path.
+- **＋** (a folder that takes changes; #5828): New Folder and New Text File, each asking for a name (a taken one is refused, nothing replaced; the new item is marked, a text file opens), then Upload from Photos and from Files. **Download** in the selection bar and a folder's long press: one file as it is; several items or a folder are zipped on the computer first (`files/zip` into a temporary folder there, "Zipping on the computer…" in the transfers bar), then saved through Save to Files.
 - **Show in Files Page** (the preview's ⋯, where the preview was opened from the Files page or an Agent's chat): the Files page at the file's folder with the file marked for a moment.
 
 ## File viewer (2026-10-31)

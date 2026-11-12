@@ -18,7 +18,8 @@ import { hitFolder, hitName, nameEntries, searchNames, type NameHit } from "../.
 import { ago, bytes, shortPath } from "../../lib/format";
 import { openPanel } from "../../lib/panel";
 import { notePlace } from "../../lib/panel-memory";
-import { useStore } from "../../lib/store";
+import { FILE_MKDIR_FEATURE, FILE_WRITE_FEATURE } from "../../lib/file-ops";
+import { hubHas, useStore } from "../../lib/store";
 import { useFsLive } from "../../lib/use-fs-live";
 import { NARROW, useMedia } from "../../lib/viewport";
 import { Button, copyText, cx, IconButton, Loading, Menu, useMenu } from "../../ui/atoms";
@@ -28,6 +29,7 @@ import { SearchField } from "../../ui/SearchField";
 import { scrollBehavior } from "../../ui/stream/motion";
 import { PanelHeader } from "../../ui/PanelHeader";
 import { FileInfoDialog } from "./files/FileInfo";
+import { NewItemDialog, type NewKind } from "./files/NewItem";
 import { FileView } from "./files/FileView";
 import { DropHint, dragHasFiles, RowCheck, rowClick, rowFrameProps, RowMore, SelectionBar, useFileOps, type OpTarget, type RowOps } from "./files/FileOps";
 import { FilesTree } from "./files/FilesTree";
@@ -73,6 +75,9 @@ export function FilesPanel({ mid, sid, cwd, path, file, highlight: marked, onClo
   // where it is, kept when the page leaves the session so coming back opens it here again (#5150)
   useEffect(() => notePlace({ mid, sid, cwd }, { path: dir === cwd ? undefined : dir, file: open.at(-1) }), [mid, sid, cwd, dir, open]);
   const menu = useMenu();
+  const newMenu = useMenu();
+  const features = useStore((s) => s.features);
+  const [newKind, setNewKind] = useState<NewKind | null>(null);
   const [info, setInfo] = useState<{ path: string; entry?: FsEntry } | null>(null);
   const [query, setQuery] = useState("");
   useEffect(() => setQuery(""), [dir]);
@@ -194,6 +199,9 @@ export function FilesPanel({ mid, sid, cwd, path, file, highlight: marked, onClo
                 {sync && <span className="text-[11px] text-ink-3 tabular-nums">{sync}</span>}
                 {changes > 0 && <span className="rounded-full bg-field px-1.5 text-[11px] text-ink-2 tabular-nums">{changes}</span>}
               </button>
+              {here_dir && (hubHas(features, FILE_MKDIR_FEATURE) || hubHas(features, FILE_WRITE_FEATURE)) && (
+                <IconButton icon="plus" label={t("files-new.new")} onClick={newMenu.open} active={Boolean(newMenu.anchor)} />
+              )}
               {ops.canUpload && here_dir && <IconButton icon="upload" label={t("files-ops.upload")} onClick={() => ops.choose(here_dir)} />}
               <IconButton icon="more" label={t("session-filespanel.more")} onClick={menu.open} active={Boolean(menu.anchor)} />
             </>
@@ -213,6 +221,18 @@ export function FilesPanel({ mid, sid, cwd, path, file, highlight: marked, onClo
               { key: "reload", label: t("session-filespanel.reload"), icon: "retry", onSelect: () => setReloads((n) => n + 1) },
               ...(ops.canUpload && here_dir ? [{ key: "upload", label: t("files-ops.upload"), icon: "upload" as const, divider: true, onSelect: () => ops.choose(here_dir) }] : []),
               { key: "select", label: t("files-ops.select"), checked: selecting, divider: !(ops.canUpload && here_dir), onSelect: () => (selecting ? endSelect() : setSelection({ scope: ops.scope, items: new Map() })) },
+            ]}
+          />
+        )}
+        {newMenu.anchor && (
+          <Menu
+            anchor={newMenu.anchor}
+            onClose={newMenu.close}
+            align="right"
+            items={[
+              ...(hubHas(features, FILE_MKDIR_FEATURE) ? [{ key: "folder", label: t("files-new.new_folder"), icon: "folder" as const, onSelect: () => setNewKind("folder") }] : []),
+              ...(hubHas(features, FILE_WRITE_FEATURE) ? [{ key: "text", label: t("files-new.new_text"), icon: "file" as const, onSelect: () => setNewKind("text") }] : []),
+              ...(ops.canUpload ? [{ key: "upload", label: t("files-ops.upload"), icon: "upload" as const, divider: true, onSelect: () => ops.choose(here_dir) }] : []),
             ]}
           />
         )}
@@ -306,6 +326,21 @@ export function FilesPanel({ mid, sid, cwd, path, file, highlight: marked, onClo
         </div>
         {ops.ui}
       </div>
+      {newKind && (
+        <NewItemDialog
+          mid={mid}
+          cwd={cwd}
+          dir={shown}
+          folderName={fileName(shown) || shown}
+          kind={newKind}
+          onClose={() => setNewKind(null)}
+          onMade={(p, kind) => {
+            setReloads((n) => n + 1);
+            setHighlight(fileName(p));
+            if (kind === "text") setOpen([p]);
+          }}
+        />
+      )}
       {info && <FileInfoDialog mid={mid} cwd={cwd} path={info.path} entry={info.entry} onClose={() => setInfo(null)} onGoTo={goTo} />}
       {viewing && (
         <FileView

@@ -54,5 +54,10 @@
   "restore_failed": "元に戻せませんでした：{error}",
   "trash_failed": "ゴミ箱に入れられませんでした：{error}",
   "trashed_named": "「{name}」をゴミ箱に入れました",
-  "dismiss": "閉じる"
+  "dismiss": "閉じる",
+  "download_zip": "ZIP でダウンロード",
+  "archive_name": "アーカイブ.zip",
+  "zipping_one": "コンピュータで {count} 項目を圧縮中…",
+  "zipping_other": "コンピュータで {count} 項目を圧縮中…",
+  "zip_failed": "圧縮できませんでした：{error}"
 }

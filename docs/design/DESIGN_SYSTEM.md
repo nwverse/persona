@@ -463,6 +463,12 @@ For every component: use the design-system one, not a lookalike. Counts are appr
   Persona's place in the message actions; the card over the composer (`ForwardBar`) and in the bubble (`ForwardBlock`)
   are the quote bar's and quote card's shapes (`views/chat/Quote.tsx`) with the `forward` icon, and Forward to is a
   `Dialog` (a bottom sheet on phones) with palette-style rows; no Share as Image row, as the web has no share card.
+- Forwarding several at once (#3838): the entry is a row at the top of Forward To, "Select Messages…" (「多选…」), never
+  a bar item next to Select Text, and the message bar keeps its width. Selecting in a chat is the Inbox Select's pattern:
+  a round mark on each message's leading edge (filled accent when picked), a tap anywhere on the message toggles it, the
+  composer gives way to a bar with Cancel, "N Selected" and Forward N (disabled at 0), and Cancel leaves the chat as it
+  was. Several forwards of one chat are one row over the composer (a line each, one ×) and one card in the bubble (each
+  message's author, time and two lines, each opening it; past three, "N More").
 - Share as Image (iOS `MessageShareSheet`): a full-screen page with the message as a card (who said it, where and when, the
   words with code blocks that wrap and have no Copy bar, a quiet Persona mark, on a pale blue-to-lilac gradient), Light /
   Dark at the top, and Share (the picture), Save, Copy and Share Text along the bottom; the card is 390 pt wide, wider for
@@ -1981,6 +1987,7 @@ Who it serves: people working with their computers' files from the phone or the 
 - **Path bar**: Back, Forward and Up as the page's circle buttons (`.themedButton()` clipped to a circle on iOS, `IconButton` on the web), then the path from the home (`Theme.Icon.home`) or `/`, every folder a button, the current one on `Theme.Fill.chip` (web `bg-field`), separated by `Theme.Icon.pathSeparator`. The session's folder carries a compact accent `Chip` "Session"; a folder outside the home ends with a compact `Chip` "Read Only" (`Theme.Icon.locked`). Why not the breadcrumb alone: the page now leaves the session's folder, so the path is the whole one and the history is a browser's.
 - **Find field** under the path bar, beside the page's tool buttons: a capsule of `Theme.Fill.chip` at `Theme.Size.wellS` (the buttons' height) with the search mark and a clear button; the web's `SearchField` `sm`. Results replace the list while there are words in it.
 - **Info**: a sheet with medium and large detents on iOS (a grouped list of `LabeledContent` rows, `.themedRow()`), a `Dialog` on the web, both with Copy Path; permissions in plain words before the code (`rw-r--r-- · 644`), the code in `Theme.Font.code`.
+- **＋ menu** (#5828): the page's add button (`Theme.Icon.add`; web `plus`) opens New Folder (`Theme.Icon.newFolder`) and New Text File (`Theme.Icon.newFile`), then the uploads, each section apart; a name is asked in an alert on iOS (as Rename) and a `Dialog` on the web, the name before the extension selected.
 - **Symlinks**: `Theme.Icon.symlink` on the icon's corner (accent), `Theme.Icon.error` in `Theme.danger` for a broken one, whose second line is the danger color too.
 
 ## Starting from what you already have (#5193)

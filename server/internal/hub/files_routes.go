@@ -41,4 +41,8 @@ func (h *Hub) fileRoutes(api *http.ServeMux) {
 	api.HandleFunc("POST /api/v1/machines/{mid}/files/move", h.fileEdit("move"))
 	api.HandleFunc("POST /api/v1/machines/{mid}/files/trash", h.fileEdit("trash"))
 	api.HandleFunc("POST /api/v1/machines/{mid}/files/restore", h.fileEdit("restore"))
+	// #5828 / #5829: a new folder, a text file written (made, or replaced when it is still the version opened), a zip
+	api.HandleFunc("POST /api/v1/machines/{mid}/files/mkdir", h.fileEdit("mkdir"))
+	api.HandleFunc("POST /api/v1/machines/{mid}/files/write", h.fileEdit("write"))
+	api.HandleFunc("POST /api/v1/machines/{mid}/files/zip", h.fileEdit("zip"))
 }
