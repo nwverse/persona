@@ -1,6 +1,7 @@
 package persona.core.data
 
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.*
 import org.junit.Assert.*
 import org.junit.Test
@@ -36,6 +37,29 @@ class CodexFirstMessageTest {
         runCurrent()
         assertEquals(OutboxState.NeedsConfirmation, store.state("message"))
         assertEquals(1, hub.requests)
+        sender.close()
+    }
+
+    @Test fun aFirstMessageSettlesAfterTheWaitingRowDisappears() = runTest {
+        val waiting = SessionKey("computer", "waiting")
+        val thread = SessionKey("computer", "thread")
+        val store = MemoryOutboxStore()
+        val sender = OutboxMessageSender(HubScope("hub", "pairing"), store,
+            Hub(MessageTransportResult.Accepted), backgroundScope)
+        var waitingPresent = true
+        sender.connectActivity { it == waiting && waitingPresent }
+        sender.send(waiting, "Review the changes", "message")
+        runCurrent()
+        assertEquals(OutboxState.Sent, store.state("message"))
+        assertEquals(setOf(waiting), sender.awaitingTranscript.first())
+        sender.observeTranscript(thread, listOf(Item("echo", 1, role = "user", kind = "text", text = "Review the changes")))
+        assertEquals(OutboxState.Sent, store.state("message"))
+        waitingPresent = false
+        advanceTimeBy(60_001)
+        runCurrent()
+        assertEquals(OutboxState.Shown, store.state("message"))
+        assertTrue(sender.outbox.value.isEmpty())
+        assertTrue(sender.awaitingTranscript.first().isEmpty())
         sender.close()
     }
 

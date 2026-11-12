@@ -82,8 +82,6 @@ interface ChatActions {
      * hub has no such row.
      */
     suspend fun completeRow(session: Session): Session? = null
-    /** A waiting Codex pane's live thread, even when the current filtered list excludes it. */
-    suspend fun codexThread(session: Session): Session? = null
 
     /**
      * The session's cards and how each ended (GET /api/v1/interactions/history, iOS `DelegatedHistoryModel`), for Session

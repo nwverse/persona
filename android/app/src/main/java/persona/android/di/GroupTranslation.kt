@@ -174,7 +174,6 @@ internal fun ChatActions.inGroup(names: GroupNames): ChatActions {
         override suspend fun sendQueuedNow(session: Session) = source.sendQueuedNow(names.rawSession(session))
         override suspend fun info(session: Session) = source.info(names.rawSession(session))
         override suspend fun completeRow(session: Session) = source.completeRow(names.rawSession(session))?.let(names::session)
-        override suspend fun codexThread(session: Session) = source.codexThread(names.rawSession(session))?.let(names::session)
         override suspend fun interactionHistory(session: Session) = source.interactionHistory(names.rawSession(session))
             .map { it.copy(interaction = names.interaction(it.interaction)) }
         override suspend fun restoreModel(session: Session) = source.restoreModel(names.rawSession(session))

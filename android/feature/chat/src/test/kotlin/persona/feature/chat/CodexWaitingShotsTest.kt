@@ -11,6 +11,8 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -108,7 +110,7 @@ class CodexWaitingShotsTest {
         assertEquals(listOf(thread.key), followed)
     }
 
-    @Test fun aFilteredOutTerminalThreadIsLookedUpWithoutChangingTheList() {
+    @Test fun anAbsentTerminalThreadDoesNotFetchOnListHintsOrReconnect() {
         rows.sessions.value = emptyList()
         rows.adoptedSessions.value = listOf(waiting)
         val followed = mutableListOf<SessionKey>()
@@ -117,22 +119,55 @@ class CodexWaitingShotsTest {
             override suspend fun isMuted(session: Session) = false
             override suspend fun execute(session: Session, action: ChatAction) = ChatActionResult.Done
             override suspend fun verify(session: Session, action: ChatAction) = ChatActionResult.Done
-            override suspend fun codexThread(session: Session): Session {
-                assertEquals(waiting.key, session.key)
+            override suspend fun completeRow(session: Session): Session? {
                 lookups++
-                return thread
+                return null
             }
+        }
+        val connection = object : HubConnection {
+            override val state = MutableStateFlow(ConnectionState.Online)
+            override val events = MutableSharedFlow<ServerEvent>(extraBufferCapacity = 10)
+            override fun reconnect() = Unit
+            override fun send(message: JsonObject) = true
         }
         rule.setContent {
             PersonaTheme(reduceMotion = true) {
                 ChatScreen(waiting.key, chats, sender, requests, rows, onBack = {},
-                    chrome = ChatChromeBindings(actions = actions, onFollowSession = { followed += it }))
+                    chrome = ChatChromeBindings(actions = actions, connection = connection, onFollowSession = { followed += it }))
             }
         }
-        rule.waitUntil(10_000) { followed.isNotEmpty() }
-        assertEquals(listOf(thread.key), followed)
-        assertEquals(1, lookups)
+        rule.waitForIdle()
+        repeat(3) { revision ->
+            rule.runOnIdle {
+                connection.events.tryEmit(SessionsListEvent("revision-$revision"))
+                connection.state.value = ConnectionState.WaitingForNetwork
+            }
+            rule.waitForIdle()
+            rule.runOnIdle { connection.state.value = ConnectionState.Online }
+            rule.mainClock.advanceTimeBy(60_000)
+            rule.waitForIdle()
+        }
+        assertTrue(followed.isEmpty())
+        assertEquals(0, lookups)
         assertTrue(rows.sessions.value.isEmpty())
+        rule.onNodeWithText("First message to Codex").assertExists()
+    }
+
+    @Test fun aNormalConversationNeverFollowsAReturnedThread() {
+        val normal = waiting.copy(awaitingFirstMessage = false)
+        rows.sessions.value = listOf(normal, thread)
+        rows.startedThreads.value = mapOf(normal.key to thread)
+        val followed = mutableListOf<SessionKey>()
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                ChatScreen(normal.key, chats, sender, requests, rows, onBack = {},
+                    chrome = ChatChromeBindings(onFollowSession = { followed += it }))
+            }
+        }
+        rule.waitForIdle()
+        rule.runOnIdle { rows.sessions.value = listOf(thread) }
+        rule.waitForIdle()
+        assertTrue(followed.isEmpty())
     }
 
     @Test fun reusingAPaneNeverFollowsAnOlderStartsReceipt() {

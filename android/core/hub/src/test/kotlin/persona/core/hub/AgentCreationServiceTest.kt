@@ -21,8 +21,6 @@ class AgentCreationServiceTest {
             assertEquals(listOf("codex", "codex"), launchers.map { it.agentType })
             assertTrue(launchers.first().promptOptional)
             assertFalse(launchers.last().promptOptional)
-            assertEquals("codex", JsonCodec.decodeFromString<AgentLauncher>(
-                """{"name":"detected","agent":"codex","agent_type":"claude","prompt_optional":true}""").agentType)
             server.takeRequest()
             server.enqueue(MockResponse().setBody("""{"session":{"machine_id":"computer","session_id":"waiting","agent":"codex","status":"idle","pane_id":"pane","awaiting_first_message":true}}"""))
             val result = service.start(AgentStartRequest("computer", "/code", "modern", agentType = "codex"),
@@ -34,6 +32,21 @@ class AgentCreationServiceTest {
             assertEquals("idle", result.session.status)
         }
     }
+
+    @Test fun launcherTypesMatchWebPrecedenceRegardlessOfKeyOrder() {
+        for (fields in listOf(
+            """"agent":"codex","agent_type":"claude"""",
+            """"agent_type":"claude","agent":"codex"""",
+        )) assertEquals("claude", JsonCodec.decodeFromString<AgentLauncher>("""{"name":"configured",$fields}""").agentType)
+        for (fields in listOf(
+            """"agent":"codex","agent_type":""""",
+            """"agent_type":"","agent":"codex"""",
+            """"agent_type":null,"agent":"codex"""",
+            """"agent":"codex"""",
+        )) assertEquals("codex", JsonCodec.decodeFromString<AgentLauncher>("""{"name":"fallback",$fields}""").agentType)
+        assertEquals("claude", JsonCodec.decodeFromString<AgentLauncher>("""{"name":"default","agent_type":"","agent":null}""").agentType)
+    }
+
     @Test fun lostStartResponseQueriesTheReceiptWithoutPostingAgain() = runBlocking {
         MockWebServer().use { server ->
             val service = HttpAgentCreationService("hub/pairing", server.url("/").toString(), "test-token", OkHttpClient())

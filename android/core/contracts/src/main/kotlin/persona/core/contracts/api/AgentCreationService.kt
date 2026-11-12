@@ -136,12 +136,13 @@ data class AgentLauncher(
     val title: String get() = displayName?.trim()?.takeIf(String::isNotEmpty) ?: name
 }
 
-/** The detected agent wins over an older configured type, as on the web. */
+/** Prefer the configured agent type, falling back to the hub's `agent` field, as on the web. */
 @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
 object AgentLauncherSerializer : JsonTransformingSerializer<AgentLauncher>(AgentLauncher.generatedSerializer()) {
     override fun transformDeserialize(element: JsonElement): JsonElement {
         val fields = element as? JsonObject ?: return element
-        val agent = fields["agent"]?.takeUnless { it == JsonNull } ?: fields["agent_type"] ?: return element
+        val agent = sequenceOf("agent_type", "agent").mapNotNull { fields[it] as? JsonPrimitive }
+            .firstOrNull { it != JsonNull && it.content.isNotEmpty() } ?: JsonPrimitive("claude")
         return JsonObject((fields - "agent_type") + ("agent" to agent))
     }
 }

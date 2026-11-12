@@ -191,7 +191,7 @@ private fun ChatPage(
     // (#5055), read from the session's complete row where the hub looks one up (`sessions_lookup`); Glass's pill shows it.
     var completeRow by remember(key) { mutableStateOf<Session?>(null) }
     val lookup = "sessions_lookup" in LocalHubFeatures.current && renderStyle != ChatRenderStyle.Assistant &&
-        (row?.agent == "codex" || PersonaTheme.style == AppStyle.Glass && AgentModelPanel.LAUNCHER_SWITCH in LocalHubFeatures.current)
+        PersonaTheme.style == AppStyle.Glass && AgentModelPanel.LAUNCHER_SWITCH in LocalHubFeatures.current
     LaunchedEffect(key, row?.waiting != null, row?.rev, chrome.actions, lookup) {
         if (row?.waiting == null || !lookup) return@LaunchedEffect
         try { completeRow = chrome.actions?.completeRow(row) }
@@ -211,12 +211,8 @@ private fun ChatPage(
     } ?: lastSession
     SideEffect { if (liveSession != null) lastSession = liveSession }
     val session = liveSession ?: readOnlySessionMetadata(key, historyReadOnly, historySession)
-    var discoveredThread by remember(key) { mutableStateOf<Session?>(null) }
-    val codexThread = (startedThreads[key] ?: discoveredThread ?: session?.let { codexThreadOf(sessionList, it) }).takeUnless { historyOnly }
-    FollowWaitingCodex(session?.takeIf { !historyOnly && codexThread == null }, sessionList.any { it.key == key },
-        chrome.actions, chrome.connection) { thread ->
-        sessions.adopt(thread)
-        discoveredThread = thread
+    val codexThread = session?.takeIf { it.awaitingFirstMessage && !historyOnly }?.let {
+        startedThreads[key] ?: codexThreadOf(sessionList, it)
     }
     val followSession = chrome.onFollowSession ?: onContextCleared ?: chrome.onOpenSession
     LaunchedEffect(codexThread?.key) {

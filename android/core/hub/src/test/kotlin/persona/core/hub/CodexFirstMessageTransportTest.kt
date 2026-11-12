@@ -47,29 +47,4 @@ class CodexFirstMessageTransportTest {
         }
     }
 
-    @Test fun terminalThreadLookupTraversesBoundedCodexPagesOutsideTheVisibleFilter() = runBlocking {
-        val paths = mutableListOf<String>()
-        val pages = ArrayDeque(listOf(
-            SessionListPage(listOf(waiting, thread.copy(machineId = "other", sessionId = "elsewhere")), hasMore = true, nextCursor = "next"),
-            SessionListPage(listOf(thread.copy(machineId = "computer", status = "offline", state = "offline"), thread.copy(machineId = "computer"))),
-        ))
-        val actions = HttpChatActions { path, method, _ ->
-            assertEquals("GET", method)
-            paths += path
-            response(200, JsonCodec.encodeToString(pages.removeFirst()))
-        }
-        assertEquals(thread.copy(machineId = "computer"), actions.codexThread(waiting))
-        assertEquals(2, paths.size)
-        for ((index, path) in paths.withIndex()) {
-            val url = Request.Builder().url("https://example.com$path").build().url
-            assertEquals("50", url.queryParameter("limit"))
-            assertEquals("0", url.queryParameter("summary"))
-            assertEquals("codex", url.queryParameter("provider"))
-            assertEquals("computer", url.queryParameter("machine_id"))
-            assertNull(url.queryParameter("state"))
-            assertEquals(if (index == 0) null else "next", url.queryParameter("cursor"))
-        }
-        assertNull(actions.codexThread(waiting.copy(paneId = null)))
-        assertEquals(2, paths.size)
-    }
 }

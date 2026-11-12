@@ -572,6 +572,12 @@ class HubSessionsRepository(
 
     override suspend fun adoptThread(previous: SessionKey, session: Session) {
         if (previous.machineId != session.machineId || previous == session.key) return
+        restored.await()
+        val waiting = lock.withLock {
+            (mutableAdoptedSessions.value.lastOrNull { it.key == previous }
+                ?: mutableSessions.value.firstOrNull { it.key == previous })?.awaitingFirstMessage == true
+        }
+        if (!waiting) return
         adopt(session)
         lock.withLock {
             mutableStartedThreads.value = (mutableStartedThreads.value + (previous to session)).toList().takeLast(WINDOW_SIZE).toMap()

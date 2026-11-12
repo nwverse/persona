@@ -61,6 +61,19 @@ class SessionsAdoptTest {
         assertEquals(listOf("working"), ListSnapshotStore(directory).restore<List<Session>>("sessions")?.map { it.status })
     }
 
+    @Test fun aNormalSendAnswerCannotAdoptAnotherSession() = runTest {
+        val original = Session("computer", "normal", agent = "codex", status = "idle")
+        val transport = Transport().apply { list = listOf(original) }
+        val repository = HubSessionsRepository(transport, Connection(), backgroundScope)
+        repository.refresh()
+        repository.adoptThread(original.key, original.copy(sessionId = "different"))
+        assertEquals(listOf(original), repository.sessions.value)
+        assertTrue(repository.adoptedSessions.value.isEmpty())
+        assertTrue(repository.startedThreads.value.isEmpty())
+        repository.adoptThread(SessionKey("computer", "unknown"), original.copy(sessionId = "unknown-answer"))
+        assertTrue(repository.adoptedSessions.value.isEmpty())
+    }
+
     @Test fun anAppliedMachineReplacesItsEntryUntilTheNextList() = runTest {
         val transport = Transport().apply { machineList = listOf(Machine("a", engine = "herdr"), Machine("b")) }
         val repository = HubSessionsRepository(transport, Connection(), backgroundScope)
