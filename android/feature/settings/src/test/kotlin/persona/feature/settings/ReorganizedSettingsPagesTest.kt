@@ -26,10 +26,11 @@ import java.io.File
 class ReorganizedSettingsPagesTest {
     @get:Rule val rule = createAndroidComposeRule<ComponentActivity>()
     private fun back() = rule.runOnIdle { rule.activity.onBackPressedDispatcher.onBackPressed() }
+    private fun out(): File = File(System.getProperty("persona.shots") ?: "build/settings-reorganized-shots").also { it.mkdirs() }
     private fun image(name: String) {
         rule.waitForIdle()
         val bitmap = rule.onNodeWithTag("page-shot").captureToImage().asAndroidBitmap()
-        val out = File("build/settings-reorganized-shots").also { it.mkdirs() }
+        val out = out()
         File(out, "$name.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
     @Test fun searchAndGroupParentsSurviveBack() {
