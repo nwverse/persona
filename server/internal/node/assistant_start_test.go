@@ -61,7 +61,11 @@ func TestAssistantSendFailsWhenTheLauncherDoesNotStart(t *testing.T) {
 
 // One that starts answers as before, as soon as its first line comes out.
 func TestAssistantSendReturnsOnceTheProcessStarted(t *testing.T) {
-	fakeClaudeHome(t, "read line\necho '{\"type\":\"system\",\"subtype\":\"init\"}'\nsleep 30\n")
+	fakeClaudeHome(t, `case " $* " in *" auth status "*) echo '{"loggedIn":true}'; exit 0 ;; esac
+read line
+echo '{"type":"system","subtype":"init"}'
+sleep 30
+`)
 	n := codexTestNode(t)
 	withFakeHub(t, n)
 	start := time.Now()

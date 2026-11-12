@@ -60,8 +60,15 @@ while IFS= read -r line; do
 done
 `
 
-// fakeCLI is a claude -p that keeps its args and finishes each turn at once.
-const fakeCLI = `printf '%s\n' "$*" >> "$SDK_FAKE_DIR/cli-argv"
+// fakeCLI is a claude -p that keeps its args and finishes each turn at once. Its auth status is signed in so the
+// new-profile preflight does not turn every unrelated CLI fixture into a 20-second wait.
+const fakeCLI = `case " $* " in
+  *" auth status "*)
+    printf '%s\n' "$*" >> "$SDK_FAKE_DIR/cli-auth-argv"
+    echo '{"loggedIn":true}'
+    exit 0 ;;
+esac
+printf '%s\n' "$*" >> "$SDK_FAKE_DIR/cli-argv"
 printf '%s\n' "$CLAUDE_CONFIG_DIR" > "$SDK_FAKE_DIR/cli-profile"
 echo '{"type":"system","subtype":"init"}'
 while IFS= read -r line; do
@@ -385,7 +392,7 @@ func TestAssistantSDKStreamsAndControlRequests(t *testing.T) {
 	if f.proc(id).sdkVersion != "0.0.0-test" {
 		t.Fatal("sdk version not kept")
 	}
-	if f.file("cli-argv") != "" {
+	if f.file("cli-argv") != "" || f.file("cli-auth-argv") != "" {
 		t.Fatal("the CLI ran too")
 	}
 }
@@ -526,7 +533,7 @@ func TestAssistantSDKBusyKeepsTheRunningProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 	sdkWait(t, "the second message", func() bool { return strings.Contains(f.file("stdin.jsonl"), `"two"`) })
-	if f.proc(id) != p || !p.alive() || f.file("cli-argv") != "" {
+	if f.proc(id) != p || !p.alive() || f.file("cli-argv") != "" || f.file("cli-auth-argv") != "" {
 		t.Fatal("a busy conversation was restarted on the CLI")
 	}
 	if s := f.session(t, id); s.Runtime != proto.AssistantRuntimeAgentSDK {

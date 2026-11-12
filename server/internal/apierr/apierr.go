@@ -325,10 +325,11 @@ func RPCText(l i18n.Lang, text string) string {
 // codeActions are the refusals whose words the hub writes itself, wherever they came from (the assistant, a node),
 // with what a client offers to fix each (docs/assistant/onboarding.md 4.6, 5.2).
 var codeActions = map[string]string{
-	proto.CodeNoMachine:       "add_computer",
-	proto.CodeMachinePending:  "confirm_computer",
-	proto.CodeClaudeMissing:   "install_claude",
-	proto.CodeLauncherMissing: "connect_model",
+	proto.CodeNoMachine:        "add_computer",
+	proto.CodeMachinePending:   "confirm_computer",
+	proto.CodeClaudeMissing:    "install_claude",
+	proto.CodeLauncherMissing:  "connect_model",
+	proto.TurnErrorNotLoggedIn: "connect_model",
 }
 
 // OnMachine is err naming the machine (its display name) it was refused on, when it is one of the refusals the hub

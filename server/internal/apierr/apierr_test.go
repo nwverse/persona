@@ -88,6 +88,27 @@ func TestCallExplainsCodedRefusals(t *testing.T) {
 	}
 }
 
+func TestCallExplainsPrivateProfileSignIn(t *testing.T) {
+	const raw = `the selected profile is not signed in; run CLAUDE_CONFIG_DIR='/example/profile' claude`
+	refusal := &rpc.Error{Code: proto.TurnErrorNotLoggedIn, Message: raw,
+		Data: json.RawMessage(`{"delivered":"none","retryable":false,"launcher":"claude"}`)}
+	for _, tc := range []struct {
+		lang i18n.Lang
+		want string
+	}{
+		{"", "这个对话的 Claude Code 配置还没有登录。请登录该配置，或者改用 API Key。"},
+		{i18n.En, "This conversation's Claude Code profile isn't signed in. Sign in to that profile, or use an API key."},
+		{i18n.Ja, "この会話の Claude Code プロファイルにログインしていません。ログインするか、API キーを使ってください。"},
+	} {
+		rec := httptest.NewRecorder()
+		body := call(t, langWriter{rec, tc.lang}, rec, OnMachine(refusal, "server"))
+		if rec.Code != http.StatusConflict || body["code"] != proto.TurnErrorNotLoggedIn || body["error"] != tc.want ||
+			body["detail"] != raw || body["action"] != "connect_model" || body["delivered"] != "none" || body["retryable"] != false {
+			t.Errorf("%s: %d %v", tc.lang, rec.Code, body)
+		}
+	}
+}
+
 // A start whose new tab would not take its command (node/typedstart.go, #2022) is 503 and retryable, with nothing
 // delivered, not the generic 502.
 func TestCallTerminalNotReadyIsRetryable(t *testing.T) {

@@ -380,6 +380,11 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		if err != nil {
 			return "", err
 		}
+		if !resume {
+			if err := n.assistantNewProfileAuth(ctx, launcher, execution.Runtime, asked, execution.ConfigDir); err != nil {
+				return "", err
+			}
+		}
 	} else if executionOption(options).ConfigDir != "" {
 		return "", errors.New("config_dir is only supported for Claude assistant conversations")
 	}
