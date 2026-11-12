@@ -987,6 +987,66 @@ func TestInteractionsFilters(t *testing.T) {
 	}
 }
 
+// InteractionsPage pages the history back by time: since, kind and a cursor of (created_at, id), so rows of the same
+// time are neither skipped nor read twice across pages, and a full page names the next one's cursor.
+func TestInteractionsPage(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	base := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+	for i := range 9 {
+		kind := proto.IxQuestion
+		if i == 4 {
+			kind = proto.IxPermission
+		}
+		at := base.Add(time.Duration(i/3) * time.Minute) // three rows each minute
+		if err := d.InsertInteraction(ctx, proto.Interaction{ID: fmt.Sprintf("ix%d", i), MachineID: "m1", SessionID: "s1",
+			Kind: kind, CreatedAt: at}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var pages []string
+	q := InteractionQuery{Kind: proto.IxQuestion, Since: base, Limit: 3}
+	for range 10 {
+		page, err := d.InteractionsPage(ctx, q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ids []string
+		for _, r := range page.Records {
+			ids = append(ids, r.Interaction.ID)
+		}
+		pages = append(pages, strings.Join(ids, ","))
+		if page.NextBefore == nil {
+			break
+		}
+		q.Before, q.BeforeID = *page.NextBefore, page.NextBeforeID
+	}
+	if got := strings.Join(pages, " | "); got != "ix8,ix7,ix6 | ix5,ix3,ix2 | ix1,ix0" {
+		t.Fatalf("pages %q", got)
+	}
+	// since leaves the older rows out; before without an id is strictly before; no filter is every row.
+	for _, c := range []struct {
+		q    InteractionQuery
+		want string
+	}{
+		{InteractionQuery{Since: base.Add(2 * time.Minute)}, "ix8,ix7,ix6"},
+		{InteractionQuery{Before: base.Add(time.Minute), Machine: "m1", Session: "s1"}, "ix2,ix1,ix0"},
+		{InteractionQuery{Kind: proto.IxPermission}, "ix4"},
+		{InteractionQuery{Session: "nope", Since: base}, ""},
+	} {
+		page, err := d.InteractionsPage(ctx, c.q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ids []string
+		for _, r := range page.Records {
+			ids = append(ids, r.Interaction.ID)
+		}
+		if got := strings.Join(ids, ","); got != c.want || page.NextBefore != nil {
+			t.Errorf("%+v: %s (next %v), want %s", c.q, got, page.NextBefore, c.want)
+		}
+	}
+}
+
 // The cached history statements stay on an index under a generic plan too, which Postgres switches a cached
 // statement to: neither scans the table, and machine+session does not walk interactions_created past the rows it skips.
 func TestInteractionsHistoryIndexed(t *testing.T) {

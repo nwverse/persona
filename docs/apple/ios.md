@@ -202,7 +202,7 @@ Chat page:
   Your message → gray work row "Tools 5 · Thinking 1 · Replies 1 · 4 min 17 sec ›" (name then count) → Agent's last text before next message → next message…
   Active and complete look identical except active spinner, timer and terminal button ("Working 39 sec · Tools 2").
   While it runs, the line names the current step instead of its counts (#2987, `WorkNow`, every style, Agents and Persona chats): the newest call without a result in its running form, with the subject its step row shows ("Running go test ./server/... · 1 min 4 s", "Editing ChatView.swift · 2 min", "Reading 3 files" for reads running together; a command Claude described shows its description alone, already an imperative: "Run the widget snapshot tests · 1 min 16 s"), "+N" for other calls running at once; with none running, the latest step (a thought: its first line, else "Thinking"). Only the newest batch of calls counts as running, back to a thought, the agent's words or a call answered before the next began (an older call without a result never got one); notices and bookkeeping calls (to-dos, ToolSearch) are not steps; nothing known (only words, or the newest work folded by the hub) keeps the counts. The words give way in the middle or at the end on one line, "+N" and the clock stay whole (at the accessibility text sizes, where beside those the words kept a letter, the words take up to two lines, with room for both always kept so the line holds still as steps change, with "+N" and the clock on a line under them); they change at most about twice a second (`WorkLine.follow`, `WorkNow.hold`), and a step coming back after subagents or a fold is named at once, without the counts in between. Subagents it waits on keep their own words. A finished line reads as before.
-  The queue strip above the composer (`QueueStrip`): each queued message's menu takes it back to edit, copies or deletes it. For a Claude in a terminal pane (`Session.steersQueue`, #6088) the strip also has Send Now (after a confirmation that says a running command moves to the background and a reply being written starts again; `POST …/queue/send-now`, Claude Code's own send-now, which takes the whole queue; the hub's words for `nothing_queued` / `send_now_unsupported` / `send_now_unrecognized` / `send_now_in_doubt` are shown as they come), and each message Move Up / Move Down (`QueueOrder.moved`: the `/queue` `keep` in the new order). UI test `QueueSteerUITests` (`MOCK_QUEUE=1`; `MOCK_SEND_NOW=<code>` makes the mock refuse).
+  The queue strip above the composer (`QueueStrip`): each queued message's menu takes it back to edit, copies or deletes it. For a Claude in a terminal pane (`Session.steersQueue`, #6088) the strip also has Send Now (after a confirmation that says a running command moves to the background and a reply being written starts again; `POST …/queue/send-now`, Claude Code's own send-now, which takes the whole queue; the hub's words for `nothing_queued` / `send_now_unsupported` / `send_now_unrecognized` / `send_now_in_doubt` are shown as they come), and each message Move Up / Move Down (`QueueOrder.moved`: the `/queue` `keep` in the new order). At the accessibility text sizes the strip's title wraps and Send Now has the line under it, so the title keeps its words and a tap on it opens the strip (#4846; UI test `QueueStripTextSizeUITests`). UI test `QueueSteerUITests` (`MOCK_QUEUE=1`; `MOCK_SEND_NOW=<code>` makes the mock refuse).
   A Persona chat shows the same strip (#4475): the user's own messages come first and keep those actions with a Persona-specific Send Now confirmation, while the last `queued_relayed` messages only show their arrival note ("Arrives when this chat is free": its turn ended and the owner not talking in it, `docs/assistant/assistant.md` "Messages from the system wait for the owner") and Copy. `AppModel` and the UI both index only `Session.ownQueuedCount`, so relayed messages cannot be changed even if a menu is wrong. UI test `PersonaQueueUITests` (`MOCK_PERSONA_QUEUE=1`, light and dark).
   Claude's queue keeps only text: photos become `[Image #N]` placeholders and an `<attached_images>` block of machine paths, videos and quotes their XML tags. `QueuedDraft` reads that back into what was written, so a row shows the words with a mark per kind of attachment, and Take Back to Edit puts the words in the box and the attachments in their bars (photos from this phone's outbox copy, else read from the machine by path; one that can't come back leaves its path in the words, #3022). A Persona hub instead returns the photos with `/queue`; those bytes go through the same off-main-actor decode and composer restoration. `QueuedDraft(photoCount:)` removes the composer's stand-in from a photo-only message. Pathless photos stay in the composer even beyond the picker's four-photo cap, but `sendNow` refuses them until enough are removed, and `sendText` clears nothing when refused; an unreadable preview keeps its original payload and says so. A Persona message sent from this device also shows its pending outbox photo count beside its queued words. UI test `QueuedAttachEditUITests` (`MOCK_QUEUE_SENDS=1` queues what is sent to the working widget Agent in Claude's shape; `/mock/queue?photos=N&text=…` queues one sent from elsewhere).
   Multiple queued messages in one turn still pair one-to-one after completion, each with its work/reply (#2512 removed merged-bubble completion); sent images are square thumbnails above message (`SentPhotos`, same as pending),
@@ -729,6 +729,28 @@ Long-press the Persona icon: the last conversation opened on this device, then "
 - Navigation only, except Record, which starts recording: Inbox pushes onto the assistant, New chat follows the drawer's New chat route (`ShellState.show(.newConversation)`), returning already-pushed pages such as Inbox to the root. Without hub pairing, remain on Welcome.
 - If the App is open or backgrounded, use the scene delegate's `windowScene(_:performActionFor:)`; on cold launch the item comes through scene connectionOptions. `QuickActionSceneDelegate` handles only these two entry points; SwiftUI still manages the window.
 - `QuickActionsTests` opens a demo chat, long-presses the home-screen icon, finds that chat on the menu (with Record, and no Agents) and taps it, then Inbox and New chat; a second test opens two chats in turn and checks the menu's order (the newer chat only, then Record, New chat, Inbox). Record is not tapped (it would record). `RecentChatsTests` runs the shared fixture. Cold launch is untested: SpringBoard launch cannot pass demo-mode arguments. Each simulator return to the home screen waits about 60 seconds for SpringBoard idle; the whole test takes about 7 minutes.
+
+## App icon badge (#5824)
+
+The number on the Persona icon (the iPhone's home screen, the Mac's Dock; Apple Vision Pro runs the same code) is the
+tab badges added up: Persona's waiting questions (`TabBadges.assistant`) + Agents' Needs You (`TabBadges.agents`) +
+the Inbox's unread items (`InboxStore.unreadCount`). One function, `AppIconBadge.count` (`Persona/App/AppIconBadge.swift`),
+on every Apple app.
+
+- **Same as the tabs**: nothing the tabs leave out (muted agents, an agent's finished turn not yet opened, open
+  to-dos, an extension's badge, Messages) and nothing more; a quiet task's question counts with Persona's, as on its
+  tab. Signed out, or every item handled, clears it.
+- **Set by the app**: `AppIconBadgeWatcher` observes the numbers while the app runs and sets the icon only when the sum
+  moves, 0.25 s after the first change of a burst (P7). iOS calls `UNUserNotificationCenter.setBadgeCount` on a serial
+  utility queue (P1) and sends the number again each time the app becomes active: one set before the user allowed
+  badges is dropped. The Mac sets `NSApp.dockTile.badgeLabel`. The hub's pushes carry no `badge`, so while the app is
+  not running the icon keeps the last number set, and a build without push (no `aps-environment`) works the same.
+- **The user's switch**: the system draws the number only with badge permission (asked with notifications after
+  pairing, `PushRegistrar`) and its Badges switch on (iOS Settings › Notifications; macOS System Settings ›
+  Notifications › Badge application icon). A Mac that never asked (Demo Mode only) has the Dock label set but not
+  drawn (`lsappinfo info -only StatusLabel` shows it).
+- **Tests**: `AppIconBadgeTests` (also in `PersonaMacTests`): the sum, the model's tabs feeding it, nothing while
+  signed out, one call per burst, none when a burst ends where it started.
 
 ## Share to Persona (#4586, #1460)
 
@@ -1360,7 +1382,7 @@ When on, tasks dispatched by the main chat are quiet (to-do `quiet`, attached se
 - Foreground notifications: `willPresent` shows no banner for quiet sessions.
 - Badges: quiet-session questions count toward the assistant, not Agents (handled in the main chat); the drawer / Mac sidebar's To-dos count excludes quiet tasks (`TodoStore.badgeCount`), though the to-do list still includes them.
 - Watch: both the phone-synced summary and the watch's directly fetched lists exclude quiet sessions and their questions (watch credentials cannot read to-dos and use only session `quiet`).
-- Mac: notifications and Dock badges treat them as muted; the menu bar excludes them.
+- Mac: notifications treat them as muted; the menu bar excludes them. The app icon counts their questions with Persona's, as the tabs do ("App icon badge (#5824)").
 
 `AppModel.isQuiet` decides: first the hub's session `quiet`, then the current hub's to-dos (`QuietTasks`: quiet to-dos and their Agents, including ones detached from the to-do). Task cards in the main chat and the Agents-page list still display normally.
 
@@ -1907,8 +1929,9 @@ is listed), and a hub that answers it has no roster filters nothing (`AppModel.m
   or Don't Start, a briefing question's Handled) name the conversation's own manager (`AppModel.feedManager`), whichever
   assistant is current: some of those routes name no conversation, so the hub would take them to the default. The
   default's conversations name none, and with one installed manager or no roster nothing is named.
-- **Counts**: the tab badges, the sidebar's Inbox and To-dos counts, the home page's Needs You and the main conversation's
-  dock count the current assistant's (`AppModel.countBadges`, `InboxStore.actionCount`, `TodoStore.badgeCount`). The
+- **Counts**: the tab badges, the app icon's number (their sum), the sidebar's Inbox and To-dos counts, the home page's
+  Needs You and the main conversation's dock count the current assistant's (`AppModel.countBadges`,
+  `InboxStore.actionCount`, `TodoStore.badgeCount`). The
   switcher shows beside every other assistant what waits there (`AssistantBadges`, `AppModel.assistantBadges`): its agents
   waiting (a session with a pending card or in Needs You once, quiet and muted ones left out, a card on no session by
   itself; Persona's own conversations by their cards only) plus `inbox_needs_you`. The header's face carries a mark while

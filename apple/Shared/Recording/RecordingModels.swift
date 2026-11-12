@@ -281,6 +281,10 @@ nonisolated enum RecordingAudioSpec {
     static let bitRate = 32_000
     static let segmentSeconds: Double = 60
     static let liveSegmentSeconds: Double = 30
+    /// A meeting Persona attends with the live view (#3862 phase 2, `RecordingAttendance.shortSegments`), in the
+    /// foreground and the background alike: a line reaches the page and the room within about 15–30 seconds. Above the
+    /// writer's 10-second minimum.
+    static let meetingLiveSegmentSeconds: Double = 15
     static let transferBatchSeconds: Double = 180
     static let lowPowerTransferBatchSeconds: Double = 300
 }

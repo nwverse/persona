@@ -104,7 +104,7 @@ func (f filters) matches(r *record) bool {
 		return false
 	}
 	v := r.item
-	return (f.ID == "" || f.ID == v.ID) &&
+	return (f.ID == "" || f.ID == v.ID) && (!f.NoPrivate || !v.Private) &&
 		(!f.Roots || v.root() == "") && (f.Under == "" || f.Under == v.root()) &&
 		(f.State == "" || f.State == stateOf(v, f.Roots)) &&
 		(f.Machine == "" || f.Machine == v.Machine) &&

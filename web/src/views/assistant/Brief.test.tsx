@@ -279,6 +279,18 @@ describe("a brief item", () => {
     expect(location.search).toBe("?tab=persona");
   });
 
+  it("opens the background supervisor's model purpose from the lower-tier line, and changes nothing", () => {
+    draw(item(body({ setup: [
+      { id: "supervisor_tier", setting: "assistant.supervise", count: 24, text: "A lower tier for the background supervisor: … 24 acceptances on big-model …" },
+    ] })));
+    const setup = rows("setup");
+    expect(setup.map((r) => r.querySelector("div")?.textContent)).toEqual(["A lower tier for the background supervisor: … 24 acceptances on big-model …"]);
+    expect(setup[0].querySelectorAll("button").length).toBe(1);
+    act(() => setup[0].querySelector("button")!.click());
+    expect(api).not.toHaveBeenCalled();
+    expect(location.search).toBe("?tab=models&purpose=assistant.supervise");
+  });
+
   it("has no setup section on a briefing without the block", () => {
     draw(item(body()));
     expect(rows("setup")).toEqual([]);

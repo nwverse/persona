@@ -320,6 +320,7 @@ The assistant and the L2 read-only connector are available; Inbox, knowledge bas
     high / unknown risk is separately marked. Denial returns user feedback; "Always allow in this session" remembers the command.
   - Output-only allowed directly: `--help`, `--version`, `--dry-run`, `schema`, `skills`, `whoami`, `doctor`, `auth status / check / scopes / list`, `event list / schema / status`;
     `lark-cli api` uses HTTP methods: GET / HEAD allowed, other methods follow the permission mode and action classification (method, path, `--data` on a confirmation card).
+  - For a gated message send or reply, the approval summary shows the conversation name (id when unavailable), the original sender and a short excerpt for a reply, topic status, and the outgoing text, rather than internal JSON fields such as `clientId` or `expectedSenderId`. `node/larkgate_card_context.go` reads that metadata with read-only Lark CLI calls (1.5 s per call); if it cannot be read, the old method / path / body summary is kept, and no gate decision changes (#5776).
   - Reject `auth login / logout` (user handles login), `config`, `profile`, `update`, custom `--profile`, or access to `~/.lark-cli/`.
   - The gate classifies individual calls in loops and literal shell scripts where it can. Presentation-only environment assignments such as `NO_COLOR=1` and `NO_PROGRESS=1`, local output redirection to any target and read-only filters (`jq`, `grep`, `head`) preserve a classified read. When the command names the CLI, executable-loading environment variables such as `BASH_ENV`, `NODE_OPTIONS` and `PATH`, unresolved CLI arguments and command substitutions in those arguments require whole-command confirmation. `docs +fetch` remains a known read even without configured CLI risk discovery.
   - A trusted assistant in `bypassPermissions` runs classified reads and ordinary writes without a card. The gate protects Lark outbound sends as the user (messages, replies, comments and mail) and deletion, including inside compound commands. Ordinary non-Lark commands such as `rm`, `git push` and `tee` remain outside this gate. Unclassifiable execution requires confirmation when the command text names `lark-cli` (including an absolute path or interpreter, `sh -c` or `eval` code), or a variable, command substitution or other expansion supplies a command name. This also covers unresolved CLI arguments. Such a whole-command card names Lark or a gate only when the command shows it (it names `lark-cli`, even as a variable's value, or calls the gate); a command named only by an expansion, such as a local script's `$ADMIN POST /api/…`, is asked as an ordinary Bash card showing the whole command, and declining it does not tell the model it was a Lark write (#4890). Local redirect targets do not change call classification. Command substitutions in redirect targets are classified recursively. A literal formatter stays outside the gate, while a dynamic command or Lark send still requires confirmation. The literal test commands `[` and `[[` are not expansions. Wrapper prefixes and their option values are parsed recursively from a shared table, including nested `env`, `sudo`, `nice`, `timeout`, `xargs` and `exec` calls. Unknown wrapper options require confirmation if remaining words contain expansions or a CLI name. Shell `-c` scripts (including combined options such as `-lc`, common shell names such as `ash`, `mksh`, `csh` and `rbash`, their path and numeric-version forms, and busybox shell applets) and literal `eval` arguments are classified recursively; dynamic shell scripts and dynamic `eval`, `source` or `.` arguments require confirmation. Ordinary interpreter calls, `awk`, `sed`, `find`, wrappers with ordinary executable names, script files, argument substitutions such as `echo $(date)` and brace arguments such as `echo {a,b}` return no gate decision when they do not name the CLI; the conversation permission mode handles them. Script-file contents are not inspected: a script invoked without a CLI name in the command text can still call the CLI internally. This is an accepted residual risk of this gate's scope. The action and bot-exemption tables in `node/larkgate_rules.go` classify these boundaries; only the documented message send/reply shortcuts may use the bot exemption, with the last `--as` value taking effect. Raw API sends, mail, comments and deletion still require confirmation with `--as bot`. Explicit deny rules still refuse them. Proxy-authenticated writes inside compound commands are refused and must be sent as standalone calls. Other permission modes and health conversations retain their confirmation rules.
@@ -1022,6 +1023,8 @@ Step R3 (section 4c) of `docs/design/proposals/main-chat-availability.md`. The m
 background rounds ship off or empty, because each spends tokens or acts for the owner. Once a week a briefing says,
 from this install's own records, which of them would have removed how many of the last 7 days' asks or background
 rounds, what it costs in one sentence, and where it is turned on. Code: `server/internal/assistant/setup_suggest.go`.
+One line is of another kind, a lower tier for the background supervisor's model ("A lower tier for the background
+supervisor" below, `setup_suggest_tier.go`); every rule of this section holds for it too.
 
 - **Computed, not written.** Every number is counted by the manager from what is recorded anyway; no model call makes
   or changes one, and there is no table of its own. The model is given the finished lines and told to copy them
@@ -1047,7 +1050,8 @@ rounds, what it costs in one sentence, and where it is turned on. Code: `server/
   copy and not checked against the computed lines.
 - **Where a mechanism is turned on.** Session triage's three switches, the standing authorizations and the
   remembered kinds of task are on the assistant's own settings page in the web app (`/settings?tab=persona`; iOS
-  Settings › General, Android Settings › AI); the lines name the switch by the label it has there. Leader
+  Settings › General, Android Settings › AI); the lines name the switch by the label it has there. The background
+  supervisor's model is its purpose's page of Model Settings (`/settings?tab=models&purpose=assistant.supervise`). Leader
   conversations: **Pin** in a conversation's menu. The spot-check share: asking Persona, confirmed on a card. The
   assistant answering agents' questions and the independent review have no switch in any app: their lines say so and
   name the key and value for the assistant's configuration file (`docs/operations/config.md`).
@@ -1068,6 +1072,7 @@ the work events are kept.
 | Leader conversations (`leaders`, `assistant.leaders`) | The main conversation's rounds last week that a supervision message started (the `round` rows of "Availability metrics" above), and their minutes | No leader conversation exists |
 | Spot-check reviews (`review_sample`, `assistant.review_sample_percent`) | Supervised tasks whose first and only review, last week, was the supervisor's own `accepted` with every `done_when` criterion met with evidence, no `user_check`, the work live, and never reopened | The share is 100 |
 | Independent review (`independent_review`, `agents.review.launcher`) | Reworks a supervisor sent last week after the done judge had called the work done (`review_rework` with `judged_done`) | No reviewer launcher is set |
+| A lower tier for the background supervisor (`supervisor_tier`, the purpose `assistant.supervise`) | The background supervisor's settled acceptances of the last 30 days on the model its purpose is bound to now, and how many of them were reopened ("A lower tier for the background supervisor" below) | At least 20 settled, at most 1 in 20 of them reopened, and a lower tier that is not the smallest is known |
 
 What the numbers do and do not say:
 
@@ -1094,16 +1099,62 @@ What the numbers do and do not say:
 - **A hello that fails names nothing it cannot read.** Whether the delegate and the independent review are on comes
   from the hub's hello; when it cannot be read neither is named, as the triage's three are not when its switches
   cannot be read.
-- **A lower tier for supervision is not suggested.** The proposal ties it to K1's numbers (reviews and tokens per
-  supervisor model), which are not recorded yet; the block leaves it out until they are.
+
+### A lower tier for the background supervisor (#5805)
+
+The block's last line, from the numbers of "Supervision by model" below (section 9c of the proposal): the reviews the
+background supervisor made on its current model held, and its provider has a tier below that one. It is computed like
+the other lines, named at most once in 30 days, and changes no binding: the owner picks another model for the purpose
+**Background supervisor** in Model Settings, or does not. Code: `server/internal/assistant/setup_suggest_tier.go`.
+All four must hold:
+
+- **The background supervisor is on and did the reviews.** `assistant.main_supervises_own_tasks` is not on, the
+  background supervisor exists, and only `task_reviewed` rows with role `background` are read. A review by the main
+  conversation, a leader or a task leader's agent says nothing about this binding.
+- **Enough settled acceptances: 20.** Counted over the last 30 days (as long as work events are kept; 7 days rarely
+  hold enough to judge a reviewer), on exactly the model the purpose `assistant.supervise` resolves to now (its own
+  binding, else the main chat's, else the provider's default model; a `[1m]` marker aside, any effort). Reviews made
+  on another model, before the binding was changed, are not counted, so a changed binding starts from zero. The row's
+  model is what the node listed for the conversation; when a node lists another form of the name than the binding
+  has (an alias, a gateway's own id), nothing matches and nothing is suggested.
+- **Reopened over settled is at most 1 in 20 (5 percent).** The share is `reopened` over `settled`, by the one rule
+  of "Supervision by model": never over `accepted`, because an acceptance younger than 24 hours has not had its day
+  to be reopened in and would only water the share down. A reopen is held against the background supervisor's latest
+  acceptance of the task before it even when another conversation accepted the task in between, which can only make
+  the share higher.
+- **A lower tier that is not the smallest is known.** All the manager knows of tiers is the tier models of a provider
+  added in Persona (`opus_model`, `sonnet_model`, `haiku_model`, `fable_model` of the provider's record, which the
+  owner or the import of their shell alias filled in; smallest first: `haiku_model`, `sonnet_model`, `opus_model`,
+  `fable_model`). The smallest slot is read as the node runs it: `haiku_model`, else `small_model`, which is where
+  the web app's provider form keeps its light tier. The supervisor's model must be one of them; the tier below is the nearest filled slot under it with
+  another model; and under that one there must be yet another filled slot with a third model. So on a provider with
+  three tier models only the largest gets the line, pointing at the middle one. The smallest tier is never suggested
+  (an acceptance is a judgment call: `docs/assistant/model-config.md` "Models for each role"), nor is a tier the
+  manager cannot tell is not the smallest. Not known, and so never suggested: plain `claude` and an rc-file launcher
+  (nothing is stored about their models), a provider with fewer than three distinct tier models, a model that is none
+  of the provider's tier models, a direct API provider, and Agent presets (`docs/assistant/model-profiles.md`), which
+  have names and descriptions but no order.
+
+The line names the two models as the owner's provider has them (no model is named in code): by the name the
+provider's record has for the model (`models[].name`, which the model picker of Model Settings lists it under), else
+by its id. It gives the two numbers, both counts of acceptances, not of tasks (a task accepted, reopened after its
+day and accepted again is two), and in one sentence the cost and the risk: a lower tier spends less on every review,
+but the numbers say how the current model reviewed, not how the lower one will. It says its own 30 days, and the
+block's introduction says the numbers are of the last 7 days "unless a line names its own period" and that each item
+"stays as it is until you change it yourself", which holds for a mechanism that is off and for a binding alike (the
+same sentence on the Lark card and, from the web app's own strings, on its briefing card). The `brief` item's `count` is the settled acceptances and `setting` the
+purpose id. Out of scope: the reverse. Nothing suggests a stronger tier, whatever is reopened; the table of "Models
+for each role" says when to raise it. Once the owner has moved the supervisor down, the same rule may name the next
+tier down after its own 20 settled acceptances, but never the smallest.
 
 ## Supervision by model (#5086)
 
 Step K1 of the same proposal (section 9c): what supervision costs per accepted task, by the model the supervisor ran
 on, so a cheaper or a stronger model for the background supervisor (`assistant.supervise`,
 `docs/assistant/model-config.md` "Models for each role") can be judged on this install. It is the `supervision` field
-of `GET /api/v1/assistant/availability`; nothing shows it in an app or a briefing, and nothing acts on it. Each number
-in one sentence:
+of `GET /api/v1/assistant/availability`; no app shows it, and nothing acts on it. The weekly block reads the same rows
+for its one line about a lower tier ("A lower tier for the background supervisor" above), which changes nothing
+either. Each number in one sentence:
 
 - **Accepted** (`by_model[].accepted`): the acceptances in the window, each a `task_review` that accepted a task and
   closed it, by the model and effort the reviewer ran on when it reviewed; a task accepted, reopened and accepted
@@ -1212,8 +1263,10 @@ An ordinary extension conversation is an assistant conversation (the assistant d
 - **Directory**: the hub has the node's `assistant.guest_prepare` write `.persona/guest` with only a guest CLAUDE.md / AGENTS.md (`prompts/assistant/guest_claude_md.md`), leaving the assistant's connectors, CLIs and skills alone. A node that doesn't know the method (too old) gets a 400 and nothing starts.
 - **Node** (`node/assistant_guest.go`): Claude Code on the CLI or the Agent SDK (Codex and agent runtimes such as DSH are refused), never the warm spare process.
   Every CLI process it runs in (start, resume, compaction, model switch) has `--tools ""`, `--strict-mcp-config` (only Persona's own MCP server, none of the user's or the extensions'), and `--allowedTools` naming only its tools.
-  On the Agent SDK, `tools: []` disables built-ins, `settingSources: []` leaves out user and project settings, and
-  `strictMcpConfig` is true. The bridge lists the guest's tools from the same stdio Persona MCP server and registers
+  None of the owner's Claude Code setup reaches it either (#5786), as for a meeting's room ([meeting-minutes.md](./meeting-minutes.md) "Nothing of the owner's Claude Code setup"): every CLI process also has `--setting-sources project` and the guest's own `--settings` (`node/assistant_guest.go` `guestSettingsFile`), which excludes the CLAUDE.md and AGENTS.md files and `.claude/rules` of every directory above its own and of the user's profile, turns auto memory off, and keeps only the environment, login and model keys of the launcher's and the profile's settings. Without the excludes, `--setting-sources project` would still read `~/.claude/CLAUDE.md` and every `~/.claude/rules` file as the home directory's project files.
+  A launcher's own arguments still reach it, as they reach every process the launcher starts (for example a shell function that appends a system prompt file): run guest conversations on a launcher without them.
+  On the Agent SDK, `tools: []` disables built-ins, `settingSources: []` leaves out user and project settings,
+  `strictMcpConfig` is true, and the SDK's `settings` are the same guest settings. The bridge lists the guest's tools from the same stdio Persona MCP server and registers
   only those through an in-process SDK server, so the manager's whitelist and call routing stay unchanged.
   The manager registers the guest's session id and tools before starting the node: SDK discovery happens before
   `assistant.send` returns, and an unregistered first discovery would return an empty list. A start that fails drops

@@ -69,6 +69,10 @@ nonisolated enum IslandMetrics {
     static let recordingTimerWidth: CGFloat = 54
     /// The expanded island's time, at `.title3`: "1:23:45" whole.
     static let recordingExpandedTimerWidth: CGFloat = 92
+    /// The Lock Screen's time, at `.title2` (capped at the default text size there): "1:23:45" whole (81 pt), with the
+    /// expanded island's margin. Fixed, as `Text(timerInterval:)` takes all the width it is offered: the name and the
+    /// subtitle beside it got half the row, and a meeting's topic after Persona's role little of it (#3862 phase 2).
+    static let recordingLockTimerWidth: CGFloat = 100
     /// The recording's mark on the Lock Screen.
     static let recordingMark: CGFloat = 40
     /// Between the Lock Screen's and the expanded island's two buttons.

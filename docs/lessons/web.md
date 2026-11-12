@@ -1,5 +1,13 @@
 # Lessons: web UI and interactions
 
+## Live acceptance must distinguish a lookup POST from a mutation (#5753)
+
+The live composer driver rejected the app's normal `POST /api/v1/launchers/catalog`, although the handler is a
+built-in metadata lookup that fetches and stores nothing. Permit that exact route, not every POST, while blocking
+main-chat records and mutations. Save a private test-session record and reuse it after a slow start; check the
+synthetic prompt and side-conversation URL before typing. Capture an expanded editor only after its finite
+animations finish: a half-transparent opening frame can look like text overlaps the chat behind it.
+
 ## The live screen's later words go in a lazy component, not in a startup namespace (#5685)
 
 `main.tsx` imports `screen/ScreenView` without waiting for the rest of the catalog, so the build counts every namespace

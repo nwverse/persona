@@ -263,14 +263,14 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 	if settingsErr != nil {
 		return nil, settingsErr
 	}
-	if n.guestKindOf(id) == guestMeeting { // a meeting's room: none of the owner's Claude Code setup (assistant_guest.go)
-		if n.guestOf(id) == nil {
-			return nil, errRoomRecord // never with the assistant's tools
-		}
-		if settings, settingsErr = n.meetingRoomSettingsFile(id, cwd, configPath, settings, hooks == ""); settingsErr != nil {
+	if n.guestKindOf(id) == guestMeeting && n.guestOf(id) == nil {
+		return nil, errRoomRecord // a meeting's room never runs with the assistant's tools
+	}
+	if n.guestOf(id) != nil { // a guest, a meeting's room too: none of the owner's Claude Code setup (assistant_guest.go)
+		if settings, settingsErr = n.guestSettingsFile(id, cwd, configPath, settings, hooks == ""); settingsErr != nil {
 			return nil, settingsErr
 		}
-		args = append(args, meetingRoomArgs()...)
+		args = append(args, guestSettingArgs()...)
 	}
 	if settings != "" {
 		args = append(args, "--settings", settings)

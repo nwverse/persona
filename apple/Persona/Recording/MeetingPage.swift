@@ -133,6 +133,7 @@ struct MeetingPage: View {
                             subtitle(entry)
                         }
                         problems(entry)
+                        topics(entry)
                         MeetingLiveBox(entry: entry, exchanges: exchanges, folded: false)
                         threadHeader(entry)
                         thread(entry)
@@ -155,6 +156,7 @@ struct MeetingPage: View {
                 .padding(.horizontal, Theme.Space.page)
                 .padding(.top, Theme.Space.s)
                 problems(entry)
+                if !writing { topics(entry) }
                 MeetingLiveBox(entry: entry, exchanges: exchanges, folded: writing)
                     .padding(.horizontal, Theme.Space.page)
                 threadHeader(entry)
@@ -283,6 +285,17 @@ struct MeetingPage: View {
         case .participant: String(localized: "Persona takes part")
         case .listener: String(localized: "Persona listens")
         case .off: String(localized: "Persona is off")
+        }
+    }
+
+    // MARK: Topics
+
+    /// The room's topics (#3862 phase 2), for a meeting started with the live view, once the room set any: a row of chips
+    /// under the header, above the Live box. It steps aside while the field has the keyboard, as the subtitle does.
+    @ViewBuilder private func topics(_ entry: RecordingEntry) -> some View {
+        let topics = conversation.meeting(id).topics
+        if entry.attendance?.liveView == true, !topics.isEmpty {
+            MeetingTopicsRow(topics: topics, inset: size.isAccessibilitySize ? Theme.Space.flush : Theme.Space.page)
         }
     }
 
@@ -794,6 +807,83 @@ private struct MeetingLiveBox: View {
                 }
             }
             .font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+        }
+    }
+}
+
+/// The meeting's topics as the room set them (#3862 phase 2; docs/design/DESIGN_SYSTEM.md「Meeting page (#3862)」): "Topics"
+/// and a horizontal row of chips in the room's order, the current one scrolled into view. The state is said in words,
+/// never by color alone: "Done: …" on the neutral fill, "Now: …" in the accent, an open topic its title alone in an
+/// outline; VoiceOver reads each with its state ("Not yet: …" for an open one).
+struct MeetingTopicsRow: View {
+    /// The room's topics with a stable identity each (`MeetingTopic.listed`): the room replaces the list as a whole,
+    /// inserting and reordering, so a chip keeps its identity by its title, not its place.
+    private let listed: [MeetingTopic.Listed]
+    /// The row's side margin (the page's; none where the page's content scrolls inside its own margin).
+    var inset: CGFloat
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(topics: [MeetingTopic], inset: CGFloat) {
+        listed = MeetingTopic.listed(topics)
+        self.inset = inset
+    }
+
+    private var current: String? { listed.first { $0.topic.known == .current }?.id }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            Text("Topics [Meeting]").font(Theme.Font.captionStrong).foregroundStyle(.secondary)
+                .accessibilityAddTraits(.isHeader)
+                .padding(.horizontal, inset)
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal) {
+                    HStack(spacing: Theme.Space.s) {
+                        ForEach(listed) { item in
+                            chip(item.topic).id(item.id)
+                        }
+                    }
+                    .padding(.horizontal, inset)
+                    .padding(.vertical, Theme.Space.xxs)
+                }
+                .scrollIndicators(.hidden)
+                .onChange(of: current, initial: true) { _, id in
+                    guard let id else { return }
+                    withAnimation(reduceMotion ? nil : Theme.Motion.state) { proxy.scrollTo(id, anchor: .center) }
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("meeting-topics")
+    }
+
+    private func chip(_ topic: MeetingTopic) -> some View {
+        Chip(text: Self.words(topic), look: Self.look(topic.known), shrinks: true)
+            .scaledFrame(maxWidth: Theme.Size.meetingTopicChip)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text(Self.spoken(topic)))
+            .accessibilityIdentifier("meeting-topic-\(topic.known.rawValue)")
+    }
+
+    /// What a chip says: its state in words before the title, except an open topic's, which its outline tells apart.
+    static func words(_ topic: MeetingTopic) -> String {
+        switch topic.known {
+        case .done: String(localized: "Done: \(topic.title) [Meeting Topic]")
+        case .current: String(localized: "Now: \(topic.title) [Meeting Topic]")
+        case .open: topic.title
+        }
+    }
+
+    /// What VoiceOver says for it: the state in words for every topic.
+    static func spoken(_ topic: MeetingTopic) -> String {
+        topic.known == .open ? String(localized: "Not yet: \(topic.title) [Meeting Topic]") : words(topic)
+    }
+
+    private static func look(_ state: MeetingTopic.State) -> Chip.Look {
+        switch state {
+        case .done: .neutral
+        case .current: .tint(Theme.accent)
+        case .open: .outline
         }
     }
 }
