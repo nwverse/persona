@@ -301,29 +301,46 @@ func TestMeetingRoomStartsUnderItsID(t *testing.T) {
 	if !n.knowsConversation(room) {
 		t.Fatal("the node does not know the room it started")
 	}
-	var line string
-	deadline := time.Now().Add(5 * time.Second)
-	for line == "" && time.Now().Before(deadline) {
-		files, _ := filepath.Glob(filepath.Join(os.Getenv("HOME"), "args-*"))
-		for _, f := range files {
-			if raw, _ := os.ReadFile(f); strings.Contains(string(raw), "["+id+"]") {
-				line = string(raw)
-			}
-		}
-		if line == "" {
-			<-time.After(20 * time.Millisecond) // the process writes its arguments as it starts
-		}
-	}
+	line := startedArgs(t, "["+id+"]")
 	for _, want := range []string{"[--tools] []", "[--strict-mcp-config]", "[--setting-sources] [project]", "[--session-id] [" + room + "]",
 		"[--allowedTools] [" + strings.Join(compat.MCPToolNames(tools), ",") + "]"} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("the room's process has no %s: %s", want, line)
 		}
 	}
+	assertGuestSettings(t, line, "assistant-room-"+room+".json", cwd)
+	if guestSettingArgs()[0] != "--setting-sources" {
+		t.Fatal("args changed")
+	}
+}
+
+// startedArgs is the arguments line ("[a] [b]…") a fake claude of fakeClaudeHome wrote for the process with marker in
+// its arguments; it waits for the process to write them as it starts.
+func startedArgs(t *testing.T, marker string) string {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		files, _ := filepath.Glob(filepath.Join(os.Getenv("HOME"), "args-*"))
+		for _, f := range files {
+			if raw, _ := os.ReadFile(f); strings.Contains(string(raw), marker) {
+				return string(raw)
+			}
+		}
+		<-time.After(20 * time.Millisecond)
+	}
+	t.Fatalf("no process started with %s", marker)
+	return ""
+}
+
+// assertGuestSettings checks a guest's process (its arguments line) runs on its own settings file, named file, which
+// keeps the CLAUDE.md files above cwd (in a home directory's state directory, as the hub prepares it) and the user's
+// out, its own in, and turns auto memory off.
+func assertGuestSettings(t *testing.T, line, file, cwd string) {
+	t.Helper()
 	_, after, _ := strings.Cut(line, "[--settings] [")
 	settingsPath, _, _ := strings.Cut(after, "]")
-	if filepath.Base(settingsPath) != "assistant-room-"+room+".json" {
-		t.Fatalf("the room's own settings are not its --settings: %s", line)
+	if filepath.Base(settingsPath) != file {
+		t.Fatalf("the guest's own settings are not its --settings: %s", line)
 	}
 	raw, err := os.ReadFile(settingsPath)
 	if err != nil {
@@ -338,16 +355,72 @@ func TestMeetingRoomStartsUnderItsID(t *testing.T) {
 	}
 	home := os.Getenv("HOME")
 	for _, want := range []string{filepath.Join(home, "CLAUDE.md"), filepath.Join(home, ".persona", "CLAUDE.md"),
-		filepath.Join(home, ".claude", "CLAUDE.md"), filepath.Join(filepath.Dir(cwd), "CLAUDE.md")} {
+		filepath.Join(home, ".claude", "CLAUDE.md"), filepath.Join(filepath.Dir(cwd), "CLAUDE.md"),
+		filepath.Join(home, ".claude", "rules", "**"), filepath.Join(filepath.Dir(cwd), ".claude", "rules", "**")} {
 		if !slices.Contains(settings.Excludes, want) {
 			t.Errorf("%s is not excluded: %v", want, settings.Excludes)
 		}
 	}
-	if slices.Contains(settings.Excludes, filepath.Join(cwd, "CLAUDE.md")) || settings.Env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] != "1" {
+	for _, own := range []string{filepath.Join(cwd, "CLAUDE.md"), filepath.Join(cwd, ".claude", "rules", "**")} {
+		if slices.Contains(settings.Excludes, own) {
+			t.Errorf("its own %s is excluded: %s", own, raw)
+		}
+	}
+	if settings.Env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] != "1" {
 		t.Errorf("settings %s", raw)
 	}
-	if meetingRoomArgs()[0] != "--setting-sources" {
-		t.Fatal("args changed")
+}
+
+// An extension's guest carries none of the owner's Claude Code setup either (#5786): its start and its resume (a
+// model switch, a restart) load only the project's setting sources, on its own settings, which keep the user's and the
+// home's CLAUDE.md files out and turn auto memory off. An ordinary conversation keeps the user's setup.
+func TestExtensionGuestCarriesNoneOfTheOwnersSetup(t *testing.T) {
+	fakeClaudeHome(t, "for a in \"$@\"; do printf ' [%s]' \"$a\"; done > \"$HOME/args-$$\"\nread line\necho '{\"type\":\"system\",\"subtype\":\"init\"}'\nsleep 30\n")
+	n := codexTestNode(t)
+	n.dir = filepath.Join(os.Getenv("HOME"), ".persona")
+	if err := os.MkdirAll(n.dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	withFakeHub(t, n)
+	out, err := n.assistantGuestPrepare(json.RawMessage(`{"dir":".persona/guest","claude_md":"# guest"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cwd, _ := out.(map[string]any)["cwd"].(string)
+	tools := []string{"lark_agent_reply"}
+	id, err := n.assistantSend(withGuest(context.Background(), tools), "", cwd, "claude", "someone asks", nil, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { n.stopAssistant(id) })
+	if n.guestKindOf(id) != "" {
+		t.Fatalf("an extension's guest taken for a room: %q", n.guestKindOf(id))
+	}
+	line := startedArgs(t, "[--session-id] ["+id+"]")
+	if !strings.Contains(line, "[--setting-sources] [project]") {
+		t.Fatalf("the guest's process loads the user's settings: %s", line)
+	}
+	assertGuestSettings(t, line, "assistant-guest-"+id+".json", cwd)
+
+	n.stopAssistant(id)
+	p, err := n.spawnClaude(id, cwd, "claude", true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(p.stop)
+	line = startedArgs(t, "[--resume] ["+id+"]")
+	if !strings.Contains(line, "[--setting-sources] [project]") {
+		t.Fatalf("the guest's resume loads the user's settings: %s", line)
+	}
+	assertGuestSettings(t, line, "assistant-guest-"+id+".json", cwd)
+
+	other, err := n.assistantSend(context.Background(), "", t.TempDir(), "claude", "hello", nil, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { n.stopAssistant(other) })
+	if line := startedArgs(t, "["+other+"]"); strings.Contains(line, "--setting-sources") || strings.Contains(line, "assistant-guest-") {
+		t.Fatalf("an ordinary conversation lost the user's setup: %s", line)
 	}
 }
 
@@ -528,7 +601,7 @@ func TestMeetingRoomSettingsKeepNothingOfTheLaunchers(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, personaHooks := range []bool{true, false} {
-		path, err := n.meetingRoomSettingsFile(room, cwd, profile, merged, personaHooks)
+		path, err := n.guestSettingsFile(room, cwd, profile, merged, personaHooks)
 		if err != nil {
 			t.Fatal(err)
 		}

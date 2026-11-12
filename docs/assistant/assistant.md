@@ -1212,8 +1212,10 @@ An ordinary extension conversation is an assistant conversation (the assistant d
 - **Directory**: the hub has the node's `assistant.guest_prepare` write `.persona/guest` with only a guest CLAUDE.md / AGENTS.md (`prompts/assistant/guest_claude_md.md`), leaving the assistant's connectors, CLIs and skills alone. A node that doesn't know the method (too old) gets a 400 and nothing starts.
 - **Node** (`node/assistant_guest.go`): Claude Code on the CLI or the Agent SDK (Codex and agent runtimes such as DSH are refused), never the warm spare process.
   Every CLI process it runs in (start, resume, compaction, model switch) has `--tools ""`, `--strict-mcp-config` (only Persona's own MCP server, none of the user's or the extensions'), and `--allowedTools` naming only its tools.
-  On the Agent SDK, `tools: []` disables built-ins, `settingSources: []` leaves out user and project settings, and
-  `strictMcpConfig` is true. The bridge lists the guest's tools from the same stdio Persona MCP server and registers
+  None of the owner's Claude Code setup reaches it either (#5786), as for a meeting's room ([meeting-minutes.md](./meeting-minutes.md) "Nothing of the owner's Claude Code setup"): every CLI process also has `--setting-sources project` and the guest's own `--settings` (`node/assistant_guest.go` `guestSettingsFile`), which excludes the CLAUDE.md files and `.claude/rules` of every directory above its own and of the user's profile, turns auto memory off, and keeps only the environment, login and model keys of the launcher's and the profile's settings. Without the excludes, `--setting-sources project` would still read `~/.claude/CLAUDE.md` and every `~/.claude/rules` file as the home directory's project files.
+  A launcher's own arguments still reach it, as they reach every process the launcher starts (for example a shell function that appends a system prompt file): run guest conversations on a launcher without them.
+  On the Agent SDK, `tools: []` disables built-ins, `settingSources: []` leaves out user and project settings,
+  `strictMcpConfig` is true, and the SDK's `settings` are the same guest settings. The bridge lists the guest's tools from the same stdio Persona MCP server and registers
   only those through an in-process SDK server, so the manager's whitelist and call routing stay unchanged.
   The manager registers the guest's session id and tools before starting the node: SDK discovery happens before
   `assistant.send` returns, and an unregistered first discovery would return an empty list. A start that fails drops

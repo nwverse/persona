@@ -285,6 +285,18 @@ setting sources, carries the login keys (`env`, `apiKeyHelper`, the AWS and `for
 model `<synthetic>`, error `authentication_failed` only in the transcript); read the session row's `turn_error` before
 taking the turn's last words as an answer.
 
+## `--setting-sources project` still reads `~/.claude` as the home's project files (2026-11-12, #5786)
+
+A guest conversation's `--tools ""` and `--strict-mcp-config` take away tools, not context: an extension's guest on the
+CLI read the owner's `~/.claude/CLAUDE.md`, every `~/.claude/rules` file and the auto-memory index (about 39k tokens in
+its first request on one machine), so the person it answered could ask for them. A meeting's room was started with
+`--setting-sources project`, CLAUDE.md excludes for every directory above its own and auto memory off, and even that let
+the rules through (about 27k of those tokens): for a directory below the home, Claude Code reads `~/.claude` as the home
+directory's project `.claude`, rules included. `claudeMdExcludes` takes paths and globs and covers rules files too, so
+every guest now also excludes `<dir>/.claude/rules/**` for each directory above its own, the home's and the profile's;
+the same first request was under 3k tokens. Check such isolation on the real CLI: pick a marker line from each source and
+count it in the run's transcript, which records the instructions the process loaded.
+
 ## Read colors to determine whether Claude's input box is empty (#1434)
 
 After each turn, Claude Code puts a suggested next message in dim text (SGR 2), such as `❯ 现在部署一下 hub` ("deploy the hub now"). Plain-text screen reads can't distinguish it from typed text.
@@ -885,7 +897,7 @@ refused as `dialog_open` with nothing on the phone to answer.
   same check that ignored allow honoured deny.
 - `--setting-sources project` does not keep a `--settings` file out: flag settings always load, hooks, plugins and output
   style included. A launcher alias's `--settings` is a user settings file, so a process that must carry none of the user's
-  setup (a meeting's room, `node/assistant_guest.go` `meetingRoomKeys`) copies only what it needs from it (env, login, model).
+  setup (a guest conversation, `node/assistant_guest.go` `guestSettingsKeys`) copies only what it needs from it (env, login, model).
 - A node's session state is stored by the hub's manager (`db.NodeSession`): a field it does not keep is gone after the next node
   restart. Persist what decides how a process runs (a guest's tools and kind), and fail closed when it is missing.
 
