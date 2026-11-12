@@ -494,7 +494,7 @@ so the extension does not need to read the hub's or the manager's data directory
 | `kb.get` | `{kind,id,recent_chars?}` | `{detail}` | `kb.read` |
 | `kb.day` | `{id,day}`, day is `YYYY-MM-DD` | `{day,messages,prev,next,sent_origin}`; `messages[].n` is the 1-based line number in the source file | `kb.read`; `sent.read` adds origin marks |
 | `kb.search` | `{query,messages?,limit?}` | `{hits}` | `kb.read` |
-| `kb.update` | `{kind,id,...fields to update,evidence?,unlock?}` | `{id,before?}` | `kb.write` |
+| `kb.update` | `{kind,id,...fields to update,evidence?,unlock?}` | `{id,before?,ignored?}` | `kb.write` |
 | `kb.owner` | `{}` | `{name,aliases,handles:[{kind,value}]}` | `kb.read` |
 
 The params, answers, error codes and events are described in `schema/extension/kb.schema.json`; the Go SDK has them as `ext.Hub`'s `KBList`, `KBRecent`, `KBGet`, `KBDay`, `KBSearch`, `KBUpdate` and `KBOwner`.
@@ -529,6 +529,19 @@ The locked fields it writes become its own with `evidence` (`[{chat, day, n?, no
 `before` is each written field's previous value (`null` when unset, the old `summary` text), for the extension's undo. Rules and how this sits with the built-in pipeline: [Knowledge base](../assistant/knowledge.md#who-holds-a-field-6100).
 
 The update fields follow the existing knowledge base update API, plus `pinned`, `lock` and `remove_people/remove_chats/remove_aliases/remove_projects`.
+Each kind takes only the fields it uses ("Fields each kind takes" in `docs/assistant/knowledge.md`); the others are not applied, and the answer names them in `ignored: [{field, reason}]`, so nothing is dropped silently (a person's `summary` and `log`, for one).
+
+**A person's profile** (`profile`, people only): what the extension knows of the person, in four parts kept apart: `facts`, the user's own words about them (`views`), `inferences` (each with its `basis`, shown as only a hint), and `commitments` either way (`owes: user | them`, `due?`, `done?`). Every item needs `sources`.
+It is the extension's own: a write replaces the profile it wrote before as a whole (one with no items removes it) and touches no other extension's, nor the user's, nor the person's `pinned` and `note`, so it never conflicts. `before.profile` is the one replaced.
+The person's summary.md shows it under its own headings, every line labelled with its part, which is what `kb_get` / `kb_search` and `kb.get` / `kb.search` read; `kb.get` also gives `profiles` by writer, as written. Rules and bounds are in "Person profiles" (`docs/assistant/knowledge.md`).
+
+```json
+{"kind":"people","id":"<person id>","profile":{
+  "facts":[{"text":"Leads the example project","sources":["chats/<dm id>/messages/2026-11-03.md"]}],
+  "views":[{"text":"explains things clearly","sources":["user"]}],
+  "inferences":[{"text":"Prefers written updates","basis":"asked for a written summary after three of four calls","sources":["chats/<dm id>"]}],
+  "commitments":[{"text":"Send the review notes","owes":"user","due":"2026-11-20","sources":["chats/<dm id>/messages/2026-11-04.md"]}]}}
+```
 Protection rules, which entities they apply to, encryption of the owner's identity and history limits are in [Knowledge base](../assistant/knowledge.md#扩展整理知识库1908). The owner's aliases are edited by the user in the assistant settings;
 there is no separate RPC for extensions to write the owner's identity.
 
@@ -664,6 +677,31 @@ cursor.
 An extension's token is never shown a private card, one of the health space, or one whose space cannot be told, and a card's
 `resolution.values` (what was filled into its fields on the phone, such as a password) is left out (see "Never shown to
 extensions"). A page may then hold fewer cards than `limit` while the cursor still says there is more.
+
+#### Recommendations and who decided
+
+To learn how the user usually decides, and how often they take what was recommended, read these on the assistant's own questions
+(`tool_name: "ask_user"`; `docs/protocol/protocol.md` "Decision fields" and "Who answered a card"):
+
+| Where | Field | Meaning |
+| --- | --- | --- |
+| `interaction` | `deadline` | When an unanswered question takes its recommendation by default (or is reminded, when it cannot be undone) |
+| `interaction` | `reversible` | Whether going ahead can be undone, as the assistant said it; absent when it did not say |
+| `interaction.questions[]` | `recommend` | The recommended option's label; absent when there was none |
+| `resolution` | `answered_by` | Absent: the user. `assistant`: the assistant answered for the user. `default`: nobody answered; the recommendation was taken at the deadline |
+| `resolution` | `late` | The answer came after the card expired (on the to-do it became, or at its deadline); the card's `status` stays `expired` |
+
+None of them is filled in for cards from before they were kept: a missing field is unknown, not `false` or "no recommendation".
+Taken-or-not is `resolution.answers[q] == questions[].recommend` for the user's answers (`answered_by` absent); a `default` answer
+was not the user's choice.
+
+A finished task's decision for the owner (a supervised task's `needs_user` review) is not a card. While it waits, `GET /api/v1/todos`
+(`todos.read`) lists it on its to-do as `ask`: `recommend`, `options` (the recommended first), `deadline`, and `default` (`taken`: the
+recommendation is taken at the deadline, which only a reversible decision does; `never`: it never is). The review itself stays on the
+to-do, decided or not (`supervision.reviews[]`, the last 20, with `verdict: "needs_user"`, `recommend`, `options`, and `deadline` and
+`reversible` as the supervisor gave them, absent when it gave none or on reviews from before they were kept). Once decided,
+`GET /api/v1/todos/{id}/decisions` has the outcome: `source: "manual"` for the user's choice, `source: "agent"` with the deadline's
+`reason` for the default.
 
 #### Folded work
 
@@ -2472,8 +2510,8 @@ A hub picture that fails to load may have outlived its token, so the page is dra
 A row's extra actions open from a right click, a half-second press on a touch screen and the … button at its end (no swipe on the web).
 The component showcase's version 6 pages are `web/src/showcase/v6` (with their pictures in `web/src/showcase/images`) until the showcase extension's own snapshots have them.
 
-**iOS** (#827) draws it in parts and sends 6 only when all of it is drawn, after the rest of UI version 5; meanwhile the hub downgrades it as for any older app. Drawn so far: row controls
-(see "App: Settings › Extensions" below). One difference from the web and Android: a switch that asks first has already moved when the alert shows (a system switch cannot be held where it was), and Cancel puts it back.
+**iOS** (#827) draws it in parts and sends 6 only when all of it is drawn, after the rest of UI version 5; meanwhile the hub downgrades it as for any older app. Drawn so far: row controls, and the styles
+(the 45 icons, named colors, `title` / `headline`; see "App: Settings › Extensions" below). One difference from the web and Android: a switch that asks first has already moved when the alert shows (a system switch cannot be held where it was), and Cancel puts it back.
 
 ## System-level placements (#1858)
 
@@ -2914,6 +2952,26 @@ Views, components, actions, responses, placements and context all use schema-gen
   `GET /mock/invalidate` syncs one note and sends `ui.invalidate`; UI test `ExtensionV3Tests` (list, filters, more, search to empty state, push note page, edit/save/pop, invalidate),
   unit tests `ExtensionUIv3Tests`, `PersonaCardTests`. `MOCK_EXTENSION_CARDS=1` with `ExtensionAssistantCardTests` checks in a real assistant chat that
   `persona-view` and old `persona-card` share the renderer, actions are not tappable, links remain, and saves light/dark screenshots. Four-client showcase comparison depends on #1852, not replaceable by notes screenshots.
+- UI version 6's styles (#827): every name of the icon set (UI version 4's code hosting and version 6's 45 for homes and markets) is drawn as the app's own symbol
+  (`ExtensionUIStyle.icon`; meanings the app already has, such as home, lock, camera, play, use its own); the 11 named colors are `Theme.Hue`'s (`ExtensionUIStyle.color`), on marks only:
+  a row's icon in its color on the design system's `IconTile`, a metric's icon before its label, an empty state's mark, and a badge as a soft tint of the color behind words in the text's
+  own color (a tone, when it has one, wins). `text` takes `title` and `headline` (heading levels for VoiceOver). Unit tests `ExtensionStylesTests` read the schema's names; screenshots of
+  `showcase › styles` with `ExtensionShowcaseShotsUITests`.
+- UI version 5's code review (#827, "UI version 5: code review"), drawn in parts (pages send 4 until all of version 6 is drawn too, so the hub strips these fields for iOS meanwhile).
+  Reading (`ExtensionCodeReview.swift`, the code page): the words that changed in a removed and added pair on a stronger fill (PersonaKit's `LineDiff` word comparison, worked out once per hunk);
+  generated files and lockfiles (by the extension's `generated` or the web's path list), changes over 400 lines and viewed files start folded with a line saying why and **Show**; a generated
+  file without hunks is not loaded by itself. Each diff's header has a **Viewed** tick box (`.toggleStyle(.tickBox)`): checked, the file folds; unchecked, it stays as it is. With `mark_viewed`
+  the mark changes at once and is sent quietly (`ExtensionViewModel.quiet`: nothing waits, an empty answer draws nothing, a failure puts the mark back); without it the mark is kept on the
+  device by `path` + `revision` (or a digest of the lines), at most 5,000 (`CodeViewedMarks`). The tree ticks viewed files. Over the diffs: "Viewed x / y", "N unresolved" (each tap unfolds
+  and scrolls to the next open thread; drafts don't count) and a ⋯ menu with **Ignore Whitespace** (kept for every page). A rename shows its similarity. An action's `items` replace their
+  components without drawing the page again, and a page drawn again keeps diffs loaded since. Hidden lines (`context`): between hunks a bar says how many lines are hidden, with the next hunk's
+  header, and shows 20 more down or up, or all (a few: all at once; the first gap only up, the last only down, to the end of the file once its length is known); the lines are asked quietly for the
+  new side (`to` "end" when the length is not known yet), kept per file so showing more of a gap that came needs no request, and `expand` is not used then. `code.line_url` adds **Copy Link to
+  Line** to the code viewer's line menu (https only). Commenting: a second line number on the same side picks the lines between (`start_line`, the picked lines tinted, the box under the
+  last one, what is typed kept); the box sends alone (**Comment**) or as a draft of the pending review (`draft`, **Add to Review**, first once a review is under way), its ✕ closes it, and
+  **Suggest Change** (`suggestions`, new side) starts a ```suggestion block from the lines as they are. A comment's suggestion is drawn as a small diff of the lines it is on; **Resolve** /
+  **Reopen** send `resolve`; a resolved thread is folded to its first comment. Unit tests `ExtensionCodeReviewTests`, UI test `ExtensionCodeReviewUITests` (`showcase › snapshots › code-review-v5`; the mock answers
+  `context` with made-up lines of a 90-line file).
 - UI version 6 (#827, "UI version 6"), drawn in parts; pages keep sending 4 and cards 3 until all of it is drawn, so the hub still downgrades it for iOS meanwhile.
   Row controls (`ExtensionControls.swift`, `ExtensionControlRow`): a switch or a stepper at the row's end, a slider on a line under it, all system controls labeled by the row's title and read out with
   their value as written (`display` for the value the extension drew, else the number in the user's locale and the unit); a row with its own action does it from its words, the control beside them.

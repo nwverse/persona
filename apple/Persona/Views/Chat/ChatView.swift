@@ -18,6 +18,7 @@ enum ChatStyle {
 struct ChatView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dynamicTypeSize) private var typeSize
     /// The session on screen; the sibling strip can switch it to another agent in the same space.
     @State private var key: SessionKey
     var style: ChatStyle = .dev
@@ -38,6 +39,9 @@ struct ChatView: View {
     /// The pin is bringing a header up to show what opened under it (`ChatPin.onRising`): no ↓ for that moment.
     @State private var pinRising = false
     @State private var showTerminal = false
+    /// The terminal comes up to resume a stopped Agent at once (Resume in Terminal, #5521): it shows the resume's progress
+    /// and connects as soon as the Agent is up.
+    @State private var resumeOnOpen = false
     #if os(macOS)
     /// The Mac's terminal takes the chat's place (Terminal | Chat, #3183): mounted the first time it is shown, then kept under
     /// the chat, still subscribed and at the same size, so coming back to it does not connect again.
@@ -744,8 +748,9 @@ struct ChatView: View {
         .onChange(of: status) { _, st in if !st.isActive { Task { await loadGit() } } }
         // One stack: the chat takes the whole screen. Beside the list (split) the tab bar stays, or there is no way out.
         .hidesTabBarWhenShown(style == .dev && split == nil)
-        .fullScreenCover(isPresented: Binding(get: { showTerminal && session?.canTerminal == true }, set: { showTerminal = $0 })) {
-            TerminalCover(key: key, switchTo: switchTo).presentationBackground(.clear)
+        .fullScreenCover(isPresented: Binding(get: { showTerminal && session?.canTerminal == true },
+                                              set: { showTerminal = $0; if !$0 { resumeOnOpen = false } })) {
+            TerminalCover(key: key, switchTo: switchTo, resumeOnOpen: resumeOnOpen).presentationBackground(.clear)
         }
         .renameSessionAlert($renaming)
         .confirmClose($closing) { closedAgent($0, order: []) }
@@ -805,6 +810,7 @@ struct ChatView: View {
         .environment(\.viewImages, actions.viewImages)
         .environment(\.imageZoom, imageZoom)
         .environment(\.openTools, openTools)
+        .environment(\.plainRefusals, session?.assistant == true) // a Persona conversation: plain words (#5202)
         .fullScreenCover(item: $viewingImages) { v in
             Group {
                 if let viewed = v.viewed {
@@ -1455,7 +1461,7 @@ struct ChatView: View {
                     }
                     .font(Theme.Font.caption)
                     .foregroundStyle(.secondary)
-                    .padding(.leading, WorkCardSlice.contentLeading)
+                    .padding(.leading, WorkCardSlice.contentLeading(typeSize))
                     .padding(.trailing, WorkCardSlice.inset)
                     .padding(.vertical, Theme.Space.m)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -2504,6 +2510,8 @@ struct ChatView: View {
             // Needs You / In Progress in the dock's capsules, each opening its tray (#3393), on every device.
             AssistantActionBar(conversation: conversation, key: key, computer: computerActivity)
             RouteChip(conversation: conversation)
+            // Items handed to the main conversation that are still open: "Wrap up" asks it for the final write-back (#5932).
+            if model.assistantMain == key { WrapUpChips(key: key) }
         }
     }
 
@@ -2586,7 +2594,8 @@ struct ChatView: View {
                         .padding(.leading, Theme.Space.xs)
                 }
                 if let s = session, s.isStopped {
-                    StoppedAgentBar(openTerminal: openTerminal) // read-only: its terminal page has the shell and Resume (#4754)
+                    // read-only: its terminal page has the shell it left and Resume (#4754), which Resume here opens (#5521)
+                    StoppedAgentBar(openTerminal: openTerminal, resume: resumeHere)
                 } else if let s = session, !s.canSend, let reason = s.sourceSubtitle {
                     Text(reason).font(Theme.Font.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -3270,6 +3279,10 @@ struct ChatView: View {
                 if session?.canTerminal == true {
                     Button { openTerminal() } label: { Label("Terminal", systemImage: Theme.Icon.terminal).lineLimit(1) }
                 }
+                #if os(iOS)
+                // Its computer is read only for a session that isn't running: a live chat never watches the machines (P5).
+                if let s = session, s.status == .offline || s.status == .unknown { resumeMenuItem(s) }
+                #endif
                 if pane != .chat {
                     Button { withAnimation(Theme.Motion.standard) { pane = .chat } } label: { Label("Back to Chat", systemImage: SessionPane.chat.symbol) }
                 }
@@ -3876,6 +3889,47 @@ struct ChatView: View {
         else if backShowsList, let showList { showList.show() } else { dismissChat() }
         #endif
     }
+
+    /// Resume in Terminal (#5521): the terminal comes up over the page and resumes the stopped Agent there (TerminalPanel's
+    /// Resume Session, `session.start` with its id), so its progress, an error and then the Agent itself show in one place.
+    private func resumeInTerminal() {
+        resumeOnOpen = true
+        openTerminal()
+    }
+
+    /// The stopped line's Resume: as Resume in Terminal on the phone; the frozen Mac app keeps its line as it was.
+    private var resumeHere: (() -> Void)? {
+        #if os(macOS)
+        nil
+        #else
+        resumeInTerminal
+        #endif
+    }
+
+    #if os(iOS)
+    /// ⋯'s Resume in Terminal, as `Session.terminalResume(on:)` says: there for a stopped Agent, disabled with why where
+    /// its computer has no terminal engine, gone otherwise (running, starting, an assistant's, a desktop app's).
+    @ViewBuilder private func resumeMenuItem(_ s: Session) -> some View {
+        let machine = model.machine(s.machineRef)
+        switch s.terminalResume(on: machine) {
+        case .available:
+            Button { resumeInTerminal() } label: { Label("Resume in Terminal", systemImage: Theme.Icon.resume).lineLimit(1) }
+                .accessibilityIdentifier("chat-resume-terminal")
+        case .noEngine:
+            // The reason under the name, written as the mode menu's disabled Allow Everything: two `Text`s and the image
+            // (a menu drops a `Label`'s second `Text`, and keeps a `Label`'s icon tinted while the row dims).
+            Button {} label: {
+                Text("Resume in Terminal")
+                Text("No terminal engine on \(machine?.name ?? s.machineID)", comment: "Why Resume in Terminal is off: the computer enables no terminal engine")
+                Theme.Icon.image(Theme.Icon.resume)
+            }
+            .disabled(true)
+            .accessibilityIdentifier("chat-resume-terminal")
+        case .hidden:
+            EmptyView()
+        }
+    }
+    #endif
 
     /// Terminal: on the Mac it takes the chat's place (Terminal | Chat, #3183); elsewhere it comes up from the bottom over the page.
     private func openTerminal() {
@@ -4575,14 +4629,33 @@ struct StartingNote: View {
 }
 
 /// Why a session waits for the user, in its host's words (a botmux attention), with its Feishu topic one tap away.
+/// Under it, the AskUserQuestion it waits on, read-only (#5889), when no card can answer it: a dialog only its computer
+/// can answer still says here what it asks.
 struct AttentionNote: View {
     var reason: String
     var link: URL?
+    /// The chat whose open question it lists; read here, so only the note follows the chat's items (P5).
+    var key: SessionKey? = nil
+    @Environment(AppModel.self) private var model
 
     var body: some View {
+        // A question a card can answer is listed there, not here too (#5937).
+        let questions = key.flatMap {
+            model.interactions(for: $0).isEmpty ? AskUserAnswers.pending(model.chat($0).items) : nil
+        } ?? []
         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
             ThemedIcon(Theme.Icon.needsYou).font(Theme.Font.labelStrong).foregroundStyle(StatusPalette.needsYou.text)
-            Text(reason).font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(3)
+            VStack(alignment: .leading, spacing: Theme.Space.s) {
+                Text(reason).font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(3)
+                ForEach(Array(questions.enumerated()), id: \.offset) { _, q in
+                    VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                        Text(q.question).font(Theme.Font.captionMedium)
+                        ForEach(Array(q.options.enumerated()), id: \.offset) { _, label in AskUserDetail.choice(label, picked: false) }
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("chat.attention.question")
+                }
+            }
             Spacer(minLength: 0)
             if let link { FeishuLink(url: link).font(Theme.Font.secondaryStrong) }
         }
@@ -5063,7 +5136,7 @@ struct Composer: View, Equatable {
                 StartingNote(error: s.startError, agent: s.agentLabel, coded: s.startErrorCode?.isEmpty == false)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             } else if let s = model.session(key), let reason = s.attentionReason, !reason.isEmpty, s.state == .needsYou {
-                AttentionNote(reason: reason, link: s.externalLink)
+                AttentionNote(reason: reason, link: s.externalLink, key: key)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             } else if let s = model.session(key), let reason = s.failureReason, !reason.isEmpty, !status.isActive,
                       retried != reason {
@@ -5760,10 +5833,12 @@ struct TerminalCover: View {
     @Environment(\.dismiss) private var dismiss
     let key: SessionKey
     var switchTo: ((SessionKey) -> Void)?
+    /// Resume in Terminal (#5521): resume the stopped Agent as the terminal comes up.
+    var resumeOnOpen = false
     @State private var offset: CGFloat = 0
 
     var body: some View {
-        TerminalPanel(key: key, switchTo: switchTo, grab: TerminalGrab(
+        TerminalPanel(key: key, switchTo: switchTo, resumeOnOpen: resumeOnOpen, grab: TerminalGrab(
             dragged: { offset = max(0, $0) },
             released: { distance, predicted in
                 if distance > 140 || predicted > 420 { close() } else { withAnimation(.spring(duration: 0.3)) { offset = 0 } }
@@ -5783,22 +5858,50 @@ struct TerminalCover: View {
 }
 
 /// Above a stopped Agent's composer (#4754, docs/integrations/engines.md「Agents run in a terminal」): it takes no messages;
-/// its terminal page shows the shell it left and offers Resume, the one way it runs again.
+/// its terminal page shows the shell it left and offers Resume, the one way it runs again. Resume Session here opens that
+/// page and resumes it there (#5521), as the web's line does; the words go above the two buttons, which stay on one line.
 private struct StoppedAgentBar: View {
+    @Environment(\.dynamicTypeSize) private var typeSize
     var openTerminal: () -> Void
+    /// Nil keeps the line as it was (the frozen Mac app).
+    var resume: (() -> Void)?
 
     var body: some View {
-        HStack(spacing: Theme.Space.s) {
-            Text("This Agent has stopped. Its conversation and terminal stay; it doesn't take messages.")
-                .font(Theme.Font.caption).foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Button(action: openTerminal) {
-                Label("Terminal", systemImage: Theme.Icon.terminal).font(Theme.Font.labelStrong).lineLimit(1)
+        Group {
+            if let resume {
+                VStack(alignment: .leading, spacing: Theme.Space.s) {
+                    note
+                    // At the accessibility sizes the two go one above the other: side by side they would be cut short.
+                    let buttons = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: Theme.Space.s))
+                        : AnyLayout(HStackLayout(spacing: Theme.Space.s))
+                    buttons {
+                        terminal
+                        Button(action: resume) {
+                            Label("Resume Session", systemImage: Theme.Icon.resume).font(Theme.Font.labelStrong).lineLimit(1)
+                        }
+                        .themedButton(prominent: true)
+                        .accessibilityIdentifier("chat.stopped.resume")
+                    }
+                }
+            } else {
+                HStack(spacing: Theme.Space.s) { note; terminal }
             }
-            .themedButton()
-            .accessibilityIdentifier("chat.stopped.terminal")
         }
         .accessibilityElement(children: .contain)
+    }
+
+    private var note: some View {
+        Text("This Agent has stopped. Its conversation and terminal stay; it doesn't take messages.")
+            .font(Theme.Font.caption).foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var terminal: some View {
+        Button(action: openTerminal) {
+            Label("Terminal", systemImage: Theme.Icon.terminal).font(Theme.Font.labelStrong).lineLimit(1)
+        }
+        .themedButton()
+        .accessibilityIdentifier("chat.stopped.terminal")
     }
 }
 
@@ -6436,6 +6539,7 @@ nonisolated indirect enum WorkItem: Identifiable, Equatable, Sendable {
 struct WorkStepView: View, Equatable {
     nonisolated let item: WorkItem
     nonisolated let first: Bool
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.item == rhs.item && lhs.first == rhs.first
@@ -6461,19 +6565,19 @@ struct WorkStepView: View, Equatable {
                 ThinkingRow(item: t, compact: true) // a row like the tools', with their insets
             case .step(.thought(let t)):
                 Group { if t.kind == .notice { NoticeRow(item: t) } else { ThinkingRow(item: t, compact: !WorkCardSlice.timeline) } }
-                    .padding(.leading, WorkCardSlice.contentLeading)
+                    .padding(.leading, WorkCardSlice.contentLeading(typeSize))
                     .padding(.trailing, WorkCardSlice.inset)
                     .padding(.vertical, WorkCardSlice.timeline ? Theme.Space.s : Theme.Space.m)
             case .step(.folded(let f)):
                 FoldedWorkRow(fold: f)
-                    .padding(.leading, WorkCardSlice.contentLeading)
+                    .padding(.leading, WorkCardSlice.contentLeading(typeSize))
                     .padding(.trailing, WorkCardSlice.inset)
                     .padding(.vertical, WorkCardSlice.timeline ? Theme.Space.s : Theme.Space.m)
             case .text(let i):
                 // The agent's words between its steps: on the timeline in the quieter type, so they read as part of
                 // the process and not as its answer.
                 AssistantText(item: i, quiet: WorkCardSlice.timeline)
-                    .padding(.leading, WorkCardSlice.contentLeading)
+                    .padding(.leading, WorkCardSlice.contentLeading(typeSize))
                     .padding(.trailing, WorkCardSlice.inset)
                     .padding(.vertical, WorkCardSlice.timeline ? Theme.Space.s : Theme.Space.m)
             }
@@ -6566,20 +6670,32 @@ struct WorkStepView: View, Equatable {
 struct WorkCardSlice: View {
     var top: Bool
     var bottom: Bool
+    @Environment(\.dynamicTypeSize) private var typeSize
     /// Half the list's spacing (`LazyVStack(spacing: Theme.Space.l)`): the slices meet in the middle of each gap. It was
     /// 7 from when the spacing was 14; at 16 every seam showed a 2 pt gap (white lines across the card, the rail broken).
     static let bridge: CGFloat = Theme.Space.l / 2
     static let radius = Theme.Radius.card
-    /// The rows' side padding inside the card.
-    static let inset: CGFloat = 12
-    /// Where a tool row's words start (inset + 24 pt icon + 10): separators start there.
-    static let textColumn: CGFloat = 46
-    /// The timeline's rail runs through the middle of the tools' icons.
-    static let railX: CGFloat = inset + Theme.Size.icon / 2
+    /// Side padding inside a card. The timeline's icon column uses `iconLeading` instead.
+    static let inset: CGFloat = Theme.Space.m
+    /// Where the timeline's icons start. Flush with the assistant reply bubble, which begins at the list's content
+    /// margin. A card keeps `inset` inside its ring, so that style does not move.
+    static var iconLeading: CGFloat { timeline ? Theme.Space.flush : inset }
+    /// The card's text column, unchanged: inset + icon + 10. The hairline between card steps starts there.
+    /// The separator only draws for cards, so it reads this directly instead of a text size.
+    static let cardTextColumn: CGFloat = 46
+    /// The icon's width at this text size, the same scale `scaledFrame` gives the step icons.
+    static func iconWidth(_ typeSize: DynamicTypeSize) -> CGFloat { Theme.Size.icon * Theme.sizeScale(typeSize) }
+    /// Where a tool row's words start. On the timeline that is the scaled icon plus the header's gap, so the title,
+    /// the opened detail and Collapse share one edge. A card keeps `cardTextColumn`.
+    static func textColumn(_ typeSize: DynamicTypeSize) -> CGFloat {
+        timeline ? iconLeading + iconWidth(typeSize) + Theme.Space.m : cardTextColumn
+    }
+    /// The rail's x, through the middle of the tools' icons.
+    static func railX(_ typeSize: DynamicTypeSize) -> CGFloat { iconLeading + iconWidth(typeSize) / 2 }
 
     static var timeline: Bool { StyleSpec.current.workList == .timeline }
     /// Where a step's own content starts: the card's inset, or (timeline) right of the rail, where the tools' words are.
-    static var contentLeading: CGFloat { timeline ? textColumn : inset }
+    static func contentLeading(_ typeSize: DynamicTypeSize) -> CGFloat { timeline ? textColumn(typeSize) : inset }
 
     var body: some View {
         if Self.timeline { rail } else { card }
@@ -6592,7 +6708,7 @@ struct WorkCardSlice: View {
             Rectangle()
                 .fill(Color(uiColor: .separator))
                 .frame(width: Theme.Size.lineMedium, height: bottom ? g.size.height / 2 + (top ? 0 : Self.bridge) : g.size.height + (top ? 0 : Self.bridge) + Self.bridge)
-                .offset(x: Self.railX - Theme.Size.lineMedium / 2, y: top ? Theme.Space.m : -Self.bridge)
+                .offset(x: Self.railX(typeSize) - Theme.Size.lineMedium / 2, y: top ? Theme.Space.m : -Self.bridge)
         }
         .allowsHitTesting(false)
     }
@@ -6617,7 +6733,7 @@ struct WorkCardSlice: View {
     @ViewBuilder static var separator: some View {
         if !timeline {
             Rectangle().fill(beautiful ? Theme.cardStroke : Color(uiColor: .separator)).frame(height: beautiful ? Theme.Size.line : Theme.Size.hairline)
-                .padding(.leading, textColumn)
+                .padding(.leading, cardTextColumn)
                 .offset(y: -bridge)
                 .allowsHitTesting(false)
         }
@@ -6629,6 +6745,7 @@ struct WorkCardSlice: View {
 struct WorkEndView: View, Equatable {
     @Environment(\.openFile) private var openFile
     @Environment(\.chatPin) private var pin
+    @Environment(\.dynamicTypeSize) private var typeSize
     nonisolated let count: Int
     nonisolated let files: [ChangedFile]
     /// What the chat's pin knows the chips by: "+N files" opens the rest under them, the chips staying where they are (#3757).
@@ -6662,7 +6779,7 @@ struct WorkEndView: View, Equatable {
                 }
                 .font(Theme.Font.caption)
                 .foregroundStyle(.secondary)
-                .padding(.leading, WorkCardSlice.contentLeading)
+                .padding(.leading, WorkCardSlice.contentLeading(typeSize))
                 .padding(.trailing, WorkCardSlice.inset)
                 .padding(.vertical, Theme.Space.m)
                 .frame(maxWidth: .infinity, alignment: .leading)
