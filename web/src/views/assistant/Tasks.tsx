@@ -65,8 +65,9 @@ const PlanBrief = lazy(() => import("./TaskBrief").then((m) => ({ default: m.Pla
 // A decision's row comes with the tray's first decision, not with the first screen (startup-preload's budget); the
 // same chunk has a suggested rule's line (#5802), which comes with the first card that carries one.
 const NeedsYouPart = lazy(() => import("./TaskDecision"));
-/** The suggested rule's line of a card, drawn right after it; nothing for a card without the field. */
-const ruleLine = (of: RuleCard) => of.suggestion && <Suspense fallback={null}><NeedsYouPart rule={of} /></Suspense>;
+/** The suggested rule's line of a card, drawn right after it; nothing for a card without the field, unless Always
+ *  was answered on it here (the line then says what was made, though the hub sent the card again without the field). */
+const ruleLine = (of: RuleCard) => (of.suggestion || underCard.made?.has(of.id!)) && <Suspense fallback={null}><NeedsYouPart rule={of} /></Suspense>;
 underCard.line = ruleLine;
 import { SentLine, TaskSentList } from "./Sent";
 import { feedWake, HandoffCard, HandoffCards, taskHandoffs, whyNotStarted } from "./Handoff";

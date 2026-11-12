@@ -5,7 +5,7 @@
 // this page says what Always stores and, afterwards, where the rule is listed and removed. The pure parts and the two
 // requests; the view is views/assistant/RuleSuggestionLine.tsx.
 import { t } from "../i18n";
-import { api, ApiError, enc } from "./api";
+import { api, ApiError, credentialOwner, enc } from "./api";
 
 /** What a suggested rule would cover; empty for `delegate`, whose setting is not per directory. */
 export interface RuleScope {
@@ -38,6 +38,10 @@ export interface RuleSuggestion {
  *  to-do's decision (which gives the `headers` its own answers go with). `suggestion` is as the hub sent it, checked
  *  by ruleSuggestion where it is drawn. */
 export interface RuleCard {
+  /** The card's own id (a plan's, a question's, a decision's round): what Always made is kept by it. */
+  id?: string;
+  /** The card cannot be answered from here (a question whose own controls are off): the line's buttons are off too. */
+  disabled?: boolean;
   suggestion?: RuleSuggestion;
   conversation?: string;
   manager?: string;
@@ -69,7 +73,7 @@ function scopeMachine(scope: RuleScope | undefined): string {
 }
 
 /** Exactly what Always stores, in sentences: the remembered kind of task, the standing authorization with its
- *  conditions and the words kept as the owner's, or nothing but a pointer to the setting. */
+ *  conditions and the words kept as the owner's, or, for `delegate`, that it stores no rule and turns nothing on. */
 export function ruleCreates(s: RuleSuggestion & { kind: RuleKind }): string[] {
   const scope = s.scope ?? {};
   const where = { directory: scope.directory ?? "", machine: scopeMachine(scope) };
@@ -85,7 +89,8 @@ export function ruleCreates(s: RuleSuggestion & { kind: RuleKind }): string[] {
       ].filter(Boolean);
     }
     case "delegate":
-      return [t("assistant-rulesuggestion.creates_delegate", { setting: s.setting || "agents.delegate" })];
+      // no key and no place here: the hub's own sentence says what the setting does
+      return [t("assistant-rulesuggestion.creates_delegate")];
   }
 }
 
@@ -108,8 +113,15 @@ export interface RuleMade {
 }
 
 /** What is said once Always went through: what was made, and where it is listed and removed. `page` is where this
- *  app lists it; a `delegate` rule is no setting of this app (the assistant's manager.json), so it has none. */
-export function ruleResult(s: RuleSuggestion & { kind: RuleKind }, made: RuleMade): { text: string; where: string; page?: string } {
+ *  app lists it; `delegate` stores nothing and its setting has no switch in any app yet (the assistant's configuration
+ *  file on the hub's computer), so it has none. */
+export interface RuleResult {
+  text: string;
+  where: string;
+  page?: string;
+}
+
+export function ruleResult(s: RuleSuggestion & { kind: RuleKind }, made: RuleMade): RuleResult {
   const kind = KINDS.includes(made.kind ?? "") ? (made.kind as RuleKind) : s.kind;
   // both lists are on the assistant's own settings page, each under its own heading
   const where = (list: string) => t("assistant-rulesuggestion.where", { tab: t("settings-nav.tab_profile"), list });
@@ -127,9 +139,10 @@ export function ruleResult(s: RuleSuggestion & { kind: RuleKind }, made: RuleMad
  *  or no longer earned), which only clears the line. Any other failure throws, and the line stays to try again. */
 export type RuleAnswer = { state: "made"; made: RuleMade } | { state: "hidden" } | { state: "gone" };
 
-export async function answerRuleSuggestion(id: string, answer: "always" | "not-now", headers?: Record<string, string>): Promise<RuleAnswer> {
+/** `current`: whether the page is still signed in as it was when the answer was given (the request's fence). */
+export async function answerRuleSuggestion(id: string, answer: "always" | "not-now", headers?: Record<string, string>, current?: () => boolean): Promise<RuleAnswer> {
   try {
-    const made = await api<RuleMade>(`/assistant/rule-suggestions/${enc(id)}/${answer}`, { method: "POST", headers });
+    const made = await api<RuleMade>(`/assistant/rule-suggestions/${enc(id)}/${answer}`, { method: "POST", headers, isAuthContextCurrent: current });
     return answer === "always" ? { state: "made", made: made ?? {} } : { state: "hidden" };
   } catch (e) {
     if (e instanceof ApiError && e.status === 404) return { state: "gone" };
@@ -137,19 +150,54 @@ export async function answerRuleSuggestion(id: string, answer: "always" | "not-n
   }
 }
 
-// The suggestions answered on this page: the hub takes an answered one off every card and sends the cards again, but a
-// plan and a to-do's decision are only worded when read, so the line goes at once here whatever arrives.
-const answered = new Set<string>();
+// What this page knows about the suggestions it answered, kept per hub (the page's credential). A suggestion's id is a
+// hash of its kind and what it covers, so the `delegate` one has the same id on every hub and under every manager:
+// `answered` is per manager too (`ruleScope`), and one answered for one of them says nothing about another's.
+//
+// `answered`: the hub takes an answered suggestion off every card and sends the cards again, but a plan and a to-do's
+// decision are only worded when read, so the line goes at once here whatever this page still holds. It hides the
+// copies the page held when the answer was given, and what arrives right after it (a read that was on its way); a copy
+// the hub sends later is a suggestion earned again, which is drawn.
+// `made`: what Always made, by the card it was answered on, so it stays said there once the card comes without the
+// suggestion.
+const ANSWER_SETTLES_MS = 15_000;
+const answered = new Map<string, { at: number; held: WeakSet<object> }>();
+const made = new Map<string, RuleResult>();
 const listeners = new Set<() => void>();
 
-export function ruleAnswered(id: string): boolean {
-  return answered.has(id);
+/** The hub and manager a card's suggestion belongs to: this page's credential and what the card's requests carry. */
+export function ruleScope(headers: Record<string, string> | undefined): string {
+  return `${credentialOwner()}\n${JSON.stringify(Object.entries(headers ?? {}).sort())}`;
 }
 
-export function markRuleAnswered(id: string) {
-  if (answered.has(id)) return;
-  answered.add(id);
+/** Whether `suggestion` (the object a card carries, by `scope`) was answered here and is not one the hub sent since. */
+export function ruleAnswered(scope: string, suggestion: { id: string }, now = Date.now()): boolean {
+  const key = `${scope}\n${suggestion.id}`;
+  const was = answered.get(key);
+  if (!was) return false;
+  if (was.held.has(suggestion)) return true;
+  if (now - was.at < ANSWER_SETTLES_MS) {
+    was.held.add(suggestion);
+    return true;
+  }
+  answered.delete(key); // earned again: the hub sent it after it took the answer
+  return false;
+}
+
+export function markRuleAnswered(scope: string, suggestion: { id: string }, now = Date.now()) {
+  answered.set(`${scope}\n${suggestion.id}`, { at: now, held: new WeakSet([suggestion]) });
   listeners.forEach((l) => l());
+}
+
+/** What Always made on the card `card` (its id), if this page made it on the hub it is signed in to. By the card
+ *  alone, not its manager: the hub sends a card again with or without its manager's name, and a card's id is its own. */
+export function ruleMade(card: string | undefined): RuleResult | undefined {
+  return card ? made.get(`${credentialOwner()}\n${card}`) : undefined;
+}
+
+/** `owner`: the credential the answer was given under (credentialOwner when it was tapped). */
+export function markRuleMade(owner: string, card: string | undefined, result: RuleResult) {
+  if (card) made.set(`${owner}\n${card}`, result);
 }
 
 export function subscribeRuleAnswered(listener: () => void): () => void {
@@ -160,4 +208,5 @@ export function subscribeRuleAnswered(listener: () => void): () => void {
 /** For tests. */
 export function resetRuleAnswered() {
   answered.clear();
+  made.clear();
 }

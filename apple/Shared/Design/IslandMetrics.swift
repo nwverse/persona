@@ -80,6 +80,9 @@ nonisolated enum IslandMetrics {
     /// The mark of a button that shows only its mark (Bookmark, Turn Off, Stop beside Ask Persona in a meeting Persona
     /// attends, #2981): with the capsule's own padding the button is over 44 pt wide, and Ask Persona keeps its words.
     static let recordingIconButton: CGFloat = 24
+    /// The expanded island's button row's inset from its sides (#5819): the row sits at the island's bottom, where the
+    /// corners round in, and with Ask Persona taking the width the Stop capsule ran into the right corner and was cut.
+    static let recordingIslandButtonsInset: CGFloat = 12
     /// The Lock Screen's inset from the activity's edges.
     static let lockPadding: CGFloat = 16
 

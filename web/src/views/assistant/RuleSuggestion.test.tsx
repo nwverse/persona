@@ -14,11 +14,12 @@ vi.mock("../../ui/atoms", async (original) => ({ ...(await original<typeof impor
 import { initI18n } from "../../i18n";
 import type { TaskPlan } from "../../lib/feed";
 import { MANAGER_HEADER } from "../../lib/manager-choice";
-import { resetRuleAnswered, type RuleSuggestion } from "../../lib/rule-suggestion";
+import { resetRuleAnswered, type RuleCard, type RuleSuggestion } from "../../lib/rule-suggestion";
+import { setToken } from "../../lib/api";
 import { reset, upsertSession } from "../../lib/store";
 import type { Todo, TodoAsk } from "../../lib/todos";
 import type { Interaction, Session } from "../../lib/types";
-import { InteractionCard } from "../chat/Interactions";
+import { InteractionCard, underCard } from "../chat/Interactions";
 import RuleSuggestionLine from "./RuleSuggestionLine";
 import { TaskDecision } from "./TaskDecision";
 import { PlanCard } from "./Tasks";
@@ -63,6 +64,7 @@ beforeAll(async () => void (await import("./TaskDecision")));
 beforeEach(async () => {
   await initI18n("en");
   resetRuleAnswered();
+  underCard.made = undefined;
   toast.mockClear();
   posts = [];
   answer = { status: 200, body: { ok: true } };
@@ -88,12 +90,12 @@ afterEach(async () => {
 });
 
 describe("the line under a card", () => {
-  // `kept`: under a decision's row, where the line is always mounted (it names its to-do's manager in `headers`);
-  // else under a plan card or a question, where it goes with the suggestion
-  const card = (suggestion?: RuleSuggestion | unknown, kept = true) => (
+  // `kept`: under a decision's row (it names its to-do's manager in `headers`); else under a plan card or a question
+  // (which names its manager). `more`: the card's other fields.
+  const card = (suggestion?: RuleSuggestion | unknown, kept = true, more: Partial<RuleCard> = {}) => (
     <>
       <div data-the-card>card</div>
-      <RuleSuggestionLine of={{ suggestion: suggestion as RuleSuggestion, ...(kept ? { headers: { [MANAGER_HEADER]: "second" } } : { manager: "second" }) }} />
+      <RuleSuggestionLine of={{ id: "card-1", suggestion: suggestion as RuleSuggestion, ...(kept ? { headers: { [MANAGER_HEADER]: "second" } } : { manager: "second" }), ...more }} />
     </>
   );
 
@@ -138,28 +140,24 @@ describe("the line under a card", () => {
     expect(location.pathname + location.search).toBe("/settings?tab=persona");
   });
 
-  it("under a plan card or a question the line goes with the suggestion, so what Always made is said in a toast that opens the list", async () => {
+  it("under a plan card or a question too, what Always made is said in place and stays when the card comes without the suggestion", async () => {
     answer = { status: 200, body: { ok: true, kind: "plan_start", creates: "tasks.trust", key: "k" } };
     await render(card(planStart, false));
     await press("Always");
     expect(posts).toEqual([{ path: "/api/v1/assistant/rule-suggestions/rs_plan/always", manager: "second", body: undefined }]);
     expect(line()).toBeNull();
-    expect(result()).toBeNull();
-    const [text, tone, action] = toast.mock.calls[0];
-    expect(text).toBe("Remembered: tasks like this now start without asking. Listed and removed in Settings › Assistant profile › Remembered auto-start rules.");
-    expect(tone).toBe("ok");
-    expect(action.label).toBe("Open settings");
-    act(() => action.run());
-    expect(location.pathname + location.search).toBe("/settings?tab=persona");
-    // nothing stored for delegate: no list to open
+    expect(result()!.textContent).toContain("Remembered: tasks like this now start without asking. Listed and removed in Settings › Assistant profile › Remembered auto-start rules.");
+    expect(toast).not.toHaveBeenCalled();
+    // the hub sends the card again without the suggestion, and the page draws it anew (another conversation and back)
     act(() => root.unmount());
     root = createRoot(host);
-    toast.mockClear();
-    answer = { status: 200, body: { ok: true, kind: "delegate", creates: "", setting: "agents.delegate" } };
-    await render(card(delegate, false));
-    await press("Always");
-    expect(toast.mock.calls[0][0]).toContain("No rule was stored.");
-    expect(toast.mock.calls[0][2]).toBeUndefined();
+    await render(card(undefined, false));
+    expect(result()!.textContent).toContain("Remembered: tasks like this now start without asking.");
+    await act(async () => [...result()!.querySelectorAll("button")].find((b) => b.textContent === "Open settings")!.click());
+    expect(location.pathname + location.search).toBe("/settings?tab=persona");
+    // another card says nothing of it
+    await render(card(undefined, false, { id: "card-2" }));
+    expect(result()).toBeNull();
   });
 
   it("a remembered kind of task names its own list; a delegate suggestion stores nothing and has no page to open", async () => {
@@ -172,10 +170,11 @@ describe("the line under a card", () => {
     root = createRoot(host);
     answer = { status: 200, body: { ok: true, kind: "delegate", creates: "", setting: "agents.delegate" } };
     await render(card(delegate));
-    expect(line()!.querySelector("[data-rule-creates]")!.textContent).toContain("Always stores no rule here");
+    // the hub's sentence, then ours: plain, with no setting key and no file name
+    expect(line()!.querySelector("[data-rule-creates]")!.textContent).toBe("Always stores no rule and turns nothing on: it only puts this suggestion away for 30 days.");
     await press("Always");
-    expect(result()!.textContent).toContain("No rule was stored.");
-    expect(result()!.textContent).toContain("agents.delegate");
+    expect(result()!.textContent).toContain("No rule was stored and nothing was turned on.");
+    expect(result()!.textContent).toContain("the assistant's configuration file on the hub's computer (agents.delegate)");
     expect(result()!.querySelector("button")).toBeNull();
   });
 
@@ -197,22 +196,64 @@ describe("the line under a card", () => {
     expect(toast).not.toHaveBeenCalled();
   });
 
-  it("any other refusal says why and leaves the line to try again", async () => {
+  it("a failure says why and leaves the line to try again", async () => {
+    answer = { status: 503, body: { error: "The hub is busy." } };
+    await render(card(merge));
+    await press("Always");
+    expect(line()).not.toBeNull();
+    expect(result()).toBeNull();
+    expect(toast.mock.calls[0][0]).toContain("The hub is busy.");
+    expect(toast.mock.calls[0][1]).toBe("error");
+    expect(button("Always").disabled).toBe(false);
+  });
+
+  it("a device the hub refuses (403) is told why once: the line stays, and its buttons take no more taps", async () => {
     answer = { status: 403, body: { error: "Full access is required to answer a suggested rule." } };
     await render(card(merge));
     await press("Always");
     expect(line()).not.toBeNull();
     expect(result()).toBeNull();
     expect(toast.mock.calls[0][0]).toContain("Full access is required");
-    expect(toast.mock.calls[0][1]).toBe("error");
-    expect(button("Always").disabled).toBe(false);
+    expect(button("Always").disabled).toBe(true);
+    expect(button("Not now").disabled).toBe(true);
+    await press("Not now");
+    expect(posts).toHaveLength(1);
   });
 
-  it("answered on one card, the same suggestion goes from every card that carries it", async () => {
-    await render(<>{card(merge)}<RuleSuggestionLine of={{ suggestion: merge }} /></>);
-    expect(host.querySelectorAll("[data-rule-suggestion]")).toHaveLength(2);
+  it("under a card that cannot be answered from here, the buttons are off and nothing is sent", async () => {
+    await render(card(merge, false, { disabled: true }));
+    expect(button("Always").disabled).toBe(true);
+    expect(button("Not now").disabled).toBe(true);
+    await press("Always");
+    expect(posts).toHaveLength(0);
+  });
+
+  it("answered on one card, the same suggestion goes from every card of that manager that carries it, and from no other manager's", async () => {
+    const copy = { ...merge }; // each card has its own copy of what the hub sent
+    await render(<>{card(merge)}<RuleSuggestionLine of={{ id: "card-2", suggestion: copy, manager: "second" }} /><RuleSuggestionLine of={{ id: "card-3", suggestion: { ...merge }, manager: "third" }} /></>);
+    expect(host.querySelectorAll("[data-rule-suggestion]")).toHaveLength(3);
     await press("Not now");
-    expect(host.querySelectorAll("[data-rule-suggestion]")).toHaveLength(0);
+    expect(host.querySelectorAll("[data-rule-suggestion]")).toHaveLength(1);
+    expect(posts.map((p) => p.manager)).toEqual(["second"]);
+  });
+
+  it("an answer that comes back after the page signed in to another hub marks nothing there", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((r) => { release = r; });
+    const fetched = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => { await held; return fetched(url, init); }));
+    answer = { status: 200, body: { ok: true, kind: "delegate", creates: "", setting: "agents.delegate" } };
+    await render(card(delegate));
+    await act(async () => button("Always").click());
+    setToken("another-hub-token"); // paired with another hub before the answer arrived
+    await act(async () => { release(); });
+    await flush();
+    // the other hub's suggestion with the same id is drawn, and nothing says a rule was made there
+    await render(card({ ...delegate }));
+    expect(line()).not.toBeNull();
+    expect(result()).toBeNull();
+    expect(toast).not.toHaveBeenCalled();
+    setToken("");
   });
 
   it("is in Simplified Chinese and Japanese", async () => {
@@ -234,14 +275,22 @@ describe("on each kind of card", () => {
     await render(<PlanCard plan={plan(planStart)} />);
     expect(line()!.dataset.ruleSuggestion).toBe("plan_start");
     expect(line()!.previousElementSibling!.querySelector("[data-plan-actions]")).not.toBeNull();
+    answer = { status: 200, body: { ok: true, kind: "plan_start", creates: "tasks.trust", key: "k" } };
     await press("Always");
     expect(posts.map((p) => p.path)).toEqual(["/api/v1/assistant/rule-suggestions/rs_plan/always"]);
     expect(line()).toBeNull();
+    // what was made is said under the card, and stays when the plan is read again without the suggestion
+    expect(result()!.textContent).toContain("Remembered: tasks like this now start without asking.");
+    await render(<PlanCard plan={plan()} />);
+    expect(result()!.textContent).toContain("Listed and removed in Settings › Assistant profile › Remembered auto-start rules.");
+    expect(result()!.previousElementSibling!.querySelector("[data-plan-actions]")).not.toBeNull();
     act(() => root.unmount());
     root = createRoot(host);
     resetRuleAnswered();
+    underCard.made = undefined;
     await render(<PlanCard plan={plan()} />);
     expect(line()).toBeNull();
+    expect(result()).toBeNull();
     // the card alone, as before
     expect(host.children).toHaveLength(1);
     expect(host.firstElementChild!.querySelector("[data-plan-actions]")).not.toBeNull();
@@ -260,6 +309,24 @@ describe("on each kind of card", () => {
     resetRuleAnswered();
     await render(<InteractionCard ix={{ ...ix, suggestion: undefined }} />);
     expect(line()).toBeNull();
+    // Always: the hub sends the card again without the suggestion, and what was made stays said under it
+    answer = { status: 200, body: { ok: true, kind: "delegate", creates: "", setting: "agents.delegate" } };
+    await render(<InteractionCard ix={ix} />);
+    await press("Always");
+    // (a pushed card does not always name its manager as the listed one did)
+    await render(<InteractionCard ix={{ ...ix, suggestion: undefined, manager: undefined }} />);
+    expect(result()!.textContent).toContain("No rule was stored and nothing was turned on.");
+    expect(host.textContent).toContain("Rerun the example checks?");
+  });
+
+  it("under a question whose own controls are off, the line's buttons are off too", async () => {
+    // a session this device may read but not approve for
+    upsertSession({ machine_id: "m", session_id: "s", title: "Demo", state: "needs_you", capabilities: { read: true } } as Session);
+    const ix = { id: "ix_up", machine_id: "m", session_id: "s", kind: "question", manager: "second", questions: [{ question: "Rerun the example checks?", options: [{ label: "Rerun" }, { label: "Skip" }] }], suggestion: delegate } as Interaction;
+    await render(<InteractionCard ix={ix} />);
+    expect(host.querySelector("fieldset")!.disabled).toBe(true);
+    expect(button("Always").disabled).toBe(true);
+    expect(button("Not now").disabled).toBe(true);
   });
 
   it("a decision carries it under its row, answered through the to-do's manager", async () => {

@@ -86,8 +86,9 @@ export function TaskDecision({ todo, rowKey }: { todo: Todo; rowKey: string }) {
     <Button className="min-h-11" disabled={busy || !round} busy={dismissing} onClick={dismiss}>{t("assistant-tasks.dismiss_draft")}</Button>
   </div>;
   // a decision that offers a go-ahead the owner gave three times carries a suggested rule: its line goes under the
-  // row (#5802; always mounted here, so what Always made stays said once the hub took the suggestion off), answered through the to-do's manager as the row's own answers are
-  const rule = { suggestion: ask?.suggestion, headers: { [MANAGER_HEADER]: manager } };
+  // row (#5802; always mounted here), answered through the to-do's manager as the row's own answers are
+  // (kept by the decision's round: what Always made is not said under the to-do's next decision)
+  const rule = { id: todo.id + (ask?.asked_at ?? ""), suggestion: ask?.suggestion, headers: { [MANAGER_HEADER]: manager } };
   if (ask && askOptions(ask).length) return <><DecisionRow todo={todo} ask={ask} rowKey={rowKey} admission={admission} onBusyChange={setBusy} blocked={busy} footer={controls} /><RuleSuggestionLine of={rule} /></>;
   return <><div data-needs-row={rowKey} className="flex min-w-0 flex-col gap-1.5 rounded-control bg-field px-3 py-2.5">
     {ask ? <><AcceptRow stacked admission={admission} onBusyChange={setBusy} blocked={busy} row={{ id: todo.id, title: todo.title, waited_s: Math.max(0, (Date.now() - Date.parse(ask.asked_at)) / 1000), outcome: ask.outcome, verdict: ask.verdict, recommend: ask.recommend, asked_at: ask.asked_at }} />{ask.for_briefing && <BriefingMark />}</> : <>

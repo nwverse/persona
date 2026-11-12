@@ -1,8 +1,10 @@
+// @vitest-environment jsdom
 // A suggested rule (#4929, #5802): which suggestions the page draws, what it says Always stores for each kind, what
 // it says afterwards, and the two requests (a 404 is "gone", any other failure throws).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initI18n } from "../i18n";
-import { answerRuleSuggestion, markRuleAnswered, resetRuleAnswered, ruleAnswered, ruleCreates, ruleJoin, ruleResult, ruleSuggestion, subscribeRuleAnswered, type RuleSuggestion } from "./rule-suggestion";
+import { credentialOwner, setToken } from "./api";
+import { answerRuleSuggestion, markRuleAnswered, markRuleMade, resetRuleAnswered, ruleAnswered, ruleCreates, ruleJoin, ruleMade, ruleResult, ruleScope, ruleSuggestion, subscribeRuleAnswered, type RuleSuggestion } from "./rule-suggestion";
 
 const plan: RuleSuggestion = {
   id: "rs_plan", kind: "plan_start", count: 3, creates: "tasks.trust",
@@ -65,9 +67,10 @@ describe("what Always stores, in words", () => {
     expect(ruleCreates(newer)).toEqual(["Always adds a standing authorization for /code/example on Example node: tag.", "Only when: reviewed."]);
   });
 
-  it("nothing for a delegate suggestion: a pointer to the setting it names", () => {
-    expect(ruleCreates(ruleSuggestion(delegate)!)).toEqual(["Always stores no rule here: Persona answers these for you once agents.delegate is on in the assistant's manager.json."]);
-    expect(ruleCreates(ruleSuggestion({ ...delegate, setting: undefined })!)[0]).toContain("agents.delegate");
+  it("nothing for a delegate suggestion, said plainly: no rule, nothing turned on, no key and no file name", () => {
+    const said = ruleCreates(ruleSuggestion(delegate)!);
+    expect(said).toEqual(["Always stores no rule and turns nothing on: it only puts this suggestion away for 30 days."]);
+    expect(said[0]).not.toMatch(/agents\.delegate|manager\.json/);
   });
 
   it("in Simplified Chinese and Japanese too", async () => {
@@ -75,7 +78,9 @@ describe("what Always stores, in words", () => {
     expect(ruleJoin(ruleCreates(ruleSuggestion(standing)!))).toBe("点「总是」会为 Example node 的 /code/example 新增一条长期授权：合入改动。仅在满足这些条件时：所有检查通过、无合并冲突。记为你的原话：「Merge the PR now? → Yes」。");
     await initI18n("ja");
     expect(ruleCreates(ruleSuggestion(plan)!)[0]).toContain("この種類のタスクを記憶します");
-    expect(ruleCreates(ruleSuggestion(delegate)!)[0]).toContain("agents.delegate");
+    expect(ruleCreates(ruleSuggestion(delegate)!)[0]).not.toMatch(/agents\.delegate|manager\.json/);
+    await initI18n("zh-Hans");
+    expect(ruleCreates(ruleSuggestion(delegate)!)[0]).not.toMatch(/agents\.delegate|manager\.json/);
   });
 });
 
@@ -95,8 +100,8 @@ describe("what is said after Always", () => {
 
   it("nothing stored for delegate: the setting to turn on, and no page of this app to open", () => {
     const r = ruleResult(ruleSuggestion(delegate)!, { ok: true, kind: "delegate", creates: "", setting: "agents.delegate" });
-    expect(r.text).toBe("No rule was stored.");
-    expect(r.where).toContain("agents.delegate");
+    expect(r.text).toBe("No rule was stored and nothing was turned on.");
+    expect(r.where).toBe("No app has a switch for this yet: it is turned on in the assistant's configuration file on the hub's computer (agents.delegate).");
     expect(r.page).toBeUndefined();
   });
 
@@ -145,17 +150,62 @@ describe("the two requests", () => {
 });
 
 describe("suggestions answered on this page", () => {
-  it("are remembered by id and told to whoever draws one", () => {
+  const scope = () => ruleScope({ "X-Persona-Manager": "first" });
+
+  it("are hidden from then on and told to whoever draws one", () => {
     const heard = vi.fn();
     const stop = subscribeRuleAnswered(heard);
-    expect(ruleAnswered("rs_plan")).toBe(false);
-    markRuleAnswered("rs_plan");
-    markRuleAnswered("rs_plan");
-    expect(ruleAnswered("rs_plan")).toBe(true);
-    expect(ruleAnswered("rs_merge")).toBe(false);
+    expect(ruleAnswered(scope(), plan)).toBe(false);
+    markRuleAnswered(scope(), plan);
+    expect(ruleAnswered(scope(), plan)).toBe(true);
+    expect(ruleAnswered(scope(), standing)).toBe(false);
     expect(heard).toHaveBeenCalledTimes(1);
     stop();
-    markRuleAnswered("rs_merge");
+    markRuleAnswered(scope(), standing);
     expect(heard).toHaveBeenCalledTimes(1);
+  });
+
+  it("say nothing about the same id under another manager or on another hub (delegate's id is the same everywhere)", () => {
+    markRuleAnswered(scope(), delegate);
+    expect(ruleAnswered(scope(), delegate)).toBe(true);
+    expect(ruleAnswered(ruleScope({ "X-Persona-Manager": "second" }), delegate)).toBe(false);
+    expect(ruleAnswered(ruleScope(undefined), delegate)).toBe(false);
+    // the page pairs with another hub: another credential, the same manager name
+    const before = scope();
+    setToken("another-hub-token");
+    expect(scope()).not.toBe(before);
+    expect(ruleAnswered(scope(), delegate)).toBe(false);
+    setToken("");
+  });
+
+  it("hide the copies the page held and one arriving right after; a copy the hub sends later is earned again and drawn", () => {
+    const t0 = 1_000_000;
+    const other = { ...delegate }; // the same suggestion on another card
+    markRuleAnswered(scope(), delegate, t0);
+    expect(ruleAnswered(scope(), other, t0 + 500)).toBe(true); // a read that was on its way
+    // both stay hidden however long the page keeps them
+    expect(ruleAnswered(scope(), delegate, t0 + 3_600_000)).toBe(true);
+    expect(ruleAnswered(scope(), other, t0 + 3_600_000)).toBe(true);
+    // the hub sends the suggestion again (the same kind and scope has the same id): drawn, and the copies with it
+    const again = { ...delegate };
+    expect(ruleAnswered(scope(), again, t0 + 3_600_000)).toBe(false);
+    expect(ruleAnswered(scope(), again, t0 + 3_600_001)).toBe(false);
+  });
+
+  it("keep what Always made by card, on the hub it was made on", () => {
+    const made = { text: "Standing authorization added.", where: "Listed there." };
+    const owner = credentialOwner();
+    expect(ruleMade("card-1")).toBeUndefined();
+    markRuleMade(owner, "card-1", made);
+    expect(ruleMade("card-1")).toBe(made);
+    expect(ruleMade("card-2")).toBeUndefined();
+    expect(ruleMade(undefined)).toBeUndefined();
+    markRuleMade(owner, undefined, made);
+    // paired with another hub: its card of the same id says nothing; an answer that comes back late is kept for the hub it was given to
+    setToken("another-hub-token");
+    expect(ruleMade("card-1")).toBeUndefined();
+    markRuleMade(owner, "card-3", made);
+    expect(ruleMade("card-3")).toBeUndefined();
+    setToken("");
   });
 });

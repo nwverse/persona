@@ -82,12 +82,7 @@ class BackgroundSupervisorMockTests(unittest.TestCase):
     def test_model_purpose_follows_main_chat_until_set(self):
         base, process, log = start({})
         self.addCleanup(stop, process, log)
-        # the catalog lists it once, last among the built-in purposes (#5806), and its own id answers the same row
-        catalog = call(base, "/api/v1/model-config")["purposes"]
-        self.assertEqual([p["id"] for p in catalog].count("assistant.supervise"), 1)
-        self.assertEqual(catalog[-1]["id"], "assistant.supervise")
-        self.assertEqual(call(base, PURPOSE)["purpose"], catalog[-1])
-        self.assertTrue(catalog[-1]["description"])
+        self.assertNotIn("assistant.supervise", [p["id"] for p in call(base, "/api/v1/model-config")["purposes"]])
         main = call(base, "/api/v1/model-config/purposes/assistant")["purpose"]
         purpose = call(base, PURPOSE)["purpose"]
         self.assertEqual((purpose["parent"], purpose["category_id"]), ("assistant", "assistant"))
@@ -101,19 +96,8 @@ class BackgroundSupervisorMockTests(unittest.TestCase):
         with self.assertRaises(HTTPError) as stale:
             call(base, PURPOSE, {"revision": purpose["revision"], "model": "stale"}, "PATCH")
         self.assertEqual(stale.exception.code, 409)
-        # the catalog's row follows what was saved by its id
-        self.assertEqual(call(base, "/api/v1/model-config")["purposes"][-1]["effective"]["model"], "model-small")
         restored = call(base, PURPOSE, {"revision": saved["revision"], "model": None}, "PATCH")["purpose"]
         self.assertEqual(restored["effective"], main["effective"])
-
-    def test_a_hub_before_5806_leaves_it_out_of_the_catalog_and_answers_it_by_id(self):
-        base, process, log = start({"MOCK_SUPERVISE_UNLISTED": "1"})
-        self.addCleanup(stop, process, log)
-        self.assertNotIn("assistant.supervise", [p["id"] for p in call(base, "/api/v1/model-config")["purposes"]])
-        purpose = call(base, PURPOSE)["purpose"]
-        self.assertEqual((purpose["parent"], purpose["category_id"]), ("assistant", "assistant"))
-        saved = call(base, PURPOSE, {"revision": purpose["revision"], "model": "model-small"}, "PATCH")["purpose"]
-        self.assertEqual(saved["effective"]["model"], "model-small")
 
     def test_without_the_flag_no_conversation_and_an_older_hub_has_nothing(self):
         base, process, log = start({})
@@ -128,10 +112,6 @@ class BackgroundSupervisorMockTests(unittest.TestCase):
         with self.assertRaises(HTTPError) as missing:
             call(old, PURPOSE)
         self.assertEqual(missing.exception.code, 404)
-        # nor a row in its catalog, nor any description (a hub before #5086)
-        purposes = call(old, "/api/v1/model-config")["purposes"]
-        self.assertNotIn("assistant.supervise", [p["id"] for p in purposes])
-        self.assertFalse(any("description" in p for p in purposes))
 
 
 if __name__ == "__main__":

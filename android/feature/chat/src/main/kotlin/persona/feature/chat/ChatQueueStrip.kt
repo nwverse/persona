@@ -2,15 +2,18 @@ package persona.feature.chat
 
 import androidx.compose.runtime.*
 import android.content.res.Resources
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import persona.core.contracts.Session
 import persona.core.contracts.api.ChatActions
 import persona.core.contracts.api.hubCodedFailure
+import persona.core.designsystem.AppStyle
 import persona.core.designsystem.JAction
 import persona.core.designsystem.JActionSheet
 import persona.core.designsystem.JDialog
 import persona.core.designsystem.LocalPersonaName
+import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.rememberCopy
 import persona.core.designsystem.QueueStrip
 import persona.core.designsystem.icons.PersonaIcons
@@ -19,7 +22,9 @@ import persona.core.domain.sort.canSend
 import persona.core.domain.sort.ownQueued
 import persona.core.domain.sort.steersQueue
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** "2 queued · Claude will handle them in order": how many wait, and for whom (iOS QueueStrip's line). */
 internal fun queueTitle(count: Int, agent: String, resources: Resources): String =
@@ -108,6 +113,7 @@ internal fun ChatQueueStrip(
     val scope = rememberCoroutineScope()
     val copy = rememberCopy()
     val resources = LocalResources.current
+    val context = LocalContext.current
     var busy by remember { mutableStateOf(false) }
     var confirmSend by remember { mutableStateOf(false) }
     // The row picked, with its words: if the queue moves under the open menu (the agent took one), the menu closes.
@@ -138,9 +144,17 @@ internal fun ChatQueueStrip(
         if (index >= own) return
         operate(changeFailed) { service ->
             val pulled = service.editQueue(session, queueKeep(own, index))
-            if (delete) onNotice(resources.getString(R.string.chat_queue_deleted))
-            else pulled.getOrNull(index)?.let { composer.restoreQueued(it); onNotice(resources.getString(R.string.chat_queue_restored)) }
-                ?: onNotice(resources.getString(R.string.chat_queue_not_found))
+            if (delete) { onNotice(resources.getString(R.string.chat_queue_deleted)); return@operate }
+            val taken = pulled.queue.getOrNull(index)
+            if (taken == null) { onNotice(resources.getString(R.string.chat_queue_not_found)); return@operate }
+            composer.restoreQueued(taken)
+            // A Persona conversation's photos come beside the queue as base64 (the words carry no paths for them): they
+            // go back into the draft as photos, and what could not is said (iOS `restoreQueued`).
+            val photos = pulled.imagesOf(index)
+            val restored = if (photos.isEmpty()) null else withContext(Dispatchers.IO) { restoredPhotos(context, photos) }
+            restored?.let { composer.restorePhotos(it.attachments) }
+            onNotice(if (restored != null && restored.lost > 0) resources.getQuantityString(R.plurals.chat_queue_photos_lost, restored.lost, restored.lost)
+                else resources.getString(R.string.chat_queue_restored))
         }
     }
     fun move(index: Int, step: Int) {
@@ -153,12 +167,19 @@ internal fun ChatQueueStrip(
     }
     val sendNowLabel = stringResource(R.string.chat_queue_send_now)
     val relayedNote = stringResource(R.string.chat_queue_relayed_note)
+    val photoMark = stringResource(R.string.chat_composer_photo_placeholder)
+    val videoMark = stringResource(R.string.chat_composer_video_placeholder)
+    // Glass says how many photos a Persona message carries under its words (iOS's "N images", from what this phone sent), not as a mark among them.
+    val photoCounts = if (persona != null && PersonaTheme.style == AppStyle.Glass) queued.mapIndexed { index, text -> if (index < own) composerPhotoCount(text) else 0 }
+        else emptyList()
     // A new session's queue starts folded (Glass), as each chat's does on iOS.
     key(session.key) {
-        QueueStrip(queueTitle(queued.size, persona ?: session.agentLabel, resources), queued.map { composerMessagePreview(it) },
+        QueueStrip(queueTitle(queued.size, persona ?: session.agentLabel, resources),
+            queued.mapIndexed { index, text -> composerMessagePreview(text, if (photoCounts.getOrElse(index) { 0 } > 0) "" else photoMark, videoMark) },
             onItem = { index -> queued.getOrNull(index)?.let { picked = index to it } }, busy = busy, enabled = enabled,
             sendNow = sendNowLabel.takeIf { steers && own > 0 }, onSendNow = { confirmSend = true },
-            notes = queued.indices.map { index -> relayedNote.takeIf { index >= own } }, initiallyExpanded = initiallyExpanded)
+            notes = queued.indices.map { index -> relayedNote.takeIf { index >= own } }, initiallyExpanded = initiallyExpanded,
+            photos = photoCounts)
     }
     if (confirmSend) JDialog(onDismiss = { confirmSend = false }, title = stringResource(R.string.chat_queue_send_now_title),
         text = persona?.let { stringResource(R.string.chat_queue_send_now_message_persona, it) }

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-// A decision held for the briefing (#5803): the to-do's ask says `for_briefing`, and its row in To-dos, its page and
-// its decision card in Needs you say it comes with the next briefing, with what that means in one line. Nothing is
+// A decision held for the briefing (#5803): the to-do's ask says `for_briefing`, and its ask line (a To-dos row, a task's card, the task panel's
+// banner), its page and its decision card in Needs you say it comes with the next briefing, with what that means in one line. Nothing is
 // drawn for an ask without the field (an older hub, a decision that was pushed).
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -12,6 +12,7 @@ vi.hoisted(() => {
 import { initI18n } from "../../i18n";
 import { reset } from "../../lib/store";
 import type { Todo, TodoAsk } from "../../lib/todos";
+import { TodoAskLine } from "../TodoAsk";
 import { HeldForBriefing } from "../Todos";
 import { TaskDecision } from "./TaskDecision";
 
@@ -50,24 +51,28 @@ afterEach(async () => {
   await initI18n("zh-Hans");
 });
 
-describe("on the to-do's row and page (To-dos)", () => {
+describe("on the to-do's ask line (a To-dos row, a task's card, the task panel's banner) and page", () => {
   it("only a to-do whose ask says for_briefing: true carries it", async () => {
     for (const ask of [decision, { ...decision, for_briefing: false }, { ...decision, for_briefing: "yes" as unknown as boolean }, undefined, { ...held, asked_at: "" }]) {
-      await render(<><HeldForBriefing todo={todo(ask)} /><HeldForBriefing todo={todo(ask)} caption /></>);
+      await render(<><TodoAskLine todo={todo(ask)} /><HeldForBriefing todo={todo(ask)} /></>);
       expect(marks()).toHaveLength(0);
     }
   });
 
-  it("the row has a quiet mark whose hover says what it means", async () => {
-    await render(<HeldForBriefing todo={todo(held)} />);
+  it("the ask line has a quiet mark whose hover says what it means, under the verdict and the recommendation", async () => {
+    await render(<TodoAskLine todo={todo(held)} className="px-4" />);
     expect(marks()).toHaveLength(1);
     expect(marks()[0].dataset.forBriefing).toBe("mark");
     expect(marks()[0].textContent).toBe("With the next briefing");
     expect(marks()[0].title).toBe(HINT);
+    // inside the line (so inside the task panel's banner band), after what the line already said
+    const lineEl = host.querySelector<HTMLElement>('[data-testid="todo-ask"]')!;
+    expect(lineEl.contains(marks()[0])).toBe(true);
+    expect(marks()[0].previousElementSibling!.textContent).toContain("Keep it");
   });
 
   it("the page writes the definition out", async () => {
-    await render(<HeldForBriefing todo={todo(held)} caption />);
+    await render(<HeldForBriefing todo={todo(held)} />);
     expect(marks()).toHaveLength(1);
     expect(marks()[0].dataset.forBriefing).toBe("caption");
     expect(marks()[0].textContent).toBe(`With the next briefing · ${HINT}`);

@@ -43,36 +43,19 @@ class ModelConfigMockTests(unittest.TestCase):
             cls.process.wait(timeout=5)
         cls.log.close()
 
-    def request(self, path, body=None, language=None):
+    def request(self, path, body=None):
         request = Request(self.base + path,
                           data=None if body is None else json.dumps(body).encode(),
                           method="GET" if body is None else "PATCH",
-                          headers={"Content-Type": "application/json", **({"Accept-Language": language} if language else {})})
+                          headers={"Content-Type": "application/json"})
         with urlopen(request, timeout=3) as response:
             return json.load(response)
 
     def test_catalog(self):
         catalog = self.request("/api/v1/model-config")
         ids = [p["id"] for p in catalog["purposes"]]
-        # the four categories, then the background supervisor's purpose, last among the built-in ones (#5806)
-        self.assertEqual(ids, ["assistant", "agent.new", "kb", "inbox.triage", "assistant.supervise"])
-        self.assertTrue(all(p["category_id"] == p["id"] and p["uses"] for p in catalog["purposes"][:4]))
-        supervise = catalog["purposes"][4]
-        self.assertEqual((supervise["parent"], supervise["category_id"]), ("assistant", "assistant"))
-        self.assertNotIn("uses", supervise)
-        self.assertEqual(supervise["fields"], ["provider", "model", "effort"])
-        # the row is the one its own id answers
-        self.assertEqual(self.request("/api/v1/model-config/purposes/assistant.supervise")["purpose"], supervise)
-
-    def test_each_purpose_says_what_it_is_for_in_the_requests_language(self):
-        for lang, word in (("en", "Talks with you"), ("zh-Hans", "和你对话"), ("ja", "あなたと話し")):
-            catalog = self.request("/api/v1/model-config", language=lang)
-            self.assertTrue(all(p.get("description") for p in catalog["purposes"]), lang)
-            self.assertIn(word, catalog["purposes"][0]["description"])
-        # Chinese without the header, as the mock's other words; a use under a category has its own sentence
-        self.assertIn("和你对话", self.request("/api/v1/model-config")["purposes"][0]["description"])
-        self.assertIn("AI 分身", self.request("/api/v1/model-config/purposes/inbox.agent")["purpose"]["description"])
-        self.assertNotIn("description", self.request("/api/v1/model-config/purposes/translate")["purpose"])
+        self.assertEqual(ids, ["assistant", "agent.new", "kb", "inbox.triage"])
+        self.assertTrue(all(p["category_id"] == p["id"] and p["uses"] for p in catalog["purposes"]))
 
     def test_save_conflict_and_restore(self):
         path = "/api/v1/model-config/purposes/agent.new"
@@ -101,7 +84,7 @@ class ModelConfigMockTests(unittest.TestCase):
             with self.assertRaises(HTTPError) as error:
                 self.request(path, {"revision": purpose["revision"], "model": "individual"})
             self.assertEqual(error.exception.code, 400)
-        self.assertEqual(len(self.request("/api/v1/model-config")["purposes"]), 5)
+        self.assertEqual(len(self.request("/api/v1/model-config")["purposes"]), 4)
 
     def test_unknown_purpose_is_not_created(self):
         for body in (None, {"revision": 0, "model": "x"}):
