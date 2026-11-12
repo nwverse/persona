@@ -98,6 +98,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+private const val AssistantEntryMetadata = "persona.android.ui.assistant-entry"
+
 @Composable
 fun PersonaRoot(
     hub: Hub?,
@@ -506,6 +508,10 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         // A regular window (an open foldable, a tablet) is laid out as an open iPhone Duo or an iPad: the shared sidebar
         // is a column beside the Assistant page, and Settings shows its list beside the page it opens (RegularWindow.kt).
         val regular = isRegularWindow(windowWidth.value, windowHeight.value)
+        val widePhone = !regular && listsBesideDetails(windowWidth.value, windowHeight.value)
+        val panePolicies = AppTab.entries.associateWith { tab ->
+            assistantPanePolicy(tab, stacks.getValue(tab), regular, widePhone)
+        }
         // Lists sit beside their details in a regular window and when expanded; also on a wide phone on its side.
         // Panes share the window's one background; between them only a little space, no second surface or rule.
         // The scaffold must not move focus into the pane it shows (its default): focus entered the list pane's first
@@ -537,6 +543,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         }
         val rootKeys: Set<Any> = remember { listOf<NavKey>(AssistantRoute, AgentsRoute).map { NavEntry(it) {}.contentKey }.toSet() }
         val assistantRootKey: Any = remember { NavEntry<NavKey>(AssistantRoute) {}.contentKey }
+        val assistantTopKey: Any? = assistantStack.lastOrNull()?.let { NavEntry<NavKey>(it) {}.contentKey }
         // The one shared sidebar, as the drawer or as the column beside the Assistant page. The two never share a key:
         // on Agents in a regular window the drawer opens while the Assistant page (kept composed) still holds its column.
         val sharedSidebar: @Composable (String) -> Unit = { stateKey ->
@@ -582,16 +589,16 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         // What the decorator below reads: it is remembered across compositions, these change with the window.
         val currentSidebar = rememberUpdatedState(sharedSidebar)
         val currentRegular = rememberUpdatedState(regular)
+        val currentAssistantPolicy = rememberUpdatedState(panePolicies.getValue(AppTab.Persona))
+        val currentAssistantTopKey = rememberUpdatedState(assistantTopKey)
         val currentOthersWaiting = rememberUpdatedState(othersWaiting)
         val currentHinges = rememberUpdatedState(paneHinges)
         val currentConnection = rememberUpdatedState(connection)
-        // A regular window shows the sidebar as a column beside the Assistant page (inside its root page, so the pages
-        // opened over it, Inbox's list and detail among them, still have the whole width): the avatar hides and shows
-        // it, as the open iPhone Duo's sidebar button does. Folded, it is the drawer again; the page stays as it was.
-        val besideAssistant: @Composable (@Composable () -> Unit) -> Unit = { page ->
+        // Regular Assistant entries keep their page slot while only the top entry owns the column's saveable key.
+        val besideAssistant: @Composable (Boolean, @Composable () -> Unit) -> Unit = { showSidebar, page ->
             BoxWithConstraints(Modifier.fillMaxSize()) {
                 val split = sidebarSplit(maxWidth.value, currentHinges.value)
-                JSidebarColumn(if (currentRegular.value) ({ currentSidebar.value("shared-sidebar-column") }) else null,
+                JSidebarColumn(if (currentRegular.value && showSidebar) ({ currentSidebar.value("shared-sidebar-column") }) else null,
                     width = split.sidebar.dp, pageStart = split.page.dp, shown = sidebarColumnShown.value) { page() }
             }
         }
@@ -632,7 +639,9 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                         } else entry.Content()
                     }
                 }
-                if (assistantRoot) besideAssistant(page) else page()
+                val assistantEntry = entry.metadata[AssistantEntryMetadata] == true
+                val assistantTop = entry.contentKey == currentAssistantTopKey.value
+                if (assistantEntry && currentAssistantPolicy.value.keepSharedSidebar) besideAssistant(assistantTop, page) else page()
             }
         }
         // A chat's terminal cover reads its machine's own hub group, as the terminal page does (`routed`).
@@ -707,9 +716,10 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
             session.voice?.let { voiceEntries(navigator, it, session.identity, onModelConfiguration = { purpose -> navigator.navigate(ModelPurposeRoute(purpose)) }) } ?: run { entry<VoiceRoute> { UnavailablePage(stringResource(R.string.app_demo_no_voice), navigator) } }
             tools?.run { register(navigator) }
         }
-        val panes: (NavKey) -> NavEntry<NavKey> = { key ->
+        val panes: (NavKey, Boolean, Boolean) -> NavEntry<NavKey> = { key, assistantEntry, singleRightStack ->
             val entry = provider(key)
-            NavEntry(key, entry.contentKey, entry.metadata + paneMetadata(key)) { entry.Content() }
+            val ownership = if (assistantEntry) mapOf(AssistantEntryMetadata to true) else emptyMap()
+            NavEntry(key, entry.contentKey, entry.metadata + paneMetadata(key, singleRightStack) + ownership) { entry.Content() }
         }
         // Tabs stay composed once visited: switching back shows the page as it was instead of rebuilding it (which
         // flashed empty and loading states). A hidden tab is measured but never placed or drawn, and cannot take back.
@@ -727,7 +737,8 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         val sides = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
         val sideRoom = sides.getLeft(LocalDensity.current, LocalLayoutDirection.current) > 0 ||
             sides.getRight(LocalDensity.current, LocalLayoutDirection.current) > 0
-        CompositionLocalProvider(LocalAmbience provides ambience, LocalWindowLayout provides windowLayout, LocalInboxItemPages provides inboxItemPages,
+        CompositionLocalProvider(LocalAmbience provides ambience, LocalWindowLayout provides windowLayout, LocalLargeWindowInput provides regular,
+            LocalInboxItemPages provides inboxItemPages,
             LocalInboxTriageSetup provides triageSetup, LocalAssistantSidebarHost provides sidebar) {
           JShellDrawer(sidebar.opened.value, onDismiss = { sidebar.opened.value = false }, drawer = { sharedSidebar("shared-sidebar") }) {
           Box(Modifier.fillMaxSize().background(PersonaTheme.palette.background)) {
@@ -745,7 +756,9 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                         // The row of what the detail pane shows is marked in the list, however the page was opened.
                         val detail = detailOf(stacks.getValue(tab))
                         // Agents may close its list beside an open conversation; Inbox and Settings keep theirs (as the old app did).
-                        val listDetail = rememberShellListDetail(tab, directive, maxWidth, paneHinges, detailOpen = detail != null,
+                        val policy = panePolicies.getValue(tab)
+                        val sceneDirective = if (policy.singleRightStack) directive.onePane() else directive
+                        val listDetail = rememberShellListDetail(tab, sceneDirective, maxWidth, paneHinges, detailOpen = detail != null,
                             store = paneStore, collapsible = canCollapseList(stacks.getValue(tab)))
                         ShellTabLifecycle(shown) {
                             CompositionLocalProvider(LocalNavigationEventDispatcherOwner provides back, LocalDetailKey provides detail,
@@ -762,7 +775,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                                         slideOutHorizontally(tween(260, easing = FastOutSlowInEasing)) { width -> width }, targetContentZIndex = -1f) },
                                     predictivePopTransitionSpec = { _ -> ContentTransform(slideInHorizontally(tween(260)) { width -> -width / 4 },
                                         slideOutHorizontally(tween(260)) { width -> width }, targetContentZIndex = -1f) },
-                                    entryProvider = panes)
+                                    entryProvider = { key -> panes(key, tab == AppTab.Persona, policy.singleRightStack) })
                             }
                         }
                     }
@@ -842,21 +855,24 @@ private fun pretendFold(real: androidx.compose.material3.adaptive.WindowAdaptive
 }
 
 /**
- * Which pane each destination takes when the window has room for two: the first page of Agents, Inbox and Settings is
- * a list, what they open is its detail. Everything else (the Persona home, its knowledge base) stays one page.
+ * Which pane each destination takes where list-detail remains active. A single-right-stack Assistant removes Inbox's
+ * parallel roles; Agents and Settings keep their existing metadata.
  */
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
-private fun paneMetadata(key: NavKey): Map<String, Any> = when (key) {
-    AgentsRoute -> ListDetailSceneStrategy.listPane(detailPlaceholder = {
-        DetailPlaceholder(stringResource(R.string.app_pane_agents_title), stringResource(R.string.app_pane_agents_detail), PhIcons.ChatsCircle)
-    })
-    InboxRoute -> ListDetailSceneStrategy.listPane(detailPlaceholder = {
-        DetailPlaceholder(stringResource(R.string.app_pane_inbox_title), stringResource(R.string.app_pane_inbox_detail), PhIcons.Tray)
-    })
-    SettingsRoute -> ListDetailSceneStrategy.listPane(detailPlaceholder = {
-        DetailPlaceholder(stringResource(R.string.app_tab_settings), stringResource(R.string.app_pane_settings_detail), PhIcons.GearSix)
-    })
-    else -> if (isDetailDestination(key)) ListDetailSceneStrategy.detailPane() else emptyMap()
+private fun paneMetadata(key: NavKey, singleRightStack: Boolean = false): Map<String, Any> {
+    if (singleRightStack && isInboxDestination(key)) return emptyMap()
+    return when (key) {
+        AgentsRoute -> ListDetailSceneStrategy.listPane(detailPlaceholder = {
+            DetailPlaceholder(stringResource(R.string.app_pane_agents_title), stringResource(R.string.app_pane_agents_detail), PhIcons.ChatsCircle)
+        })
+        InboxRoute -> ListDetailSceneStrategy.listPane(detailPlaceholder = {
+            DetailPlaceholder(stringResource(R.string.app_pane_inbox_title), stringResource(R.string.app_pane_inbox_detail), PhIcons.Tray)
+        })
+        SettingsRoute -> ListDetailSceneStrategy.listPane(detailPlaceholder = {
+            DetailPlaceholder(stringResource(R.string.app_tab_settings), stringResource(R.string.app_pane_settings_detail), PhIcons.GearSix)
+        })
+        else -> if (isDetailDestination(key)) ListDetailSceneStrategy.detailPane() else emptyMap()
+    }
 }
 
 /** The same directive with one pane across (a copy would lose that the scaffold never moves focus). */
