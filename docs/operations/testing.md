@@ -169,6 +169,10 @@ pending first-message checks are cancelled and joined before
 the fake socket closes or shared settings are restored. Tests of delivery/recovery still await `firstWait` before
 their assertions. The normal node keeps its detached delivery lifetime and all production wait limits.
 
+The Codex app-server fixture registers a reply waiter before sending each request and wakes it on the matching
+JSON-RPC response. Its five-second request budget, approval assertions and recorded responses remain intact;
+cancellation, transport errors and EOF remove pending waiters without leaving its reader blocked.
+
 ## Fast local checks (`scripts/check-fast.sh`, #2849)
 
 Runs only relevant second-scale checks based on git changes, with independent checks in parallel; useful before committing:

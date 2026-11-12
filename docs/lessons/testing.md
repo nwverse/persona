@@ -7,6 +7,12 @@
   Keep normal detached delivery and production wait limits unchanged, and measure serial and partitioned commands
   separately when evaluating the gain.
 
+- A transport fixture that already reads every reply should wake its request waiter from that reader (#5730).
+  Register by request ID before sending, retain JSON-RPC errors, remove waiters on cancellation/EOF/write failure,
+  and keep duplicate or late replies from blocking the reader. Polling an already available approval response
+  added about 23 seconds to the complete shell-name security matrix. Keep every classification assertion and
+  verify the transport with real pipes and held approvals; virtual time can expose an unnecessary polling tick.
+
 - A test that calls an entry point which sets the process environment must `t.Setenv` that variable first, so the
   test puts it back (#4581). `nodeclient.RunHook` with `--persona-home <dir>` sets `PERSONA_HOME`; one test left it
   pointing at its removed `t.TempDir()`, and every later `internal/node` test put `node.sock` there. On macOS that path
