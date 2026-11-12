@@ -219,25 +219,30 @@ func TestSpaceHoldingEmptySnapshotPreservesWorkspaceListError(t *testing.T) {
 	}
 }
 
-func TestWorktreePrepareDoesNotGuessFromConflictingPaneDirectories(t *testing.T) {
+func TestWorktreePrepareUsesExplicitCwdWithConflictingPaneDirectories(t *testing.T) {
 	w := worktreeNode(t)
 	w.f.reply("workspace.list", map[string]any{"workspaces": []any{
 		map[string]any{"workspace_id": "w1", "label": "proj", "number": 1},
 	}})
+	panes := []any{
+		map[string]any{"pane_id": "w1:p1", "tab_id": "w1:t1", "workspace_id": "w1", "cwd": w.repo},
+		map[string]any{"pane_id": "w1:p2", "tab_id": "w1:t1", "workspace_id": "w1", "cwd": filepath.Join(w.home, "other")},
+	}
+	w.f.reply("pane.list", map[string]any{"panes": panes})
 	w.f.reply("session.snapshot", snapshot(
 		[]any{map[string]any{"workspace_id": "w1", "label": "proj", "number": 1}},
 		[]any{map[string]any{"tab_id": "w1:t1", "workspace_id": "w1", "label": "1", "number": 1}},
-		nil, []any{
-			map[string]any{"pane_id": "w1:p1", "tab_id": "w1:t1", "workspace_id": "w1", "cwd": w.repo},
-			map[string]any{"pane_id": "w1:p2", "tab_id": "w1:t1", "workspace_id": "w1", "cwd": filepath.Join(w.home, "other")},
-		},
+		nil, panes,
 	))
 	listSessions(t, w.n)
 	w.f.reset()
 
-	_, err := request(t, w.n, "worktree.prepare", map[string]any{"cwd": w.repo})
-	if err == nil || !strings.Contains(err.Error(), "不在这台电脑的任何工作区里") {
-		t.Fatalf("prepare with conflicting pane directories: %v", err)
+	res, err := request(t, w.n, "worktree.prepare", map[string]any{"cwd": w.repo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res["root"] != resolved(t, w.repo) || res["path"] != filepath.Join(w.home, ".herdr", "worktrees", "proj") {
+		t.Fatalf("prepare with an explicit cwd and conflicting pane directories = %v", res)
 	}
 	if got := w.f.trace("worktree.create", "workspace.create"); len(got) != 0 {
 		t.Errorf("prepare changed something: %v", got)
