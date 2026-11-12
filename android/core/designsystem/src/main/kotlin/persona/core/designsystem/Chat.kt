@@ -60,6 +60,11 @@ fun ChatTopBar(
     onTitleClick: (() -> Unit)? = null,
     /** Which agent runs here, and in which client (#6390): its mark before the status line's dot. */
     agentMark: AgentMarkSpec? = null,
+    /**
+     * It works only because the background work it started waits (iOS `Session.waitsInBackground`): Glass draws the clock
+     * for its dot and says its words in that state's lighter tone (`stateTone`); Brief and Board keep the dot and the tone.
+     */
+    waiting: Boolean = false,
     /** What a tap on the title does, as the screen reader says it ("View session info"); null: just a button. */
     titleClickLabel: String? = null,
     actions: @Composable RowScope.() -> Unit = {},
@@ -67,7 +72,8 @@ fun ChatTopBar(
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
     val style = PersonaTheme.style
-    val tone = status?.let { palette.status(it) }
+    val lighter = waiting && style == AppStyle.Glass
+    val tone = status?.let { if (lighter) palette.backgroundWaiting else palette.status(it) }
     val titleBlock: @Composable RowScope.() -> Unit = {
         Column(Modifier.weight(1f).padding(horizontal = 4.dp.dense).then(if (onTitleClick != null) Modifier.clickable(role = Role.Button, onClickLabel = titleClickLabel, onClick = onTitleClick) else Modifier)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -84,7 +90,7 @@ fun ChatTopBar(
                     // A quiet state says nothing in words (iOS): its dot alone, which TalkBack reads by its name.
                     val spoken = stringResource(status.labelRes)
                     if (statusText != null && style == AppStyle.Brief && status == Status.Working) JSpinner(Modifier.size(11.dp), stroke = 1.6.dp)
-                    else Box(if (statusText == null) Modifier.semantics { contentDescription = spoken } else Modifier) { JStatusDot(status, size = 7.dp) }
+                    else Box(if (statusText == null) Modifier.semantics { contentDescription = spoken } else Modifier) { JStateDot(status, Tokens.Size.dotS, waiting) }
                     statusText?.let {
                         Spacer(Modifier.width(afterDot))
                         Text(it, style = type.caption, color = if (style == AppStyle.Brief) palette.ink else tone!!.text, maxLines = 1)
