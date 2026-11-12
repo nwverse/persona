@@ -322,7 +322,7 @@ struct Index {
   private destinationMenuItems(name: string, param: Object): NavigationMenuItem[] {
     if (name === 'settings' && this.isAdminPage(this.settingsKind(param))) return this.adminMenus(name, param);
     if (name === 'extension' && this.applicationAllowed(param)) return this.extensionMenus(name, param);
-    if (name === 'session' || name === 'conversation') return [{ value: tr('more'), isEnabled: this.targetReady(name, param), action: () => this.showChatActions(name, param) }];
+    if (name === 'session' || name === 'conversation') return [{ value: tr('more'), icon: $r('sys.media.ohos_ic_public_more'), isEnabled: this.targetReady(name, param), action: () => this.showChatActions(name, param) }];
     return [];
   }
   private chatMenuOptions(revision: number): MenuOptions {

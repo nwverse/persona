@@ -225,7 +225,7 @@ function titleMarkup(){
   if(wide&&S.route==='agentDetail'&&!S.collapsed)return `<header class="native-title wide-agent-title-actions"><div class="title-actions"><button class="icon-button" data-action="open-chat-actions" data-testid="wide-agent-more" aria-label="More">${icon('more')}</button></div></header>`;
   const back=root?'':`<button class="icon-button back-button" data-action="back" data-testid="navigation-back" aria-label="Back">${icon('back')}</button>`;
   const phoneRootActions=!wide&&root?rootMenusMarkup():'';
-  const conversationMore=S.route==='conversation'?`<button class="icon-button conversation-more-button" data-action="open-chat-actions" data-testid="conversation-more" aria-label="More">More</button>`:'';
+  const conversationMore=S.route==='conversation'?`<button class="icon-button conversation-more-button" data-action="open-chat-actions" data-testid="conversation-more" aria-label="More">${icon('more')}</button>`:'';
   return `<header class="native-title">${back}<div class="title-copy"><h1>${esc(title)}</h1></div><div class="title-actions">${phoneRootActions}${conversationMore}</div></header>`;
 }
 function rootMenusMarkup(){return `<button class="master-owner-button" data-action="owner-menu" data-testid="owner-switch" aria-label="Switch workspace">${esc(currentOwnerLabel())}⌄</button>${directoryButtonAvailable()?`<button class="apps-button" data-action="open-apps" data-testid="root-app-menu" aria-label="Open app">${icon('apps')}<span>Apps</span></button>`:''}`}

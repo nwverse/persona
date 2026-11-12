@@ -248,6 +248,8 @@ function compareItems(left: TranscriptItem, right: TranscriptItem): number {
 
 function isWorkItem(item: TranscriptItem): boolean {
   if (item.kind === "thinking" || item.kind === "tool_use" || item.kind === "tool_result" || item.kind === "fold") return true;
+  // A fold range distinguishes assistant narration from its final answer.
+  if (item.kind === "text") return item.role === "assistant";
   if (item.kind !== "image") return false;
   const toolUseId = item.tool_use_id ?? item.toolUseId;
   return typeof toolUseId === "string" && toolUseId.length > 0;

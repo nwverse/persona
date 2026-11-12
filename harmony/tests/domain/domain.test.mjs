@@ -327,6 +327,20 @@ test("real work removes an overlapping fold, including a fold in the same batch"
   assert.equal(projectToolTurn("turn", mixed.items, false).toolCount, 1);
 });
 
+test("assistant narration participates in folds while user text and out-of-range answers remain", () => {
+  const user = { id: "2#3", seq: 2, kind: "text", role: "user", text: "Keep this request" };
+  const narration = { id: "2#4", seq: 2, kind: "text", role: "assistant", text: "Working through the files" };
+  const answer = { id: "2#12", seq: 2, kind: "text", role: "assistant", text: "Final answer" };
+  const fold = { id: "fold:2#2", seq: 2, kind: "fold", fold: { through_seq: 2, through_id: "2#10" } };
+  const reducer = new TranscriptReducer();
+  reducer.latest({ items: [user, narration, answer], history: "narration", toSeq: 2 });
+  reducer.apply({ items: [fold] });
+  assert.deepStrictEqual(reducer.items.map(item => item.id), [fold.id, user.id, answer.id]);
+  reducer.apply({ items: [narration] });
+  assert.deepStrictEqual(reducer.items.map(item => item.id), [user.id, narration.id, answer.id]);
+  assert.equal(reducer.covered, 2);
+});
+
 test("Harmony adopts current full-copy semantics for repeated plain item IDs", () => {
   // Current Apple ChatStore.merge replaces duplicate IDs with the incoming full item. Keep the shared legacy fixture unchanged.
   const legacy = readJson("continuity/pagination_and_legacy.json").cases.find((entry) => entry.name === "same_id_plain_item_keeps_original");
