@@ -264,6 +264,14 @@
       },
       "$description": "Theme.Size.icon"
     },
+    "dotL": {
+      "$type": "dimension",
+      "$value": {
+        "value": 9,
+        "unit": "px"
+      },
+      "$description": "Theme.Size.dotL"
+    },
     "dotXL": {
       "$type": "dimension",
       "$value": {
@@ -272,6 +280,22 @@
       },
       "$description": "Theme.Size.dotXL"
     },
+    "hairline": {
+      "$type": "dimension",
+      "$value": {
+        "value": 0.5,
+        "unit": "px"
+      },
+      "$description": "Theme.Size.hairline"
+    },
+    "line": {
+      "$type": "dimension",
+      "$value": {
+        "value": 1,
+        "unit": "px"
+      },
+      "$description": "Theme.Size.line"
+    },
     "lineMedium": {
       "$type": "dimension",
       "$value": {
@@ -279,6 +303,14 @@
         "unit": "px"
       },
       "$description": "Theme.Size.lineMedium"
+    },
+    "box150": {
+      "$type": "dimension",
+      "$value": {
+        "value": 150,
+        "unit": "px"
+      },
+      "$description": "Theme.Size.box150"
     }
   }
 }

@@ -257,6 +257,7 @@
     <string name="agents_directory">目录</string>
     <string name="agents_space_tab">标签 %1$d</string>
     <string name="agents_space_new_tab">在此开新标签</string>
+    <string name="agents_space_new_tab_card">在这个空间开新标签</string>
     <string name="agents_new_choose_directory">选择目录</string>
     <string name="agents_new_back">返回</string>
     <string name="agents_new_parent">上一级</string>

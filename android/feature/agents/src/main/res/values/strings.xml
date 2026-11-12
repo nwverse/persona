@@ -271,6 +271,7 @@
     <string name="agents_directory">Directory</string>
     <string name="agents_space_tab">Tab %1$d</string>
     <string name="agents_space_new_tab">New tab here</string>
+    <string name="agents_space_new_tab_card">Open a new tab in this space</string>
     <string name="agents_new_choose_directory">Choose directory</string>
     <string name="agents_new_back">Back</string>
     <string name="agents_new_parent">Up one level</string>

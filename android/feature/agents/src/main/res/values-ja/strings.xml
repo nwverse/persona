@@ -257,6 +257,7 @@
     <string name="agents_directory">ディレクトリ</string>
     <string name="agents_space_tab">タブ%1$d</string>
     <string name="agents_space_new_tab">ここで新しいタブ</string>
+    <string name="agents_space_new_tab_card">このスペースで新しいタブを開く</string>
     <string name="agents_new_choose_directory">ディレクトリを選択</string>
     <string name="agents_new_back">戻る</string>
     <string name="agents_new_parent">上の階層へ</string>

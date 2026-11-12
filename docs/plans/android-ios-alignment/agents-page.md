@@ -53,7 +53,7 @@ The Agents page on Android shows the same sessions as on iOS, in the same groupi
 - Sort not under By Status (iOS hides it there: the sections are the states). Done (11-12): the list settings leave Sort out under By Status (`AgentsHomeAffordancesTest`).
 - Interrupt in the row's long-press menu. Done (11-12): after Pin while the agent works or needs you and can be interrupted, on the list and the space page (`AgentOperations.interruptSession`, `AgentsHomeAffordancesTest`).
 - A tab with several agents shows as a tab row in By Repository too, not only by computer.
-- The space page: two-column cards by urgency, the computer opening its projects page, the path shortened with ~, a dashed "Open a new tab" card.
+- The space page: two-column cards by urgency, the computer opening its projects page, the path shortened with ~, a dashed "Open a new tab" card. Done (11-12), Glass only: the page has a large title, the computer as an accent capsule and the folder shortened with ~ (`shortPath`), then one card per agent two to a row, the most urgent first with each tab's agents together (`spaceCardOrder`), and a dashed "Open a new tab in this space" card while a tab can be started; a card's long press keeps the row's menu, Interrupt included (`SpaceCardsTest`, `SpaceCardsShotsTest`). Android has no page of a computer's projects (iOS `MachineSpacesView`), so the capsule opens the computer's details page for now. Like iOS's cards they have no swipe to close (Close stays in the menu). Left: a page of the computer's projects, and the "Working (Background)" state word, which Android's rows lack too.
 - The Personal Agents pill beside the grouping pill.
 
 ### Already decided by the spec: which assistant's computers show
