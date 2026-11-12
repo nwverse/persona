@@ -370,6 +370,17 @@ func wireSamples(t *testing.T) map[string][]wireSample {
 		add("interactions", "interaction_"+kind, "交互卡携带对应类型的提问、计划、权限或屏幕信息。", "event", ws(map[string]any{"type": "interaction", "interaction": ix}), fields,
 			"server/internal/proto/interaction.go: Interaction", "server/internal/hub/http.go: Hub.serveWS", "apple/Shared/Models.swift: Interaction, ScreenDialog", "docs/protocol/protocol.md: 终端对话框（screen 交互）")
 	}
+	// The assistant's ask_user keeps its decision on the card (deadline, reversible, each question's recommend): keys the
+	// apps do not model, which they read past.
+	deadline, reversible := now.Add(6*time.Hour), true
+	decision := proto.Interaction{ID: "ix_decision", MachineID: "m1", SessionID: "s1", SessionTitle: "Persona", Kind: proto.IxQuestion,
+		ToolName: "ask_user", CreatedAt: now, ExpiresAt: now.Add(time.Hour), Deadline: &deadline, Reversible: &reversible,
+		Questions: []proto.Question{{Question: "现在合并示例分支吗", Header: "合并", Recommend: "合并",
+			Options: []proto.QuestionOption{{Label: "合并", Description: "推荐"}, {Label: "等一等"}}}}}
+	add("interactions", "interaction_question_decision", "助手的提问卡带截止时间、能否撤回和每题的建议项；客户端不认识这几个键，照常读其余字段。", "event",
+		ws(map[string]any{"type": "interaction", "interaction": decision}),
+		map[string]any{"/type": "interaction", "/interaction/kind": "question", "/interaction/id": "ix_decision", "/interaction/questions/0/options/0/label": "合并"},
+		"server/internal/proto/interaction.go: Interaction.Deadline, Interaction.Reversible, Question.Recommend", "apple/Shared/Models.swift: Interaction")
 	secret := ixs[3]
 	for _, mode := range []string{"form", "url"} {
 		ix := proto.Interaction{ID: "ix_elicitation_" + mode, MachineID: "m1", SessionID: "s1", Kind: proto.IxElicitation,

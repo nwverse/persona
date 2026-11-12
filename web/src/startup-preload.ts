@@ -7,6 +7,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import ts from "typescript";
 import { brotliCompress, constants, gzip as gzipCompress } from "node:zlib";
 
 /** The languages under `dir` (src/i18n/locales): code → the language subtags its _meta.json matches. Build time only. */
@@ -216,8 +217,11 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * the refusal line's one sentence with the model's short name and its closed Details, the fallback card's one-line
  * title, its Details and the short name while going back, their words). Raise it on purpose, in the change that needs
  * it.
+ * From #5760 on, firstScreenBytes also normalizes local bindings (placeholderLocalNames): a minifier renaming a chunk's
+ * locals no longer moves the count. On this main, that is 470,502 B en / 474,216 B ja / 471,480 B zh-Hans; the budget
+ * is rebased to the new ja baseline, with 0 B of room. That is a rebase of the measurement, not new room for first-screen code.
  */
-export const FIRST_SCREEN_BUDGET = 593_345;
+export const FIRST_SCREEN_BUDGET = 474_216;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
@@ -268,6 +272,62 @@ export function placeholderExportNames(code: string, hashes: ReadonlySet<string>
     .replace(EXPORT_CLAUSE, (clause, list: string) => (entries(list) ? "export{}" : clause));
 }
 
+// Common globals are not local names: replacing them would only make a chunk's count less meaningful. Property
+// names, method names and labels are not local bindings either and are left alone by the AST walk below.
+const GLOBAL_IDENTIFIERS = new Set([
+  "arguments", "globalThis", "undefined", "NaN", "Infinity", "console", "window", "document", "navigator", "location", "history",
+  "localStorage", "sessionStorage", "performance", "fetch", "Request", "Response", "Headers", "AbortController", "FormData", "Blob", "File",
+  "FileReader", "URL", "URLSearchParams", "URLPattern", "TextEncoder", "TextDecoder", "DOMParser", "MutationObserver", "ResizeObserver",
+  "IntersectionObserver", "Image", "Event", "CustomEvent", "Node", "Element", "HTMLElement", "EventTarget", "structuredClone", "crypto",
+  "setTimeout", "clearTimeout", "setInterval", "clearInterval", "queueMicrotask", "requestAnimationFrame", "cancelAnimationFrame",
+  "Object", "Array", "String", "Number", "Boolean", "BigInt", "Symbol", "Math", "JSON", "Date", "RegExp", "Error", "TypeError", "RangeError",
+  "Map", "Set", "WeakMap", "WeakSet", "Promise", "Intl", "Reflect", "Proxy", "ArrayBuffer", "DataView", "Uint8Array", "Uint16Array",
+  "Uint32Array", "Int8Array", "Int16Array", "Int32Array", "Float32Array", "Float64Array", "BigInt64Array", "BigUint64Array",
+  "require", "module", "exports", "process", "Buffer", "__dirname", "__filename",
+]);
+
+/** What firstScreenBytes counts in place of a local binding: one character, so the minifier's choice of names cannot move it. */
+export const LOCAL_NAME_PLACEHOLDER = "_";
+
+/**
+ * `code` with its local bindings counted as LOCAL_NAME_PLACEHOLDER, using TypeScript's parser rather than a regex:
+ * strings, comments, property names, method names, labels and the globals above stay as they are; local declarations
+ * and every reference to them become the same one-character name. Rollup gives locals short names by how often and
+ * where they are used, so adding code anywhere in a chunk can otherwise rename thousands of unrelated locals and move
+ * the compressed size without any first-screen change (#5760). This is for measurement only, never emitted.
+ */
+const JS_CODE_HINT = /\b(?:const|let|var|function|class|import|export|return|if|for|while|switch|try|new|async|await)\b/;
+
+export function placeholderLocalNames(code: string): string {
+  // firstScreenBytes also reads catalogs, styles and placeholders that are not JavaScript. A file with no code
+  // structure is measured as it is, not treated as one long identifier to replace.
+  if (!JS_CODE_HINT.test(code)) return code;
+  const source = ts.createSourceFile("chunk.js", code, ts.ScriptTarget.ES2022, true, ts.ScriptKind.JS);
+  const replacements: { start: number; end: number }[] = [];
+  const propertyName = (parent: ts.Node, name: ts.Node): boolean =>
+    (ts.isPropertyAssignment(parent) || ts.isPropertyDeclaration(parent) || ts.isPropertySignature(parent) ||
+      ts.isMethodDeclaration(parent) || ts.isMethodSignature(parent) || ts.isGetAccessorDeclaration(parent) ||
+      ts.isSetAccessorDeclaration(parent) || ts.isEnumMember(parent)) && (parent as { name?: ts.Node }).name === name;
+  const visit = (node: ts.Node) => {
+    if (ts.isIdentifier(node)) {
+      const parent = node.parent;
+      const propertyAccess = ts.isPropertyAccessExpression(parent) && parent.name === node;
+      const label = (ts.isLabeledStatement(parent) || ts.isBreakOrContinueStatement(parent));
+      if (!propertyAccess && !label && !propertyName(parent, node) && !GLOBAL_IDENTIFIERS.has(node.text) && node.text !== LOCAL_NAME_PLACEHOLDER) {
+        replacements.push({ start: node.getStart(source), end: node.end });
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  let out = code;
+  for (let i = replacements.length - 1; i >= 0; i--) {
+    const r = replacements[i];
+    out = out.slice(0, r.start) + LOCAL_NAME_PLACEHOLDER + out.slice(r.end);
+  }
+  return out;
+}
+
 /** The hashes in the build's file names (`names`); a name without one (sw.js, index.html) has none. */
 export function nameHashes(names: Iterable<string>): Set<string> {
   const out = new Set<string>();
@@ -283,7 +343,7 @@ export function nameHashes(names: Iterable<string>): Set<string> {
  * what the built-in hub sends for them to a browser that takes br (each one's brotli copy as brotliCopies makes it, or
  * the file itself under BROTLI_MIN_SIZE or when brotli does not make it smaller), with every hash of the build's files
  * (`names`, paths below `dir`) in their code counted as HASH_PLACEHOLDER, and the names they import from each other and
- * their export lists as placeholderExportNames counts them. A first-screen file names the files it imports and
+ * their export lists as placeholderExportNames counts them, and their local bindings as placeholderLocalNames counts them. A first-screen file names the files it imports and
  * preloads by their hashes, which change with any change to those files and are close to incompressible: counted as
  * sent, a change only to a lazy chunk or to strings off the first screen moves the total by tens of bytes either way
  * (#5164). A lazy chunk that imports one more name from a first-screen chunk renames that chunk's minified exports
@@ -297,7 +357,8 @@ export async function firstScreenBytes(dir: string, screens: [string, string[]][
     // latin1 keeps every byte as it is; the names, hashes and placeholders are ASCII. The export names before the
     // hashes: an import is recognized by the hash of the file it names.
     const code = (await readFile(join(dir, file))).toString("latin1");
-    const data = Buffer.from(placeholderHashes(placeholderExportNames(code, hashes), hashes), "latin1");
+    const normalized = file.endsWith(".js") ? placeholderLocalNames(placeholderHashes(placeholderExportNames(code, hashes), hashes)) : placeholderHashes(code, hashes);
+    const data = Buffer.from(normalized, "latin1");
     if (data.length < BROTLI_MIN_SIZE) return data.length;
     return Math.min((await brotli(data)).length, data.length);
   };
