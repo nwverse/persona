@@ -554,7 +554,7 @@ struct MessageActionBar: View {
             })
         }
         if isUser && !pending {
-            all.append(Item(title: String(localized: "Edit [Message Menu 051836]"), symbol: "pencil") { menu.edit?(text) })
+            all.append(Item(title: String(localized: "Edit [Message Menu 051836]"), symbol: Theme.Icon.edit) { menu.edit?(text) })
         }
         if Self.rewinds(id: id, isUser: isUser, menu: menu) {
             all.append(Item(title: String(localized: "Rewind"), symbol: Theme.Icon.rewindChat) { menu.rewinding = RewindAsk(id: id, text: text) })
