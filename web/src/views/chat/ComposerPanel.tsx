@@ -372,7 +372,7 @@ export function ComposerPanel({
       )}
       <div role="listbox" aria-label={t("chat-composerpanel.label")} className="min-h-0 flex-1 overflow-y-auto">
         <div className="relative">
-          <span aria-hidden className="pointer-events-none absolute inset-x-0 rounded-[8px] bg-hover" style={{ top: box?.top ?? 0, height: box?.height ?? 0, opacity: box ? 1 : 0, transition: `top 200ms ${EASE}, height 200ms ${EASE}` }} />
+          <span aria-hidden className="pointer-events-none absolute inset-x-0 rounded-[8px] bg-hover" style={{ ...box, opacity: box ? 1 : 0, transition: `top 200ms ${EASE}, height 200ms ${EASE}` }} />
           {empty && !browsing && addRows > 0 && <div className="flex h-6 items-center px-[10px] text-[12px] font-medium text-ink-3">{t("chat-composerpanel.add")}</div>}
           {entries.map(row)}
         </div>
