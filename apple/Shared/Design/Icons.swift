@@ -385,14 +385,18 @@ extension Theme {
         /// A Moments (Feishu Moments) post in the inbox: the company's public feed.
         static let moments = "newspaper"
         static let folder = "folder"
-        /// Home: Back to Main Chat (the main conversation), and a repository's main checkout in the Agents list's By Repository (as Orca
-        /// and the web mark it).
+        /// Home: Back to Main Chat (the main conversation), a repository's main checkout in the Agents list's By Repository (as Orca
+        /// and the web mark it), and the computer's home folder in the file page's path bar.
         static let home = "house"
         /// Home accessories and scenes (HomeKit, #2285).
         static let homeAccessories = home
         static let folderFilled = "folder.fill"
-        /// Up one folder (the new chat's directory browser, Parent Folder).
+        /// Up one folder (the new chat's directory browser, Parent Folder; the file page's Up).
         static let parentFolder = "arrow.turn.left.up"
+        /// A symlink in the file page: the badge on its icon (#5827).
+        static let symlink = "arrow.turn.up.right"
+        /// Between two folders in the file page's path bar.
+        static let pathSeparator = "chevron.compact.right"
         /// A folder that is a git repository (the new chat's directory browser).
         static let gitRepository = "folder.badge.gearshape"
         static let photo = "photo"

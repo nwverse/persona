@@ -94,7 +94,52 @@ nonisolated struct FileEntry: Codable, Identifiable, Hashable, Sendable {
     var symlink: Bool?
     var size: Int64
     var mtime: Date?
+    /// A symlink's text and whether it leads nowhere (hub feature `file_info`, docs/protocol/protocol.md "File details and links").
+    var linkTarget: String?
+    var linkBroken: Bool?
     var id: String { name }
+
+    enum CodingKeys: String, CodingKey {
+        case name, dir, symlink, size, mtime
+        case linkTarget = "link_target", linkBroken = "link_broken"
+    }
+}
+
+/// One path's details for the file page's Info sheet (`GET …/stat?detail=1`, hub feature `file_info`). An older node
+/// answers only `path`, `kind` and `size`.
+nonisolated struct FileInfo: Codable, Hashable, Sendable {
+    var path: String
+    /// file, dir, link (a broken symlink), denied or missing.
+    var kind: String
+    var size: Int64?
+    /// Permission bits as chmod takes them.
+    var mode: Int?
+    var owner: String?
+    var group: String?
+    var mtime: Date?
+    var ctime: Date?
+    var birthtime: Date?
+    var items: Int?
+    var itemsMore: Bool?
+    var symlink: Bool?
+    var linkTarget: String?
+    var linkReal: String?
+    var linkBroken: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case path, kind, size, mode, owner, group, mtime, ctime, birthtime, items, symlink
+        case itemsMore = "items_more", linkTarget = "link_target", linkReal = "link_real", linkBroken = "link_broken"
+    }
+
+    /// The node answered with details (an older one sends only kind and size).
+    var detailed: Bool { mode != nil || mtime != nil }
+}
+
+/// Every file under a folder (`GET …/fs/find`): paths relative to it, with `/`.
+nonisolated struct FileFindResult: Codable, Hashable, Sendable {
+    var cwd: String?
+    var files: [String]?
+    var truncated: Bool?
 }
 
 nonisolated struct FileListing: Codable, Hashable, Sendable {
@@ -126,6 +171,15 @@ extension APIClient {
     }
     func listDir(machine: String, path: String, cwd: String) async throws -> FileListing {
         try await get(mp(machine) + "/fs", query: ["path": path, "cwd": cwd])
+    }
+    private struct InfoResponse: Decodable { var stats: [FileInfo] }
+    /// One path's details for the Info sheet (`stat?detail=1`).
+    func fileInfo(machine: String, path: String, cwd: String) async throws -> FileInfo? {
+        try await get(mp(machine) + "/stat", query: ["path": path, "cwd": cwd, "detail": "1"], as: InfoResponse.self).stats.first
+    }
+    /// Every file under dir (`fs/find`; Git's files in a repository), for finding by name.
+    func findFiles(machine: String, dir: String) async throws -> FileFindResult {
+        try await getDecodedOffMain(mp(machine) + "/fs/find", query: ["cwd": dir], as: FileFindResult.self)
     }
 
     // Rename, move, trash and put back (docs/protocol/protocol.md "Changing files"); paths as in listDir.

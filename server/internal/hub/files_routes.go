@@ -19,14 +19,14 @@ func (h *Hub) fileRoutes(api *http.ServeMux) {
 		return map[string]any{"path": q.Get("path"), "cwd": q.Get("cwd"), "offset": atoi(q.Get("offset")), "stream": q.Get("stream") == "1"}
 	}))
 	// Which of the paths a conversation mentions are there on the machine (?paths=a%0Ab or ?path=a&path=b, and cwd):
-	// the phone links only those.
+	// the phone links only those. detail=1: the file page's Info sheet (hub feature file_info).
 	api.HandleFunc("GET /api/v1/machines/{mid}/stat", h.proxy("fs.stat", func(r *http.Request) any {
 		q := r.URL.Query()
 		paths := q["path"]
 		if s := q.Get("paths"); s != "" {
 			paths = append(paths, strings.Split(s, "\n")...)
 		}
-		return map[string]any{"paths": paths, "cwd": q.Get("cwd")}
+		return map[string]any{"paths": paths, "cwd": q.Get("cwd"), "detail": q.Get("detail") == "1"}
 	}))
 	api.HandleFunc("GET /api/v1/machines/{mid}/fs", h.proxy("fs.list", func(r *http.Request) any {
 		return map[string]any{"path": r.URL.Query().Get("path"), "cwd": r.URL.Query().Get("cwd")}

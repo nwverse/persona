@@ -80,6 +80,8 @@ struct ChatView: View {
     /// The row is the title bar's: the chat is in the main window's split, with room beside the search field.
     private var macInTitleBar: Bool { macWide && split?.ownWindow != true }
     @State private var pane: SessionPane = .chat
+    /// A file the Files pane shows in its folder (the preview's Show in Files Page, #5827).
+    @State private var filesReveal: String?
     @State private var git: GitStatus?
     @State private var menu = MessageMenu()
     /// What Forward To picked (#3807): done once its sheet has gone, as a navigation made while it goes is dropped.
@@ -757,7 +759,14 @@ struct ChatView: View {
         .confirmDeleteSession($deleting)
         // Deleted here or from the list beside it: the chat goes (AppModel.deletedSession).
         .onChange(of: model.deletedSession) { _, gone in if let gone { closedAgent(gone, order: []) } }
-        .sheet(item: $file) { ref in FileViewer(ref: ref, key: key) }
+        .sheet(item: $file) { ref in
+            FileViewer(ref: ref, key: key)
+                .environment(\.showInFiles, (session?.cwd ?? "").isEmpty ? nil : { target in
+                    file = nil
+                    filesReveal = target
+                    withAnimation(Theme.Motion.standard) { pane = .files }
+                })
+        }
         .sheet(item: $openedKnowledge) { entry in NavigationStack { KnowledgeDetailView(entry: entry) } }
         .sheet(isPresented: $planOpen) { PlanSheet(plan: latestPlan) }
         #if DEBUG
@@ -1981,7 +1990,7 @@ struct ChatView: View {
                 GitPane(machineID: key.machineID, group: key.group, cwd: session?.cwd ?? "", status: $git, review: openReview).padding(.top, headerRoom)
                     .transition(.move(edge: .trailing))
             } else if pane == .files {
-                FilesPane(machineID: key.machineID, group: key.group, cwd: session?.cwd ?? "", git: git, key: key).padding(.top, headerRoom)
+                FilesPane(machineID: key.machineID, group: key.group, cwd: session?.cwd ?? "", git: git, key: key, reveal: $filesReveal).padding(.top, headerRoom)
                     .transition(.move(edge: .trailing))
             }
         }
@@ -1998,7 +2007,7 @@ struct ChatView: View {
         case .git: GitPane(machineID: key.machineID, group: key.group, cwd: session?.cwd ?? "", status: $git, review: openReview).padding(.top, headerRoom)
             .transition(.move(edge: .trailing))
         case .files: FilesPane(machineID: key.machineID, group: key.group, cwd: session?.cwd ?? "", git: git, key: key,
-                                     reloadGit: { await loadGit() }).padding(.top, headerRoom)
+                                     reloadGit: { await loadGit() }, reveal: $filesReveal).padding(.top, headerRoom)
             .transition(.move(edge: .trailing))
         }
         #endif

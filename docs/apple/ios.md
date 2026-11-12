@@ -1729,6 +1729,16 @@ When a device cannot reach the hub address, connect through an SSH server. For t
 - **Debugging**: `-seedSSHTunnel <base64 SSHRoute JSON>` seeds SSH settings for the first hub; `-seedSSHKey <base64 32-byte seed>` uses a supplied test key (DEBUG only),
   `-tab settings -openSSHTunnel YES` opens the first hub's SSH tunnel page. End-to-end test setup is in `docs/operations/testing.md` ("SSH tunnels").
 
+## File page (#5827)
+
+The Files page (`Views/Session/FilesPane.swift`: an Agent's Files tab, and the computer page's Files row at the home) walks the computer's folders. The pure parts are `FilesNavigation` and `FileFind` (`FilesNavigation.swift`, `FilesNavigationTests`).
+
+- **Where it goes**: it starts at the session's folder (the computer page: `~`) and goes anywhere the node lets it read, above the session's folder included. Back and Forward walk the folders shown, like a browser (50 kept); Up opens the parent; the path bar names every folder from the home (a house) or from `/`, each a button, with the session's folder tagged **Session** and **Read Only** after a folder outside the home (or in `~/.persona`, `~/Library`). Uploads, renames, moves and trash are not offered there; the node refuses them anyway (protocol.md "Changing files"). A folder listed in the last minutes shows at once on Back / Forward while it is read again.
+- **Find**: the field under the path bar finds names under the folder shown, folders included (`fs/find`: Git's files in a repository, else a bounded walk), every typed word in the name, best first (whole name, start, word start, anywhere; folders first, shorter paths first). The web's Files panel ranks by the same rule.
+- **Info** (long press › Info, ⋯ › Info for the folder shown; `FileInfoSheet.swift`): kind, location, size or item count, created / modified / attributes changed, permissions in words and as `rw-r--r-- · 644`, owner and group, Copy Path. A symlink adds what it says, its real location and **Go to Real Location**. No permissions on a Windows computer; an older hub or node shows what the listing had and says what to update (protocol.md "File details and links").
+- **Symlinks** in the list carry an arrow on the icon and "Link → target"; a broken one the error mark and "Link broken · target isn’t there" in red, and a tap opens Info instead. A tap on a working link opens what it leads to with the path bar on the link's path.
+- **Show in Files Page** (the preview's ⋯, where the preview was opened from the Files page or an Agent's chat): the Files page at the file's folder with the file marked for a moment.
+
 ## File viewer (2026-10-31)
 
 Files mentioned in chats, tool rows and the chat's Files page all open in `FileViewer` (`Views/Chat/FileViewer.swift`, `Persona/Code/`).
