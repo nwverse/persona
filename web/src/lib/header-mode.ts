@@ -29,23 +29,10 @@ export function headerTone(mode: string | undefined): ModeTone {
   }
 }
 
-/** The mode menu's own symbol per mode (iOS hand.raised, pencil.line, list.bullet.clipboard, wand.and.sparkles,
- *  exclamationmark.shield; the plain shield when unknown). */
+/** The header's symbol per mode: the composer picker's (`pickerIcon`, one symbol per mode on the web, #5324), and the plain
+ *  shield while no mode is reported, never a guessed Default permissions. */
 export function headerIcon(mode: string | undefined): IconName {
-  switch (mode) {
-    case "default":
-      return "hand";
-    case "acceptEdits":
-      return "pencil";
-    case "plan":
-      return "list";
-    case "auto":
-      return "sparkles";
-    case BYPASS_MODE:
-      return "shieldAlert";
-    default:
-      return "shield";
-  }
+  return mode ? pickerIcon(mode) : "shield";
 }
 
 /** The mode can be changed from here: an agent with modes that runs (the composer's chips' rule). */
