@@ -704,6 +704,11 @@ App API (full-access role; 403 otherwise):
 authorizations changed meanwhile; read again and retry. 503: storage unavailable. The `suggestion` object is in
 `docs/protocol/protocol.md`, "Tasks and the chat feed".
 
+Clients (#5802): the web draws the line under the plan card, the decision's row and the passed-up question, with
+what Always stores, the two actions and the result in the same place (`docs/web/web.md` "Suggested rules"); the Apple
+apps (`docs/apple/ios.md` "Suggested standing rule and held decisions") and the Android app
+(`docs/android/android.md` "Rule suggestions, held decisions, recommended setup and purpose descriptions") draw it too.
+
 #### Asks go to the supervisor first (#3589)
 
 Only with leaders configured (`assistant.leaders` not empty); without them every card goes to the user as above.
@@ -992,11 +997,11 @@ Agents started manually in Agents have no to-do, or a to-do with empty `origin`,
   - **Today**: first main-chat display each day calls `POST …/today` (`TasksStore.loadToday`), placing the card at midnight: completed tasks, waiting tasks, working count,
     Lark meetings (Prepare sends a message for you), chats mentioning you (Review); if the App already has reminder permission, also include reminders due today (no permission prompt for this).
   - **Direct-start tasks**: Persona profile's Proactive work section lists remembered kinds, with swipe-left deletion.
-- **Message cards link to tasks** (hub): first, PR/issue URLs in the item's connector link, title, preview and context are matched against open to-dos' PR URL, title and notes (`server/internal/assistant/inbox_task_links.go`, #5578). Comment fragments and query parameters are ignored; host, repository, PR/issue kind and number must agree. Only a unique task is linked, and an existing link is kept. This step needs neither a model nor the AI twin. With the twin enabled, an unmatched or ambiguous item still goes to the Inbox's judge (`inbox/judge.md`), which sees active tasks and may return `task_id` (only an ID shown to it).
+- **Message cards link to tasks** (hub): first, PR/issue URLs in the item's connector link, title, preview and context are matched against open to-dos' PR URL, title and notes (`server/internal/assistant/inbox_task_links.go`, #5578). Comment fragments and query parameters are ignored; host, repository, PR/issue kind and number must agree. Only a unique task is linked, and an existing link is kept. This step needs neither a model nor the AI twin. Linking old content does not bypass the twin's age limit when it is later enabled. With the twin enabled, an unmatched or ambiguous item still goes to the Inbox's judge (`inbox/judge.md`), which sees active tasks and may return `task_id` (only an ID shown to it).
   The AI twin's first message includes that task's progress (`inbox/agent.md`), so the draft states actual progress. Draft submission
   (`inbox_draft`) inserts a `message` entry into the chat that started the task. The App renders `MessageCard`: original message, attached task (live), draft (Edit inline), Send (Inbox sending; send by ID if the item is not local), Later (collapse for now).
   When the linked task is supervised and `inbox_signals` is on, every new batch of messages from other people on the item also reaches the task's supervisor
-  as the signal `inbox` ("Supervision (#3124)" above, #4293), even with the twin disabled or the item not yet triaged. The existing forwarding switch, supervision exclusions and per-message deduplication still apply.
+  as the signal `inbox` ("Supervision (#3124)" above, #4293), even with the twin disabled or the item not yet triaged. The existing forwarding switch, supervision exclusions and per-message deduplication still apply. Loading previously linked content after a restart does not forward it again; newly collected batches after loading still reach the supervisor.
   Already-replied cards show "Replied on your behalf" and the sent text.
   - **Sent state on the card** (#1519): when a reply for this item is sent (from a card, Inbox, or any client), hub writes `sent_at` and `sent` (the sent text) into the previously inserted message-card body,
     then rebroadcasts `assistant_feed` with the same ID; clients replace the body by ID. `GET …/feed?since=` also includes cards sent after `since`. Written once, never cleared:

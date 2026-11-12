@@ -188,6 +188,17 @@
     <string name="chat_screen_command_ids">Request %1$s, tool call %2$s</string>
     <string name="chat_screen_type_answer">Type an answer</string>
     <string name="chat_screen_unreadable">Can\'t read this dialog yet. Check and handle it on the computer.</string>
+    <string name="chat_command_ask_title">%1$s Wants to Run a Command</string>
+    <string name="chat_command_ask_risk_delete">Can\'t confirm this command won\'t delete files</string>
+    <string name="chat_command_ask_risk_other">Claude Code warns about this command</string>
+    <string name="chat_command_ask_countdown_deny">Denied automatically in %1$s</string>
+    <string name="chat_command_ask_countdown_allow">Allowed automatically in %1$s</string>
+    <string name="chat_command_ask_countdown_over_deny">Time\'s up: Claude Code denies it</string>
+    <string name="chat_command_ask_countdown_over_allow">Time\'s up: Claude Code allows it</string>
+    <string name="chat_command_ask_show_original">Show Original</string>
+    <string name="chat_command_ask_hide_original">Hide Original</string>
+    <string name="chat_command_ask_show_all">Show All</string>
+    <string name="chat_command_ask_collapse">Collapse</string>
     <string name="chat_request_unsupported">This request can\'t be handled on the phone yet. Check and handle it on the computer.</string>
     <string name="chat_request_terminal_help">Using the terminal</string>
     <string name="chat_request_dismiss">Leave to computer</string>

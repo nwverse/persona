@@ -228,3 +228,113 @@ func TestInboxTaskURLRepeatedPassCountsOnce(t *testing.T) {
 		t.Fatalf("new comment: %+v, %v", g.Inbox, ok)
 	}
 }
+
+func TestInboxTaskURLRoutingKeepsTheTwinsAgeLimit(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		hours int
+		age   time.Duration
+	}{
+		{"default limit", 0, 48 * time.Hour},
+		{"configured limit", 2, 3 * time.Hour},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			h := agentHub(t)
+			h.setConfig(func(c *assistantwire.InboxConfig) {
+				c.Agent.Enabled, c.Agent.MaxAgeHours = false, tc.hours
+			})
+			todo := supervisedTodo(t, h.Service, "Review the change")
+			h.todos.mu.Lock()
+			h.todos.todos[todo.ID].PRURL = "https://github.com/example/project/pull/123"
+			h.todos.mu.Unlock()
+			model, calls := captureModel(t, `{"task_id":"wrong-task"}`)
+			h.in.setModel(model)
+			it := actionItem("github:old-review", time.Now().Add(-tc.age))
+			it.Connector = &InboxConnector{URL: "https://github.com/example/project/pull/123#issuecomment-456"}
+			h.inbox.mu.Lock()
+			h.inbox.items[it.ID] = it
+			h.inbox.mu.Unlock()
+			h.handPass(ctx)
+			if it.Agent == nil || it.Agent.TodoID != todo.ID || it.Handling != nil {
+				t.Fatalf("old message was not linked without starting work: %+v / %+v", it.Agent, it.Handling)
+			}
+			h.setConfig(func(c *assistantwire.InboxConfig) { c.Agent.Enabled = true })
+			h.handPass(ctx)
+			if it.Handling != nil || it.Agent.Of != "" || it.Agent.StartedAt != nil || it.Agent.SessionID != "" {
+				t.Fatalf("enabling the twin processed old backlog: %+v / %+v", it.Agent, it.Handling)
+			}
+			checkNoTwinWork(t, h)
+			if got := calls(); len(got) != 0 {
+				t.Fatalf("old linked message called the judge: %d", len(got))
+			}
+
+			h.inbox.mu.Lock()
+			it.Last, it.TriagedAt, it.UpdatedAt = "fresh-review", "fresh-review", time.Now()
+			h.inbox.mu.Unlock()
+			h.handPass(ctx)
+			if it.Handling == nil || it.Handling.State != HandlingLooking || it.Agent.SessionID == "" || it.Agent.Of != it.Last {
+				t.Fatalf("a fresh message did not start handling: %+v / %+v", it.Agent, it.Handling)
+			}
+		})
+	}
+}
+
+func TestInboxTaskURLRoutingDoesNotReplayStoredLinks(t *testing.T) {
+	ctx := context.Background()
+	h := agentHub(t)
+	turnInboxSignalsOn(t, h.Service)
+	h.superviseTimes.gather = time.Hour
+	todo := supervisedTodo(t, h.Service, "Review the change")
+	h.todos.mu.Lock()
+	h.todos.todos[todo.ID].PRURL = "https://github.com/example/project/pull/123"
+	h.todos.mu.Unlock()
+	it := &InboxItem{ID: "github:review", Kind: KindMention, Last: "1", Count: 1, UpdatedAt: time.Now(),
+		Connector: &InboxConnector{URL: "https://github.com/example/project/pull/123"}}
+	h.inbox.mu.Lock()
+	h.inbox.items[it.ID] = it
+	h.inbox.mu.Unlock()
+	h.handPass(ctx)
+	if g, ok := pendingInbox(h.Service, todo.ID); !ok || g.Inbox.Count != 1 {
+		t.Fatalf("new link did not raise its first signal: %+v, %v", g.Inbox, ok)
+	}
+
+	again := New(Options{Hub: h.f, Store: func() Store { return h.st }, Logf: testLogf(t)})
+	h.in.svc = again
+	again.superviseTimes.gather = time.Hour
+	if err := again.inboxReady(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// This fixture persists Inbox rows and settings, not to-do rows. Keep the same supervised task across the reload.
+	if err := again.ensureTodosLoaded(ctx); err != nil {
+		t.Fatal(err)
+	}
+	h.todos.mu.RLock()
+	task := copyTodoLocked(h.todos.todos[todo.ID])
+	h.todos.mu.RUnlock()
+	again.todos.mu.Lock()
+	again.todos.todos[task.ID] = &task
+	again.todos.mu.Unlock()
+	if !again.inboxSignalHolds(todoNow(again, task.ID)) || !again.inboxSignalsOn(ctx) {
+		t.Fatal("reload lost the supervised task or its forwarding setting")
+	}
+	again.handPass(ctx)
+	if g, ok := pendingInbox(again, todo.ID); ok {
+		t.Fatalf("restart replayed stored content: %+v", g.Inbox)
+	}
+	loaded := again.inbox.items[it.ID]
+	again.inbox.mu.Lock()
+	prev := seenOf(loaded)
+	loaded.Last, loaded.Count, loaded.UpdatedAt = "2", loaded.Count+2, time.Now()
+	again.inbox.noteReceived(loaded, prev, nil)
+	again.inbox.mu.Unlock()
+	again.handPass(ctx)
+	if g, ok := pendingInbox(again, todo.ID); !ok || g.Inbox.Count != 2 || g.Key != it.ID+"@2" {
+		t.Fatalf("new messages after restart were not counted once: %+v, %v", g.Inbox, ok)
+	}
+	again.handPass(ctx)
+	if g, ok := pendingInbox(again, todo.ID); !ok || g.Inbox.Count != 2 {
+		t.Fatalf("repeated pass duplicated new content: %+v, %v", g.Inbox, ok)
+	}
+	checkNoTwinWork(t, h)
+}

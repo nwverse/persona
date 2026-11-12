@@ -489,6 +489,8 @@ extension Theme {
         static let pluginCalendar = calendarView
         static let pluginMoney = "creditcard"
         static let pluginStar = "star"
+        /// Asking for a GitHub star for Persona (#5761): the empty Agents pill, the milestone card, the onboarding toast.
+        static let gitHubStar = pluginStar
         static let phone = "iphone"
         /// The assistant operating an iPhone through a Mac (the extension iphone): its section, its tools.
         static let phoneControl = "iphone.radiowaves.left.and.right"

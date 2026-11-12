@@ -779,12 +779,19 @@ class TasksStore(
         routes.update { if (todoId == null) it - conversation else it + (conversation to todoId) }
     }
 
-    /** Sends text straight to the task the conversation is routed to; false when there is none or its to-do is gone. */
-    fun sendRouted(conversation: String, text: String, onError: (Throwable) -> Unit): Boolean {
+    /**
+     * Sends text straight to the task the conversation is routed to; false when there is none or its to-do is gone.
+     * The route is consumed only by the hub's accepting response. A failure or cancellation leaves it ready to retry.
+     */
+    suspend fun sendRouted(conversation: String, text: String): Boolean {
         val todoId = routes.value[conversation] ?: return false
-        setRoute(conversation, null)
-        if (_todos.value.none { it.id == todoId }) return false // the hub would refuse it (409): Persona gets it instead
-        scope.launch { runCatching { api.route(conversation, todoId, text) }.onSuccess { received(listOf(it)) }.onFailure(onError) }
+        if (_todos.value.none { it.id == todoId }) {
+            setRoute(conversation, null)
+            return false // the hub would refuse it (409): Persona gets it instead
+        }
+        val routed = api.route(conversation, todoId, text)
+        received(listOf(routed))
+        routes.update { current -> if (current[conversation] == todoId) current - conversation else current }
         return true
     }
 
