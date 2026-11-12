@@ -131,7 +131,7 @@ struct PickBar: View {
                 .lineLimit(1)
                 .accessibilityIdentifier("chat.pickCancel")
             Spacer(minLength: Theme.Space.s)
-            Text("\(n) Selected").font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+            Text("\(n) Selected [Selected Messages]").font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
                 .accessibilityIdentifier("chat.pickCount")
             Spacer(minLength: Theme.Space.s)
             Button(action: forward) {

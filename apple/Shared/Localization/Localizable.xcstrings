@@ -93,6 +93,29 @@
         }
       }
     },
+    "%lld Selected [Selected Messages]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld Selected"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld件を選択"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已选 %lld 条"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "%lld more on the map [Place Map]" : {
       "localizations" : {
         "en" : {
