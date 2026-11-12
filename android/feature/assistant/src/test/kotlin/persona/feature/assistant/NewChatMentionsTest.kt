@@ -74,15 +74,16 @@ class NewChatMentionsTest {
         override suspend fun show(machineId: String, cwd: String, hash: String) = throw UnsupportedOperationException()
     }
 
-    private fun mount(machine: Machine = Machine()): Hub {
+    private fun mount(machine: Machine = Machine(), needs: List<NeedsYouLine> = emptyList()): Hub {
         val hub = Hub(main)
         rule.setContent {
-            PersonaTheme(reduceMotion = true) {
+            PersonaTheme(reduceMotion = true, style = AppStyle.Glass) {
                 CompositionLocalProvider(LocalManagerRoster provides ManagerRoster(listOf(
                     HubManager("assistant", "Helper", online = true, isDefault = true),
                 ), "assistant")) {
                     AssistantScreen(navigator, hub, hub, hub::start, composerService = null, mainConversationSender = hub,
-                        chatContent = { Text("chat:${it.sessionId}") }, mentionSessions = sessions, mentionFiles = machine)
+                        chatContent = { Text("chat:${it.sessionId}") }, mentionSessions = sessions, mentionFiles = machine,
+                        shellNeedsYou = needs, onOpenNeed = {}, onOpenInbox = {})
                 }
             }
         }
@@ -138,5 +139,15 @@ class NewChatMentionsTest {
         assertEquals("@~/code/README.md ", field().fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsProperties.EditableText].text)
         type("@/nowhere/")
         rule.waitUntil(5_000) { rule.onAllNodesWithText("Nothing matches in this folder").fetchSemanticsNodes().isNotEmpty() }
+    }
+
+    @Test fun whatNeedsYouStepsAsideWhileTheListIsOpen() {
+        mount(needs = listOf(NeedsYouLine.Agent(SessionKey("mac", "agent"), "r1", "plan", null, who = "weather-app", what = "Plan ready")))
+        rule.onNodeWithText("Plan ready", substring = true).assertIsDisplayed()
+        type("@")
+        rule.onNodeWithText("Photo sync").assertIsDisplayed()
+        rule.onAllNodesWithText("Plan ready", substring = true).assertCountEquals(0)
+        type("Hello")
+        rule.onNodeWithText("Plan ready", substring = true).assertIsDisplayed()
     }
 }

@@ -72,6 +72,8 @@ fun ChatComposer(
     onMention: (ChatLinkContext) -> Unit = {},
     /** A task picked in the @ menu (Persona's conversations, [ComposerMentions.tasks]): the next message goes to it. */
     onMentionTask: (String) -> Unit = {},
+    /** Whether the @ menu is open over the field (iOS `MentionMenuOpen`): New chat's page makes room for it. */
+    onMentionOpen: (Boolean) -> Unit = {},
     /** /model in the "/" list, which opens the model choices instead of typing (Claude in a terminal pane). */
     onModel: (() -> Unit)? = null,
     /** /loop in the "/" list, with a line under the box saying what it will do (Claude Code only, web `hasLoop`). */
@@ -263,6 +265,9 @@ fun ChatComposer(
     // @: the word being typed just before the caret, while nothing is selected and no "/" list is open.
     val selection = state.value.selection
     val mention = if (enabled && mentions != null && suggestions.isEmpty() && selection.collapsed) mentionAt(state.value.text, selection.start) else null
+    val mentionOpen = mention != null
+    LaunchedEffect(mentionOpen) { onMentionOpen(mentionOpen) }
+    DisposableEffect(Unit) { onDispose { onMentionOpen(false) } }
     // A typed folder (New chat's page): read from the computer while the list is open.
     val browsing = rememberMentionListing(mentions, mention?.query)
     val mentionRows = remember(mentions, mention?.query, browsing.listing) {

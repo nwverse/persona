@@ -34,8 +34,8 @@ import persona.core.navigation.Navigator
 import java.io.File
 
 /**
- * New chat's composer with "@" typed (#4339 C16), in every style, light and dark, inside the shell's bar: at rest, the
- * @ list of sessions, a typed home folder, and a picked session's quote card. The same steps on `main` (without the
+ * New chat's composer with "@" typed (#4339 C16), in every style, light and dark, inside the shell's bar: at rest (with
+ * what needs the user), the @ list of sessions, a typed home folder, and a picked session's quote card. The same steps on `main` (without the
  * page's `mentionSessions` and `mentionFiles`) draw the before. Written as PNGs to `build/new-chat-mention-shots/` (or
  * `-Dpersona.shots=<dir>`).
  */
@@ -94,6 +94,11 @@ class NewChatMentionsShotsTest {
         val hub = Hub(main)
         val sidebar = AssistantSidebarHost()
         val home = Home()
+        // What needs the user: on Glass over the composer at rest, stepping aside while the @ list is open.
+        val needs = NeedsYou(listOf(
+            NeedsYouLine.Agent(SessionKey("mbp", "agent"), "r1", "plan", null, who = "weather-app", what = "Plan ready"),
+            NeedsYouLine.Inbox("i1", lark = false, itemKind = "mail", who = "Alex", what = "Re: Q4 budget"),
+        ))
         rule.setContent {
             PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
                 val configuration = Configuration(LocalConfiguration.current).apply {
@@ -109,7 +114,8 @@ class NewChatMentionsShotsTest {
                     Box(Modifier.testTag("shot").width(400.dp).height(900.dp).background(PersonaTheme.palette.background)) {
                         key(round) {
                             AssistantScreen(navigator, hub, hub, hub::start, composerService = null, mainConversationSender = hub,
-                                requestedSession = main, machines = listOf(Machine("mbp", name = "MacBook Pro", online = true)),
+                                requestedSession = main, needsYou = needs, shellNeedsYou = needs.lines, onOpenNeed = {}, onOpenInbox = {},
+                                machines = listOf(Machine("mbp", name = "MacBook Pro", online = true)),
                                 phoneToolsAvailable = true, chatContent = { Box(Modifier.fillMaxSize()) },
                                 mentionSessions = sessions, mentionFiles = home)
                         }

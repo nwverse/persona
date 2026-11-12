@@ -776,12 +776,14 @@ fun AssistantScreen(
     // On Glass what needs the user sits over the blank page's composer, as many lines as fit (#4339 C17, iOS ShellNeedsYou);
     // Brief and Board keep "Needs you now" in the page's scroll.
     val needsRoom = remember { NeedsRoom() }
+    var mentionOpen by remember { mutableStateOf(false) }
     val needsFade = with(androidx.compose.ui.platform.LocalDensity.current) { NeedsFade.roundToPx() }
     val body: @Composable (Boolean) -> Unit = { wide ->
         val hasComposer = active == null || !hasChat || demo
         val blankPage = active == null && !viewingMainQueue && !healthPage
         val needsOverComposer = PersonaTheme.style == AppStyle.Glass
-        val shellLines = if (needsOverComposer && blankPage && onOpenNeed != null) shellNeedsYou else emptyList()
+        // The @ list takes their room while it is open (iOS `MentionMenuOpen`): with the keyboard up all three did not fit.
+        val shellLines = if (needsOverComposer && blankPage && onOpenNeed != null && !mentionOpen) shellNeedsYou else emptyList()
         Box(Modifier.fillMaxSize().then(if (shellLines.isEmpty()) Modifier else Modifier.onSizeChanged { needsRoom.pageSize(it) })) {
         JPage(
             title = LocalPersonaName.current,
@@ -866,6 +868,7 @@ fun AssistantScreen(
                             blockedLabel = blocking?.takeIf { active == null }?.let { stringResource(blockedSendLabel(it)) },
                             onBlocked = { blocking?.primaryAction()?.let { runReadinessAction(it) } },
                             extraContent = starterQuotes.isNotEmpty(), mentions = mentions, onMention = starterMentions::add,
+                            onMentionOpen = { mentionOpen = it },
                             // A new conversation's launcher, for it alone (iOS StarterComposer, web StarterLauncherChip).
                             accessory = if (active == null && !healthPage && pageManagement != null && startConversationWith != null && !demo) ({
                                 if (mentionsHere) StarterQuoteCards(starterMentions)
