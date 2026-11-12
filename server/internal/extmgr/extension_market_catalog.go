@@ -162,6 +162,8 @@ func (h *Manager) catalogIn(l i18n.Lang, q, market string) []CatalogItem {
 				it.Problem = i18n.T(l, "hub-extension_market.no_package", i18n.Args{"platform": extension.Platform()})
 			} else if _, err := extension.CheckEngines(m, h.build.Number); err != nil {
 				it.Problem = i18n.Localize(err, l)
+			} else if err := h.cantRunHere(m); err != nil {
+				it.Problem = i18n.Localize(err, l)
 			}
 			cur := h.extensions.reg.GetExact(m.ID)
 			if cur == nil && e.Replaces != "" {
