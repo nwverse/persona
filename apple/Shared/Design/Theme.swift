@@ -181,6 +181,22 @@ nonisolated enum Theme {
     static let monogramFill = Color(uiColor: .secondarySystemFill)
     #endif
 
+    /// A name's disc without a picture (`Monogram`) and its letter's color: the neutral disc in the label's color, or on
+    /// the Mac in a style with hued monograms (Lark, `StyleSpec.MacChrome.monogramHues`) the hue the name picks, the same
+    /// one on every launch, with a white letter. The iPhone, iPad and watch keep the neutral disc in every style.
+    static func monogram(_ name: String) -> (fill: Color, ink: Color?) {
+        #if os(macOS)
+        let hues = spec.mac.monogramHues
+        if !hues.isEmpty {
+            // FNV-1a over the name: `hashValue` is seeded per process, so a person's color would change on every launch.
+            var h: UInt32 = 2_166_136_261
+            for s in name.unicodeScalars { h = (h ^ s.value) &* 16_777_619 }
+            return (hues[Int(h % UInt32(hues.count))], onSolid)
+        }
+        #endif
+        return (monogramFill, nil)
+    }
+
     /// Diffs and Git: their own colors, text strength (≥ 4.5:1 on the code background) for signs and counts.
     enum Diff {
         static let add = Color(light: 0x1D7A4C, dark: 0x4CC38A)
@@ -937,9 +953,9 @@ nonisolated enum Theme {
         /// The colors that travel around the composer while a reply is generating (Glow While Replying, `ComposerGlow`):
         /// blue through violet to pink, each in its light and dark shade.
         static let composerGlow: [Color] = [Hue.blue, Hue.indigo, Hue.purple, Hue.pink]
-        /// Reserve most of the keyboard-visible viewport for the conversation, not the draft.
-        static let composerHeightFraction: CGFloat = 0.22
-        static let composerMinimumLines = 3
+        /// iPhone and iPad drafts grow through six lines before scrolling; keyboard height does not lower the cap.
+        static let composerPhoneMaximumLines = 6
+        /// The shared Mac/visionOS composer retains its existing eight-line cap.
         static let composerMaximumLines = 8
         /// Text and TextField round line heights differently; half a line distinguishes adjacent counts.
         static let composerLineTolerance: CGFloat = 0.5

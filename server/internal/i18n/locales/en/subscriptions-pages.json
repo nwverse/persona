@@ -306,7 +306,7 @@
   "setup.dry_run": "Try It",
   "setup.fields": "Fields",
   "setup.fields_footer": "The choices are fields the dry run found, with an example. A title is required; without an ID, duplicates are caught by content.",
-  "setup.group_by": "In the knowledge base",
+  "setup.group_by": "In the Inbox and knowledge base",
   "setup.items_path": "Where the items are",
   "setup.kind": "Kind",
   "setup.mode": "What to pull",

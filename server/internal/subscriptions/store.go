@@ -269,6 +269,9 @@ func applyRun(cur *Subscription, c RunCommit, withState bool) {
 	cur.SourceName, cur.Icon, cur.Service, cur.SourceMin, cur.MaxCallsPerHour = out.SourceName, out.Icon, out.Service, out.SourceMin, out.MaxCallsPerHour
 	if sameTime(cur.InboxFrom, out.InboxFrom) { // the catch-up mark of the Inbox turned on as the run saw it, not of another
 		cur.InboxCatchup = out.InboxCatchup
+		if out.InboxGroup == groupOf(cur.Recipe) { // the rows' grouping, while the recipe still groups that way
+			cur.InboxGroup, cur.InboxGroupFrom = out.InboxGroup, out.InboxGroupFrom
+		}
 	}
 	if withState {
 		cur.RunState, cur.Error, cur.FailCount, cur.FailingSince = out.RunState, out.Error, out.FailCount, out.FailingSince
