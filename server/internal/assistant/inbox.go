@@ -21,6 +21,9 @@ const (
 	inboxWindow   = 7 * 24 * time.Hour // older unread chats / mail are history, not inbox
 	inboxKeepDone = 3 * 24 * time.Hour // done items stay listed (for undo) this long
 	inboxForget   = 8 * 24 * time.Hour // and are held in memory (so old unread messages don't come back) this long
+	// inboxListDone: of those, a list carries the newest this many (inbox_list_done.go); Done pages the rest from the
+	// history.
+	inboxListDone = 200
 	// inboxKeepHistory: done items stay in the database this long, paged by GET /api/v1/inbox/done (inbox_history.go);
 	// inboxPurgeEvery is how often the rounds delete those past it.
 	inboxKeepHistory = 90 * 24 * time.Hour
