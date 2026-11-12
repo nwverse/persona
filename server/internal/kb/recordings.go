@@ -154,9 +154,12 @@ type Recording struct {
 	Projects  []string            `json:"projects,omitempty"`
 	OneLine   string              `json:"one_line,omitempty"`
 	AITitle   string              `json:"ai_title,omitempty"`
-	// SummarizedRev is the revision summary.md was written from (0: none yet).
-	SummarizedRev int64     `json:"summarized_rev,omitempty"`
-	Updated       time.Time `json:"updated"`
+	// SummarizedRev is the revision summary.md was written from (0: none yet). SummarizedFinal: in hub mode, it was
+	// written from the final transcript (the transcription final or failed when it was read): one written from the
+	// live text, also one whose call was still running when the final pass ended, is made again (summaryDue).
+	SummarizedRev   int64     `json:"summarized_rev,omitempty"`
+	SummarizedFinal bool      `json:"summarized_final,omitempty"`
+	Updated         time.Time `json:"updated"`
 	// Meeting minutes (minutes.go). Kind and Calendar are the phone's, replaced by every upload; the rest is the hub's.
 	Kind     string             `json:"kind,omitempty"`
 	Calendar *RecordingCalendar `json:"calendar,omitempty"`
@@ -914,7 +917,7 @@ func (e *Engine) SummarizeRecordings(ctx context.Context, max int) int {
 	var todo []*Recording
 	due := map[string]bool{}
 	for _, r := range e.Store.Recordings() {
-		if r.Complete && r.SummarizedRev < r.Revision && r.Chars > 0 && !r.Trimmed() && r.Kind != RecordingDay {
+		if r.summaryDue() {
 			due[r.ID] = true
 			if e.retries().recordings.waits(r.ID, recordingAbout(r), now) {
 				continue
@@ -949,8 +952,32 @@ func (e *Engine) SummarizeRecordings(ctx context.Context, max int) int {
 	return n
 }
 
-// recordingAbout is what a recording's summary is asked about: its revision (a new upload is tried at once).
-func recordingAbout(r *Recording) string { return strconv.FormatInt(r.Revision, 10) }
+// recordingAbout is what a recording's summary is asked about: its revision, and in hub mode whether its final
+// transcript is in (a new upload, or the final pass's end, is tried at once).
+func recordingAbout(r *Recording) string {
+	about := strconv.FormatInt(r.Revision, 10)
+	if r.hubFinalIn() {
+		about += "/final"
+	}
+	return about
+}
+
+// summaryDue: recording r's short summary is to be written (again): a complete recording with text, not trimmed nor
+// an all-day one, whose latest revision has none, or, in hub mode, whose summary was written before the final pass
+// stored its transcript ("the short summary (made again after the final pass)"). r's Conv is read.
+func (r *Recording) summaryDue() bool {
+	if !r.Complete || r.Chars == 0 || r.Trimmed() || r.Kind == RecordingDay {
+		return false
+	}
+	return r.SummarizedRev < r.Revision || r.hubFinalIn() && !r.SummarizedFinal
+}
+
+// hubFinalIn: r is transcribed on the hub and its final pass ended (final or failed): its transcript of record is the
+// final one.
+func (r *Recording) hubFinalIn() bool {
+	t := r.hubTranscription()
+	return t != nil && t.done()
+}
 
 // summarizeRecording writes r's summary; called: the model was asked (not when r changed meanwhile so that it needs
 // none, or could not be read).
@@ -966,8 +993,9 @@ func (e *Engine) summarizeRecording(ctx context.Context, r *Recording) (called b
 	if err := json.Unmarshal(files["meta.json"], &snapshot); err != nil {
 		return false, err
 	}
+	snapshot.Conv = meeting
 	r = &snapshot
-	if !r.Complete || r.Chars == 0 || r.SummarizedRev >= r.Revision || r.Trimmed() || r.Kind == RecordingDay {
+	if !r.summaryDue() {
 		return false, nil // a day recording's summary is its recap's (day_recap.go): it would read the whole day
 	}
 	var device []RecordingSegment
@@ -1006,8 +1034,9 @@ func (e *Engine) summarizeRecording(ctx context.Context, r *Recording) (called b
 		cur.AITitle = t
 	}
 	cur.Name = st.recordingName(cur)
-	// It summarized r's revision: a newer upload meanwhile is summarized again.
-	cur.SummarizedRev = r.Revision
+	// It summarized r's revision, and r's final transcript when it was in: a newer upload meanwhile, or the final pass
+	// ending meanwhile, has it summarized again.
+	cur.SummarizedRev, cur.SummarizedFinal = r.Revision, r.hubFinalIn()
 	for _, p := range out.Projects {
 		pr := e.FindProject(p.Name)
 		if pr == nil || !pr.Live() {

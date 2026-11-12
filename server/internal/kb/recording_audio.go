@@ -780,9 +780,10 @@ func (e *Engine) dropAudio(id string, why error) error {
 
 // FinalTranscriptStored is told once the final pass stored its text (HubTranscriptPut with HubPassFinal) and the
 // state is final or failed: pending minutes stop waiting (and minutes being made from the live text now don't settle
-// them), minutes written are made again quietly (no second push), the short summary is made again; a recording that
-// gets no minutes (not a meeting, no text, never complete, minutes failed) loses its audio now. The caller wakes the
-// minutes lane. ErrRecordingDeleted, ErrNotFound, ErrReadOnly, ErrNotHub.
+// them), minutes written are made again quietly (no second push); a recording that gets no minutes (not a meeting, no
+// text, never complete, minutes failed) loses its audio now. The short summary needs no word: one not written from the
+// final transcript is due from the state on (summaryDue). The caller wakes the minutes lane. ErrRecordingDeleted,
+// ErrNotFound, ErrReadOnly, ErrNotHub.
 func (e *Engine) FinalTranscriptStored(rawID string) error {
 	id, ok := RecordingID(rawID)
 	if !ok {
@@ -815,9 +816,6 @@ func (e *Engine) finalStoredLocked(id string) (drop bool, err error) {
 		return false, ErrNotHub
 	}
 	changed := e.remakeQuiet(r)
-	if r.SummarizedRev > 0 && !r.Trimmed() {
-		r.SummarizedRev, changed = 0, true // the short summary is made again from the final transcript
-	}
 	drop = r.transcriptionDone() && st.noMinutesComing(r)
 	if changed {
 		err = st.putRecordingMeta(r)
