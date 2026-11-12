@@ -704,6 +704,11 @@ App API (full-access role; 403 otherwise):
 authorizations changed meanwhile; read again and retry. 503: storage unavailable. The `suggestion` object is in
 `docs/protocol/protocol.md`, "Tasks and the chat feed".
 
+Clients (#5802): the web draws the line under the plan card, the decision's row and the passed-up question, with
+what Always stores, the two actions and the result in the same place (`docs/web/web.md` "Suggested rules"); the Apple
+apps (`docs/apple/ios.md` "Suggested standing rule and held decisions") and the Android app
+(`docs/android/android.md` "Rule suggestions, held decisions, recommended setup and purpose descriptions") draw it too.
+
 #### Asks go to the supervisor first (#3589)
 
 Only with leaders configured (`assistant.leaders` not empty); without them every card goes to the user as above.
