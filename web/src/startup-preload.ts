@@ -90,7 +90,7 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 }
 
 /**
- * The most a cold first screen of the client page may send, in bytes, as sentBytes counts it over the page's own files,
+ * The most a cold first screen of the client page may weigh, as firstScreenBytes counts it over the page's own files,
  * the shared and App groups and one language's startup catalog (vite.config.ts startupPreload fails the build past
  * it): the heaviest language's at #2689 (ja, 559,565 B) plus 3%, and 2,560 B for the sidebar's assistant switcher
  * (views/AssistantSwitcher.tsx and the current assistant's scope), which every first screen draws, and 512 B for the
@@ -143,9 +143,14 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * its words are in the lazy Settings page and the ui-look catalog). And 174 B more for it as merged (#5166): #5161 added
  * 451 B to ja, not 222 B, 592,153 B at 76b9cf3b4a to 592,604 B at b73f259f71 (505 B with the file names' hashes counted
  * as a fixed string, so not their noise), which left main 174 B over; the room is 0 B. Take it back down by as much as
- * the sidebar's Recent code gets lighter. Raise it on purpose, in the change that needs it.
+ * the sidebar's Recent code gets lighter. Every number so far is bytes as sent. From #5164 on, firstScreenBytes counts
+ * every built file name's hash in the first screen's code as a fixed string, which is 1,454 B less in every language at
+ * 0554037152 (ja 592,604 B sent, 591,150 B counted; en 589,016 / 587,562 B; zh-Hans 589,854 / 588,400 B): the budget
+ * moved down by the same 1,454 B and kept its 0 B of room. That is no new room; it only stops a change to a lazy chunk or
+ * to strings off the first screen from moving the count (#5145 moved ja 34 B as sent with no first-screen code changed).
+ * Raise it on purpose, in the change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 592_604;
+export const FIRST_SCREEN_BUDGET = 591_150;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
