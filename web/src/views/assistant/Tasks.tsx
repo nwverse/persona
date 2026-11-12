@@ -1006,6 +1006,14 @@ function TaskHandoffs({ item }: { item: FeedItem }) {
   return <HandoffCards handoffs={withFailureBelow(handoffs, failedBelow)} />;
 }
 
+/** The colour of a row's status word: Needs you attention, a usage limit orange, a cut or failed task red. */
+function statusTone(state: string, toStart: boolean): string {
+  if (toStart || state === "needs_you") return "text-attention";
+  if (state === "usage_limit") return "text-orange";
+  if (state === "interrupted" || state === "failed") return "text-red";
+  return "text-ink-2";
+}
+
 /** One slot, one row: live task/session state wins over historical feed metadata. */
 function ProgressTaskRow({ card, conversation, activity }: { card: TaskCardMetadata; conversation: string; activity?: BackgroundWork }) {
   const todo = useTodo(card.todo_id);
@@ -1020,6 +1028,7 @@ function ProgressTaskRow({ card, conversation, activity }: { card: TaskCardMetad
   else if (todo?.done_at && todo.supervision?.state === "cancelled") state = "cancelled";
   else if (!todo && card.plan_id && plans[card.plan_id]?.state === "dismissed") state = "cancelled";
   const finished = state === "done" || state === "accepted";
+  const clock = useNow(30_000, state === "usage_limit"); // the limit's grace running out
   const blocked = ["needs_you", "interrupted", "usage_limit", "failed"].includes(state) || (!finished && todo?.supervision?.progress?.kind === "blocked");
   const meter = taskMeter(todo, task?.lead);
   const report = feed.find((it) => it.id === card.report_id);
@@ -1031,7 +1040,7 @@ function ProgressTaskRow({ card, conversation, activity }: { card: TaskCardMetad
   const liveLine = backgroundWorkLine(liveWork);
   // parked by its supervisor (#3804): the row says so, until when and why, ahead of what its agent last did
   const parked = liveWork || finished || state === "cancelled" ? undefined : parkedLine(todo);
-  const statusLabel = liveWork ? stateName("working") : parked ? t("assistant-tasks.review_parked") : accepted || (!todo && state === "accepted") ? t("assistant-tasks.review_accepted") : state === "cancelled" ? t("assistant-tasks.review_cancelled") : toStart ? t("assistant-tasks.plan_waiting") : TODO_STATUS_INFO[state as TodoStatus]?.label ?? t("assistant-tasks.no_activity");
+  const statusLabel = liveWork ? stateName("working") : parked ? t("assistant-tasks.review_parked") : accepted || (!todo && state === "accepted") ? t("assistant-tasks.review_accepted") : state === "cancelled" ? t("assistant-tasks.review_cancelled") : toStart ? t("assistant-tasks.plan_waiting") : state === "not_started" ? t("assistant-tasks.status_starting") : TODO_STATUS_INFO[state as TodoStatus]?.label ?? t("assistant-tasks.no_activity");
   // the mark tells the state at a glance, in the colors the dock and the board use (TaskMark)
   const mark: TodoStatus = liveWork ? "working" : accepted || state === "accepted" ? "done" : state === "cancelled" ? "done" : toStart ? "needs_you" : (TODO_STATUS_INFO[state as TodoStatus] ? state as TodoStatus : "not_started");
   const ask = useStore((s) => taskAsk(todo ? taskInteraction(todo, s.interactions, task?.lead) : undefined));
@@ -1043,18 +1052,25 @@ function ProgressTaskRow({ card, conversation, activity }: { card: TaskCardMetad
   // nobody is working on it (#3618): said ahead of why it stopped and of its agent's last report
   const orphan = todo && !ask ? orphanedLine(todo) : undefined;
   const nobody = orphan && (orphan.reason ? `${orphan.lead} · ${orphan.reason}` : orphan.lead);
+  // a usage limit says what stopped it and when it goes on (the status word on the right says only that it did)
+  const limit = state === "usage_limit" ? usageLimitLabel(task?.lead, clock) : undefined;
   const detail = finished || state === "cancelled"
     ? latestReview(todo?.supervision)?.note ?? todo?.done_reason ?? (receipt && field(receipt, "summary"))
-    : liveLine ?? parked ?? waits ?? nobody ?? stopped ?? progressLine(todo?.supervision) ?? ask ?? task?.lead?.plan?.current ?? progressOf(task?.lead)?.text ?? (report && field(report, "text"));
+    : limit ?? liveLine ?? parked ?? waits ?? nobody ?? stopped ?? progressLine(todo?.supervision) ?? ask ?? task?.lead?.plan?.current ?? progressOf(task?.lead)?.text ?? (report && field(report, "text"));
   return (
     <button type="button" data-task-slot={card.id} disabled={!todo && !card.plan_id} onClick={() => card.todo_id ? openTask(card.todo_id) : window.dispatchEvent(new CustomEvent("persona:task-start", { detail: conversation }))} className="flex w-full min-w-0 items-center gap-3 px-3 py-2.5 text-left hover:bg-hover disabled:cursor-default">
       <span data-task-mark={mark} className="flex w-4 shrink-0 justify-center"><TaskMark status={mark} size={8} /></span>
       <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-center gap-2"><span className="truncate text-sm font-semibold" title={title}>{title}</span><span className={cx("shrink-0 text-xs", toStart || state === "needs_you" ? "text-attention" : "text-ink-2")}>{statusLabel}</span></div>
+        <div className="truncate text-sm font-semibold" title={title}>{title}</div>
         <BackgroundWorkDetail activity={liveWork} detail={detail} pr={prNumber ? t("assistant-tasks.progress_pr", { number: prNumber }) : undefined} />
         {!finished && state !== "cancelled" && meter && <TaskProgressMeter value={meter.value} total={meter.total} blocked={blocked} title={title} />}
       </div>
-      {finished ? <Icon name="check" className="shrink-0 text-green" /> : blocked ? <Icon name="info" className="shrink-0 text-orange" /> : <Icon name="chevronRight" className="shrink-0 text-ink-3" />}
+      {/* the status in its own right-aligned column (the rows' states scan down it), then the row's end: › where it opens
+          something, ✓ once finished, ⓘ for a usage limit (#5569) */}
+      <span data-task-status={state} className={cx("max-w-[40%] shrink-0 truncate text-right text-xs", statusTone(state, toStart))}>{statusLabel}</span>
+      <span className="flex w-4 shrink-0 justify-center">
+        {finished ? <Icon name="check" className="text-green" /> : state === "usage_limit" ? <Icon name="info" className="text-orange" /> : <Icon name="chevronRight" className="text-ink-3" />}
+      </span>
     </button>
   );
 }
@@ -1152,10 +1168,11 @@ function RunningAgentRow({ session, activity }: { session: Session; activity?: B
     <button type="button" data-running-agent={`${session.machine_id}/${session.session_id}`} onClick={() => openAgent(session.machine_id, session.session_id)} className="flex w-full min-w-0 items-center gap-3 px-3 py-2.5 text-left hover:bg-hover">
       <span className="flex w-4 shrink-0 justify-center"><StatusMark state="working" /></span>
       <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-center gap-2"><span className="truncate text-sm font-semibold">{sessionTitle(session)}</span><span className="shrink-0 text-xs text-ink-2">{stateName("working")}</span></div>
+        <div className="truncate text-sm font-semibold">{sessionTitle(session)}</div>
         {detail && <BackgroundWorkDetail activity={activity} detail={detail} />}
       </div>
-      <Icon name="chevronRight" className="shrink-0 text-ink-3" />
+      <span className="max-w-[40%] shrink-0 truncate text-right text-xs text-ink-2">{stateName("working")}</span>
+      <span className="flex w-4 shrink-0 justify-center"><Icon name="chevronRight" className="text-ink-3" /></span>
     </button>
   );
 }

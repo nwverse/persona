@@ -8,6 +8,7 @@ import { setAgentOpenMode } from "../../lib/agent-open";
 import { closePanel, getPanel } from "../../lib/panel";
 import { putTodo, refresh, refreshTodos, reset, upsertSession } from "../../lib/store";
 import type { Todo } from "../../lib/todos";
+import { usageLimitLabel } from "../../lib/usage-limit";
 import type { Interaction, Session } from "../../lib/types";
 import { AssistantActionBar, DOCK_CAPSULE, FeedLineView, TaskDock } from "./Tasks";
 
@@ -105,6 +106,31 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(row.textContent).toContain("Wait for deployment");
     expect(row.textContent).not.toContain(t("assistant-tasks.background_tasks_running", { count: 2 }));
     expect(writes).toEqual([]);
+  });
+
+  it("puts a row's status in its own column, with › where it opens and the reset time under a usage limit (#5569)", () => {
+    act(() => entry("running").click());
+    const row = () => host.querySelector("[data-task-slot]")!;
+    const status = () => row().querySelector<HTMLElement>("[data-task-status]")!;
+    expect(status().textContent).toBe(t("lib-state-labels.working"));
+    expect(row().querySelector(".font-semibold")!.textContent).toBe("Demo task"); // the title no longer carries the word
+    const limited: Session = { machine_id: "demo", session_id: "worker", title: "Demo agent", cwd: "/demo", status: "idle", state: "idle", updated_at: at,
+      turn_error: "You've hit your usage limit.", turn_error_kind: "usage_limit", turn_error_resets_at: new Date(now.getTime() + 3 * 3_600_000).toISOString() };
+    act(() => upsertSession(limited));
+    expect(status().dataset.taskStatus).toBe("usage_limit");
+    expect(status().className).toContain("text-orange");
+    expect(row().textContent).toContain(usageLimitLabel(limited, now.getTime())!);
+    act(() => upsertSession({ ...limited, turn_error: undefined, turn_error_kind: undefined, turn_error_resets_at: undefined, state: "working", status: "working" }));
+    expect(status().className).toContain("text-ink-2");
+  });
+
+  it("says Starting, not Not started, on a task whose Agent is not up yet", async () => {
+    todo.agents = [];
+    await act(async () => {
+      await refreshTodos();
+    });
+    act(() => entry("running").click());
+    expect(host.querySelector("[data-task-status]")!.textContent).toBe(t("assistant-tasks.status_starting"));
   });
 
   it("keeps two entries in order, collapses by default and replaces conversation cards with the dispatch's hand-off card", () => {
