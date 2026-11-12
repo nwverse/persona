@@ -326,11 +326,12 @@ func (n *Node) termStreamOf(id string) *termStream {
 // so its frames are not mixed into the new epoch; when the slot is busy the hub starts an observe again.
 func (n *Node) terminalControl(ctx context.Context, id string, ctlr host.Controller, pane host.PaneRef, p termControl) (map[string]any, error) {
 	var home termSize
+	handedOver := false
 	if old := n.termStreamOf(id); old != nil {
 		old.mu.Lock()
 		prev := old.ctl
 		if prev != nil { // the pane is at the last phone's size: keep the size from before, give nothing back in between
-			old.handover, home = true, old.home
+			old.handover, home, handedOver = true, old.home, true
 		}
 		old.mu.Unlock()
 		n.setTermStream(id, nil)
@@ -380,6 +381,9 @@ func (n *Node) terminalControl(ctx context.Context, id string, ctlr host.Control
 	c, err := ctlr.Control(context.WithoutCancel(sctx), pane, p.Cols, p.Rows, p.Takeover, gate.put)
 	if err != nil {
 		cancel()
+		if handedOver { // the control before let go at the phone's size for this one, which did not come
+			go giveBack(ctlr, pane, home)
+		}
 		if errors.Is(err, host.ErrAttachBusy) {
 			return nil, &rpc.Error{Code: "attach_busy", Message: err.Error()}
 		}
@@ -409,6 +413,26 @@ func paneHome(ctx context.Context, h host.Controller, pane host.PaneRef) termSiz
 		}
 	}
 	return termSize{}
+}
+
+// giveBack puts a pane released at a phone's size back to home: a control at home, let go at once (with no herdr
+// client attached herdr keeps a released pane's last size; with one it lays the pane out at that client's). A slot
+// someone else holds now is theirs, size and all: nothing is taken over.
+func giveBack(ctlr host.Controller, pane host.PaneRef, home termSize) {
+	if home.cols <= 0 || home.rows <= 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	c, err := ctlr.Control(ctx, pane, home.cols, home.rows, false, func(host.Frame) {})
+	if err != nil {
+		return
+	}
+	c.Close()
+	select {
+	case <-c.Done():
+	case <-ctx.Done():
+	}
 }
 
 // controlLoop holds the terminal until the hub lets it go (unwatch, or a watch that replaces it), the lease runs out

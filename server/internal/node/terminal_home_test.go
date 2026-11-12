@@ -16,7 +16,8 @@ import (
 )
 
 // fakeHomeHerdr is fakeControlHerdr with the pane's shell on a real terminal (pid; 0: pane process-info fails) and a
-// layout of 120 × 40 (herdr's headless default): the node gives back the terminal's size, else the layout's.
+// layout of 120 × 40 (herdr's headless default): the node gives back the terminal's size, else the layout's. A control
+// at 33 columns fails to start.
 func fakeHomeHerdr(t *testing.T, pid int) (bin, log string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -29,6 +30,7 @@ case "$1 $2" in
 "pane layout") echo '{"result":{"layout":{"panes":[{"pane_id":"w1:p1","rect":{"width":120,"height":40}}]}}}' ;;
 "terminal session")
   [ "$4" = "--help" ] && exit 0
+  case "$*" in *"--cols 33 "*) echo "herdr: cannot attach" >&2; exit 1 ;; esac
   echo "start $*" >> %[1]q
   echo '{"type":"terminal.frame","seq":1,"full":true,"width":44,"height":30,"encoding":"ansi","bytes":"RlVMTA=="}'
   while read -r line; do
@@ -163,6 +165,25 @@ func TestTerminalControlHandedOverKeepsTheFirstSize(t *testing.T) {
 	waitFor(t, "the second release", func() bool { return strings.Count(readLog(log), "released") == 2 })
 	if got := logAfter(readLog(log), "start terminal session control w1:p1 --cols 40"); len(got) != 2 || got[0] != homeResize {
 		t.Fatalf("the second control: herdr got %q, want the size from before the first back", got)
+	}
+}
+
+// A handover whose next control does not start: the first let go at the phone's size for it, so the node puts the
+// pane back to the size from before with a control at that size, let go at once.
+func TestTerminalControlHandOverThatFailsGivesTheSizeBack(t *testing.T) {
+	shell, _ := paneShell(t, 189, 52)
+	bin, log := fakeHomeHerdr(t, shell.Process.Pid)
+	n, _, _ := controlNode(t, bin)
+	if _, err := n.terminalWatch(context.Background(), "s1", &termControl{Cols: 44, Rows: 30}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := n.terminalWatch(context.Background(), "s1", &termControl{Cols: 33, Rows: 20}); err == nil {
+		t.Fatal("the fake's control at 33 columns started")
+	}
+	waitFor(t, "the size given back", func() bool { return strings.Count(readLog(log), "released") == 2 })
+	got := logAfter(readLog(log), "")
+	if len(got) != 4 || got[1] != "released" || got[2] != "start terminal session control w1:p1 --cols 189 --rows 52" || got[3] != "released" {
+		t.Fatalf("herdr got %q, want the first released, then a control at 189×52 let go at once", got)
 	}
 }
 
