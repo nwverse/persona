@@ -814,6 +814,15 @@ On a Linux development machine without the Android SDK or Xcode, pure-logic clie
 - **Swift**: Foundation-only files (such as `AgentRepoTree.swift`) build with the swift.org Linux toolchain (the Debian 12 package also works on related distributions) inside a temporary SwiftPM package running Swift Testing.
   Copy the needed types verbatim from `Models.swift` and write minimal stand-ins for the rest; match the App's settings: Swift 6, `defaultIsolation(MainActor.self)`, plus the `NonisolatedNonsendingByDefault` and `InferIsolatedConformances` upcoming features (`SWIFT_APPROACHABLE_CONCURRENCY`).
   This catches syntax, type and isolation errors and really runs the tests, but it is not an Xcode build: say "not compiled with Xcode" in the PR; Xcode 26.0 is not verified either.
+  A list's logic that sits in a SwiftUI file builds too when only its `nonisolated` top-level declarations are taken, each from its first line to the
+  next line that is only `}` (`SpaceGroup` and `AgentFilter` from `ChatsView.swift`, `AppGroups` from `AgentAppGroups.swift`): the real `AgentListProjection.swift`
+  and its tests ran so with about 90 lines of stand-ins (#4767). Tests that reach `AppModel`, `AgentListRows` or the projection's cache still need Xcode.
+- **iOS screenshots**: a throwaway branch (never a PR) whose `apple-test.yml` runs a UI test against `scripts/mock/mock_hub.py` on the hosted runner and uploads
+  the PNGs as an artifact, started with `gh workflow run` (#4767). Create the simulator as `scripts/ci/apple.sh` does (`sim-boot.sh --create-only`) and let
+  `xcodebuild test-without-building` boot it: a `sim-boot.sh` boot on the runner waited out its 15-minute `bootstatus` deadline, while the iOS lane's
+  Xcode-owned boot was ready in under 5 minutes. `simctl ui` needs a booted device, so set the look with launch arguments (`-ui.scheme dark`,
+  `-UIPreferredContentSizeCategoryName`, `-AppleLanguages (en)`), one test per screen and look. Scroll by dragging from the window and read only the
+  row you wait for: reading the frame of a row that scrolled out of the hierarchy fails and ends the test.
 
 ## 后台测量停滞时，先区分未完成测量与残留管道（2026-11-06，#5766）
 
@@ -930,3 +939,18 @@ To check that a failure is this, move `dev.json` aside in the app's data contain
   by clicking. A window's rounded corner clips a marker drawn in it: keep markers inset.
 - An agent's shell is not the login session: the login keychain is locked there and `security … -w` exits 36 (no user
   interaction allowed). A secret the user stored in the keychain can't be read; use a 0600 file outside the repository.
+
+## A test binary that is a container's PID 1 never reaps orphans (2026-11-11, #4363)
+
+- `docker run --entrypoint <test binary>` without `--init` makes the test binary PID 1, and every orphan is reparented to it. Go waits only for the children its `exec.Cmd`s started, so a background child killed after its shell exited stays a zombie, `kill(-pgid, 0)` still finds its group, and process-group tests fail. On `main`, `TestSecretRunTimeoutKillsTheGroup` and `TestSecretRunTimeoutEndsWhatIgnoresSIGTERM` failed in a `postgres:18-alpine` container this way and passed with `--init`.
+- Run such tests with `docker run --init` (Docker's own init, no image to pull), and compare with `main` in the same container before blaming a change.
+
+## A throw-away HOME also hides the Go settings (2026-11-12, #5191)
+
+- `testhome.Main` gives a test binary an empty `HOME`. The Go defaults hang off the home directory: the env file
+  `go env -w` writes (`GOENV`, where settings such as `GOPROXY` live), `GOPATH` and so the module cache, and the build
+  cache. A `go list` the hub's architecture guard started lost all of them, went to the default proxy with an empty
+  cache and failed after a minute with only `exit status 1`, on `main` too, so it looked like someone else's breakage.
+- `testhome` now resolves `GOENV`, `GOPATH`, `GOMODCACHE` and `GOCACHE` with the real home before swapping it and pins
+  them. Anything else that reads the home directory for its own config (git, ssh, a CLI's login) has the same problem
+  under testhome: pin what the child needs, or give the test its own config.

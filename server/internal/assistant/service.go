@@ -93,6 +93,9 @@ type Service struct {
 	standingJudgeModel jsonModel  // nil: the configured agent.delegate model; tests can supply a deterministic model.
 	standingMu         sync.Mutex // standing_authorizations.go: revocation and automatic answers serialize
 
+	// rules: the answers to suggested rules, and the last count of what earns one (rule_suggest.go).
+	rules ruleSuggestState
+
 	// prepared is what this hub last gave a machine's node for a directory (key: machine id NUL directory), the
 	// CLAUDE.md and the plugin skills, by prepareSpaceIf; refreshInstructions gives again what differs.
 	preparedMu sync.Mutex
@@ -123,9 +126,13 @@ type Service struct {
 	supervise  superviseBook   // supervise_signals.go
 	preempt    preemptBook     // owner_preempt.go
 	tbriefs    taskBriefBook   // task_brief.go
+	// noBackground: there is no background supervisor whatever the setting says, so the main conversation gets its
+	// own tasks' signals. Only the tests of what the main conversation's own supervision does set it; the hub never does.
+	noBackground bool
 	// briefsOptional: task_plan takes a task without done_when / expect_minutes (briefRequired). Only the tests of
 	// what a plan does once it exists set it; the hub never does.
 	briefsOptional bool
+	background     backgroundBook // supervise_background.go
 	autoRuns       autoReviewBook // supervise_autoreview.go
 	reports        reportBook     // reports.go
 	upReports      reportRate     // agent_control.go: report_to_supervisor
@@ -225,6 +232,7 @@ func New(o Options) *Service {
 	s.agentArchiveRoutes()
 	s.alwaysRoutes()
 	s.standingAuthorizationRoutes()
+	s.ruleSuggestionRoutes()
 	s.northStarRoutes()
 	s.reporterRoutes()
 	s.directionRoutes()
