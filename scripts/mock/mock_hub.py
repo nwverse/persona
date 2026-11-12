@@ -6671,7 +6671,10 @@ if MOCK_TASKS:
             ]}),
         _feed("feed_m7", 20, "receipt", "todo_task_release",
               {"title": "整理发布说明", "state": "done", "machine": "MacBook",
-               "summary": "整理好了：这周合并了 7 个 PR，分成新功能、修复和其他三组，写在 docs/release-notes.md 里，等你过目。",
+               "summary": "整理好了：这周合并了 7 个 PR，分成新功能、修复和其他三组，写在 docs/release-notes.md 里，等你过目。"
+                          + ("\n\n新功能：小组件支持横屏、设置页的按钮对齐、周报导出。\n修复：登录页验证码重复发送、订单列表的 N+1 查询、"
+                             "缓存过期时间算错一小时、深色模式下的图标发白。\n其他：升级了两个依赖，删掉了一个没人用的脚本，补了网络层的单元测试，"
+                             "发布说明里没有写内部编号。\n\n还有三个 PR 在等审核，下周一再看。" if os.environ.get("MOCK_LONG_RECEIPT") == "1" else ""),
                "pr": "https://github.com/example/weather/pull/43"}),
         _feed("feed_m7b", 12, "message", "lark:mock-task-msg", {
             "todo_id": "todo_task_widget", "source": "lark", "account": "飞书", "chat": "客户端发版群", "sender": "韩梅梅",
@@ -24533,6 +24536,7 @@ MOCK_HELP.append("MOCK_INBOX_EXTRA=<n>  收件箱多 n 封知悉即可的示例�
 MOCK_HELP.append("MOCK_CHANNELS=1  设置 › 插件 › 渠道：App、飞书机器人和微信已连接、飞书 /agent 只读、一个待绑定（令牌 example-token）、一个出错、一个在市场里；主对话第一条来自微信")
 MOCK_HELP.append("MOCK_EXCHANGES=1  主对话新布局的素材（#1666）：Persona 发给任务的长消息、任务带链接和证据的长汇报、督办消息")
 MOCK_HELP.append("MOCK_MARKDOWN=1  任务往来和回执里带 **粗体**、`代码`、标题的原话（#2363）：应渲染成 Markdown，不露标记")
+MOCK_HELP.append("MOCK_LONG_RECEIPT=1  整理发布说明的回执摘要超过四行（#5569）：应显示 Show All / Show Less")
 MOCK_HELP.append("MOCK_TASKS_STARTING=1  再加一个 Agent 还没起来的任务「检查启动状态」（Starting）和一张 wake=resumed 的交接卡（#5569）；MOCK_TASK_DECISION=1 的拍板任务带 decision_review，可点 Later / Don't handle（POST /todos/{id}/decision-dismiss、decision-undo-dismiss）")
 MOCK_HELP.append("MOCK_TASK_RENAMED=1  整理发布说明这个任务在回执写好后改了名：回执应显示新名字「写本周发布说明」（#3036）")
 MOCK_HELP.append("MOCK_AUTO_CONVERSATIONS=1  助手对话带来源 origin（feature conversation_origin）：另有 10 段自动对话（收件箱 6、定时任务 2、飞书 /agent、对话派生），侧边栏「最近」和用户自己的一起列、带来源标记，「全部对话」按来源筛（#3264、#5195）")

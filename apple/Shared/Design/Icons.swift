@@ -301,6 +301,8 @@ extension Theme {
         static let keyboard = "keyboard"
         /// Puts the keyboard away (the chat's composer, beside the mode chips).
         static let dismissKeyboard = "keyboard.chevron.compact.down"
+        /// Indent: the text editor's key that inserts the file's indentation (#5829).
+        static let indent = "increase.indent"
 
         // MARK: Voice conversation (CarPlay)
 
