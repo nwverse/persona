@@ -436,14 +436,23 @@ internal fun permissionLabel(mode: String?): String = when (mode ?: "default") {
     else -> mode.orEmpty()
 }
 
+/**
+ * A plan as the conversation or a sheet draws it: the store's latest of it ([given] until it knows the plan), so a card left
+ * open on the screen follows the plan to started or dismissed instead of offering Start again.
+ */
 @Composable
-internal fun PlanCard(plan: TaskPlan, host: AssistantTaskHost) {
+internal fun PlanCard(given: TaskPlan, host: AssistantTaskHost) {
+    val plans by host.tasks.plans.collectAsStateWithLifecycle()
+    val plan = plans[given.id] ?: given
     val busy by host.tasks.busy.collectAsStateWithLifecycle()
     var remember by remember(plan.id) { mutableStateOf(false) }
     var editing by remember(plan.id) { mutableStateOf(false) }
+    // Glass draws iOS's `PlanCard` (#4339 C13, `GlassPlanCard`); Brief and Board keep their card.
+    val glass = PersonaTheme.style == persona.core.designsystem.AppStyle.Glass
     if (plan.state != "open") {
         Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-            Text(pluralStringResource(if (plan.state == "started") R.plurals.chat_tasks_plan_started else R.plurals.chat_tasks_plan_dismissed,
+            if (glass && plan.state != "started") GlassPlanNotStarted(plan.tasks.size)
+            else Text(pluralStringResource(if (plan.state == "started") R.plurals.chat_tasks_plan_started else R.plurals.chat_tasks_plan_dismissed,
                 plan.tasks.size, plan.tasks.size),
                 style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink2)
             plan.tasks.filter { it.error != null }.forEach {
@@ -458,7 +467,8 @@ internal fun PlanCard(plan: TaskPlan, host: AssistantTaskHost) {
     }
     // The rule the plan suggests after three Starts of its kind sits under the card (#4929).
     Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-        JCard {
+        if (glass) GlassPlanCard(plan, host, remember, { remember = it }, plan.id in busy) { editing = true }
+        else JCard {
             Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
                 Text(if (plan.tasks.size > 1) pluralStringResource(R.plurals.chat_tasks_plan_split, plan.tasks.size, plan.tasks.size)
                     else stringResource(R.string.chat_tasks_plan_single), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
@@ -958,7 +968,7 @@ private fun GlassMessageCard(item: FeedItem, host: AssistantTaskHost, todo: Todo
         filed -> Triple(R.string.chat_tasks_message_filed_title, persona.core.designsystem.icons.PersonaIcons.handledElsewhere, palette.ink2)
         else -> Triple(R.string.chat_tasks_message_drafted, persona.core.designsystem.icons.PersonaIcons.draftReply, palette.accent)
     }
-    JCard(Modifier.testTag("message-card-${item.id}")) {
+    JCard(Modifier.testTag("message-card-${item.id}"), padding = Tokens.Space.l) {
         Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
                 JIcon(if (item.field("source") == "mail") persona.core.designsystem.icons.PersonaIcons.mail

@@ -223,9 +223,11 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * And 228 B for Resume in terminal (#5521: ja 474,444 B against 474,216 B on main at 9223f7f92: the rule that offers it in
  * an Agent's ⋯ or disables it where its computer has no terminal engine, the item and its two strings, the one action it
  * shares with the stopped line's Resume, Codex threads counted as stopped Agents, and a stable Terminal handler so the
- * header still draws only when it changes).
+ * header still draws only when it changes). And 31 B because #5579 and #5860 landed together (#5879): #5579 was measured
+ * on main at 9223f7f92 (+228 B) and #5860 merged before it, on whose main at bae989cf42 (ja 474,213 B) it costs +262 B;
+ * ja 474,475 B on main at 624f81dde, with 0 B of room.
  */
-export const FIRST_SCREEN_BUDGET = 474_444;
+export const FIRST_SCREEN_BUDGET = 474_475;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
@@ -392,9 +394,12 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
  * And 183 B for the single-category stacked bar's share predicate and horizontal segmented renderer (#5386,
  * 2026-11-12: 43,782 B measured on main before the change, 43,965 B after; the chart chunk is idle by contract —
  * code-views-lazy.test enforces `idle: true` — so the renderer has no intent tier to move into).
+ * And 35 B of minifier drift (2026-11-13): #5534 left no room, and by bdbfabd69 the idle tier sent 43,969 B with none
+ * of its pages (ComposerPanel, QueuePanel, SlashPalette, ImageEditor, ViewBody, ExtensionChart, Palette) changed since,
+ * only the code they share with other chunks (#5760); 31 B of room so the next main does not tip it.
  * Every other lazy page loads on intent, not at idle; raise it on purpose, in the change that needs it.
  */
-export const IDLE_TIER_BUDGET = 43_965;
+export const IDLE_TIER_BUDGET = 44_000;
 
 const gzip = promisify(gzipCompress);
 
