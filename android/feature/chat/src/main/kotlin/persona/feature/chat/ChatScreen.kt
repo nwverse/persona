@@ -19,6 +19,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -339,6 +340,17 @@ private fun ChatPage(
     var linkVisible by remember { mutableStateOf(false) }
     val chatList = rememberChatListState(readingKey, anchorStore)
     val search = remember { ChatSearchState() }
+    // Glass folds an Agent chat's header into its slim bar (#4339 C4, iOS ChatChrome): on the list's scrolling, and by
+    // itself after 3 s without a touch while animations are on.
+    val foldsHeader = HeaderFoldRules.folds(PersonaTheme.style, showTopBar, renderStyle)
+    val reduceMotion = PersonaTheme.reduceMotion
+    val headerFold = remember { ChatHeaderFold(scope) }
+    val headerMotion = PersonaTheme.motion.layout?.spec<Float>()
+    SideEffect { headerFold.moves = !reduceMotion; headerFold.motion = headerMotion }
+    val newestEdge = with(LocalDensity.current) { HeaderFoldRules.NEWEST_EDGE_DP.dp.roundToPx() }
+    val headerScroll = remember(headerFold, chatList, newestEdge) {
+        headerFold.connection { chatList.list.firstVisibleItemIndex == 0 && chatList.list.firstVisibleItemScrollOffset < newestEdge }
+    }
     // Not chatList.position: that changes every frame of a scroll, and reading it here re-ran this whole page (#4039).
     val openWork = chatList.expanded
     var timelineVersion by remember { mutableIntStateOf(0) }
@@ -826,6 +838,21 @@ private fun ChatPage(
     // `turnFix`). Persona's conversations only, as iOS and the web.
     val turnFix = if (renderStyle == ChatRenderStyle.Assistant) TurnErrorFix.of(session?.turnErrorCode) else null
     val fixModel = chrome.onFixModel?.let { open -> { action: persona.core.designsystem.ReadinessActionId -> open(action, session?.launcher, session?.manager) } }
+    // Nothing is up over the page: the header may fold by itself (iOS waits while a sheet or menu is presented).
+    val headerBusy by rememberUpdatedState(chrome.covered || overlay || chromeOverlay || linkVisible || statusSheet ||
+        terminalHelp || taskPageVisible || fullText != null || search.visible)
+    LaunchedEffect(headerFold, foldsHeader, reduceMotion) {
+        if (!foldsHeader || reduceMotion) return@LaunchedEffect
+        while (true) {
+            delay(HeaderFoldRules.TICK_MILLIS)
+            headerFold.tick(HeaderFoldRules.TICK_MILLIS, headerBusy, reduceMotion)
+        }
+    }
+    // A request arriving opens it, so its line says the agent needs you (chats.md "Risks"); and so does coming back
+    // from the terminal or the files over the chat (iOS: a pane switch).
+    val requestIds = remember(requests) { requests.map { it.id }.toSet() }
+    LaunchedEffect(headerFold, requestIds) { if (foldsHeader) headerFold.requests(requestIds) }
+    LaunchedEffect(headerFold, chrome.covered) { if (!chrome.covered) headerFold.open() }
     ChatCompletionFeedback(lastUserId, session?.status,
         lifecycle == Lifecycle.State.RESUMED && !chrome.covered && !overlay && !chromeOverlay && !linkVisible &&
             !statusSheet && !terminalHelp && !taskPageVisible && fullText == null && !search.visible &&
@@ -936,21 +963,28 @@ private fun ChatPage(
                     topScrollEdgeStyle = if (siblingSessions.size > 1) TabbedChatScrollEdgeStyle else ScrollEdgeStyle.Gradient,
                     topBar = {
                         Column {
-                            if (showTopBar) ChatHeader(session, machine, sessionList, controls, connection, readOnly, onBack,
-                                chrome.onOpenSession, chrome.onConnectionDetails, onOverlay = { headerOverlay = it },
-                                onFiles = chrome.onFiles, onGit = chrome.onGit, gitLabel = chrome.gitLabel,
-                                statusState = status, onDetails = { statusSheet = true },
-                                onOpenTodo = chrome.onOpenTodo, agentShares = chrome.agentShares, worktrees = chrome.worktrees,
-                                onSearch = { search.open(chatList) { timeline.freeze(currentItems); timelineVersion++ } },
-                                onTerminal = agentTerminal, onTerminalHelp = if (hasTerminal && terminal == null) ({ terminalHelp = true }) else null)
-                            // The space's other tabs under the title (iOS SiblingTabs); not for the assistant's conversation.
-                            if (session != null && onOpenSibling != null && siblingSessions.size > 1) {
-                                ChatSiblingTabs(session, siblingSessions, onOpenSibling)
+                            val header: @Composable () -> Unit = {
+                                Column {
+                                    if (showTopBar) ChatHeader(session, machine, sessionList, controls, connection, readOnly, onBack,
+                                        chrome.onOpenSession, chrome.onConnectionDetails, onOverlay = { headerOverlay = it },
+                                        onFiles = chrome.onFiles, onGit = chrome.onGit, gitLabel = chrome.gitLabel,
+                                        statusState = status, onDetails = { statusSheet = true },
+                                        onOpenTodo = chrome.onOpenTodo, agentShares = chrome.agentShares, worktrees = chrome.worktrees,
+                                        onSearch = { search.open(chatList) { timeline.freeze(currentItems); timelineVersion++ } },
+                                        onTerminal = agentTerminal, onTerminalHelp = if (hasTerminal && terminal == null) ({ terminalHelp = true }) else null)
+                                    // The space's other tabs under the title (iOS SiblingTabs); not for the assistant's conversation.
+                                    if (session != null && onOpenSibling != null && siblingSessions.size > 1) {
+                                        ChatSiblingTabs(session, siblingSessions, onOpenSibling)
+                                    }
+                                    // The ports it listens on (its dev servers, docs/operations/ports.md): a tap opens the page.
+                                    if (showTopBar && renderStyle != ChatRenderStyle.Assistant) ChatPortChips(session?.ports)
+                                    // The goal it works toward (Claude Code's /goal, a Codex thread goal; docs/integrations/agent-goal.md): a tap opens it.
+                                    if (showTopBar) ChatGoalBar(session?.goal)
+                                }
                             }
-                            // The ports it listens on (its dev servers, docs/operations/ports.md): a tap opens the page.
-                            if (showTopBar && renderStyle != ChatRenderStyle.Assistant) ChatPortChips(session?.ports)
-                            // The goal it works toward (Claude Code's /goal, a Codex thread goal; docs/integrations/agent-goal.md): a tap opens it.
-                            if (showTopBar) ChatGoalBar(session?.goal)
+                            if (foldsHeader) JFoldingHeader({ headerFold.fold }, onRange = { headerFold.range = it }, onTouch = headerFold::touched,
+                                full = header, compact = { ChatSlimHeader(session, status, connection, onBack, onOpen = headerFold::open) })
+                            else header()
 
                             ChatTasks(projection.tasks, lines, chatList,
                                 onFreeze = { timeline.freeze(currentItems); timelineVersion++ },
@@ -1111,7 +1145,7 @@ private fun ChatPage(
                             CloseoutCard(closeout, closeoutWork?.artifacts.orEmpty(), key.path, Modifier.padding(
                                 start = horizontalPadding, end = horizontalPadding, top = pagePaddingValues.calculateTopPadding() + Tokens.Space.s))
                         }
-                        Box(Modifier.weight(1f)) {
+                        Box(Modifier.weight(1f).then(if (foldsHeader) Modifier.nestedScroll(headerScroll) else Modifier)) {
                             val outboxBubble: @Composable (OutboxMessage) -> Unit = { message ->
                                 val delivery = composerDeliveries[message.clientMessageId]
                                 val deliveryState = if (message.state in setOf(DeliveryState.Refused, DeliveryState.Rejected))

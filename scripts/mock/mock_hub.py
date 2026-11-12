@@ -11058,6 +11058,8 @@ def machine_launchers(mid=""):
         out += [{"name": "cc_main", "model": "opus"}, {"name": "cc_team", "model": "example-pro"}]
     if NEW_AGENT_PANEL and mid == "studio":
         out = [l for l in out if l["name"] != "codex"]
+    if mid and mid in os.environ.get("MOCK_NO_CODEX", "").split(","):  # computers without a Codex launcher (#5275)
+        out = [l for l in out if l["name"] != "codex"]
     if MOCK_PROVIDERS:
         out += [{k: l[k] for k in ("name", "display_name", "base_url", "model", "source") if l.get(k)}
                 for l in LAUNCHERS if l["source"] == "persona" and l.get("kind") != "api"]
@@ -24890,6 +24892,238 @@ MOCK_HELP.append("MOCK_LAUNCHER_SWITCH=1|pending|refuse|pending,refuse  运行�
                  "自己的模型列表）；POST …/modes {launcher} 换到另一个 Claude 启动器就记下 pending_switch（codex 回 409 switch_other_agent，"
                  "sonnetcc 带模型回 409 switch_model_locked），换回自己的就清掉；下一条消息执行切换。pending：检查 PR 那个一开始就有待切换；"
                  "refuse：带切换的消息回 409 switch_busy。GET /mock/launcher_switch 看请求，?reset=1 复原")
+
+# Moving a running Agent between Claude Code and Codex (#5054, docs/protocol/protocol.md "Switching a running Agent to
+# another engine"): MOCK_ENGINE_SWITCH=1 advertises `engine_switch` and takes POST …/modes {launcher, from, model?,
+# effort?} with a launcher of the other engine (codex for the PR review, a Claude Code Agent; claude or sonnetcc for the
+# /orders one, a Codex Agent in a terminal, its launcher codex here): `pending_switch` with `agent` on the row, nothing
+# typed; the session's own launcher drops it; any other pick goes on to MOCK_LAUNCHER_SWITCH (combine both for a hub
+# that does both). The next message carrying it (`apply_switch`) moves the conversation: a new session of the target
+# engine (switching back: the earlier one, resumed) replaces the row, `engine_history` naming the stretches before it,
+# and its items get the handoff block (docs/protocol/protocol.md, the node's format) with the message, then a short
+# reply; the old session's items stay served (the chat stitches them). =pending: the PR review waits with a switch to
+# Codex; =done: "Add sign in with OAuth" went Claude Code -> Codex -> Claude Code (its live row the Claude session
+# resumed, the Codex stretch's items under ENGINE_DONE_CODEX); =refuse: a message carrying a switch is refused (409
+# switch_failed, delivered none) and the switch dropped. GET /mock/engine_switch: the picks and switches; ?reset=1
+# puts every row and its items back.
+ENGINE_SWITCH_MODE = os.environ.get("MOCK_ENGINE_SWITCH", "")
+ENGINE_SWITCH_LOG = []
+ENGINE_DONE_CLAUDE = "e5054000-0000-4000-8000-000000000001"
+ENGINE_DONE_CODEX = "019a5054-0000-7000-8000-000000000002"
+ENGINE_NAMES = {"claude": "Claude Code", "codex": "Codex"}
+ENGINE_ORIGINALS = []  # (index, row) as they were, for ?reset=1
+ENGINE_ITEMS = {}  # session -> its items as they were (None: it had none)
+
+
+def engine_now(ms=0):
+    """The time now (ago() counts from the mock's start): a switch's `until` and the items after it."""
+    return (datetime.now(timezone.utc) + timedelta(milliseconds=ms)).isoformat().replace("+00:00", "Z")
+
+
+def engine_esc(v):
+    return str(v).replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def engine_handoff_block(text, frm, to, model, resumed):
+    """The node's handoff block in front of the user's message (proto handoffBlock)."""
+    attrs = 'kind="engine-switch" title="Handoff" from="%s" to="%s"' % (engine_esc(frm), engine_esc(to))
+    if model: attrs += ' model="%s"' % engine_esc(model)
+    if resumed: attrs += ' resumed="1"'
+    return '<persona-context %s>\n%s\n</persona-context>\n\n' % (attrs, text)
+
+
+def engine_handoff_text(items, frm, to, delta):
+    """A handoff note shaped like the node's (prompts/agents/engine_handoff.md), from the stretch's items: the files it
+    changed and commands it ran, then its last words."""
+    a, b = ENGINE_NAMES.get(frm, frm), ENGINE_NAMES.get(to, to)
+    out = ["[Session handoff · internal context]",
+           ("You (%s) worked on this conversation before; it was handed over to the %s engine for a while, and now it is "
+            "switching back to you. Below is a record of what happened while you were away." % (b, a)) if delta else
+           ("This conversation was previously driven by the %s engine; from here on you (%s) continue it. Below is the "
+            "prior record of this conversation; continue naturally in the first person." % (a, b))]
+    files = [x["tool_input"]["file_path"] for x in items if x.get("kind") == "tool_use" and x.get("tool_name") in ("Edit", "Write") and (x.get("tool_input") or {}).get("file_path")]
+    commands = [x["tool_input"]["command"] for x in items if x.get("kind") == "tool_use" and x.get("tool_name") == "Bash" and (x.get("tool_input") or {}).get("command")]
+    if files or commands:
+        out += ["", "== Work ledger (auto-extracted) =="]
+        if files: out += ["Files changed:"] + ["- " + f for f in dict.fromkeys(files)]
+        if commands: out += ["Commands (most recent):"] + ["- " + c for c in commands[-3:]]
+    said = [x for x in items if x.get("kind") == "text" and x.get("role") in ("user", "assistant") and x.get("text")]
+    if said:
+        out += ["", "== Conversation while you were away ==" if delta else "== Recent conversation =="]
+        for x in said[-3:]:
+            text = re.sub(r"(?s)<persona-context .*?</persona-context>\s*", "", x["text"]).strip()
+            out += ["[User]" if x["role"] == "user" else "[Assistant]", text[:400]]
+    out += ["", "== End of handoff note; the user's new message follows =="]
+    return "\n".join(out)
+
+
+def engine_of_launcher(mid, name):
+    """The engine a launcher of the computer runs ("" when it has no such launcher)."""
+    listed = LAUNCHER_SWITCH_ALL if LAUNCHER_SWITCH_MODE else machine_launchers(mid)
+    l = next((x for x in listed if x["name"] == name), None)
+    if l is None: return ""
+    return l.get("agent") or LAUNCHER_MODELS.get(name, {}).get("agent") or "claude"
+
+
+def engine_default_model(launcher):
+    models = LAUNCHER_MODELS.get(launcher, {}).get("models") or [{}]
+    first = next((m for m in models if m.get("default")), models[0])
+    return first.get("resolved") or first.get("id") or ""
+
+
+def engine_row_for(s, sid, to, launcher, model, effort, history):
+    """`s` moved to engine `to`: the same conversation (title, place, terminal), the other engine's session."""
+    row = {k: v for k, v in s.items() if k not in ("pending_switch", "permission_mode", "can_fork", "effort", "context_tokens", "context_window",
+                                                   "codex_route", "codex_route_note", "activity", "activity_at", "efforts", "service_tiers")}
+    row.update(session_id=sid, agent=to, launcher=launcher, model=model, engine_history=history, status="idle", state="idle",
+               updated_at=engine_now(2), rev=(s.get("rev") or 0) + 1)
+    if effort: row["effort"] = effort
+    if to == "claude":
+        row.update(permission_mode="default", can_fork=True)
+        row.setdefault("effort", "high")
+    return row
+
+
+def engine_switch_carry(s, ps, text):
+    """The message carrying `ps` moves the conversation to ps.agent: the row replaced, the handoff in the new items."""
+    old, frm, to = s["session_id"], s.get("agent") or "claude", ps["agent"]
+    now = engine_now()
+    before = list(s.get("engine_history") or [])
+    history = before + [{"session_id": old, "agent": frm, "until": now}]
+    # the conversation ran on that engine before: its latest session of it is resumed with what happened meanwhile
+    earlier = next((l["session_id"] for l in reversed(before) if l["agent"] == to and l["session_id"] != old), None)
+    sid = earlier or str(uuid.uuid4())
+    since = next((l["until"] for l in reversed(before) if l["session_id"] == earlier), None) if earlier else None
+    stretch = [x for x in ITEMS.get(old, []) if not since or x["ts"] > since]
+    model = ps.get("model") or engine_default_model(ps["launcher"])
+    handoff = engine_handoff_text(stretch, frm, to, bool(earlier))
+    ENGINE_ITEMS.setdefault(sid, copy.deepcopy(ITEMS.get(sid)))
+    reply = ("Picking this up where we left off. I checked the workspace first and it matches, so I'll go on from there."
+             if not earlier else "Back on it. I read what changed while I was away and the workspace agrees, so I'll continue from there.")
+    # after `until`: the new stretch's window starts there
+    ITEMS[sid] = (ITEMS.get(sid, []) if earlier else []) + [
+        it("user", "text", 0, text=engine_handoff_block(handoff, frm, to, model, bool(earlier)) + (text or ""), ts=engine_now(1)),
+        it("assistant", "text", 0, text=reply, ts=engine_now(2))]
+    row = engine_row_for(s, sid, to, ps["launcher"], model, ps.get("effort"), history)
+    SESSIONS[SESSIONS.index(s)] = row
+    ENGINE_SWITCH_LOG.append({"switched": old, "to": sid, "agent": to, "resumed": bool(earlier)})
+    push_machine(s["machine_id"])
+
+
+def engine_switch_reset():
+    """Every row and its items as they were (the rows a switch made go)."""
+    ids = {row["session_id"] for _, row in ENGINE_ORIGINALS} | {e["to"] for e in ENGINE_SWITCH_LOG if "to" in e}
+    SESSIONS[:] = [x for x in SESSIONS if x["session_id"] not in ids]
+    for i, row in ENGINE_ORIGINALS:
+        SESSIONS.insert(min(i, len(SESSIONS)), copy.deepcopy(row))
+    for sid, items in ENGINE_ITEMS.items():
+        if items is None: ITEMS.pop(sid, None)
+        else: ITEMS[sid] = copy.deepcopy(items)
+    ENGINE_ITEMS.clear()
+    ENGINE_SWITCH_LOG.clear()
+
+
+def engine_switch_setup():
+    for i, x in enumerate(SESSIONS):
+        if x["session_id"] == ORDERS:
+            x["launcher"] = "codex"  # a Codex Agent started from the codex launcher
+        if x["session_id"] == REVIEW and "pending" in ENGINE_SWITCH_MODE:
+            x["pending_switch"] = {"launcher": "codex", "agent": "codex", "at": ago(minutes=2)}
+    if "done" in ENGINE_SWITCH_MODE:
+        t1, t2 = ago(minutes=50), ago(minutes=20)
+        first = ([it("user", "text", 70, text="Add sign in with OAuth to the weather app: GitHub first, keep the token in the keychain.")]
+                 + tool("Read", {"file_path": "/Users/me/code/weather/Sources/Weather/Auth/Session.swift"}, "struct Session { var token: String? }", 68)
+                 + tool("Edit", {"file_path": "/Users/me/code/weather/Sources/Weather/Auth/OAuth.swift", "old_string": "", "new_string": "enum OAuth { … }"}, "ok", 62)
+                 + [it("assistant", "text", 56, text="Sign in with GitHub works: the app opens the browser, takes the code back and keeps the token in the keychain.")])
+        handoff1 = engine_handoff_text(first, "claude", "codex", False)
+        middle = ([it("user", "text", 49, text=engine_handoff_block(handoff1, "claude", "codex", "gpt-5.5", False)
+                      + "Let's have Codex do the token refresh: an expired token should refresh without asking the user again.")]
+                  + tool("Bash", {"command": "rg -n refresh Sources/Weather/Auth"}, "Sources/Weather/Auth/OAuth.swift:41: // TODO refresh", 46)
+                  + tool("Edit", {"file_path": "/Users/me/code/weather/Sources/Weather/Auth/OAuth.swift", "old_string": "// TODO refresh", "new_string": "try await refresh()"}, "ok", 40)
+                  + tool("Bash", {"command": "swift test --filter OAuthTests"}, "Executed 6 tests, with 0 failures", 30)
+                  + [it("assistant", "text", 25, text="Expired tokens now refresh on their own before a request goes out; a refresh that fails signs the user out. The six OAuth tests pass.")])
+        handoff2 = engine_handoff_text(middle, "codex", "claude", True)
+        last = ([it("user", "text", 19, text=engine_handoff_block(handoff2, "codex", "claude", "opus", True)
+                    + "Looks good. Now add a Sign out button to Settings.")]
+                + tool("Edit", {"file_path": "/Users/me/code/weather/Sources/Weather/Settings/SettingsView.swift", "old_string": "Section {", "new_string": "Section {\n  Button(\"Sign Out\", role: .destructive) { session.signOut() }"}, "ok", 16)
+                + [it("assistant", "text", 14, text="Settings has a Sign Out button now; it clears the keychain token and goes back to the sign-in screen.")])
+        ITEMS[ENGINE_DONE_CLAUDE] = first + last
+        ITEMS[ENGINE_DONE_CODEX] = middle
+        SESSIONS.append(sess("macbook", ENGINE_DONE_CLAUDE, "Add sign in with OAuth", "/Users/me/code/weather", "idle", "idle", "weather", 1,
+                             "oauth", 5, 14, "Settings has a Sign Out button now; it clears the keychain token and goes back to the sign-in screen.",
+                             model="claude-opus-5-5", engine_history=[{"session_id": ENGINE_DONE_CLAUDE, "agent": "claude", "until": t1},
+                                                                     {"session_id": ENGINE_DONE_CODEX, "agent": "codex", "until": t2}]))
+    ENGINE_ORIGINALS[:] = [(i, copy.deepcopy(x)) for i, x in enumerate(SESSIONS) if x["session_id"] in (REVIEW, ORDERS, ENGINE_DONE_CLAUDE)]
+
+
+def engine_switch_route(handler, p, body):
+    """MOCK_ENGINE_SWITCH: a pick of the other engine's launcher, a message carrying it. False otherwise."""
+    if not ENGINE_SWITCH_MODE: return False
+    if p == "/mock/engine_switch":
+        if "reset=1" in (handler.path.split("?", 1) + [""])[1]:
+            engine_switch_reset()
+            for m in MACHINES: push_machine(m["id"])
+        return handler.send_json({"requests": ENGINE_SWITCH_LOG}) or True
+    m = re.fullmatch(r"/api/v1/sessions/([^/]+)/([^/]+)/(modes|messages)", p)
+    if not m or handler.command != "POST": return False
+    s = next((x for x in SESSIONS if x["machine_id"] == m.group(1) and x["session_id"] == m.group(2)), None)
+    if s is None: return False
+    req = json.loads(body or b"{}")
+    frm = s.get("agent") or "claude"
+    if m.group(3) == "messages":
+        ps = s.get("pending_switch")
+        if not ps or not ps.get("agent") or ps["agent"] == frm: return False
+        if "refuse" in ENGINE_SWITCH_MODE:
+            s.pop("pending_switch", None)
+            push_machine(s["machine_id"])
+            return handler.send_json({"error": "%s didn't come up in the Agent's terminal, so %s is back and your message wasn't sent"
+                                               % (ENGINE_NAMES.get(ps["agent"], ps["agent"]), ENGINE_NAMES.get(frm, frm)),
+                                      "code": "switch_failed", "delivered": "none"}, 409) or True
+        engine_switch_carry(s, ps, req.get("text") or "")
+        return False  # the message goes on as any other
+    launcher = req.get("launcher") or ""
+    if not launcher: return False
+    own = s.get("launcher") or "claude"
+    if req.get("from") and req["from"] != own:
+        return handler.send_json({"error": "The Agent runs on %s now, not %s: pick again" % (own, req["from"]), "code": "switch_stale"}, 409) or True
+    if launcher == own:
+        if (s.get("pending_switch") or {}).get("agent"):
+            ENGINE_SWITCH_LOG.append({"session_id": s["session_id"], "launcher": launcher})
+            s.pop("pending_switch", None)
+            push_machine(s["machine_id"])
+            return handler.send_json({}) or True
+        return False
+    to = engine_of_launcher(s["machine_id"], launcher)
+    if not to or to == frm: return False  # another launcher of its engine: MOCK_LAUNCHER_SWITCH's
+    ENGINE_SWITCH_LOG.append({"session_id": s["session_id"], **{k: req[k] for k in ("launcher", "from", "model", "effort") if k in req}})
+    s["pending_switch"] = {"launcher": launcher, **{k: req[k] for k in ("model", "effort") if req.get(k)}, "agent": to, "at": engine_now()}
+    push_machine(s["machine_id"])
+    return handler.send_json({}) or True
+
+
+if ENGINE_SWITCH_MODE:
+    engine_switch_setup()
+
+_plugins_route_without_engine_switch = plugins_route
+
+
+def plugins_route(handler, p, body):
+    return engine_switch_route(handler, p, body) or _plugins_route_without_engine_switch(handler, p, body)
+
+
+_features_without_engine_switch = features
+
+
+def features():
+    return _features_without_engine_switch() + (["engine_switch"] if ENGINE_SWITCH_MODE else [])
+
+
+MOCK_HELP.append("MOCK_ENGINE_SWITCH=1|pending|done|refuse  A running Agent moves between Claude Code and Codex (#5054): features list engine_switch; "
+                 "POST …/modes {launcher} with the other engine's launcher (codex for the PR review, claude for the /orders Codex Agent) records "
+                 "pending_switch with agent, the session's own launcher drops it; the next message replaces the row with the other engine's session "
+                 "(engine_history, a handoff block in its first item). pending: the PR review waits with a switch to Codex; done: \"Add sign in with "
+                 "OAuth\" went Claude Code -> Codex -> Claude Code; refuse: the message is refused (409 switch_failed). Combine with "
+                 "MOCK_LAUNCHER_SWITCH=1 for a hub that also switches launchers. GET /mock/engine_switch shows the requests, ?reset=1 restores")
 
 # Agent session archives (docs/protocol/protocol.md "Agent session archives"; web "Archived agents"): MOCK_AGENT_ARCHIVES=1
 # advertises archives and "Archive and close" (=archive: archives only, as behind an older manager), with two agents

@@ -115,7 +115,7 @@ struct ShellView: View {
                          startMeeting: startMeeting)
     }
 
-    /// The drawer's Meeting Recording: records the meeting and opens Recordings (`MeetingRecorder`), or opens the
+    /// The drawer's Record: records the meeting and opens Recordings (`MeetingRecorder`), or opens the
     /// recording already running.
     private var startMeeting: (() -> Void)? {
         #if os(iOS)

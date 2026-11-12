@@ -190,11 +190,17 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * card drawn as the same notice, and their words). And 444 B for cindy's run status bar (#5312: ja 590,296 B against
  * 589,852 B on main at a38ddd0cd: the state words worked out from the turn's newest steps in an Agent session and the plain
  * phases in a Persona conversation, Done only for a finished turn and its pop, their words; the speed history, its button
- * and card load once an Agent's turn runs). And 12 B for the connected Inbox cards (PR #4743: shared CSS for
- * responsive nowrap/truncation and hidden disclosure markers; ja 590,042 B on main 47598241b to 590,054 B).
- * Raise it on purpose, in the change that needs it.
+ * and card load once an Agent's turn runs). And 1,231 B for switching an Agent between Claude Code and Codex (#5054:
+ * ja 591,480 B against 590,071 B on main at d7536a601c, +1,409 B, of which 225 B fit the room main had, plus 47 B of
+ * room: the switch divider's chip above the first message the other engine got, the live stretch's items in a
+ * switched-back conversation, the old session link's redirect to the conversation's row, the pill's engine switch state
+ * and their words; the earlier stretches' windows, reading and drawing, the handoff panel and their words, the "Switch
+ * Agent?" dialog and the panel's engine code load lazily). And 453 B because #5303 and #5457 landed together (#5488):
+ * #5303 counted the room main had at d7536a601c as its own, and #5457 (#5420, the provider import link) used that room
+ * too, merged in between; ja 591,939 B on main at 48f1e053b5, plus 41 B of room. Raise it on purpose, in the change that
+ * needs it.
  */
-export const FIRST_SCREEN_BUDGET = 590_308;
+export const FIRST_SCREEN_BUDGET = 591_980;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").

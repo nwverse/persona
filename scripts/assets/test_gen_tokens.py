@@ -386,6 +386,11 @@ class RepositoryTests(unittest.TestCase):
     def test_ios_sizes_match(self):
         # spec/tokens carries the sizes Android uses, each as Theme.Size has it; the rest of Theme.Size isn't ported.
         ios = {name: float(value) for name, value in re.findall(r'static let (\w+): CGFloat = ([0-9.]+)$', self.swift_enum("Size"), re.M)}
+        # The folded chat bar's source is ChatChrome.compactHeight, as the catalog documents.
+        chat = (gen.ROOT / "apple/Persona/Views/Chat/ChatView.swift").read_text()
+        compact = re.findall(r'static let compactHeight: CGFloat = ([0-9.]+)$', chat, re.M)
+        self.assertEqual(len(compact), 1, "ChatChrome.compactHeight must have one source value")
+        ios["slimBar"] = float(compact[0])
         tokens = {key.removeprefix("size."): value["value"] for key, value in self.catalog.values.items() if key.startswith("size.")}
         self.assertTrue(tokens)
         self.assertEqual({name: ios.get(name) for name in tokens}, tokens, "a size in spec/tokens differs from Theme.Size")

@@ -137,7 +137,7 @@ struct AssistantView: View {
                                 collapse: column && pageTabSwitch ? { toggleSidebar() } : nil)
     }
 
-    /// The sidebar's Meeting Recording: records the meeting (opening Recordings), or `open`s the recording running already.
+    /// The sidebar's Record: records the meeting (opening Recordings), or `open`s the recording running already.
     /// nil off the iPhone and iPad (the Mac records nothing).
     private static func startMeeting(_ open: @escaping () -> Void) -> (() -> Void)? {
         #if os(iOS)

@@ -114,12 +114,22 @@ export interface ModelPick {
   effort?: string;
 }
 
-/** Session.pending_switch (#5035). */
+/** Session.pending_switch (#5035). `agent` is set on a switch to the other engine (feature `engine_switch`, #5054):
+ *  "claude" or "codex", the engine the next message moves the conversation to. */
 export interface PendingSwitch {
   launcher: string;
   model?: string;
   effort?: string;
+  agent?: string;
   at?: string;
+}
+
+/** One earlier stretch of a conversation that moved between Claude Code and Codex (Session.engine_history, #5054): the
+ *  session that ran it, its engine ("claude" / "codex"), and when the conversation was switched away from it. */
+export interface EngineLeg {
+  session_id: string;
+  agent: string;
+  until: string;
 }
 
 export interface SessionCapabilities {
@@ -368,6 +378,11 @@ export interface Session {
   children?: SessionChildren;
   /** When the session began, where the node knows it (child sessions at least). */
   started_at?: string;
+  /** The conversation's earlier stretches, oldest first, when it moved between Claude Code and Codex (feature
+   *  `engine_switch`, #5054): only the session running it now has them, and the sessions they name are not listed on
+   *  their own (one conversation, one row); their transcripts stay readable (docs/protocol/protocol.md "Switching a
+   *  running Agent to another engine"). A session can be named more than once, each time for another stretch. */
+  engine_history?: EngineLeg[];
   /** Claude Code workflow runs it launched in the last day, newest first (#2935); older hubs leave it out. */
   workflows?: Workflow[];
   /** Working only because of background work: its turn is over, workflows / background commands / subagents run on

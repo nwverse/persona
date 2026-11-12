@@ -17,6 +17,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
@@ -28,6 +29,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import coil3.ImageLoader
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -44,9 +46,9 @@ import persona.core.domain.lines.WorkItem
 import java.io.File
 
 /**
- * An opened step of a tool no table knows (#4339 C1, iOS `ToolArgumentsDetail`): its subject on the row, and on Glass its
- * input as `key: value` lines in words; Brief and Board keep the input as code. Every style, light and dark. PNGs in
- * `build/tool-arguments-shots/` (or `-Dpersona.shots=<dir>`).
+ * An opened step of a tool no table knows (#4339 C1, iOS `ToolArgumentsDetail`) in the middle of a run: its subject on
+ * the row, and on Glass its input as `key: value` lines in words, right of the rail (#5025); Brief and Board keep the
+ * input as code. Every style, light and dark. PNGs in `build/tool-arguments-shots/` (or `-Dpersona.shots=<dir>`).
  */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -65,6 +67,13 @@ class ToolArgumentsShotsTest {
         "labels":["bug","export"],"draft":false,"milestone":12,"meta":{"source":"crash-report","app":"weather/2.4"}}""",
         "Created issue #42")
 
+    // The opened step sits in the middle of a run: the rail above and below it runs past its details, never through them.
+    private val run = listOf(
+        step("t0", "Read", """{"file_path":"/w/weather/Export.kt"}""", "1\tfun export() {}"),
+        issue,
+        step("t2", "Bash", """{"command":"./gradlew :export:test"}""", "BUILD SUCCESSFUL"),
+    )
+
     @Test fun anUnknownToolListsItsArgumentsOnGlass() {
         var style by mutableStateOf(AppStyle.Glass)
         var dark by mutableStateOf(false)
@@ -74,8 +83,11 @@ class ToolArgumentsShotsTest {
                 val loader = remember { ImageLoader.Builder(context).build() }
                 DisposableEffect(loader) { onDispose { loader.shutdown() } }
                 Column(Modifier.testTag("shot").width(400.dp).background(PersonaTheme.palette.background).padding(Tokens.Space.l)) {
-                    ChatLineContent(ChatLine.Step("w", issue, true), SessionKey("mac", "s1"), loader, recordedDuration = null,
-                        onToggle = {}, onFold = {}, folding = emptySet(), foldErrors = emptyMap(), onFullText = {}, lastWorkStep = true)
+                    run.forEachIndexed { i, step ->
+                        ChatLineContent(ChatLine.Step("w", step, i == 0), SessionKey("mac", "s1"), loader, recordedDuration = null,
+                            onToggle = {}, onFold = {}, folding = emptySet(), foldErrors = emptyMap(), onFullText = {},
+                            lastWorkStep = i == run.lastIndex)
+                    }
                 }
             }
         }
@@ -99,6 +111,9 @@ class ToolArgumentsShotsTest {
         Snapshot.sendApplyNotifications()
         rule.waitForIdle()
         rule.onAllNodesWithTag("tool-arguments", useUnmergedTree = true).assertCountEquals(1)
+        // Right of the rail, which runs through the middle of the icons (#5025): the details start past the icon.
+        val left = rule.onNodeWithTag("tool-arguments", useUnmergedTree = true).getBoundsInRoot().left
+        assertTrue("details at $left cross the rail", left >= Tokens.Space.l + Tokens.Space.m + Tokens.Size.iconXS)
         rule.onNodeWithText("Milestone", useUnmergedTree = true).assertIsDisplayed()
         rule.onNodeWithText("bug, export", useUnmergedTree = true).assertIsDisplayed()
         style = AppStyle.Brief
