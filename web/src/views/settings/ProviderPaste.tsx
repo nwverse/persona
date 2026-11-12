@@ -147,7 +147,8 @@ function DraftCard({ d, radio }: { d: PasteDraft; radio?: { index: number; check
   const p = d.provider;
   const host = hostOf(p.base_url);
   const title = p.display_name || d.label || host;
-  const openAI = p.kind === "api" && (p.api === "responses" || p.api === "chat");
+  // how it signs in, when it says (a provider with no sign-in has none; an OpenAI-style API always sends a key)
+  const auth = p.auth && !(p.kind === "api" && (p.api === "responses" || p.api === "chat")) ? (p.auth === "api_key" ? "x-api-key" : "Bearer") : "";
   const lines = [importBrings(d), ...importLeftOut(d), ...headerLines(d)].filter(Boolean);
   const notes = d.notes ?? [];
   const head = (
@@ -161,7 +162,7 @@ function DraftCard({ d, radio }: { d: PasteDraft; radio?: { index: number; check
         <span className="mt-0.5 flex min-w-0 flex-wrap gap-x-2 text-[11.5px] text-ink-3">
           {title !== host && <span className="truncate">{host}</span>}
           <span className="tabular-nums">{t("lib-providers.model_count", { count: draftModels(d).length })}</span>
-          {!openAI && <span>{p.auth === "api_key" ? "x-api-key" : "Bearer"}</span>}
+          {auth && <span>{auth}</span>}
         </span>
       </span>
     </>

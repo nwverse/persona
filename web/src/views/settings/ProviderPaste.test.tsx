@@ -284,4 +284,40 @@ describe("paste a configuration", () => {
     await advance(700);
     expect(parses()).toHaveLength(1);
   });
+
+  it("starts the custom gateway picked by hand from an empty form, and the paste's Continue fills it again", async () => {
+    const url = () => document.body.querySelector<HTMLInputElement>('input[inputmode="url"]')!.value;
+    const toPick = () => click([...document.body.querySelectorAll("ol button")].find((b) => b.textContent?.includes(t("settings-providerwizard.step_pick")))!);
+    await openPaste();
+    await pasteText("alias kimi=…");
+    await click(continueButton());
+    expect(url()).toBe("https://gw.example.com");
+    await toPick();
+    await click(button(t("settings-providerwizard.back")));
+    await click(buttons().find((b) => b.textContent?.startsWith(t("settings-providerwizard.custom")))!);
+    expect(url()).toBe("");
+    expect(document.body.querySelector<HTMLInputElement>('input[type="password"]')!.value).toBe("");
+    // typed by hand, it stays when the gateway is picked again
+    const field = document.body.querySelector<HTMLInputElement>('input[inputmode="url"]')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field, "https://typed.example.com");
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await toPick();
+    await click(buttons().find((b) => b.textContent?.startsWith(t("settings-providerwizard.custom")))!);
+    expect(url()).toBe("https://typed.example.com");
+    await toPick();
+    await click(pasteRow()!);
+    await click(continueButton());
+    expect(url()).toBe("https://gw.example.com");
+  });
+
+  it("names how a draft signs in only when it says", async () => {
+    parse = () => json(answer([{ ...GW, provider: { ...GW.provider, auth: undefined, api_key: undefined } }]));
+    await openPaste();
+    await pasteText("{\"kind\":\"custom\"}");
+    const card = document.body.querySelector("[data-paste-draft]")!.textContent;
+    expect(card).not.toContain("Bearer");
+    expect(card).not.toContain("x-api-key");
+  });
 });
