@@ -9,7 +9,7 @@ import org.junit.Test
 import persona.core.contracts.Item
 import persona.core.contracts.Subagent
 
-/** A subagent's task card reads as the web's (`lib/tasks.ts`: `agentStatus`, `agentSummary`, `modelChipLabel`, `withNestedSubagents`). */
+/** A subagent's task card reads as the web's (`lib/tasks.ts`: `agentStatus`, `agentSummary`, `withNestedSubagents`; the model chip is `ModelNamesTest`'s). */
 class SubagentsTest {
     private fun use(seq: Int, id: String, name: String = "Agent", at: String = "2026-11-12T10:00:00Z",
         input: String = """{"description":"Check $id","prompt":"Look at $id"}""") = LineItem(Item("u$seq", seq = seq,
@@ -87,14 +87,7 @@ class SubagentsTest {
         assertEquals("abcd…", Subagents.compact("abcdefgh", 5))
     }
 
-    @Test fun theModelChipAndTokensReadAsTheWebWritesThem() {
-        assertEquals("Haiku 4.5", Subagents.modelChip("claude-haiku-4-5-20251001"))
-        assertEquals("Opus 4.8", Subagents.modelChip("claude-opus-4-8[1m]"))
-        assertEquals("Sonnet 4", Subagents.modelChip("us.anthropic.claude-sonnet-4"))
-        assertEquals("Opus 4.1", Subagents.modelChip("gateway/claude-opus-4-1"))
-        assertEquals("GPT-5.4 Mini", Subagents.modelChip("gpt-5.4-mini"))
-        assertEquals("Kimi K2", Subagents.modelChip("kimi-k2"))
-        assertEquals("", Subagents.modelChip(null))
+    @Test fun tokensReadAsTheWebWritesThem() {
         assertEquals("950", Subagents.tokens(950))
         assertEquals("23.4k", Subagents.tokens(23_400))
         assertEquals("1.2M", Subagents.tokens(1_200_000))

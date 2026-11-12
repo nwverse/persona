@@ -630,7 +630,7 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 		if verdict == reviewCancelled {
 			reason = "取消：" + cmp.Or(clip(oneLine(note), 80), "不做了") // i18n-ignore: done_reason, as a conversation's review writes it
 		}
-		if t.DoneAt == nil {
+		if t.DoneAt == nil || t.StartError != "" {
 			if _, err := s.reviewDoneTodo(ctx, t.ID, reason, verdict == reviewAccepted); err != nil {
 				return "", err
 			}

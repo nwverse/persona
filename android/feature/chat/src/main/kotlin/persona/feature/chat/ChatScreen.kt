@@ -55,6 +55,7 @@ import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -270,7 +271,6 @@ private fun ChatPage(
     // the conversation's own cards are in the panel above the composer, not only behind Needs you (#4883)
     val panel = panelRequests(renderStyle == ChatRenderStyle.Assistant, requests, key, trayReview, taps.shown(allRequests))
     val messages = chatBubbles(allMessages, key, snapshot.items)
-    val currentMessageCount by rememberUpdatedState(messages.size)
     val composerDeliveries by (composerService?.deliveries ?: remember {
         kotlinx.coroutines.flow.MutableStateFlow(emptyMap<String, ComposerDelivery>())
     }).collectAsStateWithLifecycle()
@@ -440,6 +440,30 @@ private fun ChatPage(
     val contentLastSteps = remember(lines) { lines.asReversed().filterIsInstance<ChatLine.Step>().associate { it.groupId to it.step.id } }
     // Each open work line's plan card (web #1990 draws only the latest plan of an exchange).
     val contentPlans = remember(contentWorkGroups) { contentWorkGroups.filterValues { it.open }.mapValues { latestPlan(it.value.steps) } }
+    // Rows at the chat's newest end, under your unsent messages, as iOS draws them in an Agent's chat: a load error as a line
+    // of the chat (Glass; Brief and Board say it above the composer), then "Claude is getting ready…" while your message
+    // waits for its turn.
+    val glass = PersonaTheme.style == AppStyle.Glass
+    val agentChat = renderStyle != ChatRenderStyle.Assistant
+    val errorLine = snapshot.error?.takeIf { glass && agentChat }
+    val readyLine = if (readOnly || !agentChat) null else gettingReady(res, session, messages, liveWork = liveWorkLines.isNotEmpty())
+    val tailRows = listOfNotNull(ERROR_ROW.takeIf { errorLine != null }, READY_ROW.takeIf { readyLine != null })
+    // Rows before the lines in the list: the tail rows and the unsent messages.
+    val currentLeadRows by rememberUpdatedState(tailRows.size + messages.size)
+    // The newest "while you were away" recap open as the last line until tapped or typing starts (Glass, an Agent's chat).
+    val recapContext = LocalContext.current
+    val closedRecaps = remember(recapContext) { ClosedRecaps(recapContext) }
+    var closedRecap by remember(key) { mutableStateOf(closedRecaps.closed(key)) }
+    val recapShown = if (glass && agentChat && !readOnly) openRecapId(lines, closedRecap) else null
+    val openRecap = remember(key, recapShown) {
+        recapShown?.let { id -> OpenRecap(id) { closedRecaps.close(key, id); closedRecap = id } }
+    }
+    val currentOpenRecap by rememberUpdatedState(openRecap)
+    LaunchedEffect(composer) {
+        snapshotFlow { composer.value.text }.drop(1).collect { typed -> if (typed.isNotEmpty()) currentOpenRecap?.close?.invoke() }
+    }
+    var planSheet by remember { mutableStateOf(false) }
+    var sheetPlan by remember { mutableStateOf<LinePlan?>(null) }
     val currentItems by rememberUpdatedState(snapshot.items)
     val currentLines by rememberUpdatedState(lines)
     val list = chatList.list
@@ -447,7 +471,7 @@ private fun ChatPage(
     val newestVisibleItem by remember {
         derivedStateOf {
             list.layoutInfo.visibleItemsInfo.mapNotNull { visible ->
-                currentLines.getOrNull(visible.index - currentMessageCount)?.lastItem()
+                currentLines.getOrNull(visible.index - currentLeadRows)?.lastItem()
             }.maxWithOrNull(chatItemOrder)
         }
     }
@@ -806,7 +830,7 @@ private fun ChatPage(
     val unreadEntry = if (session?.agentState == AgentState.Unread) lines.firstOrNull { line ->
         line.holds(lastUserId)
     }?.let { ChatListEntry(it.contentKey, lastLineAtTop = true) } else null
-    ChatListEffects(chatList, messages.asReversed().map { "outbox-${it.clientMessageId}" } + lines.map { it.contentKey },
+    ChatListEffects(chatList, tailRows + messages.asReversed().map { "outbox-${it.clientMessageId}" } + lines.map { it.contentKey },
         ready = !snapshot.loading && (snapshot.items.isEmpty() || lines.isNotEmpty() ||
             (renderStyle.compactToolSummary && projectedFrom === snapshot.items && assistantPresentation.foreground.isEmpty())) &&
             (unreadEntry == null || markdownReadyFor == snapshot.items), entry = unreadEntry,
@@ -825,7 +849,7 @@ private fun ChatPage(
         if (chrome.covered || search.visible || search.pending || search.returning || !chatList.restored || chatList.programmaticScroll || overlay || chromeOverlay || fullText != null || linkVisible || statusSheet || terminalHelp || taskPageVisible || lifecycle != Lifecycle.State.RESUMED || !snapshot.verified) return@LaunchedEffect
         snapshotFlow {
             if (list.isScrollInProgress) null else list.layoutInfo.visibleItemsInfo.mapNotNull { visible ->
-                currentLines.getOrNull(visible.index - currentMessageCount)?.seenItem()
+                currentLines.getOrNull(visible.index - currentLeadRows)?.seenItem()
             }.maxWithOrNull(chatItemOrder)
         }.debounce(450).distinctUntilChanged().collect { item ->
             if (item != null && (reportedSeen == null || chatItemOrder.compare(item, reportedSeen!!) > 0)) try {
@@ -966,7 +990,8 @@ private fun ChatPage(
                                         }
                                     }
                                 })
-                            (if (feedback == null) notice ?: snapshot.error else snapshot.error)?.let {
+                            val composerError = snapshot.error.takeIf { errorLine == null }
+                            (if (feedback == null) notice ?: composerError else composerError)?.let {
                                 Text(it, Modifier.padding(horizontal = Tokens.Space.m), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
                             }
                             if (!historyOnly && !readOnly) ChatStartingNote(session)
@@ -1020,7 +1045,11 @@ private fun ChatPage(
                                     canClear = clearingPane == null && session?.canTypeClaudeCommands == true,
                                     service = composerService, onSend = { send() }, onCommand = { send(it) }, onNotice = { notice = it },
                                     extraContent = linkContexts.isNotEmpty(), visible = composerShown(panel, requestCollapsed),
-                                    enabled = canSend, placeholder = if (canSend) stringResource(R.string.chat_screen_placeholder) else READ_ONLY.text(),
+                                    enabled = canSend, placeholder = when {
+                                        !canSend -> READ_ONLY.text()
+                                        !agentChat -> stringResource(R.string.chat_screen_placeholder)
+                                        else -> agentPlaceholder(res, session)
+                                    },
                                     // Permission mode and effort for Claude's sessions, Persona's included; the model for Claude in a pane;
                                     // the effort alone for a Codex thread on its app-server.
                                     leading = if (session?.canChangeModes == true || session?.canChangeEffortOnly == true) ({
@@ -1062,6 +1091,8 @@ private fun ChatPage(
                                 top = padding.calculateTopPadding() + 12.dp,
                                 bottom = padding.calculateBottomPadding() + 12.dp,
                             )) {
+                                errorLine?.let { error -> item(key = ERROR_ROW, contentType = ERROR_ROW) { ChatSystemLine(error, failed = true) } }
+                                readyLine?.let { words -> item(key = READY_ROW, contentType = READY_ROW) { TypingLine(words) } }
                                 items(messages.asReversed(), key = { "outbox-${it.clientMessageId}" }, contentType = { "outbox" }) { message ->
                                     val delivery = composerDeliveries[message.clientMessageId]
                                     val deliveryState = if (message.state in setOf(DeliveryState.Refused, DeliveryState.Rejected))
@@ -1083,7 +1114,7 @@ private fun ChatPage(
                                 items(lines, key = { it.contentKey }, contentType = { it.contentType() }) { line ->
                                     ChatSearchHighlight(search, line.contentKey) {
                                         androidx.compose.runtime.CompositionLocalProvider(LocalAssistantTaskHost provides taskHost,
-                                            LocalTurnErrorFixAction provides fixModel) {
+                                            LocalTurnErrorFixAction provides fixModel, LocalOpenRecap provides openRecap) {
                                         ChatLineContent(line, key, loader,
                                         line.recordedDuration(snapshot.recordedTurnDurations),
                                         ::toggle, ::expand, folding, foldErrors,
@@ -1116,10 +1147,15 @@ private fun ChatPage(
                                 }
                             }
                             // Under the top bar: in glass the list (and this box) runs under it, up to the status bar.
-                            WorkCollapseOverlay(lines, list, messages.size, ::toggle, Modifier.align(Alignment.TopStart)
+                            WorkCollapseOverlay(lines, list, tailRows.size + messages.size, ::toggle, Modifier.align(Alignment.TopStart)
                                 .padding(start = horizontalPadding, top = padding.calculateTopPadding() + Tokens.Space.s))
                             val settling = snapshot.loading || projectedFrom == null || (snapshot.items.isNotEmpty() && projectedFrom !== snapshot.items)
-                            if (settling && lines.isEmpty() && messages.isEmpty()) JLoading(Modifier.align(Alignment.Center).padding(padding).padding(horizontal = horizontalPadding))
+                            if (settling && lines.isEmpty() && messages.isEmpty()) {
+                                // An Agent's chat on Glass: iOS's skeleton rows where its newest lines will be; Brief and Board keep the spinner.
+                                if (glass && agentChat) ChatSkeleton(Modifier.align(Alignment.BottomCenter).padding(start = horizontalPadding, end = horizontalPadding,
+                                    bottom = padding.calculateBottomPadding() + Tokens.Space.m))
+                                else JLoading(Modifier.align(Alignment.Center).padding(padding).padding(horizontal = horizontalPadding))
+                            }
                             else if (!settling && lines.isEmpty() && messages.isEmpty() && snapshot.error == null)
                                 JEmptyState(stringResource(R.string.chat_screen_empty_title),
                                     stringResource(if (readOnly) R.string.chat_screen_empty_read_only else R.string.chat_screen_empty_hint),
@@ -1130,14 +1166,21 @@ private fun ChatPage(
                                 anchor != null && list.layoutInfo.totalItemsCount > 0 &&
                                     list.layoutInfo.visibleItemsInfo.none { it.key == anchor.lineId }
                             } }
+                            // The open sheet follows the newest plan, and keeps the last one if its work line folds away.
+                            if (planSheet && anchor != null) SideEffect { sheetPlan = anchor.plan }
                             if (anchor != null && planOut) {
                                 val progress = remember(anchor.plan.todos) { planProgress(anchor.plan.todos) }
+                                // An Agent's chat on Glass: the whole plan in a sheet (iOS `PlanSheet`); Brief and Board scroll back to its card.
+                                val opensSheet = glass && agentChat
                                 PlanPill(progress.step, progress.total, progress.done, onClick = {
-                                    scope.launch {
+                                    if (opensSheet) { sheetPlan = anchor.plan; planSheet = true }
+                                    else scope.launch {
                                         timeline.freeze(currentItems); timelineVersion++
                                         chatList.scrollToRecord(anchor.lineId)
                                     }
-                                }, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = padding.calculateBottomPadding() + Tokens.Space.l))
+                                }, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = padding.calculateBottomPadding() + Tokens.Space.l),
+                                    spoken = if (opensSheet) planStepText(res, anchor.plan.todos) else null,
+                                    onClickLabel = if (opensSheet) stringResource(R.string.chat_plan_pill_opens) else null)
                             }
                             if (!chatList.followsEnd) JumpToLatest(timeline.newMessageCount(snapshot.items, newestVisibleItem, readThrough),
                                 onClick = chatList::returnToLatest,
@@ -1160,6 +1203,7 @@ private fun ChatPage(
                 recovery = recovery, machine = machine, draftSaveError = statusBindings.draftSaveError, readOnly = readOnly,
                 onOpenSession = chrome.onOpenSession?.let { open -> { target -> statusSheet = false; open(target) } })
             fullText?.let { FullTextReader(it, onDismiss = { fullText = null }) }
+            sheetPlan?.takeIf { planSheet }?.let { PlanSheet(it, onDismiss = { planSheet = false }) }
             val menuTitle = session?.displayTitle ?: stringResource(R.string.chat_screen_untitled)
             MessageMenuSheet(messageMenu, messageMenuWrites(readOnly, session),
                 onQuote = quoteTarget, onEdit = composer::edit,
@@ -1178,3 +1222,7 @@ private fun ChatPage(
         }
     }
 }
+
+/** The rows at the chat's newest end, under your unsent messages: a load error (Glass), then "Claude is getting ready…". */
+private const val ERROR_ROW = "load-error"
+private const val READY_ROW = "getting-ready"

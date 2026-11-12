@@ -264,6 +264,14 @@
       },
       "$description": "Theme.Size.icon"
     },
+    "dotS": {
+      "$type": "dimension",
+      "$value": {
+        "value": 7,
+        "unit": "px"
+      },
+      "$description": "Theme.Size.dotS"
+    },
     "dotXL": {
       "$type": "dimension",
       "$value": {
@@ -272,6 +280,14 @@
       },
       "$description": "Theme.Size.dotXL"
     },
+    "markS": {
+      "$type": "dimension",
+      "$value": {
+        "value": 14,
+        "unit": "px"
+      },
+      "$description": "Theme.Size.markS"
+    },
     "lineMedium": {
       "$type": "dimension",
       "$value": {
@@ -279,6 +295,14 @@
         "unit": "px"
       },
       "$description": "Theme.Size.lineMedium"
+    },
+    "bar": {
+      "$type": "dimension",
+      "$value": {
+        "value": 3,
+        "unit": "px"
+      },
+      "$description": "Theme.Size.bar: the accent bar beside a quote-like card"
     }
   }
 }
