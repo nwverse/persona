@@ -304,6 +304,14 @@
       },
       "$description": "Theme.Size.markS"
     },
+    "badge": {
+      "$type": "dimension",
+      "$value": {
+        "value": 18,
+        "unit": "px"
+      },
+      "$description": "Theme.Size.badge"
+    },
     "wellXS": {
       "$type": "dimension",
       "$value": {
@@ -344,6 +352,22 @@
       },
       "$description": "Theme.Size.bar: the accent bar beside a quote-like card"
     },
+    "box64": {
+      "$type": "dimension",
+      "$value": {
+        "value": 64,
+        "unit": "px"
+      },
+      "$description": "Theme.Size.box64: the height of a card and of the viewed-images strip's thumbnails"
+    },
+    "box80": {
+      "$type": "dimension",
+      "$value": {
+        "value": 80,
+        "unit": "px"
+      },
+      "$description": "Theme.Size.box80: a viewed image alone"
+    },
     "box120": {
       "$type": "dimension",
       "$value": {
@@ -359,6 +383,14 @@
         "unit": "px"
       },
       "$description": "Theme.Size.box150"
+    },
+    "box280": {
+      "$type": "dimension",
+      "$value": {
+        "value": 280,
+        "unit": "px"
+      },
+      "$description": "Theme.Size.box280: the widest a pill above the composer gets (the pill while a chat's model operates a Mac)"
     },
     "slimBar": {
       "$type": "dimension",

@@ -13,6 +13,9 @@ import { AssistantActionBar, DOCK_CAPSULE, FeedLineView, TaskDock } from "./Task
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const at = "2026-11-10T08:00:00Z";
+// "Now" for every case: an hour after the fixtures, not the real clock, by which they would be long shelved
+// (SHELVE_AFTER_MS, lib/todo-triage.ts) and the trays would leave them out (#5531). Only Date is faked: timers stay real.
+const now = new Date("2026-11-10T09:00:00Z");
 const conversation = "tray-demo";
 const plan: TaskPlan = { id: "tray-plan", conversation, state: "started", created_at: at, tasks: [{ title: "Demo task", prompt: "Demo checks", cwd: "/demo", machine: "demo", todo_id: "tray-task" }] };
 let todo: Todo;
@@ -32,6 +35,8 @@ const feed: FeedItem[] = [
 ];
 
 beforeEach(async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(now);
   writes = [];
   moreTodos = [];
   moreSessions = [];
@@ -55,6 +60,7 @@ beforeEach(async () => {
   act(() => root.render(<StrictMode><AssistantActionBar conversation={conversation} />{feed.map((item) => <FeedLineView key={item.id} item={item} simplified />)}</StrictMode>));
 });
 afterEach(() => {
+  vi.useRealTimers();
   act(() => root.unmount());
   host.remove();
   history.replaceState(null, "", "/");

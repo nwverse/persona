@@ -8,6 +8,8 @@
     <string name="designsystem_status_unknown">不明</string>
     <string name="designsystem_status_waiting">待機中</string>
     <string name="designsystem_status_muted">ミュート中</string>
+    <string name="designsystem_density_standard">標準</string>
+    <string name="designsystem_density_compact">コンパクト</string>
     <string name="designsystem_style_glass">ガラス</string>
     <string name="designsystem_style_glass_summary">状態の光の上にすりガラスが浮かび、対応が必要なことがあると琥珀色に光ります</string>
     <string name="designsystem_style_brief">朝刊</string>
@@ -73,6 +75,8 @@
         <item quantity="other">コンピューターがオフラインです。状態が古い可能性があります（%1$d分前）</item>
     </plurals>
     <string name="designsystem_line_answering">選択を送信中…</string>
+    <string name="designsystem_message_sending">送信中</string>
+    <string name="designsystem_message_processing">処理中</string>
     <string name="designsystem_line_sending">送信中…</string>
     <string name="designsystem_line_unconfirmed">前回の操作の結果は未確認です</string>
     <plurals name="designsystem_line_needs_you_count">
@@ -279,6 +283,7 @@
     <string name="designsystem_qr_code">QRコード</string>
     <string name="designsystem_queue_actions">待機中メッセージの操作</string>
     <string name="designsystem_queue_item">%1$d件目：%2$s</string>
+    <string name="designsystem_queue_item_note">%1$d件目：%2$s。%3$s</string>
     <string name="designsystem_draft_ready">Personaが返信を下書きしました</string>
     <!-- Connection details (the title's sheet while the hub is out of reach) -->
     <string name="designsystem_connection_online">ハブに接続済み</string>

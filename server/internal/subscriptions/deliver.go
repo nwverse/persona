@@ -217,7 +217,15 @@ func (d deliverer) inboxThings(catchup, live []Held) []connector.InboxThing {
 	return out
 }
 
-func (d deliverer) thread(key string) string { return "sub:" + d.sub.ID + ":" + key }
+func (d deliverer) thread(key string) string { return threadPrefix(d.sub.ID) + key }
+
+func threadPrefix(sub string) string { return "sub:" + sub + ":" }
+
+// OwnsThread says whether thread is one subscription id delivered to the Inbox (the item's connector thread, under
+// the subscription's id as its source), deleted since or not: it has no conversation of its own to open.
+func OwnsThread(id, thread string) bool {
+	return id != "" && strings.HasPrefix(thread, threadPrefix(id))
+}
 
 // tags are a thing's: the subscription it came from, and the sender of a row of items (#5306), which the Inbox can mute
 // as it mutes a connector's (lowercased, as people are told apart by name here). A digest, a snapshot and the failure

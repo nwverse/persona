@@ -1,5 +1,13 @@
 # Lessons: hub / node and networking
 
+## A Go file named after a platform builds only there (#5563)
+
+Go reads a file name's last `_<word>` (before `_test`) as a build constraint when the word is a GOOS or GOARCH:
+`selfupdate_android_test.go` compiled only for `GOOS=android`, so `go test ./internal/hub/` passed without running its
+tests. Name feature files so they do not end in `_android`, `_ios`, `_linux`, `_darwin`, `_windows`, `_js`, `_wasm`
+and the like (`selfupdate_androidsync_test.go`; `android.go` alone is fine), and check a new test file with
+`go test -list <name>` or `-v`: "no tests to run" for a test you just wrote means it was never compiled.
+
 ## Resident exec must drain replies before closing transport (#5277)
 
 Stopping idle assistant processes after Attach closes spends the node's reconnect grace on SIGTERM/SIGKILL waits.
@@ -24,6 +32,14 @@ a real hub, or simply an English Mac next to a Chinese iPhone, flipped it at eve
 summaries, folder names, the assistant's answers and pushes. Connecting is not choosing: remember what each device
 last reported and take only a device's own change (`server/internal/hub/locale.go`, `docs/protocol/i18n.md` "Protocol:
 telling hub the language"). Apply the same rule to any hub-wide value inferred from what several devices report.
+
+## Extension feature strings are not transport authority (#5258)
+
+Old hubs merge extension reports into `hello.features`. A new client cannot trust a newly reserved receipt type merely
+because that array contains its name: an older manager can declare both the feature and an unreserved event. Reserve the
+hub's event against manager broadcasts, and advertise its transport version in a dedicated hub-owned hello field that
+old report merging cannot manufacture. Bind trust to the current authenticated connection and clear it on reconnect or
+credential changes; cached UI capabilities are not live socket proof. Test both old feature injection and old-socket frames.
 
 ## Authority handover must include the trusted keeper roster (#5228)
 

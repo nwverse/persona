@@ -60,6 +60,9 @@ A writable Git task whose directory is occupied defaults to `new`, regardless of
 When that inferred `new` meets an engine that cannot prepare checkouts (`worktree.prepare` fails with code `worktree_unsupported`:
 the Paseo or Cindy runtime, or a host without checkout support), the task runs in its `cwd` as tasks did before workspaces: a free directory becomes `existing`, an occupied one becomes
 `none` with `workspace_resolved.shared: true` and no claim. An explicit `new` still fails on such an engine.
+A repository nobody has committed to (no ref names a commit) has nothing to check out, so `worktree.prepare` fails
+with code `worktree_no_commits` (#5548): an inferred `new` then uses the free directory as `existing`, and an occupied one
+is refused with a message naming the task that holds it; an explicit `new` fails saying the repository has no commits.
 An explicit `workspace` overrides inference. When a caller means a particular branch/PR/checkout, it should name that checkout with `existing`.
 Inference uses the node's `worktree.status`; if the node cannot answer, the plan reports the error and asks for an explicit choice.
 The same preference is available through `persona_settings` as `assistant.task_workspace_preference`.
@@ -956,6 +959,11 @@ Agents started manually in Agents have no to-do, or a to-do with empty `origin`,
   - **Old task cards collapse**: non-today `task` entries become one line (`TaskLine`: state, title, progress); tapping opens details.
   - **Instant result cards**: successful `phone_reminders_create` / `phone_calendar_create_event` results render below that turn's work row (`QuickResult`,
     `ChatLines.quickResults`). Undo deletes locally through EventKit (`RemindersTool.remove`, `CalendarTool.remove`), without hub.
+    Successful `phone_location_current`, `phone_location_search` and `phone_maps_search_nearby` results render there as a map (`PlaceMapResult`, `PlaceMapCard`, #5543):
+    the phone's dot or up to ten numbered pins in result order (the numbers the answer uses), the first three places listed with Directions to Apple Maps,
+    and the whole map in a sheet. The chat draws a cached `MKMapSnapshotter` still; only the sheet's map is live.
+    Directions `phone_maps_navigate` handed to Apple Maps (`opened: maps`) render there too (#5545): the destination on the same map, with Maps' icon,
+    the mode and "Opened in Maps", and a button that opens the same directions again; Maps does the navigating.
   - **Today**: first main-chat display each day calls `POST …/today` (`TasksStore.loadToday`), placing the card at midnight: completed tasks, waiting tasks, working count,
     Lark meetings (Prepare sends a message for you), chats mentioning you (Review); if the App already has reminder permission, also include reminders due today (no permission prompt for this).
   - **Direct-start tasks**: Persona profile's Proactive work section lists remembered kinds, with swipe-left deletion.
@@ -974,7 +982,7 @@ Agents started manually in Agents have no to-do, or a to-do with empty `origin`,
     Drafts submitted after the reply was sent no longer insert cards.
   - **No placeholders**: drafts are sent verbatim with one tap. `inbox/agent.md` and `inbox/draft.md` require omitting unknown information (no more 【】 markers for the user to fill).
     `inbox_draft` rejects drafts containing 【…】 / {{…}} and asks the AI twin to resubmit. Web and Android cards refuse to send drafts still containing 【…】 and ask for edits.
-  - iOS still uses local records + the Inbox list item's `done`, not `sent_at` (the list retains processed items only for 3 days; reopening an item makes old cards show Send again). To be fixed.
+  - iOS still uses local records + the Inbox list item's `done`, not `sent_at` (the list retains processed items only for 3 days, at most the newest 200; reopening an item makes old cards show Send again). To be fixed.
 
 ## Steps
 

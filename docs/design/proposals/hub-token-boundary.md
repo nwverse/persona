@@ -1,8 +1,8 @@
 # Proposal: a token on the hub machine is not the owner's approval
 
-Status: proposal (#5525). Design only: nothing here is built, and no step starts until the owner picks a direction in
-section 7. Covers the hub's authentication, the managers' view of who called, the command line on the hub machine and
-the agent sandbox. The clients change only where a step says so.
+Status: not planned (#5525). The owner decided on 2026-11-12 that the change is too large for now. This page keeps the
+findings and options for later; nothing here is built. Covers the hub's authentication, the managers' view of who
+called, the command line on the hub machine and the agent sandbox. The clients change only where a step says so.
 
 **Who it serves**: everyone who runs a hub. What Persona and its Agents change in the owner's name should be something
 the owner approved on their own device. Everyday screens stay as they are. The visible additions are a card when a
