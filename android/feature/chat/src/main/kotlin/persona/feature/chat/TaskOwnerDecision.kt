@@ -20,6 +20,7 @@ import persona.core.designsystem.icons.PersonaIcons
 import persona.core.domain.tasks.AssistantExtra
 import persona.core.domain.tasks.AssistantTaskCards
 import persona.core.domain.tasks.decisionOptions
+import persona.core.domain.tasks.todoRuleCard
 
 /** Acceptance carries the exact round the user read, independently of any later task refresh. */
 @Composable
@@ -57,7 +58,7 @@ internal fun TaskDecisionCard(todo: Todo, host: AssistantTaskHost, enabled: Bool
     Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
         if (ask.decisionOptions.isNotEmpty()) TaskDecisionAnswers(todo, ask, host, enabled, onOpen)
         else TaskDecisionRecommendation(todo, ask, host, enabled, onOpen)
-        RuleSuggestionLine("todo:${todo.id}", ask.suggestion, host.tasks, host.onError, todo.manager, enabled)
+        RuleSuggestionLine(todoRuleCard(todo.id, ask.askedAt), ask.suggestion, host.tasks, host.onError, todo.manager, enabled)
     }
 }
 

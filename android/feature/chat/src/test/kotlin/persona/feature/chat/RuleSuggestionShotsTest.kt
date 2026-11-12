@@ -66,6 +66,7 @@ import persona.core.designsystem.AppStyle
 import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.Tokens
 import persona.core.domain.tasks.TasksStore
+import persona.core.domain.tasks.todoRuleCard
 
 /**
  * The rule a card suggests after the same answer three times (#4929) and the mark of a decision held for the next
@@ -96,6 +97,8 @@ class RuleSuggestionShotsTest {
         creates = "", setting = "agents.delegate", count = 3)
 
     private val askedAt = "2026-11-10T08:00:00Z"
+    /** The decision's own round: what is answered on it is not the to-do's next decision's. */
+    private val todoCard = todoRuleCard("t1", askedAt)
     private fun plan(suggestion: RuleSuggestion? = start) = TaskPlan("p1", "main", listOf(
         PlanTask("Fix the importer", "Fix the importer's date parsing", "example-node", "/code/example", why = "The nightly import failed twice.")),
         "open", suggestion = suggestion)
@@ -113,11 +116,14 @@ class RuleSuggestionShotsTest {
 
     private class Api(var rows: List<Todo>) : TasksApi {
         var status: Int? = null
+        /** What Always answers, when not the three kinds' own. */
+        var made: RuleSuggestionMade? = null
         val calls = mutableListOf<Triple<String, String, String?>>()
         override suspend fun todos() = rows
         override suspend fun ruleAlways(suggestionId: String): RuleSuggestionMade {
             calls += Triple("always", suggestionId, currentCoroutineContext()[RequestManager]?.id)
             status?.let { throw Refused(it) }
+            made?.let { return it }
             // answered: the hub words the decision again without its line
             rows = rows.map { todo -> todo.copy(ask = todo.ask?.takeIf { it.suggestion?.id != suggestionId } ?: todo.ask?.copy(suggestion = null)) }
             return when (suggestionId) {
@@ -207,9 +213,9 @@ class RuleSuggestionShotsTest {
             rule.onNodeWithText("Always creates a standing authorization: merge.", useUnmergedTree = true).assertIsDisplayed()
             rule.onNodeWithText("Only when: checks pass, no conflicts", useUnmergedTree = true).assertIsDisplayed()
             rule.onNodeWithText("Kept as your words: “Merge the PR now? → Yes”", useUnmergedTree = true).assertIsDisplayed()
-            rule.onNodeWithText("agents.delegate is turned on in the hub's configuration", substring = true, useUnmergedTree = true).assertIsDisplayed()
+            rule.onNodeWithText("agents.delegate is turned on in the assistant's configuration file on the hub's computer", substring = true, useUnmergedTree = true).assertIsDisplayed()
             rule.onAllNodesWithText("Always", useUnmergedTree = true).assertCountEquals(3)
-            rule.onAllNodesWithText("Not Now", useUnmergedTree = true).assertCountEquals(3)
+            rule.onAllNodesWithText("Not now", useUnmergedTree = true).assertCountEquals(3)
             // the decision was held for the next briefing, and its card says so
             rule.onNodeWithTag("decision-for-briefing", useUnmergedTree = true).assertIsDisplayed()
             rule.onNodeWithText("Comes with the next briefing", useUnmergedTree = true).assertIsDisplayed()
@@ -221,7 +227,7 @@ class RuleSuggestionShotsTest {
         val api = Api(listOf(decision()))
         show(api)
         rule.onNodeWithTag("rule-always-plan:p1").performClick()
-        rule.onNodeWithTag("rule-always-todo:t1").performClick()
+        rule.onNodeWithTag("rule-always-$todoCard").performClick()
         rule.onNodeWithTag("rule-always-card:q1").performClick()
         rule.waitForIdle()
         // the plan's goes to its conversation's assistant, the decision's to its to-do's, the card's to its own (none here)
@@ -233,13 +239,13 @@ class RuleSuggestionShotsTest {
         rule.waitForIdle()
         everyLook("rule-made") {
             rule.onAllNodesWithText("Always", useUnmergedTree = true).assertCountEquals(0)
-            rule.onAllNodesWithText("Not Now", useUnmergedTree = true).assertCountEquals(0)
+            rule.onAllNodesWithText("Not now", useUnmergedTree = true).assertCountEquals(0)
             rule.onNodeWithTag("rule-made-plan:p1", useUnmergedTree = true).assertIsDisplayed()
             rule.onNodeWithText("under Remembered auto-start rules in Persona's settings in the web app", substring = true, useUnmergedTree = true).assertIsDisplayed()
-            rule.onNodeWithTag("rule-made-todo:t1", useUnmergedTree = true).assertIsDisplayed()
+            rule.onNodeWithTag("rule-made-$todoCard", useUnmergedTree = true).assertIsDisplayed()
             rule.onNodeWithText("under Standing authorizations in Persona's settings in the web app", substring = true, useUnmergedTree = true).assertIsDisplayed()
             rule.onNodeWithTag("rule-made-card:q1", useUnmergedTree = true).assertIsDisplayed()
-            rule.onNodeWithText("No rule was stored. To let Persona answer such questions first, turn on agents.delegate in the hub's configuration.",
+            rule.onNodeWithText("No rule was stored. To let Persona answer such questions first, turn on agents.delegate in the assistant's configuration file on the hub's computer.",
                 useUnmergedTree = true).assertIsDisplayed()
         }
         assertTrue(errors.isEmpty())
@@ -254,10 +260,10 @@ class RuleSuggestionShotsTest {
         rule.onAllNodesWithTag("rule-made-plan:p1", useUnmergedTree = true).assertCountEquals(0)
         // 404: the answers do not earn it any more, or it was answered on another device
         api.status = 404
-        rule.onNodeWithTag("rule-always-todo:t1").performClick()
+        rule.onNodeWithTag("rule-always-$todoCard").performClick()
         rule.waitForIdle()
-        rule.onAllNodesWithTag("rule-suggestion-todo:t1", useUnmergedTree = true).assertCountEquals(0)
-        rule.onAllNodesWithTag("rule-made-todo:t1", useUnmergedTree = true).assertCountEquals(0)
+        rule.onAllNodesWithTag("rule-suggestion-$todoCard", useUnmergedTree = true).assertCountEquals(0)
+        rule.onAllNodesWithTag("rule-made-$todoCard", useUnmergedTree = true).assertCountEquals(0)
         assertTrue(errors.isEmpty())
         // the decision itself is still there to answer
         rule.onNodeWithTag("assistant-task-decision-t1").assertIsDisplayed()
@@ -270,15 +276,60 @@ class RuleSuggestionShotsTest {
         capture("rule-answered-glass-light")
     }
 
+    @Test fun whatWasMadeOnOneDecisionIsNotDrawnUnderTheToDosNextOne() {
+        val api = Api(listOf(decision()))
+        val store = show(api)
+        rule.onNodeWithTag("rule-always-$todoCard").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag("rule-made-$todoCard", useUnmergedTree = true).assertIsDisplayed()
+        // the to-do raises another decision, which suggests nothing: no standing authorization is claimed under it
+        val next = "2026-11-11T09:00:00Z"
+        api.rows = listOf(decision(suggestion = null).let { it.copy(ask = it.ask!!.copy(askedAt = next, question = "Deploy to production?")) })
+        store.reloadTodos()
+        rule.waitForIdle()
+        rule.onNodeWithTag("assistant-task-decision-t1").assertIsDisplayed()
+        rule.onAllNodesWithText("Standing authorization made.", substring = true, useUnmergedTree = true).assertCountEquals(0)
+        rule.onAllNodesWithTag("rule-made-${todoRuleCard("t1", next)}", useUnmergedTree = true).assertCountEquals(0)
+        // and one that earns the same rule again, under the same id, is there to answer
+        api.rows = listOf(decision().let { it.copy(ask = it.ask!!.copy(askedAt = next)) })
+        store.reloadTodos()
+        rule.waitForIdle()
+        rule.onNodeWithTag("rule-suggestion-${todoRuleCard("t1", next)}", useUnmergedTree = true).assertIsDisplayed()
+    }
+
+    @Test fun aRuleThisBuildDoesNotKnowKeepsTheHubsWordsAndIsNeverCalledNothing() {
+        val unknown = RuleSuggestion("rs_new", "new_kind", "You did this 3 times. Always do it?", where, creates = "some_new_rule", count = 3)
+        // a delegate suggestion that names no setting says only that nothing is stored
+        shownPlan = plan(suggestion = unknown); shownQuestion = question(suggestion = delegate.copy(setting = null))
+        val api = Api(listOf(decision(suggestion = null, forBriefing = false))).apply { made = RuleSuggestionMade("new_kind", "some_new_rule") }
+        show(api)
+        rule.onNodeWithText(unknown.text, useUnmergedTree = true).assertIsDisplayed()
+        rule.onNodeWithText("Applies to Example node · /code/example", useUnmergedTree = true).assertIsDisplayed()
+        rule.onNodeWithText("Always stores no rule and puts this line away.", useUnmergedTree = true).assertIsDisplayed()
+        // one line of what Always creates: the delegate's. The unknown rule has none of ours
+        rule.onAllNodesWithTag("rule-creates", useUnmergedTree = true).assertCountEquals(1)
+        rule.onAllNodesWithText("turned on", substring = true, useUnmergedTree = true).assertCountEquals(0)
+        rule.onNodeWithTag("rule-always-plan:p1").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithText("Rule made.", useUnmergedTree = true).assertIsDisplayed()
+        rule.onAllNodesWithText("No rule was stored", substring = true, useUnmergedTree = true).assertCountEquals(0)
+        api.made = RuleSuggestionMade("delegate", "")
+        rule.onNodeWithTag("rule-always-card:q1").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithText("No rule was stored.", useUnmergedTree = true).assertIsDisplayed()
+        assertTrue(errors.isEmpty())
+        capture("rule-unknown-glass-light")
+    }
+
     @Test fun aHubWithoutTheFieldsDrawsTheCardsAsBefore() {
         shownPlan = plan(suggestion = null); shownQuestion = question(suggestion = null)
         show(Api(listOf(decision(suggestion = null, forBriefing = false))))
         rule.onNodeWithTag("assistant-task-decision-t1").assertIsDisplayed()
         rule.onNodeWithText("Fix the importer", useUnmergedTree = true).assertIsDisplayed()
         rule.onAllNodesWithText("Always", useUnmergedTree = true).assertCountEquals(0)
-        rule.onAllNodesWithText("Not Now", useUnmergedTree = true).assertCountEquals(0)
+        rule.onAllNodesWithText("Not now", useUnmergedTree = true).assertCountEquals(0)
         rule.onAllNodesWithTag("decision-for-briefing", useUnmergedTree = true).assertCountEquals(0)
-        for (card in listOf("plan:p1", "todo:t1", "card:q1")) {
+        for (card in listOf("plan:p1", todoCard, "card:q1")) {
             rule.onAllNodesWithTag("rule-suggestion-$card", useUnmergedTree = true).assertCountEquals(0)
             rule.onAllNodesWithTag("rule-made-$card", useUnmergedTree = true).assertCountEquals(0)
         }

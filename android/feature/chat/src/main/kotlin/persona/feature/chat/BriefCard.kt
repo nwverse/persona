@@ -298,11 +298,13 @@ private fun BriefSetupSection(brief: BriefBody, host: AssistantTaskHost) {
         BriefNote(stringResource(R.string.chat_brief_setup_intro))
         brief.setup.forEach { row: BriefSetup ->
             val open: (() -> Unit)? = row.page?.let { page -> host.onOpenSetup?.let { go -> { go(page) } } }
-            Row(Modifier.fillMaxWidth().padding(vertical = Tokens.Space.xs), verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
-                Text(row.text, Modifier.weight(1f).testTag("brief-setup-${row.id}"), style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink)
-                if (open != null) JButton(stringResource(R.string.chat_brief_setup_open), open, Modifier.testTag("brief-setup-open-${row.id}"),
-                    kind = JButtonKind.Secondary, size = JButtonSize.Small)
+            // the hub's line takes the card's width, its button under it, as the card's other rows are laid out
+            Column(Modifier.fillMaxWidth().padding(vertical = Tokens.Space.xs), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+                Text(row.text, Modifier.testTag("brief-setup-${row.id}"), style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink)
+                if (open != null) FlowRow {
+                    JButton(stringResource(R.string.chat_brief_setup_open), open, Modifier.testTag("brief-setup-open-${row.id}"),
+                        kind = JButtonKind.Secondary, size = JButtonSize.Small)
+                }
             }
         }
     }
