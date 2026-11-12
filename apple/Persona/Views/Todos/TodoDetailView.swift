@@ -33,8 +33,9 @@ struct TodoDetailView: View {
     /// Marks the to-do seen when it is in Just finished and the hub keeps seen marks; a failure leaves it there.
     private func seeIfJustFinished() async {
         guard let todo = currentTodo, model.hubFeatures.contains(TodoSeen.feature) else { return }
-        // no restores read (UserDefaults, P2): a restore only takes a to-do out of Shelved, never into Just finished
-        let lookup = TodosLogic.makeSessionLookup(AppModel.shared.allSessions(inFront: inFront))
+        // no restores read (UserDefaults, P2): a restore only takes a to-do out of Shelved, never into Just finished; the
+        // sessions as they are now, not watched (an action, AllSessionsReadersTests)
+        let lookup = TodosLogic.makeSessionLookup(model.sessionsNow)
         let t = TodoTriageLogic.triage(todo, lookup: lookup, now: .now,
                                        superseded: TodoTriageLogic.supersededFailedStarts(store.todos).contains(todo.id),
                                        calendar: TodoCalendar.userCalendar)
