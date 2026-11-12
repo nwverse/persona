@@ -88,6 +88,26 @@ internal fun keptClosedRecaps(stored: Map<String, String>): Map<String, String> 
     else stored.entries.sortedByDescending { it.value.substringBefore(' ').toLongOrNull() ?: 0L }
         .take(CLOSED_RECAPS_KEPT).associate { it.key to it.value }
 
+/** Sentence ends, ASCII and full-width: a recap that ends on one gets no second from [recapSpoken]'s template. */
+private val SentenceEnds = setOf('.', '!', '?', '。', '！', '？', '．', '｡')
+
+/**
+ * What the open recap says to TalkBack: "Recap while you were away: <the recap>. Tap to close". The template's own full stop
+ * after the recap goes when the recap already ends a sentence, so it never reads "。。" or "..".
+ */
+internal fun recapSpoken(res: android.content.res.Resources, text: String): String {
+    val words = text.trimEnd()
+    val template = res.getString(R.string.chat_recap_open_spoken, RECAP_MARK)
+    val at = template.indexOf(RECAP_MARK)
+    if (at < 0) return res.getString(R.string.chat_recap_open_spoken, words)
+    var after = template.substring(at + RECAP_MARK.length)
+    if (words.lastOrNull() in SentenceEnds && after.firstOrNull() in SentenceEnds) after = after.drop(1)
+    return template.substring(0, at) + words + after
+}
+
+/** Stands in for the recap while [recapSpoken] finds where the template puts it (a private-use character). */
+private const val RECAP_MARK = "\uE000"
+
 /**
  * The newest recap in full as the chat's last line when you come back to it (iOS `RecapStrip`): the accent bar, "While
  * you were away · 21 min ago" with a close mark, and the recap as plain words, up to eight lines. A tap closes it to the
@@ -100,7 +120,7 @@ internal fun RecapStrip(item: Item, onClose: () -> Unit) {
     val resources = LocalResources.current
     val now by rememberNow(60_000)
     val text = plainMarkdown(item.text.orEmpty())
-    val spoken = stringResource(R.string.chat_recap_open_spoken, text)
+    val spoken = recapSpoken(resources, text)
     val shape = RoundedCornerShape(Tokens.Radius.card)
     Row(
         Modifier.fillMaxWidth().height(IntrinsicSize.Min).clip(shape).background(palette.accentSoft)

@@ -123,6 +123,16 @@ class TagReleaseTests(unittest.TestCase):
             upload.assert_not_called()
             self.assertEqual(view.call_args.args[0][:3], ["gh", "release", "view"])
 
+    def test_upload_refuses_a_view_without_an_asset_list(self):
+        artifact = self.root / "Persona-1.0.0.apk"
+        artifact.write_bytes(b"signed")
+        views = [json.dumps({"tagName": "v1.0.0", "isDraft": False, "assets": []})]
+        for answer in ("null", json.dumps({"assets": None}), json.dumps("assets")):
+            with self.subTest(answer=answer), patch.object(tag_release.subprocess, "run"), \
+                    patch.object(tag_release.subprocess, "check_output", side_effect=views + [answer]):
+                with self.assertRaisesRegex(tag_release.ConfigError, "no asset list"):
+                    tag_release.upload("example/project", "v1.0.0", [{"path": str(artifact), "name": artifact.name}])
+
     def test_upload_views_existing_release_and_verifies_remote_digests(self):
         artifact = self.root / "Persona-1.0.0.apk"
         artifact.write_bytes(b"signed")

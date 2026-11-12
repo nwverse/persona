@@ -266,6 +266,8 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 
 ## Testing
 
+- A fixture time fed to code that reads the real clock is a time bomb (2026-11-12, #5530). The Assistant's trays build In progress with `System.currentTimeMillis()`, and an open task that hasn't moved for 48 hours, with nothing running, is shelved (`SHELVE_AFTER_MS`). `AssistantTraysShotsTest` and `CloseoutShotsTest` pinned their tasks to `2026-11-10T08:00:00Z`. They passed on the day they merged and failed from 2026-11-12T08:00Z on every commit, so a bisect over the day's merges pointed at nothing. Build such times from `Instant.now()` (as the chat shot tests do), or pass the code a fixed `now` when it takes one (`TodosScreen(now = …)`). To see whether a test will break later, move its date literals back N days in a scratch copy and run it: to code that reads the real clock, that is the same test N days later.
+
 - A screenshot test's fake image loader is global state (#2546). `SingletonImageLoader.setUnsafe` survives into later Robolectric classes using the same sandbox. Reset the singleton and shut down the test-owned loader in teardown. Otherwise a later image-fallback assertion can fail because it receives a successful synthetic bitmap; running only that later class hides the leak. Reproduce with the showcase and native-stream classes together, and retain the original fallback assertion.
 
 - `OkHttpHubConnection` publishes `Revoked` before it reports the last refusing hub through `onMemberRevoked`, outside the lock (HubGroupConnectionTest). A test that reads the callback list right after seeing `Revoked` can miss that last entry under load; one hosted run failed `theConnectionIsRevokedOnlyWhenNoHubOfTheGroupIsLeft` this way while main passed. Widening the gap with a temporary sleep before that report fails the old test every time (`but was:<[(hub-a, true), (hub-b, true)]>`). Production consumers launch their cleanup asynchronously and reach the same end state in either order, so the test now waits for the report it asserts, then checks the exact list.
@@ -591,6 +593,10 @@ On the JVM, closing a server socket with a blocked accept can defer the actual d
 Keep a message's last rendered parse while its next parse runs; switching to raw text for every delta changes list and code-block geometry twice. Reset that retained state when the message identity or cache changes, and include stream completion in the parse effect keys. The Markdown renderer also defaults to a text-size spring: chat text should use its measured size immediately, without animating every line wrap.
 
 Measure pending and parsed frames with the real chat row and reverse list. A fixed scroll index and offset can still accompany visible height oscillation. Replay both Assistant and Agent styles, completion, rapid deltas, history reading and return-to-latest. Check selection and exact copied text in the APK as well. Write a PASS evidence file only after every assertion has completed; cleanup must not turn an earlier failure into a successful verdict.
+
+## Bound divider settling frames (#4756)
+
+A non-bouncy spring can still overshoot with a fling velocity. Clamp every divider animation frame to the current drag range before writing PaneExpansionState; negative widths can collide with its unset sentinel. Exercise the production splitter in a measured two-pane scaffold at both edges, including collapse and expand. State-only tests miss the visible width reset.
 
 ## Pairing fixtures must follow the default sign-in page (#4623)
 

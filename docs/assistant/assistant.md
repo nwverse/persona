@@ -24,7 +24,7 @@ Assistant conversations, including guest conversations and the Inbox AI twin, ca
 
 Omitting `trust`, or setting it to `"personal"`, preserves the existing task-context and Inbox placement behavior.
 
-The manager verifies the calling machine for `mcp.tools`, `mcp.call`, `assistant.context`, and `assistant.model`. The node's `assistant` flag only requests the assistant tool set. The configured assistant computer and Inbox twin computer can bootstrap sessions before runtime session IDs are available; a known ordinary Agent or host pane does not acquire assistant privileges. A conversation explicitly started by the manager on another personal computer is authorized during startup and then by its recorded machine and session. Runtime tool discovery without a session ID can rediscover the tool schemas on that computer after startup; execution still requires its recorded session. Guest conversations retain their restricted tool whitelist and receive no live context. `assistant.lark` remains restricted to the configured assistant computer.
+The manager verifies the calling machine for `mcp.tools`, `mcp.call`, `assistant.context`, and `assistant.model`. The node's `assistant` flag only requests the assistant tool set. The configured assistant computer and Inbox twin computer can bootstrap sessions before runtime session IDs are available; a known ordinary Agent or host pane does not acquire assistant privileges. A conversation explicitly started by the manager on another personal computer is authorized during startup and then by its recorded machine and session. Runtime tool discovery without a session ID can rediscover the tool schemas on that computer after startup; execution still requires its recorded session. Guest conversations retain their restricted tool whitelist and receive no live context. `assistant.lark` gives the command gates, their credentials and the extensions' MCP servers only to the configured assistant computer; another personal computer gets the gate rules and lark-cli's name without its profile, so a conversation the manager starts there (a Lark `/agent`) has its lark-cli calls classified by risk level instead of all confirmed; a work computer gets nothing.
 
 Changing trust does not erase context already delivered to a computer or terminate an existing process. New personal-data tool calls and Inbox deliveries are refused; ordinary Agent supervision and question / approval cards remain available.
 
@@ -307,6 +307,7 @@ The assistant and the L2 read-only connector are available; Inbox, knowledge bas
   writes a one-line `lark-cli` wrapper in that assistant directory's command bin, invoking configured lark-cli (resolve nonabsolute paths in a login shell) with configured `--profile`,
   and adds its directory to PATH (npm lark-cli uses `env node`, so node must be findable). No wrapper if `lark.cli` absent or lark-cli not found.
   Credentials remain in its own `~/.lark-cli`; hub / node don't touch them.
+  On another personal computer (a conversation the manager starts there, such as a Lark `/agent`), `cli` carries only the command name (the base name of an absolute `bin`) and no profile: the wrapper runs that computer's lark-cli with its default profile, and its gate reads that lark-cli's risk levels (#5479).
 - **Instructions**: no skill copied into the assistant directory. CLAUDE.md (`prompts/assistant/claude_md.md`) adds a section directing `lark-cli skills read lark-<domain>` first for bundled,
   version-matched domain instructions, with parameters from `--help` / `lark-cli schema`. CLI-only explains no unread / Moments; when the built-in connector is signed in, its read-only `larkcli_*` tools are also available. Find actionable messages with
   `im +messages-search --is-at-me / --chat-type p2p`. With both sources, divide according to `lark.prefer` (goldens `assistant_claude_md.lark_cli`, `.both`).
@@ -480,6 +481,36 @@ merges such a message into the turn with `turn/steer` ("Codex" below); a Claude 
   user's language on what it is doing and how long it will take or what it waits for, then to answer the message; the sentence about
   work moved to the background is there only when it was. Without it an owner's "what happened?" got six minutes of tool calls and no
   word. Tests: `TestAssistantInterjectOffOrOldClaude`, `TestInterjectNote` (`node/assistant_interject_test.go`).
+
+## Next-message suggestions (#4644)
+
+The strip over an empty composer (#2978: click or Tab fills it in, the arrow sends it) reads one field, `Session.suggestion`, which has
+two sources (`server/internal/assistant/suggest_next.go`):
+
+- **Claude Code in a terminal** keeps the suggestion Claude Code draws in its own input box, read off the screen by the node
+  (`server/internal/node/suggestion.go`). The manager never calls a model for such a session.
+- **Every other chat** (Persona's own conversations, Codex and the other runtimes, a Claude session with no terminal) gets one from the
+  `suggest.next` model purpose (Model configuration, under information processing; it follows that category's model, like chat titles),
+  while the switch is on.
+
+Rules for the hub-made one:
+
+- **Switch**: `next_suggestions` in the assistant's settings (`GET/PUT /api/v1/assistant`, Settings › Persona on the web), **off by
+  default**. Default in one sentence: no chat gets a model-made suggestion until you turn it on. Claude Code's own suggestion
+  (`promptSuggestionEnabled`) is untouched by it.
+- **When**: once per turn, when a turn ends well (working to done or idle in the node's list) and an app has the chat open at that moment
+  (the hub watches the session for it: `Devices.Watched`). Every app with the chat open shows the same one. A new turn or a message going
+  in drops it and cancels a call still on its way. Failed turns (a turn error), interrupted turns and subagents get none.
+- **What the model reads**: at most the last 8 visible user and assistant text messages, 12,000 characters in all, oldest first
+  (`prompts/tools/next_message_input.md`). No tool calls or results, no thinking, no images, no messages Persona wrote for the model. The
+  call is a plain completion with no tools, MCP or memory.
+- **Nothing sensible, nothing shown**: `NONE`, an empty answer, more than one line or more than 200 characters shows nothing; there is no
+  stand-in and no retry.
+- **Risky suggestions** (either source): one that names a command, a path, a link, a secret-looking string or one of the risky actions
+  of the Agents' safety boundary (`riskyWords`: delete, push, deploy, send…) carries `suggestion_risky: true`. The apps fill it in but
+  show no one-tap send.
+- **Clients**: the web shows the strip in every chat, assistant conversations included, and drops the arrow for a risky one. iOS and
+  Android still show the strip only where they did, and do not read `suggestion_risky` yet (follow-up issue).
 
 ## Main chat, knowledge base, and context flow
 
@@ -665,6 +696,11 @@ A long-used main chat accumulates large context; users can replace it: `POST /ap
    with `assistant/main_handoff.md` prepending background as `<persona-context kind="context" title="接上旧主对话">` (`title` means "Continue old main chat"; App context tag), then clearing it;
    `carry: none` still includes the old main-chat id, allowing `conversation_read`.
    Android first creates an empty `prompt`, then sends separately: bind background to the new session id (`for`) and include it with the first `POST …/messages` or Lark / channel message, all through `assistant.send_params`, not as a separate turn.
+5. The old main chat's open tasks follow (#4866, `assistant/main_handover.go`). When the new main chat starts, each task's `supervision.supervisor` and `origin` move to it together, as a closed leader's workers are rehomed. The ledger stays as it was: criteria, reviews, round, parking and owner waits.
+   A task waiting for review is signalled again, through the current main chat's supervision policy: the background supervisor by default, or the main chat when it supervises its own tasks. The card of each task the new main chat now supervises goes there with an active hand-off badge; the archived chat keeps its history.
+   A leader keeps supervising its tasks; only their `origin` moves. Closed tasks, the owner's own to-dos and other conversations' tasks stay where they are.
+   Making another conversation the main one in the settings (`PUT /api/v1/assistant` `main`) hands over the same way.
+   The supervision loop also moves whatever a former main chat (`assistant.former_main`) still holds. That covers switches made before tasks moved, and a move a restart cut short.
 
 Why:
 
@@ -672,6 +708,10 @@ Why:
 - **Carry compaction summary, not knowledge base**: people, groups, projects, memory, live snapshots already exist for every assistant chat (CLAUDE.md, tools, message snapshots); carrying them duplicates content.
   What's lost is chat-specific conclusions and ongoing work, exactly the compaction summary. Without compaction, carry only recent messages; confirmation suggests compacting first.
 - **Don't delete old chats**: archive only removes from lists; sending again automatically restores them (`unarchiveOnSend`).
+- **Tasks follow the main chat**: the background supervisor follows the current main chat's tasks without owning their ledger, and nobody reads an archived chat.
+  Every check that compares a task's supervisor with a conversation would treat the new main chat as an outsider:
+  its `agent_send` would reach the agent as a side conversation, the done judge would discount the agent's next turn, and `agent_supervise` would refuse.
+  Receipts and reviews would also go to the archived chat's feed.
 
 iOS / macOS (#1762): avatar top-bar menu (same Mac menu, also sidebar main-chat context menu) adds "Compact context" / "New main chat…", shown only with hub features `assistant_compact` / `assistant_main_new`.
 Status above input (`MainConversationActionsView.swift`): "Compacting context…", `done` shows "Context compacted" for 4 seconds, `failed` shows dismissible "Compaction failed: …";
@@ -975,6 +1015,159 @@ do not collide with the north star's, so they can be served from that read later
 `availability` is a different number: whether a conversation could be started or resumed at all. The reply wait
 starts when the hub takes the owner's message (`session.user_spoke`), before the node accepts it; the hub's message
 outcome (`session.assistant_sent`) only takes back the wait of a message that was not sent.
+
+## Recommended setup (#5085)
+
+Step R3 (section 4c) of `docs/design/proposals/main-chat-availability.md`. The mechanisms that cut asks and
+background rounds ship off or empty, because each spends tokens or acts for the owner. Once a week a briefing says,
+from this install's own records, which of them would have removed how many of the last 7 days' asks or background
+rounds, what it costs in one sentence, and where it is turned on. Code: `server/internal/assistant/setup_suggest.go`.
+
+- **Computed, not written.** Every number is counted by the manager from what is recorded anyway; no model call makes
+  or changes one, and there is no table of its own. The model is given the finished lines and told to copy them
+  unchanged (`prompts/assistant/routine_facts.md`).
+- **Nothing is turned on.** The block only reads. Its one write is its own book (setting
+  `assistant.setup_suggestions`: the week it was last told in, and when each mechanism was last named). The model is
+  told not to turn any of them on and not to call the settings tool for it; the owner does it where the line says.
+- **Which briefing.** There is no weekly routine, so the block goes with the first briefing (a routine with `facts`
+  on, `docs/extensions/bots.md` ("Morning and evening briefings")) that reaches the owner in a week, Monday first,
+  in the owner's time zone. "Reaches" is the run's turn ending normally, with its `brief` item (which carries the
+  block) in the conversation, or its Lark card going out, whichever comes first. It does not depend on the finished
+  push: that push is dropped when the owner has the conversation open, when it is muted, for a task that pushes only
+  what its runs send and for a health task, and the block was shown all the same. A run that failed marks nothing, so
+  its retry, or the next briefing, carries the block. Every other briefing of the week has none, also when the first
+  one had nothing to name. Without a briefing routine with `facts` on there is no block.
+- **Where it shows.** Two places draw the computed lines themselves: a section of the Lark briefing card after "In
+  progress", each line with a link to its settings page in the web app when it has one and hub.json has a
+  `public_url`; and the web app's briefing card, from the `setup` list of the run's `brief` item
+  (`docs/protocol/protocol.md` ("Tasks and the chat feed")), with an **Open settings** button on the lines that have
+  a page (`docs/web/web.md`). The model is also given the lines and copies them at the end of its answer when no
+  Lark card goes out, as it does the briefing's other rows. The iOS and Android apps do not draw `setup` yet: an
+  owner who uses only those, without the Lark card, reads the lines in the model's answer, which is the model's
+  copy and not checked against the computed lines.
+- **Where a mechanism is turned on.** Session triage's three switches, the standing authorizations and the
+  remembered kinds of task are on the assistant's own settings page in the web app (`/settings?tab=persona`; iOS
+  Settings › General, Android Settings › AI); the lines name the switch by the label it has there. Leader
+  conversations: **Pin** in a conversation's menu. The spot-check share: asking Persona, confirmed on a card. The
+  assistant answering agents' questions and the independent review have no switch in any app: their lines say so and
+  name the key and value for the assistant's configuration file (`docs/operations/config.md`).
+- **Once a month.** A mechanism the block named is not named again for 30 days, whatever its count.
+- **Not named**: a mechanism that is on, and a count under 3 (10 rounds for leader conversations).
+
+Each number, in one line. "Last week" is the 7 days before the run starts; "before" looks back 30 days, as long as
+the work events are kept.
+
+| Mechanism (`id`, setting) | The number | Named when |
+| --- | --- | --- |
+| Assistant answers agents' questions (`delegate`, `agents.delegate`) | Question cards a supervisor passed up to the owner with a recommendation (`ask_escalated`) that the owner answered once last week, with exactly that recommendation. Only a leader conversation's supervisor passes a question up, so without leader conversations this is always 0 | `agents.delegate` is off |
+| Standing authorizations (`standing_authorizations`, `assistant.standing_authorizations`) | The owner's go-aheads last week for merge, push or deploy-test (read as "A rule after the same answer three times" reads them) in a directory no grant covers, where they had given the same go-ahead before and never said no to it | Always; a covered directory is not counted |
+| Start directly (`task_trust`, `tasks.trust`) | Plans made last week that the owner started, every file-changing kind of which (same computer and directory) they had started before, never dismissed, and `tasks.trust` does not hold | Always; a trusted kind is not counted |
+| Triage: card for decisions (`triage_decide`, `agents.triage.decide`) | Stops waiting on the owner that only `decide` being off kept from being a card (not muted, no authorization link), and that went on by hand (`resumed` with `hand` `decide`) | The triage is on and `decide` is off |
+| Triage: continue after errors (`triage_auto_continue`, `agents.triage.auto_continue`) | Stops on a usage limit whose CLI does not go on by itself, which only `auto_continue` being off kept from being continued at the reset, and that went on by hand (`resumed` with `hand` `auto_continue`) | The triage is on and `auto_continue` is off |
+| Triage: wake on schedule (`triage_wake`, `agents.triage.wake`) | Stops waiting on something named (CI, a deploy, another agent) with no risky next step, which only `wake` being off kept from being woken, and that went on by hand (`resumed` with `hand` `wake`) | The triage is on and `wake` is off |
+| Leader conversations (`leaders`, `assistant.leaders`) | The main conversation's rounds last week that a supervision message started (the `round` rows of "Availability metrics" above), and their minutes | No leader conversation exists |
+| Spot-check reviews (`review_sample`, `assistant.review_sample_percent`) | Supervised tasks whose first and only review, last week, was the supervisor's own `accepted` with every `done_when` criterion met with evidence, no `user_check`, the work live, and never reopened | The share is 100 |
+| Independent review (`independent_review`, `agents.review.launcher`) | Reworks a supervisor sent last week after the done judge had called the work done (`review_rework` with `judged_done`) | No reviewer launcher is set |
+
+What the numbers do and do not say:
+
+- **They are lower bounds of what was certain, not forecasts.** A go-ahead counts only as a repeat, a plan only when
+  all of its kinds were started before, a review only when the judge's own conditions held; the delegate, the judge
+  and an independent reviewer still decide case by case once they are on, so a mechanism may remove fewer.
+- **Leader conversations move rounds, they do not remove them.** The number is the main conversation's time spent on
+  follow-ups; a leader spends that time in its own conversation, for the tasks of its direction only.
+- **The triage's own switch (`enabled`) is never named.** With the triage off nothing about a stopped turn is
+  recorded (reading one is the model call the switch costs), so there is no number to give, and its three actions
+  are counted only while it is on. A stop on a transient model error is not counted either: `transient_retry`
+  continues those by default (`docs/assistant/agent-work.md` ("Switches")), so the proposal's example for
+  `auto_continue` became the usage-limit count.
+- **"By hand" is what Persona did not do.** The triage notes, when it leaves a stop alone, the one action that its
+  switch being off kept it from (the same conditions the switch itself checks, so a `/loop`, a background task, a
+  wait whose next step is risky and a usage limit the CLI resumes itself are never noted). When that session works
+  again the `resumed` row carries the action as `hand` only if no message of this manager's went to it in the two
+  minutes before (the triage's own, a supervisor's rework, a task's follow-up, the assistant's session tool) and the
+  node does not say the agent woke itself (a background task's report, a `/loop`). What is left is a message from
+  outside Persona: the owner's, in an app or typed into the agent's terminal. The manager cannot tell the two apart
+  from anything else typed there, which is why the lines say "by hand" and not "you wrote".
+- **The triage's notes are not kept over a restart of the manager.** A stop triaged before a restart and resumed
+  after it is not counted. Rows from before this version carry no `hand` and are not counted either.
+- **A hello that fails names nothing it cannot read.** Whether the delegate and the independent review are on comes
+  from the hub's hello; when it cannot be read neither is named, as the triage's three are not when its switches
+  cannot be read.
+- **A lower tier for supervision is not suggested.** The proposal ties it to K1's numbers (reviews and tokens per
+  supervisor model), which are not recorded yet; the block leaves it out until they are.
+
+## Supervision by model (#5086)
+
+Step K1 of the same proposal (section 9c): what supervision costs per accepted task, by the model the supervisor ran
+on, so a cheaper or a stronger model for the background supervisor (`assistant.supervise`,
+`docs/assistant/model-config.md` "Models for each role") can be judged on this install. It is the `supervision` field
+of `GET /api/v1/assistant/availability`; nothing shows it in an app or a briefing, and nothing acts on it. Each number
+in one sentence:
+
+- **Accepted** (`by_model[].accepted`): the acceptances in the window, each a `task_review` that accepted a task and
+  closed it, by the model and effort the reviewer ran on when it reviewed; a task accepted, reopened and accepted
+  again counts twice.
+- **Settled** (`by_model[].settled`): those of the acceptances that were made at least 24 hours before the read, whose
+  day to be reopened in is over.
+- **Reopened** (`by_model[].reopened`): the settled acceptances whose task was reopened within 24 hours of the
+  acceptance, whichever way (by hand, a change asked on its "Please verify" card, its agent set to work again). The
+  rate to compare between models is `reopened` over `settled`.
+- **Rework rounds** (`by_model[].rework_rounds`, `rework_rounds_per_task`): the times the accepted tasks were sent
+  back between their previous acceptance (or their start) and this one, whoever sent them back, in all and divided
+  by the acceptances.
+- **Output tokens per day** (`days[].output_tokens`, next to `days[].accepted`): per day and supervisor conversation,
+  the output tokens the conversation generated in the rounds that ended that day, beside the tasks it accepted that
+  day.
+
+**Tokens are not attributed to tasks.** Nothing recorded says which task a supervisor's turn was spent on: one
+supervision message gathers several tasks' signals, the token usage the nodes report (`docs/server/usage-windows.md`,
+the usage buckets) is per computer, model and launcher with no conversation, and a conversation's own count is one
+running total. So the read does not give "tokens per accepted task"; it puts a supervisor conversation's day of output
+next to that day's acceptances and leaves the division to the reader, who knows what else the conversation did that
+day. The count is **output tokens only** (no input, no cache reads or writes, which are most of a long conversation's
+cost) and is **the conversation's whole output**: for the main conversation that includes its talk with the owner, for
+the background supervisor nearly all of it is supervision.
+
+How they are recorded (`server/internal/assistant/availability_supervision.go`), as work events with no new table:
+
+- One `task_reviewed` row per `task_review` (any verdict). An acceptance is written once it closed the task: not for
+  a task that was closed already, nor when the close failed or closed nothing (a concern, which only its report
+  closes), so a retry is not a second acceptance. The row has the task, the verdict as written, the task's rework
+  rounds in all (`round`) and since its previous acceptance (`rework_rounds`, counted from the ledger's reviews, of
+  which it keeps the last 20), the reviewer, its role (`main`, `background`, `leader`, `conversation` for a side
+  conversation reviewing what it handed out, or `task_leader` for a task leader's agent reviewing its workers) and
+  the model and effort it ran on. Those are what the reviewer's node lists for it (`Session.model`,
+  `Session.effort`); for the main conversation and the background supervisor, what the node does not say is filled
+  from their purpose's binding. Both read `""` when neither says (the launcher's own default, which the manager
+  cannot name).
+- The `round` row of "Availability metrics" also carries the conversation's `model`, `effort` and `output_tokens` as
+  its node listed them when the round ended; `output_tokens` is the conversation's running total
+  (`Session.output_tokens`), and the read counts the difference between two rounds.
+- A reopen is the `todo_reopened` row that already existed (`docs/assistant/agent-work.md` "Evaluation"); it counts
+  against the task's latest acceptance before it, once, when it came within 24 hours of that acceptance. That is the
+  same day the work stats' `wrong_done.reopened` gives a close by the done judge, so "reopened" means a reopen within
+  24 hours in both; the two count different closes (a review's here, the judge's there).
+
+What the numbers do and do not say:
+
+- Only a conversation's own `task_review` counts. A task the done judge closed for its supervisor
+  (`review_sample_percent` below 100) has no reviewing conversation and is in none of these numbers.
+- `by_model` is keyed by model and effort alone: the main conversation, the background supervisor, leaders and task
+  leaders' agents on the same model and effort share a row. `days` has one row per conversation with its role, for
+  telling them apart; a task leader's agent has no `days` row, because an agent's rounds are not recorded as an
+  assistant conversation's and there is no output count to put beside its acceptances.
+- A model's name is whatever the node lists (an alias, a gateway's own id), so one model may appear under two names
+  when a binding was changed from one form to the other.
+- The first round recorded for a conversation counts no tokens: there is nothing to take the difference from. Rounds
+  from up to 48 hours before the window supply that for the window's first round. A count that goes down (a new
+  transcript) counts from zero again. A node that lists no output count (a runtime that reports none) gives 0.
+- A day's `model` and `effort` are those of the conversation's last round that day; a conversation whose model was
+  changed during the day has one row for it.
+- Every row's reopens are counted by one rule, so a model in use for three days and one in use for a month compare:
+  an acceptance younger than 24 hours is in `accepted` but in neither `settled` nor `reopened` yet, and a reopen
+  later than 24 hours after the acceptance is not held against it. An acceptance from before the window that is
+  reopened inside it is not counted.
 
 ## Chat titles
 

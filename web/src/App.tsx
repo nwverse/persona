@@ -10,10 +10,13 @@ import { navigationCrumb } from "./lib/error-reports";
 import { lazyPage, preloadPages } from "./lib/lazy-page";
 import { drawerA11y, focusBack, useDrawerDrag } from "./lib/drawer";
 import { acceptHubs, here, rememberHub, takeHubs } from "./lib/hubs";
+import { holdImportLink, takeImportLink } from "./lib/import-link";
+import { stripBase } from "./lib/base";
 import { useSessionPanels } from "./lib/panel-memory";
 import { paneRoute, resolveTab, tabOfSessionLink, tabPagePane } from "./lib/herdr-tree";
 import { askTeamWorker, isWorker } from "./lib/team";
 import { resolveSessionLink, sessionLinkRoute, type SessionLink } from "./lib/session-link";
+import { engineSwitchHome } from "./lib/engine-switch";
 import { followSubagentLink, splitSubagentLink } from "./lib/subagent-link";
 import { href, inWorkView, navigate, onLinkClick, type Route, routePath, useRoute, withWorkView } from "./lib/router";
 import { agentChatKey, noteChatShown, personaChatKey } from "./lib/recent-chats";
@@ -93,6 +96,20 @@ if (carried) {
   acceptHubs(carried.hubs, carried.removed);
   window.history.replaceState(window.history.state, "", carried.rest);
 }
+
+// A provider import link (`/settings?tab=models#import=…`, #5420) left the address bar before anything loaded (main.tsx,
+// lib/import-link.ts says why). Pasted into the address bar of a page already open, only the fragment changes and
+// nothing loads: it is taken then, the rest of the fragment with it (this page is signed in: nothing reads it now).
+function takeImportLinkHere() {
+  const importing = takeImportLink(window.location.href);
+  if (!importing) return;
+  // the fragment goes first: navigate does nothing for an address that differs only in it, and on an open page another
+  // address goes through the router, or the page the link was pasted over would stay
+  window.history.replaceState(window.history.state, "", location.pathname + location.search);
+  navigate(stripBase(importing.rest.replace(/#.*$/, "")), true);
+  holdImportLink(importing.text);
+}
+if (typeof window !== "undefined") window.addEventListener("hashchange", takeImportLinkHere);
 
 const workspaceActions = { onWorkspaceMenu: openWorktreeActions };
 function openWorkspaceInTree(target: WorkspaceTarget) {
@@ -232,6 +249,10 @@ function pageTarget(s: State, route: Route): PageTarget | undefined {
   // the lookup of an unlisted chat), the session itself until then
   const parent = row?.folded_under;
   if (parent && parent !== route.sid) return { link: undefined, to: routePath(withWorkView({ name: "session", mid: route.mid, sid: parent }, inWorkView(route))), mid: route.mid, sid: undefined, parent };
+  // an earlier session of a conversation that moved between Claude Code and Codex (#5054): the conversation's own row,
+  // whose chat reads that session's stretch in its place
+  const home = engineSwitchHome(rows, route.sid);
+  if (home) return { link: undefined, to: routePath(withWorkView({ name: "session", mid: route.mid, sid: home.session_id }, inWorkView(route))), mid: route.mid, sid: undefined };
   // an old `/s/…` link of a pane in a tab becomes that tab's `/t/…`
   const tab = tabOfSessionLink(rows, route);
   // a `/s/…` link with only the front of an id (the 8-character ones shown everywhere, #2464): the whole id's link;
