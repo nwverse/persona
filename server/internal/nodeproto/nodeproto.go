@@ -73,6 +73,13 @@ const (
 	// its next session.send carries out (docs/integrations/claude-integration.md "Switching a running Agent to another
 	// provider"). A node without it would drop launcher and apply the model on the launcher the Agent runs on.
 	LauncherSwitch = "launcher_switch"
+	// EngineSwitch: session.modes takes a launcher of the other engine (Claude Code ↔ Codex) for a running terminal
+	// Agent, kept as its pending switch (Session.pending_switch.agent); its next session.send with apply_switch starts
+	// that engine in the same terminal with a handoff summary, or resumes the conversation's earlier session of it, and
+	// the conversation's earlier sessions are named on the row now running it (engine_history) and left out of the
+	// list (docs/protocol/protocol.md "Switching a running Agent to another engine"). A node without it refuses such a
+	// pick (switch_unsupported / switch_other_agent).
+	EngineSwitch = "engine_switch"
 )
 
 // Error codes in the manager's answers to a resident node's replayed notifications (a notify with spool_id,
