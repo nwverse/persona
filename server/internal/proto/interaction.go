@@ -73,11 +73,6 @@ type Interaction struct {
 	Kind            string          `json:"kind"`
 	CreatedAt       time.Time       `json:"created_at"`
 	ExpiresAt       time.Time       `json:"expires_at"`
-	// Deadline is when an ask_user's questions take their recommended options by default (when Reversible) or are
-	// reminded again (when not); absent without one. Reversible is whether the asker said going ahead can be undone;
-	// absent when it did not say. Both are the asker's own words, kept on the card for the history.
-	Deadline   *time.Time `json:"deadline,omitempty"`
-	Reversible *bool      `json:"reversible,omitempty"`
 	ToolName        string          `json:"tool_name,omitempty"`
 	ToolUseID       string          `json:"tool_use_id,omitempty"`
 	Questions       []Question      `json:"questions,omitempty"`
@@ -154,6 +149,13 @@ type Interaction struct {
 	// FoldedAs is its session's Session.FoldedAs: "worker" when the asking session is a tab's worker folded under its
 	// lead (#5180). Set beside FoldedUnder when sent to clients.
 	FoldedAs string `json:"folded_as,omitempty"`
+	// Deadline is when an ask_user's questions take their recommended options by default (when Reversible) or are
+	// reminded again (when not); absent without one. Reversible is whether the asker said going ahead can be undone;
+	// absent when it did not say. Both are the asker's own words, kept on the card for the history
+	// (docs/protocol/protocol.md "Decision fields").
+	Deadline *time.Time `json:"deadline,omitempty"`
+	// Reversible: see Deadline.
+	Reversible *bool `json:"reversible,omitempty"`
 }
 
 // Delegate is the assistant's context on a question it left to the user (Interaction.Delegate): it is a red line or
