@@ -14,6 +14,7 @@ import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.isDialog
@@ -23,6 +24,7 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.CoroutineScope
@@ -152,18 +154,17 @@ class AssistantQueueShotsTest {
         File(output, "$name.png").outputStream().use { image.compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
 
-    @Test fun personasQueueFoldedOpenAndSendNowInEveryStyle() {
+    private fun page(style: () -> AppStyle, dark: () -> Boolean, fontScale: Float = 1f) {
         val tasks = TasksStore(api, connection, scope).also { it.reloadTodos() }
-        var style by mutableStateOf(AppStyle.Glass)
-        var dark by mutableStateOf(false)
         rule.mainClock.autoAdvance = false
         rule.setContent {
             val configuration = Configuration(LocalConfiguration.current).apply {
                 uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
-                    if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
+                    if (dark()) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
             }
-            CompositionLocalProvider(LocalConfiguration provides configuration) {
-                PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+            CompositionLocalProvider(LocalConfiguration provides configuration,
+                LocalDensity provides Density(LocalDensity.current.density, fontScale)) {
+                PersonaTheme(darkTheme = dark(), reduceMotion = true, style = style()) {
                     Box(Modifier.width(400.dp).height(760.dp).background(PersonaTheme.palette.background).testTag("assistant-queue-shot")) {
                         ChatScreen(main, chats, sender, interactions, sessions, {},
                             chrome = ChatChromeBindings(actions = actions, connection = connection, tasks = tasks, onOpenSession = {}),
@@ -174,6 +175,12 @@ class AssistantQueueShotsTest {
         }
         settle()
         rule.waitUntil(10_000) { rule.onAllNodesWithTag("assistant-tray-bar").fetchSemanticsNodes().isNotEmpty() }
+    }
+
+    @Test fun personasQueueFoldedOpenAndSendNowInEveryStyle() {
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        page({ style }, { dark })
         for (s in AppStyle.entries) for (d in listOf(false, true)) {
             style = s; dark = d
             val suffix = "${s.name.lowercase()}-${if (d) "dark" else "light"}"
@@ -189,6 +196,22 @@ class AssistantQueueShotsTest {
                 shot("queue-send-now-$suffix", rule.onNode(isDialog()).captureToImage().asAndroidBitmap())
                 rule.onAllNodesWithText("Cancel")[0].performClick(); settle()
                 // Folded again for the next pass.
+                rule.onAllNodesWithContentDescription("queued · Persona", substring = true)[0].performClick(); settle()
+            }
+        }
+    }
+
+    // Android's largest text (twice the size), Glass opened: the disc grows with the words, as iOS's scaledFrame.
+    @Test fun personasQueueAtTheLargestText() {
+        var dark by mutableStateOf(false)
+        page({ AppStyle.Glass }, { dark }, fontScale = 2f)
+        for (d in listOf(false, true)) {
+            dark = d; settle()
+            rule.onAllNodesWithContentDescription("queued · Persona", substring = true).fetchSemanticsNodes().firstOrNull()?.let {
+                rule.onAllNodesWithContentDescription("queued · Persona", substring = true)[0].performClick(); settle()
+            }
+            shot("queue-open-largest-glass-${if (d) "dark" else "light"}")
+            rule.onAllNodesWithContentDescription("queued · Persona", substring = true).fetchSemanticsNodes().firstOrNull()?.let {
                 rule.onAllNodesWithContentDescription("queued · Persona", substring = true)[0].performClick(); settle()
             }
         }

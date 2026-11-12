@@ -141,7 +141,7 @@ private fun GlassQueueStrip(
                             QueueNumber(index + 1)
                             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xxs)) {
                                 Text(text, style = type.callout, color = palette.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                note?.let { Text(it, style = type.caption, color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                                note?.let { Text(it, style = type.caption, color = palette.ink2) }
                             }
                             if (enabled) JIcon(PersonaIcons.more, null, size = Tokens.Space.l, tint = palette.ink3,
                                 modifier = Modifier.padding(top = Tokens.Space.xxs))
