@@ -3516,7 +3516,7 @@ def recording_minutes(body, rid=None):
 
 # The managers' roster (docs/assistant/managers.md): the hub's own assistant (the default), one on another computer, one offline,
 # one still installing. MOCK_MANAGER_COMMANDS=1 adds the install commands to a new code's answer; MOCK_MANAGERS=0 is a
-# hub from before the roster (404); MOCK_MANAGERS=1 only the hub's own (one manager: no switcher, no grouping).
+# hub from before the roster (404); MOCK_MANAGERS=1 only the hub's own (one manager: a one-row switcher without Default, no grouping).
 def _managers_seed():
     if os.environ.get("MOCK_MANAGERS") == "1":
         return [{"id": "assistant", "name": "助手", "online": True, "builtin": True, "host": "server", "os": "linux", "arch": "amd64",
@@ -10365,6 +10365,40 @@ if MOCK_INBOX_EVENTS:
             if _x["id"] in _event_mutes: _x["mutes"] = _event_mutes[_x["id"]]
 
 
+# MOCK_HANDOFF_CARD=1 (with MOCK_TASKS=1): an item handed to the main conversation that wrote back (#5932,
+# docs/assistant/inbox.md "Item actions"): the item carries the hand-off and the conversation's reply suggestion, and the
+# main conversation's feed has the write-back card (kind inbox_suggestion), so the chat draws the card and "Wrap up".
+# MOCK_HANDOFF_CARD=sent: the reply was confirmed and sent (the card says so). Confirming the card's suggestion files the
+# item as replied, as the hub does for a hand-off conversation's reply.
+MOCK_HANDOFF_CARD = os.environ.get("MOCK_HANDOFF_CARD", "")
+if MOCK_HANDOFF_CARD:
+    _hid = "lark:oc_handoff:300"
+    _hcard = {"version": 2, "kind": "reply", "text": "王总您好，报价单我周五上午发您，按三年维保报，有问题随时找我。",
+              "note": "上次给同类客户的报价按三年维保；周五上午有空。",
+              "recap": "示例客户问报价和维保年限。我们在对话里定了：周五上午发报价单，按三年维保报。",
+              "title": "示例客户", "source": "lark", "account": "飞书", "sender": "示例客户"}
+    _hitem = {"id": _hid, "source": "lark", "kind": "dm", "account": "lark", "account_name": "飞书", "title": "示例客户",
+              "sender": "示例客户", "preview": "周五前能给个报价吗？维保按几年算？", "count": 2, "started_at": ago(minutes=50),
+              "updated_at": ago(minutes=3), "tier": "action", "status": "action", "summary": "示例客户问报价和维保年限",
+              "read": True, "recap": _hcard["recap"], "lark": {"feed_id": "oc_handoff", "is_group": False, "start_position": "300"},
+              "handoffs": [{"machine_id": "server", "session_id": ASK1, "at": ago(minutes=40)}],
+              "suggestion": {"version": 2, "kind": "reply", "text": _hcard["text"], "note": _hcard["note"], "at": ago(minutes=3),
+                             "conversation": {"machine_id": "server", "session_id": ASK1}},
+              "chain": [{"id": "c1", "at": ago(minutes=50), "kind": "received", "text": "收到 2 条消息 · 示例客户", "count": 2, "sender": "示例客户"},
+                        {"id": "c2", "at": ago(minutes=40), "kind": "handling", "text": "交给了 Persona 主对话",
+                         "link": {"type": "session", "machine_id": "server", "session_id": ASK1}}]}
+    if MOCK_HANDOFF_CARD == "sent":
+        _hitem.pop("suggestion")
+        _hitem.pop("status")
+        _hitem.update(done_at=ago(minutes=1), done_by="replied")
+        _hitem["chain"] += [{"id": "c3", "at": ago(minutes=1), "kind": "confirmed", "text": "你确认了", "detail": _hcard["text"]},
+                            {"id": "c4", "at": ago(minutes=1), "kind": "sent", "text": "发了飞书消息", "link": {"type": "source"}}]
+    INBOX.insert(0, _hitem)
+    if MOCK_TASKS:
+        TASK_FEED.setdefault(ASK1, []).append({"id": "feed_handoff", "conversation": ASK1, "at": ago(minutes=0.4), "kind": "inbox_suggestion",
+                                               "ref": _hid, "body": _hcard})
+
+
 def _chain_add(x, kind, text, **more):
     x.setdefault("chain", []).append(dict({"id": "c%d" % (len(x["chain"]) + 1), "at": ago(), "kind": kind, "text": text}, **more))
 
@@ -10382,7 +10416,8 @@ def inbox_suggestion(iid, body):
     SENT.append(dict(body, inbox=iid))
     x.pop("suggestion", None)
     x.pop("agent", None)
-    h = x.setdefault("handling", {"owner": "manager"})
+    # a hand-off conversation's suggestion leaves the item's processing state alone (assistant/inbox_handoff.go)
+    h = {} if s.get("conversation") else x.setdefault("handling", {"owner": "manager"})
     if action == "reject":
         _chain_add(x, "rejected", "你驳回了")
         h.update(state="looking", since=ago()); x["status"] = "working"
@@ -10396,7 +10431,12 @@ def inbox_suggestion(iid, body):
         text = body.get("text") or s["text"]
         edited = text != s["text"]
         _chain_add(x, "confirmed", "你确认了（改过文字）" if edited else "你确认了", detail=text, **({"edited": True} if edited else {}))
-        if s["kind"] == "reply":
+        if s["kind"] == "reply" and s.get("conversation"):
+            # a hand-off conversation's reply (#5932): sent and filed as replied; nobody follows the other side's answer
+            _chain_add(x, "sent", "发了邮件" if x.get("mail") else "发了飞书消息", link={"type": "source"})
+            x.pop("status", None)
+            x["done_at"], x["done_by"] = ago(), "replied"
+        elif s["kind"] == "reply":
             _chain_add(x, "sent", "发了邮件" if x.get("mail") else "发了飞书消息", link={"type": "source"})
             h.update(state="waiting", since=ago()); x["status"] = "working"
         elif s["kind"] == "agent":
