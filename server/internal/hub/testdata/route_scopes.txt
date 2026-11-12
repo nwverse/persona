@@ -40,6 +40,7 @@ extensions.call:{id} /api/v1/extensions/{id}/
 -                    DELETE /api/v1/admin/devices/{credential_id}/owner
 -                    DELETE /api/v1/admin/devices/{id}
 -                    DELETE /api/v1/admin/extensions/{id}
+-                    DELETE /api/v1/admin/extensions/{id}/egress/allow
 -                    DELETE /api/v1/admin/machines/{id}
 -                    DELETE /api/v1/admin/peers/{hub_id}
 -                    DELETE /api/v1/admin/usage-sources/{id}
@@ -287,6 +288,7 @@ agents.read          GET /api/v1/sessions/{mid}/{sid}/screen
 -                    GET /api/v1/sessions/{mid}/{sid}/share-preview/{preview_id}
 -                    GET /api/v1/skills
 -                    GET /api/v1/subscriptions
+-                    GET /api/v1/subscriptions/-/graph
 -                    GET /api/v1/subscriptions/catalog
 -                    GET /api/v1/subscriptions/summary
 -                    GET /api/v1/subscriptions/{id}
@@ -320,6 +322,7 @@ todos.write          PATCH /api/v1/todos/{id}
 -                    POST /api/v1/admin/doctor
 -                    POST /api/v1/admin/extensions/install
 -                    POST /api/v1/admin/extensions/preview
+-                    POST /api/v1/admin/extensions/{id}/egress/allow
 -                    POST /api/v1/admin/extensions/{id}/rollback
 -                    POST /api/v1/admin/extensions/{id}/upgrade
 -                    POST /api/v1/admin/login
