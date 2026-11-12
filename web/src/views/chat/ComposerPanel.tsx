@@ -342,7 +342,7 @@ export function ComposerPanel({
               }
               if (e.key !== "Tab" && key(e.key)) e.preventDefault();
             }}
-            className="h-8 w-full rounded-full border border-line bg-transparent pr-2 pl-7 text-[13px] text-ink outline-none placeholder:text-ink-3 focus:border-line-strong [@media(pointer:coarse)]:text-[16px]"
+            className="h-8 w-full truncate rounded-full border border-line bg-transparent pr-2 pl-7 text-[13px] text-ink outline-none placeholder:text-ink-3 focus:border-line-strong [@media(pointer:coarse)]:text-[16px]"
           />
         </div>
       )}
