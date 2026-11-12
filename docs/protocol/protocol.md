@@ -2401,7 +2401,7 @@ fold expansions like the rest of the item; old nodes send none, and clients that
 | `cache_write` | Claude `cache_creation_input_tokens`, every lifetime; Codex none |
 | `cache_write_1h` | Of `cache_write`, what was written for an hour (`cache_creation.ephemeral_1h_input_tokens`), priced higher than the 5-minute writes |
 | `fast` | The requests ran at Claude Code's fast speed (`usage.speed` `fast`) |
-| `id` | Only on a sub-Agent's report: `agent:<agent id>`. Entries with the same `id` and `model` are one report, counted once (the largest of each field): a sub-Agent reported on two items (its hand-back and its notice) counts once |
+| `id` | Only on an agent's report: `agent:<agent id>`, a sub-Agent's, each of its nested sub-Agents' and each agent of a workflow run's. Entries with the same `id` and `model` are one agent's: a client counts them once across the chat (the largest of each field), as an agent can be reported on more than one item (its hand-back and its notice; a nested background sub-Agent's own notice to the session as well as its launcher's report) |
 
 Zero counts are left out. Where it rides:
 
@@ -2410,23 +2410,33 @@ Zero counts are left out. Where it rides:
   shown) leaves it to the request's next line, and a line without a message id is a request of its own. Claude Code up to
   2.1.306 wrote the output so far on a reply's earlier blocks: a later line of the request whose counts grew carries what
   grew, so a request's entries add up to its last usage. None on Claude Code's own lines for a failed request
-  (`<synthetic>`, `isApiErrorMessage`), on usage that is all zeros (a gateway's on a turn's other replies), or on
-  sidechain lines. A line carries the same whether it comes in a push, a page or a page of a big file opened by its end.
+  (`<synthetic>`, `isApiErrorMessage`), on usage that is all zeros (a gateway's on a turn's other replies), or on the
+  sidechain lines of a session's transcript. A sub-Agent's own chat (`<session>@<agent>`, its transcript read on its
+  own) carries its requests' usage this way, except for a fork's copy of the reply that launched it, before the fork's
+  prompt (its first user line): that request is the launcher's. A line carries the same whether it comes in a push, a
+  page or a page of a big file opened by its end.
 - **Codex**: the turn's requests summed as the usage meter counts them (a `token_count` is a new request only when
   `total_token_usage.total_tokens` grew; rate-limit updates repeat it), on the `turn_duration` item its `task_complete`
-  makes, or on the "已中断" notice of a turn the user stopped.
+  makes, or on the "已中断" notice of a turn the user stopped. An older Codex's `task_complete` without `duration_ms`
+  makes no `turn_duration` item, so that turn's usage is not reported (a known limit).
 - **A finished sub-Agent**: an item whose `task` is `{kind: "agent", task_id, status}` with `status` `completed`,
   `failed`, `killed`, `stopped` or `ended` (a foreground Agent call's result, a background agent's completion notice or
-  hand-back) carries what the sub-Agent's own transcript (`<session>/subagents/agent-<id>.jsonl`) used, its nested
-  sub-Agents' included (their metas' `parentAgentId`), one entry per model and speed with `id: "agent:<id>"`. A fork's
-  transcript starts with a copy of the reply that launched it: that request is its launcher's, not counted. A team's
-  in-process teammate (its meta's `taskKind` `in_process_teammate`) is left out, its spawn result and as a nested
-  sub-Agent alike: a long-lived worker with its own transcript, whose usage is not the turn that spawned it. The node
-  adds this to pages and pushes of Claude Code transcripts, reading each sub-Agent file once and then only what it gained.
+  hand-back) carries what the sub-Agent's own transcript (`<session>/subagents/agent-<id>.jsonl`) used under
+  `id: "agent:<id>"`, and what each of its nested sub-Agents' (their metas' `parentAgentId`, recursively) used under
+  that one's own `agent:<nested id>`, one entry per model and speed per agent. A fork's transcript starts with a copy of
+  the reply that launched it: that request is its launcher's, not counted. A team's in-process teammate (its meta's
+  `taskKind` `in_process_teammate`) is left out, its spawn result and as a nested sub-Agent alike: a long-lived worker
+  with its own transcript, whose usage is not the turn that spawned it.
+- **A finished workflow run**: an item whose `task` is `{kind: "workflow", task_id, status}` in one of those statuses
+  (the run's report) carries what each agent of its run used
+  (`<session>/subagents/workflows/<run id>/agent-<id>.jsonl`, the attempts a retry replaced included), each under its
+  own `agent:<id>`. The run is the one whose state file (`<session>/workflows/<run id>.json`, written as the run ends)
+  names the report's task (`taskId`); without one, the report carries none.
 - **Folds**: `fold.usage` (see "Folded work").
 
-A turn's usage is the sum over its items, folds' `fold.usage` included; prices per one million tokens come from the
-built-in catalog (`POST /api/v1/launchers/catalog`, `price`).
+The node adds the agents' usage to pages and pushes of Claude Code transcripts, reading each agent's file once and then
+only what it gained. A turn's usage is the sum over its items, folds' `fold.usage` included; prices per one million
+tokens come from the built-in catalog (`POST /api/v1/launchers/catalog`, `price`).
 
 ### Tool outcomes
 

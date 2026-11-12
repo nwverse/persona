@@ -374,12 +374,30 @@ func (f *File) seeded(fh *os.File, w *window, b int, end int64, window []byte) M
 			ParseLine(n, line, &ultra)
 		}
 	}
-	usage, codexTotal := f.seedUsage(readLine, func(n int) int64 { return w.lineStart(n+1, end) - w.starts[n-1] }, b, w.codex)
+	size := func(n int) int64 { return w.lineStart(n+1, end) - w.starts[n-1] }
+	usage, codexTotal := f.seedUsage(seedLines{line: readLine, size: size,
+		head: func(n int, most int64) []byte {
+			head := make([]byte, min(size(n), most))
+			if _, err := fh.ReadAt(head, w.starts[n-1]); err != nil && err != io.EOF {
+				return nil
+			}
+			return head
+		},
+		tokenCount: func(before int) int {
+			at := w.lineStart(before, end)
+			return lastMentionWithin(fh, w.starts, at, max(at-seedCodexSearch, 0), [][]byte{codexTokenCount})
+		},
+	}, b, w.codex)
+	// A subagent's own work starts at its first user line (a fork's copied context is its first two lines at most): a
+	// later window is past it.
 	return Meta{Sidechain: f.meta.Sidechain, Codex: w.codex, notified: scratch.notified, taskCalls: scratch.taskCalls,
 		handbacks: scratch.handbacks, agentCalls: scratch.agentCalls, bashInput: bash,
 		Ultracode: ultra.Ultracode, UltracodeAt: ultra.UltracodeAt, UltracodeSince: ultra.UltracodeSince, ultracodeCommand: ultra.ultracodeCommand,
-		usage: usage, codexTotal: codexTotal}
+		usage: usage, codexTotal: codexTotal, sawUser: b > 2}
 }
+
+// codexTokenCount marks a rollout's token_count line (seedCodexTotal).
+var codexTokenCount = []byte(`"type":"token_count"`)
 
 var taskIDRe = lazyre.New(`<task-id>([^<]{1,200})</task-id>`)
 var seedRequestTypeRe = lazyre.New(`"type"\s*:\s*"(?:api-request-blob|api-request-shape|tools-used)"`)
@@ -608,14 +626,19 @@ func quoteID(s string) []byte {
 // lastMention is the line (1-based, starts as in window) holding the last of the needles found in the file's bytes
 // before end, read back a block at a time; 0 when none is (or the file cannot be read).
 func lastMention(fh *os.File, starts []int64, end int64, needles [][]byte) int {
+	return lastMentionWithin(fh, starts, end, 0, needles)
+}
+
+// lastMentionWithin is lastMention looking back only to floor.
+func lastMentionWithin(fh *os.File, starts []int64, end, floor int64, needles [][]byte) int {
 	const block = 4 << 20
 	keep := 0 // a needle split across two blocks
 	for _, n := range needles {
 		keep = max(keep, len(n)-1)
 	}
-	buf := make([]byte, min(end, block+int64(keep)))
-	for hi := end; hi > 0; {
-		lo := max(hi-block, 0)
+	buf := make([]byte, min(end-floor, block+int64(keep)))
+	for hi := end; hi > floor; {
+		lo := max(hi-block, floor)
 		data := buf[:min(hi+int64(keep), end)-lo]
 		if _, err := fh.ReadAt(data, lo); err != nil && err != io.EOF {
 			return 0
