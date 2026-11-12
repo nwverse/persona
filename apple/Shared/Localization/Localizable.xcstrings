@@ -277,6 +277,30 @@
         }
       }
     },
+    "Couldn't check with the hub (%@)." : {
+      "comment" : "%@: the network's or the hub's error",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't check with the hub (%@)."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "hub に確認できませんでした（%@）。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没能向 hub 确认（%@）。"
+          }
+        }
+      }
+    },
     "Denied automatically in %@" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1243,6 +1267,29 @@
       },
       "extractionState" : "manual"
     },
+    "Persona checks again when you open this page." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona checks again when you open this page."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このページを開くたびに Persona がもう一度確認します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每次打开这一页，Persona 都会再确认一次。"
+          }
+        }
+      }
+    },
     "Place %lld [Place Map]" : {
       "localizations" : {
         "en" : {
@@ -1331,6 +1378,77 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "在地图中开始"
+          }
+        }
+      }
+    },
+    "No terminal engine on %@" : {
+      "comment" : "Why Resume in Terminal is off: the computer enables no terminal engine",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No terminal engine on %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ ではターミナルエンジンが有効になっていません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 没有启用终端引擎"
+          }
+        }
+      }
+    },
+    "Resume in Terminal" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Resume in Terminal"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ターミナルで再開"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在终端里恢复"
+          }
+        }
+      }
+    },
+    "This session isn't running, and %@ has no terminal engine to resume it in." : {
+      "comment" : "The terminal of a session that isn't running, on a computer that enables no terminal engine",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This session isn't running, and %1$@ has no terminal engine to resume it in."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このセッションは実行されておらず、%1$@ ではターミナルエンジンが有効になっていないため、ターミナルで再開できません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个会话没在运行，%1$@ 也没有启用终端引擎，没法在终端里恢复。"
           }
         }
       }
@@ -2048,6 +2166,29 @@
         }
       }
     },
+    "After an upstream refusal, this conversation answers with %@." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "After an upstream refusal, this conversation answers with %1$@."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上流で拒否されたため、この会話は %1$@ で応答しています。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上游拒绝了一次请求，这个对话现在用 %1$@ 回复。"
+          }
+        }
+      }
+    },
     "The app asks every address at once and uses the first in this order that answers; a later one when the earlier ones don't answer quickly. The paired address always comes first." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -2136,6 +2277,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "ハブ自身"
+          }
+        }
+      }
+    },
+    "The upstream refused this request, so it switched to %@." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The upstream refused this request, so it switched to %1$@."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上流がこのリクエストを拒否したため、%1$@ に切り替えました。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上游拒绝了这次请求，已改用 %1$@。"
           }
         }
       }
@@ -2255,19 +2419,19 @@
         }
       }
     },
-    "Back to Configured Model" : {
+    "Switch Back [Model Fallback Card]" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Back to Configured Model"
+            "value" : "Switch Back"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "設定済みのモデルに戻す"
+            "value" : "元に戻す"
           }
         },
         "zh-Hans" : {
@@ -82290,6 +82454,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "New Main Chat [Model Fallback Card]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New Main Chat"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新しいチャット"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新建主对话"
+          }
+        }
+      }
     },
     "New Main Chat?" : {
       "localizations" : {
