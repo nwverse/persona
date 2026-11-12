@@ -51,6 +51,7 @@ extensions.call:{id} /api/v1/extensions/{id}/
 -                    DELETE /api/v1/assistant/followups/{id}
 -                    DELETE /api/v1/assistant/memory/{name}
 -                    DELETE /api/v1/assistant/places/{id}
+-                    DELETE /api/v1/assistant/repositories/{id}
 -                    DELETE /api/v1/assistant/standing-authorizations/{id}
 -                    DELETE /api/v1/assistant/tasks/{id}
 -                    DELETE /api/v1/auth/tokens/{id}
@@ -84,10 +85,10 @@ inbox.write          DELETE /api/v1/inbox/policies/{id}
 -                    DELETE /api/v1/task-trust
 -                    DELETE /api/v1/todos/{id}
 todos.write          DELETE /api/v1/todos/{id}/agents/{mid}/{sid}
+-                    DELETE /api/v1/todos/{id}/seen
 todos.write          DELETE /api/v1/todos/{id}/spaces/{mid}/{space...}
 -                    DELETE /api/v1/todos/{id}/thread
 -                    DELETE {base}/markets/{mid}
--                    GET /api/v1/admin/assistant
 -                    GET /api/v1/admin/devices
 -                    GET /api/v1/admin/devices/{credential_id}/owner
 -                    GET /api/v1/admin/extensions
@@ -136,6 +137,8 @@ leaders.read         GET /api/v1/assistant/leaders
 -                    GET /api/v1/assistant/places
 -                    GET /api/v1/assistant/readiness
 assistant.ask        GET /api/v1/assistant/reporters
+-                    GET /api/v1/assistant/repositories
+-                    GET /api/v1/assistant/repositories/{id}
 -                    GET /api/v1/assistant/routines
 -                    GET /api/v1/assistant/runs
 -                    GET /api/v1/assistant/standing-authorizations
@@ -159,6 +162,7 @@ assistant.ask        GET /api/v1/assistant/reporters
 -                    GET /api/v1/endpoints
 -                    GET /api/v1/extensions
 -                    GET /api/v1/extensions/-/audit
+-                    GET /api/v1/extensions/-/catalog/{mid}/{id}/icon
 -                    GET /api/v1/extensions/-/operations
 -                    GET /api/v1/extensions/-/operations/{op}
 -                    GET /api/v1/extensions/-/prompts
@@ -170,6 +174,7 @@ assistant.ask        GET /api/v1/assistant/reporters
 -                    GET /api/v1/extensions/-/widgets
 -                    GET /api/v1/extensions/{id}/-/auth
 -                    GET /api/v1/extensions/{id}/-/dev/logs
+-                    GET /api/v1/extensions/{id}/-/icon
 -                    GET /api/v1/extensions/{id}/-/image/{token}
 -                    GET /api/v1/extensions/{id}/-/storage/retained
 -                    GET /api/v1/extensions/{id}/-/{$}
@@ -366,6 +371,9 @@ assistant.ask        POST /api/v1/assistant/conversations/{id}/stop
 -                    POST /api/v1/assistant/origins/backfill
 -                    POST /api/v1/assistant/places
 -                    POST /api/v1/assistant/readiness/dismiss
+-                    POST /api/v1/assistant/repositories
+-                    POST /api/v1/assistant/repositories/preview
+-                    POST /api/v1/assistant/repositories/{id}/restore
 -                    POST /api/v1/assistant/route/agent
 -                    POST /api/v1/assistant/routines/{id}/run
 -                    POST /api/v1/assistant/rule-suggestions/{id}/always
@@ -543,7 +551,6 @@ todos.write          POST /api/v1/todos/{id}/decisions
 -                    POST {base}/markets/{mid}/refresh
 -                    POST {bus.JoinPath}
 -                    POST {peerPairPath}
--                    PUT /api/v1/admin/assistant
 -                    PUT /api/v1/admin/devices/{credential_id}/owner
 -                    PUT /api/v1/admin/extensions/{id}/enabled
 -                    PUT /api/v1/admin/extensions/{id}/sandbox
@@ -562,6 +569,7 @@ todos.write          POST /api/v1/todos/{id}/decisions
 -                    PUT /api/v1/assistant/feishu/companions
 -                    PUT /api/v1/assistant/memory/{name}
 -                    PUT /api/v1/assistant/places/{id}
+-                    PUT /api/v1/assistant/repositories/{id}
 -                    PUT /api/v1/assistant/routines
 -                    PUT /api/v1/assistant/tasks/{id}
 -                    PUT /api/v1/bots/feishu
@@ -611,6 +619,7 @@ kb.write             PUT /api/v1/kb/{kind}/{id}
 -                    PUT /api/v1/recordings/{id}/private
 -                    PUT /api/v1/subscriptions/{id}
 todos.write          PUT /api/v1/todos/{id}/agents/{mid}/{sid}
+-                    PUT /api/v1/todos/{id}/seen
 todos.write          PUT /api/v1/todos/{id}/spaces/{mid}/{space...}
 -                    PUT /api/v1/todos/{id}/thread
 -                    PUT /api/v1/workspace-board/settings

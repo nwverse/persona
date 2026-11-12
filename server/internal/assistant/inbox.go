@@ -19,8 +19,11 @@ import (
 
 const (
 	inboxWindow   = 7 * 24 * time.Hour // older unread chats / mail are history, not inbox
-	inboxKeepDone = 3 * 24 * time.Hour // done items stay listed (for undo) this long
+	inboxKeepDone = 3 * 24 * time.Hour // done items are the list's (for undo) this long, the newest inboxListDone of them
 	inboxForget   = 8 * 24 * time.Hour // and are held in memory (so old unread messages don't come back) this long
+	// inboxListDone: of those, a list carries the newest this many (inbox_list_done.go); Done pages the rest from the
+	// history.
+	inboxListDone = 200
 	// inboxKeepHistory: done items stay in the database this long, paged by GET /api/v1/inbox/done (inbox_history.go);
 	// inboxPurgeEvery is how often the rounds delete those past it.
 	inboxKeepHistory = 90 * 24 * time.Hour
@@ -203,6 +206,7 @@ func (it *InboxItem) listed() InboxItem {
 	if g := currentSuggestion(it); g != nil {
 		g := *g
 		g.Changes, g.Cwd = slices.Clone(g.Changes), ""
+		g.MailTarget = nil // the reply's internal conflict check, not a client's target to choose
 		c.Suggestion = &g
 		if c.Handling == nil && g.Conversation == nil && it.Agent != nil { // an old draft: its conversation is done with this round
 			c.Handling = &InboxHandling{Owner: HandlingOwner, State: HandlingDone, MachineID: it.Agent.MachineID, SessionID: it.Agent.SessionID}

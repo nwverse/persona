@@ -184,7 +184,7 @@ func TestSubscriptionListGetAndSources(t *testing.T) {
 	}
 	format := out["recipe_format"].(map[string]any)
 	if fmt.Sprint(format["fields"]) != "[id thread title sender time body link due_date]" || format["template_vars"].(map[string]any)["{{since_date}}"] == nil ||
-		fmt.Sprint(format["modes"].(map[string]any)["snapshot"]) == "" {
+		fmt.Sprint(format["modes"].(map[string]any)["snapshot"]) == "" || len(format["group_by"].(map[string]any)) != 2 {
 		t.Fatalf("the recipe format: %v", format)
 	}
 	out, _ = e.call("subscription_sources", `{}`)
@@ -346,12 +346,24 @@ func TestSubscriptionRunWaitsForTheRun(t *testing.T) {
 	s := e.made()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go func() { // the runner's loop, without its start-up wait
-		for ctx.Err() == nil {
+	ticks := time.NewTicker(5 * time.Millisecond)
+	defer ticks.Stop()
+	done := make(chan struct{})
+	go func() { // bounded polling, as the runner's own ticker provides in production
+		defer close(done)
+		for {
 			e.h.subs.RunDue(ctx)
-			time.Sleep(5 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticks.C:
+			}
 		}
 	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
 	out, isErr := e.call("subscription_run", fmt.Sprintf(`{"id":%q,"wait_seconds":10}`, s.ID))
 	if isErr || out["ran"] != true {
 		t.Fatalf("run: %v", out)
@@ -361,7 +373,6 @@ func TestSubscriptionRunWaitsForTheRun(t *testing.T) {
 	if run["trigger"] != "now" || run["new"] != float64(2) || len(items) != 2 {
 		t.Fatalf("the run: %v", out)
 	}
-	cancel()
 	if out, _ := e.call("subscription_run", fmt.Sprintf(`{"id":%q,"wait_seconds":0}`, s.ID)); out["ran"] != false || out["why"] == nil {
 		t.Fatalf("a run not waited for: %v", out)
 	}

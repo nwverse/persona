@@ -126,14 +126,13 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
     const bucket = cardBucket(card, todo, plans, lookup, now, input.restored?.get(todo.id) ?? 0, superseded.has(todo.id));
     // a failed start carries done_at (the hub ends it), yet it is the user's to retry while its bucket says open
     const waits = status === "failed" ? bucket === "open" : !todo.done_at && WAITS_ON_YOU.has(status);
+    const decision = taskAwaitsDecision(todo);
     if (asks.length) asking.push({ kind: "task", key, todo, status, asks });
-    else if (waits || taskAwaitsDecision(todo)) {
+    else if (waits || decision) {
       // Only the review decision is hidden; a live Agent question above still has its home.
-      if (!waits && taskAwaitsDecision(todo) && (todo.decision_review?.dismissal_id && todo.decision_review.review_at === decisionRound(todo) || input.deferred?.[decisionLaterKey(todo)])) {
-        for (const agent of active) folded.add(sessionKey(agent.machine_id, agent.session_id));
-        continue;
+      if (!(status !== "needs_you" && decision && (todo.decision_review?.dismissal_id && todo.decision_review.review_at === decisionRound(todo) || input.deferred?.[decisionLaterKey(todo)]))) {
+        deciding.push({ item: { kind: "task", key, todo, status, asks }, rank: todoRank(todo, status), at: card.at });
       }
-      deciding.push({ item: { kind: "task", key, todo, status, asks }, rank: todoRank(todo, status), at: card.at });
     }
     // a parked task waits on purpose (#3804): with the tasks in progress however long it has been still, never folded away
     else if (bucket === "open" || reviewState(todo) === "parked") open.push({ item: { kind: "task", key, card, todo, status, activity: taskBackgroundWork(todo, lookup) }, rank: todoRank(todo, status), at: card.at });

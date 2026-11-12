@@ -3,6 +3,7 @@ package persona.feature.assistant
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -14,6 +15,7 @@ import persona.core.contracts.api.DeliveryState
 import persona.core.contracts.api.OutboxMessage
 import persona.core.contracts.api.PendingMainConversation
 import persona.core.designsystem.*
+import persona.core.designsystem.dense
 import persona.core.designsystem.icons.PhIcons
 import persona.core.domain.FailureReason
 import persona.core.domain.mapOperationFailure
@@ -23,6 +25,7 @@ import persona.core.domain.mapOperationFailure
 internal fun AssistantPendingConversation(
     messages: List<OutboxMessage>, session: Session?, modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(), demo: Boolean = false,
+    receipts: List<persona.core.contracts.api.MessageSendReceipt> = emptyList(),
     /** A refused start's button ("Add computer", "Connect a model…"), and "Retry" once the step is done. */
     onRefusal: (ReadinessActionId) -> Unit = {},
     onRetry: ((OutboxMessage) -> Unit)? = null,
@@ -31,18 +34,22 @@ internal fun AssistantPendingConversation(
 ) {
     LazyColumn(modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = pagePadding, end = pagePadding,
-            top = contentPadding.calculateTopPadding() + 12.dp, bottom = contentPadding.calculateBottomPadding() + 16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            top = contentPadding.calculateTopPadding() + 12.dp.dense, bottom = contentPadding.calculateBottomPadding() + 16.dp.dense),
+        verticalArrangement = Arrangement.spacedBy(12.dp.dense)) {
         if (demo) item { AssistantDemoNotice() }
-        item { StatusLine(assistantStatus(session, messages)) }
+        item { StatusLine(assistantStatus(session, messages, receipts = receipts)) }
         if (messages.isEmpty()) item {
             JEmptyState(stringResource(R.string.assistant_pending_empty_title), emptyDetail ?: stringResource(R.string.assistant_pending_empty_detail))
         }
         items(messages, key = { it.clientMessageId }) { message ->
             Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End,
-                verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                verticalArrangement = Arrangement.spacedBy(4.dp.dense)) {
                 UserBubble(message.text)
-                message.state.pendingStatus()?.let { PendingBadge(it) }
+                if (receipts.any { it.clientMessageId == message.clientMessageId && it.processing })
+                    Text(stringResource(persona.core.designsystem.R.string.designsystem_message_processing),
+                        style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
+                else if (receipts.any { it.clientMessageId == message.clientMessageId && it.state == "sending" }) PendingBadge(PendingStatus.Sending)
+                else message.state.pendingStatus()?.let { PendingBadge(it) }
                 // A refused message says why and offers Retry, not a bubble waiting for ever: a start the hub refused
                 // for a missing step also gets that step's button (docs/assistant/onboarding.md 4.4).
                 if (message.state == DeliveryState.Refused) RefusalCard(message.error, onRefusal, onRetry?.let { retry -> { retry(message) } })

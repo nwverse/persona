@@ -232,7 +232,12 @@ import UIKit
         let at = now()
         if let last = lastRetention, at >= last, at.timeIntervalSince(last) < Self.retentionInterval { return }
         lastRetention = at
-        retain()
+        // Hourly across launches too: a WatchConnectivity relaunch must not read every held day each time.
+        let store = store, interval = Self.retentionInterval
+        Task { [weak self] in
+            guard await store.claimRetentionPass(now: at, every: interval) else { return }
+            self?.retain()
+        }
     }
 
     private func resendIfDue() {

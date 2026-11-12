@@ -52,7 +52,8 @@ import type { MenuAt } from "../ui/menu-model";
 import { useSidebarTerminals } from "../lib/sidebar-terminals";
 import { usePanes } from "../lib/terminal-panes";
 import { buildTerminalTree, shellsOnly, type TermSpace } from "../lib/terminals";
-import { LinkTodoDialog as LinkTodoDialogContent, type LinkTargetSpace } from "./LinkTodoDialog";
+import type { LinkTargetSpace } from "./LinkTodoDialog";
+import { lazyDialog } from "./LazyOverlay";
 import { FoldScope, useFolded } from "../lib/use-folded";
 import { clipsOverflow, glideBox, glideStyle, sameBox, type GlideBox, type Span } from "../lib/glide";
 import { AGENTS_FOLD, onGrouping, setAgentsFolded } from "../lib/sidebar-api";
@@ -81,7 +82,7 @@ const HerdrNotices = memo(HerdrNoticesContent);
 const HubNoticeLine = memo(HubNoticeLineContent);
 const NodePrompt = memo(NodePromptContent);
 const SidebarUsage = memo(SidebarUsageContent);
-const LinkTodoDialog = memo(LinkTodoDialogContent);
+const LinkTodoDialog = memo(lazyDialog(() => import("./LinkTodoDialog").then((m) => m.LinkTodoDialog)));
 const MarkSeenDialog = memo(MarkSeenDialogContent);
 
 /** Brings `el` to the middle of its nearest scrolling ancestor when it is not fully in view (rows loading above it

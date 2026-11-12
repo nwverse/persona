@@ -14,7 +14,10 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
   with body text appearing in several large full-screen updates. herdr observe can emit a frame every 16 ms; node / hub forward unchanged, merging only frames within 30 ms (`termMinGap`).
   See section 10 of `docs/integrations/terminal.md` for measurements by segment.
 - Phone terminal takeover uses `herdr terminal session control <pane> --cols --rows` (a pipe, not a PTY; shares the slot with `terminal attach`):
-  herdr restores the pane's original size if stdin closes or the process is killed (including -9), so tying the takeover process's lifetime to node prevents it from leaving the computer stuck.
+  herdr puts the pane back to its own size when stdin closes or the process is killed (including -9) **only while a herdr client is attached** (the computer's herdr window, a web Full view).
+  With none attached, herdr leaves the pane at the controller's size, and `pane.layout` then reports herdr's headless default (120 × 40), not what the pane's programs see.
+  So the node reads the pane's terminal size from its tty before taking it (`herdr.Client.TermSize`) and resizes back to it before releasing (`CloseAt`, #5339); a node killed outright still leaves the phone's size until a herdr client attaches.
+  The same goes for observing: `--cols/--rows` at the layout's 120 × 40 cut a larger pane's right edge and bottom rows, so the herdr host's `PaneSize` is the terminal's size too (#5409).
   herdr never provides the program's raw bytes (attach also sends its redrawn grid), and there is no scrollback during takeover. The phone must accumulate history by comparing frames (`TerminalGrid.scrolled`);
   a different terminal emulator library will not solve this. Keys must use RPC events (methods run concurrently on the peer and can arrive out of order). See section 11 of `docs/integrations/terminal.md`.
 - Claude Code (2.1.312, default mode) clears terminal scrollback on a resize and redraws only the current screen. During takeover, its output also does not enter herdr history (a 70-line response still leaves herdr history at 0).

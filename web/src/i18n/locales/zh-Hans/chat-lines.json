@@ -21,9 +21,14 @@
   "time": "时间",
   "copy_raw": "复制原文",
   "retry": "重试",
+  "retry_title": "继续当前任务",
   "copy_field": "拷贝{label}",
   "fix_it": "去修",
   "background_done": "后台轮次",
   "background_running": "后台运行中",
-  "model_changed": "模型已从 {from} 切换到 {to}"
+  "model_changed": "模型已从 {from} 切换到 {to}",
+  "engine_switched": "已从 {from} 切换到 {to}",
+  "engine_handoff_view": "查看交接内容",
+  "engine_continued": "已用摘要接续",
+  "engine_resumed": "已续接原任务"
 }

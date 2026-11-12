@@ -175,6 +175,11 @@ func missingFrom(launcher string, lines []string, notFound bool) string {
 // spawnAssistant starts the conversation's process for its launcher's agent: claude -p (spawnClaude) or codex
 // app-server (spawnCodex). A new Codex conversation (id "") gets its id from Codex.
 func (n *Node) spawnAssistant(id, cwd, launcher string, resume, spare bool, options ...modelExecution) (*assistantProc, error) {
+	done, err := n.reload.enter()
+	if err != nil {
+		return nil, err
+	}
+	defer done()
 	if n.agentOf(launcher) == "codex" {
 		return n.spawnCodex(id, cwd, launcher, resume, spare, options...)
 	}
@@ -216,7 +221,7 @@ func (n *Node) claudeAssistantMCPAndTools(id, cwd string, legacyMCP bool) (mcpJS
 // A managed launcher's shell is not wrapped: it runs `personad launch`, which fetches the launcher's settings outside
 // the sandbox and wraps only the agent it execs (launchExec).
 func (n *Node) assistantCLICommand(shell, launcher, cwd string, args, env []string) *exec.Cmd {
-	argv := append([]string{shell, "-ic", n.launcherCommandIn(launcher, envValue(env, "CLAUDE_CONFIG_DIR"), shellQuote) + ` "$@"`, "persona"}, args...)
+	argv := append([]string{shell, "-ic", n.launcherCommandIn(launcher, envValue(env, "CLAUDE_CONFIG_DIR"), scriptPath) + ` "$@"`, "persona"}, args...)
 	if _, managed := n.managedLauncher(launcher); !managed {
 		base := env
 		argv, env, _ = wrapAgent("assistant", n.home, n.dir, cwd, settingsArgs(args),

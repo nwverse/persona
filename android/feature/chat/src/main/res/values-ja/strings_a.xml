@@ -361,8 +361,8 @@
     <string name="chat_today_review_prompt">Larkで私がメンションされたメッセージを確認してください：返信が必要なものを挙げ、下書きできるものは先に下書きしてください</string>
     <string name="chat_today_title">今日知っておくこと</string>
     <string name="chat_today_empty">対応待ちはなく、予定も空いています。</string>
-    <string name="chat_tasks_message_replied">あなたの名前で返信しました</string>
-    <string name="chat_tasks_message_drafted">タスクの進捗から下書きした返信</string>
+    <string name="chat_tasks_message_replied">あなたとして返信しました</string>
+    <string name="chat_tasks_message_drafted">タスクの進捗をもとに作成した返信</string>
     <string name="chat_tasks_message_blank">下書きに未入力の「%1$s」があります。修正するか削除してから送信してください</string>
     <string name="chat_tasks_send">送信</string>
     <string name="chat_tasks_later">後で</string>
@@ -370,7 +370,7 @@
     <string name="chat_tasks_message_filed_title">対応済み・送信しなかった下書き</string>
     <string name="chat_tasks_dock_waiting">%1$s・要対応</string>
     <string name="chat_tasks_dock_interrupted">%1$s・中断</string>
-    <string name="chat_tasks_route_chip">「%1$s」へ ×</string>
+    <string name="chat_tasks_route_chip">「%1$s」に伝える</string>
     <string name="chat_tool_details">ツールの詳細</string>
     <string name="chat_tool_view_file">ファイルを表示</string>
     <string name="chat_tool_plan_title">プラン</string>

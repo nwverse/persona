@@ -35,6 +35,7 @@ type fakeHub struct {
 	inboxHook     func(ctx context.Context) // runs first in InboxChanged, no lock held (#4924)
 	readHooks     receiptHooks              // around session.items reads and on receipt broadcasts, no lock held
 	itemReads     int                       // session.items reads since the hooks were set
+	onDevicesList func()                    // runs once, then clears, before the next devices.list; no lock held
 	hello         Hello
 	settings      *Settings
 	launcherList  []proto.Launcher                   // the nodes' launchers.list (nil: the list fails, so it can't be told)
@@ -145,9 +146,12 @@ type fakeHub struct {
 	// The launchers' health (launcher_health.go): launchers.check's answers by "machine/launcher" (none: it works),
 	// the checks and repairs asked for, launchers.repair's answer (nil: the node has no such method) and what a repair
 	// does to the checks.
-	checks    map[string]proto.LauncherCheck
-	checked   []string
-	onCheck   func(f *fakeHub) // runs (under the fake's lock) inside each launchers.check
+	checks  map[string]proto.LauncherCheck
+	checked []string
+	onCheck func(f *fakeHub) // runs (under the fake's lock) inside each launchers.check
+	// checkWait, when set, runs before each launchers.check is answered, outside the fake's lock, with the call's
+	// context: a check that takes its time; its error is the call's.
+	checkWait func(ctx context.Context) error
 	repairs   []map[string]any
 	repairRes *proto.LauncherRepair
 	onRepair  func(f *fakeHub)
@@ -194,6 +198,15 @@ func (f *fakeHub) Hello(context.Context) (Hello, error) {
 }
 
 func (f *fakeHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
+	if p.Device == DeviceAll && p.Method == DeviceDevicesList {
+		f.mu.Lock()
+		hook := f.onDevicesList
+		f.onDevicesList = nil
+		f.mu.Unlock()
+		if hook != nil {
+			hook() // what happens while a card is being made: its "where" reads the machines
+		}
+	}
 	if p.Method != DeviceSessionItems {
 		return f.deviceCall(ctx, p)
 	}
@@ -212,6 +225,16 @@ func (f *fakeHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 }
 
 func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
+	if p.Method == assistantwire.DeviceLaunchersCheck {
+		f.mu.Lock()
+		wait := f.checkWait
+		f.mu.Unlock()
+		if wait != nil {
+			if err := wait(ctx); err != nil {
+				return nil, err
+			}
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, p)
@@ -900,7 +923,7 @@ func newKBService(t *testing.T, f *fakeHub) *Service {
 	}
 	f.mu.Unlock()
 	s := withSettings(t, f, New(Options{Hub: f, Store: func() Store { return st }, Logf: testLogf(t), KB: &KBOptions{Dir: t.TempDir()}}))
-	t.Cleanup(s.kbClose)
+	t.Cleanup(s.kbEnd)
 	return s
 }
 
@@ -913,7 +936,7 @@ func newKBServiceOn(t *testing.T, f *fakeHub, st Store) *Service {
 	}
 	f.mu.Unlock()
 	s := withSettings(t, f, New(Options{Hub: f, Store: func() Store { return st }, Logf: testLogf(t), KB: &KBOptions{Dir: t.TempDir()}}))
-	t.Cleanup(s.kbClose)
+	t.Cleanup(s.kbEnd)
 	return s
 }
 

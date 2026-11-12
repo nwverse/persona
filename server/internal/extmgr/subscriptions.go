@@ -28,6 +28,11 @@ const subscriptionsFeature = "source_subscriptions"
 // Shortcuts action tells an older hub apart by it.
 const subscriptionPushFeature = "subscription_push"
 
+// inboxSourcesFeature says the pages are Inbox Sources (#5278): the built-in sources beside the subscriptions, the
+// recommended ones, Set Up with the assistant (persona://ask) and the preview. The apps show Settings' Inbox Sources
+// row only with it; an older manager's pages list subscriptions alone.
+const inboxSourcesFeature = "inbox_sources"
+
 // subscriptionsShown says whether the report carries subscriptionsFeature.
 func (h *Manager) subscriptionsShown() bool { return h.subs != nil && h.subs.Features().Deliver }
 
@@ -108,7 +113,7 @@ func (h *Manager) readSubscriptions(ctx context.Context, r *assistantwire.InboxR
 	}
 	for _, src := range srcs {
 		r.Names[src.ID] = src.Name
-		r.Sources = append(r.Sources, assistantwire.InboxSource{ID: src.ID, Name: src.Name, Extension: true, Kinds: src.Kinds,
+		r.Sources = append(r.Sources, assistantwire.InboxSource{ID: src.ID, Name: src.Name, Extension: true, Counts: true, Kinds: src.Kinds,
 			Things: src.Things})
 	}
 }

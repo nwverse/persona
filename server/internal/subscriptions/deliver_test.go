@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // Delivery to the Inbox and the knowledge base (#2039): the things and batches a subscription hands them, made up
@@ -128,7 +129,8 @@ func TestInboxRowsCarryTheItemsAFallbackTierAndTheRules(t *testing.T) {
 	r := rowOf(t, rows, "sub:"+sub.ID+":t1")
 	want := connector.InboxThing{Thread: "sub:" + sub.ID + ":t1", Kind: "sub_notice", Label: "Notices", Title: "Office hours moved again",
 		Sender: "Office", Preview: "Made-up notice text", At: time.Date(2026, 11, 10, 8, 30, 0, 0, time.UTC), Last: "n2",
-		Extra: &connector.ThingExtra{RuleTier: "fyi"}, Tags: []connector.Tag{{Key: "source", Value: sub.ID, Name: "Notices"}}}
+		Extra: &connector.ThingExtra{RuleTier: "fyi", Count: 2}, Tags: []connector.Tag{{Key: "source", Value: sub.ID, Name: "Notices"},
+			{Key: connector.TagSender, Value: "office", Name: "Office"}}}
 	ctx := r.Context
 	r.Context = ""
 	if !reflect.DeepEqual(r, want) {
@@ -508,5 +510,22 @@ func TestTheDestinationsMarksAreKept(t *testing.T) {
 	applyRun(&cur, RunCommit{Sub: sub}, false)
 	if !sameTime(cur.InboxCatchup, &mark) {
 		t.Fatal("a run's mark for the switch-on it saw was not kept")
+	}
+}
+
+// A row of items carries its sender as a mute target (#5306), lowercased; a digest, a snapshot and the failure notice
+// have no one sender.
+func TestDeliveredSenderIsAMuteTarget(t *testing.T) {
+	d := deliverer{sub: Subscription{ID: "sub_x", Label: "Notices"}, loc: time.UTC, lang: i18n.En}
+	tags := d.tags(" Office ")
+	if len(tags) != 2 || tags[1] != (connector.Tag{Key: connector.TagSender, Value: "office", Name: "Office"}) || tags[0].Key != "source" {
+		t.Fatalf("tags: %+v", tags)
+	}
+	if tags := d.tags(""); len(tags) != 1 || tags[0].Value != "sub_x" {
+		t.Fatalf("without a sender: %+v", tags)
+	}
+	digest := d.digestThing([]Held{{Seq: 1, Item: Item{UID: "a", Title: "A", Sender: "Office"}}, {Seq: 2, Item: Item{UID: "b", Title: "B", Sender: "Shop"}}})
+	if len(digest.Tags) != 1 {
+		t.Errorf("a digest of several senders mutes none: %+v", digest.Tags)
 	}
 }
