@@ -98,8 +98,8 @@ func TestSendMessagePassesApplySwitch(t *testing.T) {
 	if w.Code != http.StatusOK || got["apply_switch"] != true || got["text"] != "hello" {
 		t.Fatalf("%d %s; node got %v", w.Code, w.Body, got)
 	}
-	if switchSendWait < 7*time.Minute {
-		t.Errorf("the hub waits %v, less than the node's checks (1 min) and switch (5 min) with a margin", switchSendWait)
+	if switchSendWait < 8*time.Minute {
+		t.Errorf("the hub waits %v, less than the node's checks (1 min), handoff and switch to the other engine (5½ min) with a margin", switchSendWait)
 	}
 	for _, tc := range []struct {
 		p    map[string]any

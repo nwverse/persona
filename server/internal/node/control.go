@@ -269,6 +269,9 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		// Checked against the transcript and typed again when it was dropped; one that never goes in leaves the
 		// session needing the user, with why, not idle (firstprompt.go).
 		if err := n.firstPrompt(ctx, pane, id, prompt, a); err != nil {
+			if adoptedPane(ctx) != nil && !errors.Is(err, host.ErrNotDelivered) && !errors.Is(err, host.ErrNoAgent) {
+				return nil, unconfirmedStart(err) // a switch's message (engine_switch.go) may be in the claude
+			}
 			return nil, err
 		}
 	}

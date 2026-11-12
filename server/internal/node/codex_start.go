@@ -215,6 +215,9 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 	}
 	done, err := n.runAgentCommand(ctx, launch, created, ws, "", cmd, shells...) // typedstart.go
 	if err != nil {
+		if adoptedPane(ctx) != nil && prompt != "" && n.codexMessageMayHaveGone(ctx, pane, file, err) {
+			return nil, unconfirmedStart(err) // a switch's message may be in it (engine_switch.go)
+		}
 		return nil, err
 	}
 	defer done()
@@ -234,6 +237,10 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 		shown, _ := n.readPane(ctx, pane, "recent-unwrapped", 30)
 		if strings.TrimSpace(shown) == "" { // a screen Codex draws from the top of a tall pane: the bottom rows are blank
 			shown, _ = n.readPane(ctx, pane, "visible", 30)
+		}
+		if adoptedPane(ctx) != nil && prompt != "" && n.codexMessageMayHaveGone(ctx, pane, file, err) {
+			// A switch's message (engine_switch.go) may be in the Codex the line started: no other start may get it too.
+			return nil, unconfirmedStart(fmt.Errorf("%v\n%s", err, lastLines(shown, 12)))
 		}
 		start := codexAbandonedStart{launch: launch, created: created, workspace: ws}
 		var cleanupErr error

@@ -39,6 +39,9 @@ type switchShare struct {
 type switchFlight struct {
 	row  proto.Session
 	done chan struct{}
+	// unlisted: the parked session a switch to the other engine resumes (hold), waited for and kept from restarting as
+	// a session switching is, but no row of its own: the switch's session is the conversation's row meanwhile.
+	unlisted bool
 }
 
 // switches is n's share: the resident node's when attach set one, else one of n's own.
@@ -105,6 +108,22 @@ func (s *switchShare) begin(id string, row proto.Session) bool {
 	return true
 }
 
+// hold registers session id as being resumed by a switch under way (the conversation's earlier session that a switch
+// to the other engine resumes, engine_switch.go): a message to it and the user's Resume of it wait (wait), a pick, a
+// stop and keys are refused (busy), and it is not listed. end ends it. false when a switch of it is under way already.
+func (s *switchShare) hold(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.flights[id] != nil {
+		return false
+	}
+	if s.flights == nil {
+		s.flights = map[string]*switchFlight{}
+	}
+	s.flights[id] = &switchFlight{done: make(chan struct{}), unlisted: true}
+	return true
+}
+
 // end ends session id's switch under way: those waiting for it go on, and its records are no longer held for it. It
 // returns the Node serving now, the one whose state took the records (nil when none has loaded since).
 func (s *switchShare) end(id string) (serving *Node) {
@@ -162,7 +181,7 @@ func (s *switchShare) listed(seen map[string]bool) []proto.Session {
 	defer s.mu.Unlock()
 	var out []proto.Session
 	for id, f := range s.flights {
-		if !seen[id] {
+		if !seen[id] && !f.unlisted {
 			out = append(out, f.row)
 		}
 	}

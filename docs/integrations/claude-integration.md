@@ -152,7 +152,7 @@ running Agent to another provider".
   typing lock this one does not hold.
 - **From the first Ctrl+C on, on its own clock** (`context.WithoutCancel`, at most 5 minutes): a hub redeploy that ends
   the connection does not leave the agent quit and not started again. The start on the new launcher gets 90 seconds.
-  The hub waits 7 minutes for a message with `apply_switch`. A resident node (`personad node --attach`, Persona Link)
+  The hub waits 8 minutes for a message with `apply_switch` (enough for a switch to the other engine too, below). A resident node (`personad node --attach`, Persona Link)
   makes a new Node for each connection; what the node keeps of switches outside the records is shared by its Nodes
   (`switch_share.go`, handed over as the background scans are): the next connection's Node lists a switch still under
   way as starting, its messages and the user's Resume wait for it, picks and stops are refused; the records the switch
@@ -251,17 +251,38 @@ engine: the same pick, the same message that carries it out, the same time bound
   whose connection went away hands the new session's record on as well (`switchShare.keep`: its last stretch names the
   switch's session).
 - **The list** (`joinStretches`): rows get the history their records carry, and every session named in another listed
-  row's history, other than that row's own, is left out; the most recent conversation counts first, and a row it left
-  out names none, so two records still naming each other keep the newer one. A row continuing a conversation shows its
-  first stretch's title unless its own is manual.
+  row's history, other than that row's own, is left out while it is parked there (`parkedRow`: offline or cut off by a
+  restart, no pane, nothing waiting for the user; or the row of the switch moving it on). One that runs again (resumed
+  by hand elsewhere, a Codex thread an app-server still has loaded) or needs the user is its own row. The most recent
+  conversation counts first, and a row it left out names none, so two records still naming each other keep the newer
+  one unless the older one runs. A row continuing a conversation shows its first stretch's title unless its own is
+  manual.
+- **The parked session while it is resumed** (`resumeParked`): it is held as switching for that start
+  (`switchShare.hold`, unlisted): a message to it and the user's Resume (`awaitSwitch`) wait for it and then find it
+  running, a stop, a pick or keys are refused, so no second writer of its conversation starts beside the switch's; it is
+  looked at again first (running again by now, or open in another claude: a fresh session takes the conversation), and
+  a start that finds it running elsewhere and typed nothing counts as one that did not come up. The typing lock is not
+  what holds it: the claude start's first prompt takes that lock itself.
 - **Fallbacks**: a parked session that does not come up gives way to a fresh one once (its record put back,
   `stateFile.putBack`); a fresh one that does not come up loses the history it was given, the pane is cleared and the
   agent resumed on its own launcher (`comeBack`: Claude Code as above; Codex `codex resume <id>` with its record's
   model and mode), `switch_failed`, or `switch_failed_stopped` when that does not come up either. A start in the adopted
   pane never closes it (`closeNewTab`, `closeCodexStart`).
+- **A start that may have the message never falls back.** The message is in a Codex start's argv: once codex-start has
+  read its file, the Codex in the pane may run it whenever it gets past where it stopped (a dialog, a thread not seen in
+  time). Such a start's error is `delivered: "unknown"` (`unconfirmedStart`; `codexMessageMayHaveGone` says when: the
+  file was read, codex-start did not say it could not run the launcher, and the pane does not show only its shell
+  again), and so is a claude start whose first prompt was typed but not taken (herdr's error is not one of nothing
+  typed). Then the switch stops where it is (`unconfirmedSwitch`): no Ctrl+C, no other start, no rollback, the pending
+  switch dropped, and the message answered as uncertain so the app does not offer the words again as if nothing had
+  gone. When the session that start was for is known (a fresh claude's id, the parked session) the records say the
+  conversation went on there (`engineSwitched`): it is the conversation's row, and the session switched away from,
+  which was quit, is an earlier stretch of it. A fresh Codex thread that did not show is not known: the session switched
+  away from keeps its history, and the thread, once it shows, is a row of its own. A start whose codex-start file was
+  never read withdraws it (renamed away, so a line the shell runs late finds nothing) and falls back as before.
 - **Time**: as the provider switch, but up to three starts (the parked session, a fresh one, the agent back), so the
-  switch's own clock is 5½ minutes (`engineSwitchBudget`); with the minute of checks before the quit it stays under the
-  hub's 7-minute wait for a message with `apply_switch`.
+  switch's own clock is 5½ minutes (`engineSwitchBudget`); with the minute of checks and the handoff built before the
+  quit it stays under the hub's 8-minute wait for a message with `apply_switch`.
 - **Not carried over**: the reasoning, tool results and everything the handoff leaves out; the prompt cache (once); the
   ultracode switch, "allow for this session" rules, background work (it holds the switch back), photos.
 - **Known limits**: a Codex effort of `minimal` or `ultra` is refused when picked (a start takes Claude Code's levels and
@@ -270,6 +291,12 @@ engine: the same pick, the same message that carries it out, the same time bound
   the old connection's Node only (`switchShare.keep` hands on what the switch wrote, not the rollback), which leaves a
   started session that never came up with the history: it is not listed (no transcript), so nothing is hidden by it; on
   a node without `engine_switch`, a pick of a launcher of any other agent reads "Update the node" (`hub/ultracode.go`).
+  A Codex thread in a `CODEX_HOME` other than the default (a launcher that sets one, a thread of another home) is not
+  resumed on a switch back: a fresh thread takes the conversation with the whole handoff. Rolling a Codex agent back
+  resumes it with its record's model and plan mode only: a bypass or an effort it was started with is not restored, so
+  it comes back more restricted than it ran. The parked session is held from the switch's start of it on, not from the
+  plan: a Resume of it typed in that moment by hand is caught only by the look again (it runs, or a claude has it
+  open).
 
 ## Session IDs and transcripts
 

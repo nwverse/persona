@@ -3,14 +3,18 @@ package node
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/shellcmd"
 )
 
@@ -31,7 +35,10 @@ import (
 // What fails is rolled back as #5035 does: a parked session that does not come up gives way to a fresh one once; a
 // start of the other engine that does not come up has its pane cleared, the agent resumed on its own launcher in the
 // same shell (switch_failed), or stopped when even that does not come up (switch_failed_stopped). A failed switch is
-// dropped, and its message refused with nothing typed and its words kept by the client.
+// dropped, and its message refused with nothing typed and its words kept by the client. Only a start that certainly
+// never got the message falls back so: one that may have it (codex-start read it, a claude was typed it) ends the
+// switch where it is, the message answered as not known to have gone, so it never runs twice (unconfirmedSwitch). The
+// parked session is held as switching while the switch resumes it (resumeParked): no second writer of it starts.
 //
 // Only text goes over: a message with photos is refused (switch_unsupported) and the switch waits, rather than the
 // photos being lost on the way. Effort is the one picked only (the engines' levels differ); the permission mode goes
@@ -40,7 +47,8 @@ import (
 // engineSwitchBudget bounds a switch to the other engine from the first Ctrl+C on: up to three starts where the
 // launcher switch has two (the parked session, a fresh one, the agent back on its own launcher), each within
 // switchStartWait, with the quit and the panes cleared between them. With the checks before the quit
-// (switchProbeWait) it stays under the hub's wait for a message with apply_switch (switchSendWait, 7 minutes).
+// (switchProbeWait) and the handoff it builds before the quit, it stays under the hub's wait for a message with
+// apply_switch (switchSendWait, 8 minutes).
 const engineSwitchBudget = switchBudget + 30*time.Second
 
 // engineHistoryKey carries the conversation's earlier stretches into the start a switch makes (withEngineHistory): the
@@ -492,7 +500,9 @@ type engineCarry struct {
 // carryOutEngine quits session id's agent and starts the other engine in the same shell, as c says: the parked
 // session resumed when there is one, else (or when that does not come up) a fresh session; after a start that did not
 // come up it clears the pane and resumes the agent on its own launcher (not when backErr says it cannot be). It
-// returns the session running the conversation now, or the refusal that says how it ended.
+// returns the session running the conversation now, or the refusal that says how it ended. Only a start that certainly
+// never got the message falls back: one that may have it (unconfirmedStart) ends the switch where it is
+// (unconfirmedSwitch), so the message never runs twice.
 func (n *Node) carryOutEngine(ctx context.Context, c *engineCarry) (string, error) {
 	p := c.plan
 	a, h, ref := p.a, p.h, p.ref
@@ -513,6 +523,9 @@ func (n *Node) carryOutEngine(ctx context.Context, c *engineCarry) (string, erro
 		if err == nil {
 			return id, nil
 		}
+		if maybeDelivered(err) {
+			return n.unconfirmedSwitch(ctx, c, id, err)
+		}
 		n.logf("session %s: its earlier %s session %s did not come up (%v): a fresh one takes the conversation", c.id, engineName(p.to), p.parked, err)
 		if shells, dir, err = n.clearPane(ctx, c.id, a, h, ref); err != nil {
 			n.logf("session %s: could not clear the terminal: %v", c.id, err)
@@ -523,6 +536,9 @@ func (n *Node) carryOutEngine(ctx context.Context, c *engineCarry) (string, erro
 	id, startErr := n.startEngine(ctx, c, false, handoffMessage(c.full, p.from, p.to, p.model, false, c.text), shells, dir)
 	if startErr == nil {
 		return id, nil
+	}
+	if maybeDelivered(startErr) {
+		return n.unconfirmedSwitch(ctx, c, id, startErr)
 	}
 	n.logf("session %s: %s did not come up on launcher %s: %v", c.id, engineName(p.to), c.ps.Launcher, startErr)
 	err = c.backErr
@@ -542,9 +558,10 @@ func (n *Node) carryOutEngine(ctx context.Context, c *engineCarry) (string, erro
 }
 
 // startEngine starts the other engine in the switch's pane with prompt as its first message: the parked session
-// resumed (resume), else a fresh one. It returns the new session's id. What it wrote of a session that did not come up
-// is put back (the parked session's record) or loses the history it was given (a fresh one's), so the list does not
-// leave the session the switch comes back to out.
+// resumed (resume), else a fresh one. It returns the new session's id ("" for a fresh Codex thread that did not show).
+// What it wrote of a session that certainly did not get the message is put back (the parked session's record) or loses
+// the history it was given (a fresh one's), so the list does not leave the session the switch comes back to out; one
+// that may have it (unconfirmedStart) keeps what the start wrote.
 func (n *Node) startEngine(ctx context.Context, c *engineCarry, resume bool, prompt string, shells []string, dir string) (string, error) {
 	p, ps := c.plan, c.ps
 	cwd := p.cwd
@@ -556,17 +573,7 @@ func (n *Node) startEngine(ctx context.Context, c *engineCarry, resume bool, pro
 	defer cancel()
 	ws := p.a.WorkspaceID
 	if resume {
-		prev, had := n.state.get(p.parked)
-		var err error
-		if p.to == "claude" {
-			_, err = n.start(sctx, cwd, ps.Launcher, prompt, p.parked, ws, c.mode, ps.Effort, "", "", "claude", p.resume)
-		} else {
-			err = n.resumeParkedCodex(sctx, c, prompt)
-		}
-		if err != nil {
-			n.state.putBack(p.parked, prev, had)
-		}
-		return p.parked, err
+		return p.parked, n.resumeParked(sctx, c, cwd, prompt)
 	}
 	if p.to == "codex" {
 		s, err := n.start(sctx, cwd, ps.Launcher, prompt, "", ws, c.mode, "", "", "", "codex", p.fresh)
@@ -577,11 +584,61 @@ func (n *Node) startEngine(ctx context.Context, c *engineCarry, resume bool, pro
 	}
 	id := newUUID()
 	_, err := n.start(sctx, cwd, ps.Launcher, prompt, "", ws, c.mode, ps.Effort, "", id, "claude", p.fresh)
-	if err != nil {
+	if err != nil && !maybeDelivered(err) {
 		n.state.setEngineHistory(id, nil)
-		return "", err
 	}
-	return id, nil
+	return id, err
+}
+
+// resumeParked resumes the parked session in the switch's pane (ctx: startEngine's) with prompt as its message. While
+// it does, the parked session is held as switching (switchShare.hold): a message to it, or the user's Resume of it,
+// waits, and a stop, a pick or keys are refused, so no second writer of its conversation starts beside this one. It is
+// looked at again first: one that runs again by now (resumed by hand since the switch was planned) is not resumed here.
+func (n *Node) resumeParked(ctx context.Context, c *engineCarry, cwd, prompt string) error {
+	p, ps := c.plan, c.ps
+	if !n.switches().hold(p.parked) {
+		return fmt.Errorf("session %s is being started by another switch", p.parked)
+	}
+	defer n.switches().end(p.parked)
+	_ = n.refreshHosts(ctx)
+	if a, live := n.agent(p.parked); live {
+		return fmt.Errorf("session %s runs again (in %s)", p.parked, a.PaneID)
+	}
+	prev, had := n.state.get(p.parked)
+	var err error
+	if p.to == "claude" {
+		if err = n.openElsewhereRefusal(p.parked); err == nil {
+			var s *proto.Session
+			s, err = n.start(ctx, cwd, ps.Launcher, prompt, p.parked, p.a.WorkspaceID, c.mode, ps.Effort, "", "", "claude", p.resume)
+			if err == nil && s.PaneID != p.a.PaneID {
+				// it came up somewhere else meanwhile: start found it running and typed nothing
+				err = fmt.Errorf("session %s runs in %s", p.parked, s.PaneID)
+			}
+		}
+	} else {
+		err = n.resumeParkedCodex(ctx, c, prompt)
+	}
+	if err != nil && !maybeDelivered(err) {
+		n.state.putBack(p.parked, prev, had)
+	}
+	return err
+}
+
+// unconfirmedSwitch ends a switch whose start in the pane may have the user's message (err, delivered "unknown"):
+// nothing more is pressed or typed there (another start would run the message twice, a rollback would leave the
+// client offering the words again), and the message is answered as not known to have gone. When the session that
+// start was for is known (id), the records say the conversation went on in it, as after a switch carried out: it
+// carries the history and is the conversation's row. A fresh Codex thread that did not show is not known: the session
+// switched away from keeps the history, and a thread that shows up later is a row of its own. The pending switch is
+// dropped by the caller either way.
+func (n *Node) unconfirmedSwitch(ctx context.Context, c *engineCarry, id string, err error) (string, error) {
+	p := c.plan
+	n.logf("session %s: %s may have the message but did not show it in time (%v): the switch stops here", c.id, engineName(p.to), err)
+	if id != "" {
+		n.engineSwitched(ctx, c, id)
+	}
+	return "", uncertain(fmt.Errorf("%s started in the terminal with the message, but did not show in time that it took it: look at the terminal "+
+		"before sending the message again (%v)", engineName(p.to), err))
 }
 
 // resumeParkedCodex resumes the parked Codex thread in the switch's pane (ctx: startEngine's) through the launcher
@@ -603,7 +660,7 @@ func (n *Node) resumeParkedCodex(ctx context.Context, c *engineCarry, prompt str
 	}
 	err = n.resumeCodex(ctx, launch, id, sessionState{Cwd: p.parkedCwd}, argv, prompt, p.a.WorkspaceID, "")
 	if err != nil {
-		if maybeDelivered(err) && n.paneOf(id) != "" {
+		if maybeDelivered(err) {
 			codexResumes.Store(id, time.Now()) // it may still come up in the pane: no second writer of the thread
 		}
 		return err
@@ -696,6 +753,60 @@ func (n *Node) engineSwitched(ctx context.Context, c *engineCarry, newID string)
 	n.notifySessions()
 }
 
+// parkedRow: a row the list may leave out as an earlier stretch of a conversation (joinStretches): nothing runs it
+// (offline, or cut off by a restart, with no pane) and nothing of it waits for the user, or it is the row of a switch
+// to the other engine moving the conversation on (listed as starting while the new session comes up). A session that
+// runs (resumed by hand, a Codex thread an app-server has loaded) or needs the user is listed whatever names it.
+func parkedRow(s *proto.Session) bool {
+	if s.PendingInteractions > 0 || s.Status == proto.StatusBlocked {
+		return false
+	}
+	if s.Starting && s.PendingSwitch != nil && s.PendingSwitch.Agent != "" {
+		return true
+	}
+	return s.PaneID == "" && (s.Status == proto.StatusOffline || s.Status == proto.StatusInterrupted)
+}
+
+// unconfirmedStart is err as the error of a start in a switch's pane that may have the user's message all the same:
+// codex-start read it (codexMessageMayHaveGone), or it was typed to a claude that did not say it took it. Delivered
+// "unknown": the switch goes no further with the message (unconfirmedSwitch).
+func unconfirmedStart(err error) error {
+	b, _ := json.Marshal(map[string]any{"delivered": deliveredUnknown})
+	return &rpc.Error{Message: err.Error(), Data: b}
+}
+
+// codexMessageMayHaveGone says, after a Codex start or resume in a switch's pane did not answer with its thread
+// (err), whether the message may be in that Codex all the same. Not when codex-start never read its file, which is
+// withdrawn here (renamed away, so a shell that runs the typed line later finds nothing), nor when codex-start said it
+// could not run the launcher, nor when the pane shows only its shell again (the Codex exited, and no thread of it
+// began with the message). Otherwise (a Codex runs in the pane, or what runs there cannot be told) it may.
+func (n *Node) codexMessageMayHaveGone(ctx context.Context, pane, file string, err error) bool {
+	if os.Rename(file, file+".withdrawn") == nil {
+		_ = os.Remove(file + ".withdrawn")
+		return false
+	}
+	if err != nil && strings.Contains(err.Error(), codexStartError) {
+		return false
+	}
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	return !n.paneAtShell(cctx, pane)
+}
+
+// paneAtShell: only shells run in front of pane, as its host says (false when it cannot say).
+func (n *Node) paneAtShell(ctx context.Context, pane string) bool {
+	h, ref, err := n.paneHost(pane)
+	if err != nil {
+		return false
+	}
+	f, ok := h.(host.ForegroundNamer)
+	if !ok {
+		return false
+	}
+	names, err := f.PaneForeground(ctx, ref)
+	return err == nil && len(names) > 0 && allShells(names)
+}
+
 // carryTodo hands the to-do the agent in pane ref works on to whatever starts there next, best effort: the pane's
 // persona_todo_ref written as its persona_from, as a dispatcher marks a child Agent (docs/assistant/todos.md
 // "Following spawned Agents"), so the new session joins the same to-do.
@@ -723,10 +834,12 @@ func (n *Node) codexHolds(path string) bool {
 }
 
 // joinStretches gives the rows of list whose record carries earlier stretches (chains) those stretches, and returns
-// the sessions to leave out: every one named in another listed row's history, so a conversation that moved between
-// engines is one row. The most recent conversation counts first, and a row it left out names none: two records that
-// still name each other (a write that did not get through) keep the newer one. A row that continues the conversation
-// shows its first stretch's title, unless it has a manual one of its own.
+// the sessions to leave out: every one named in another listed row's history that is parked there (parkedRow), so a
+// conversation that moved between engines is one row. A session that runs again or needs the user is never left out:
+// resumed by hand elsewhere, it is a row of its own once more. The most recent conversation counts first, and a row it
+// left out names none: two records that still name each other (a write that did not get through) keep the newer one,
+// unless the older one runs. A row that continues the conversation shows its first stretch's title, unless it has a
+// manual one of its own.
 func joinStretches(list []proto.Session, chains map[string][]proto.EngineLeg) map[string]bool {
 	var rows []int
 	for i := range list {
@@ -753,7 +866,7 @@ func joinStretches(list []proto.Session, chains map[string][]proto.EngineLeg) ma
 			continue
 		}
 		for _, l := range s.EngineHistory() {
-			if l.SessionID != s.SessionID {
+			if j, listed := index[l.SessionID]; listed && j != i && parkedRow(&list[j]) {
 				hidden[l.SessionID] = true
 			}
 		}

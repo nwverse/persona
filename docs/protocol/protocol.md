@@ -560,8 +560,8 @@ keeps waiting. An answer-only device's message never carries one. With `apply_sw
 clock (a client or connection that goes away does not leave the agent half switched; a resident node's next connection
 lists it as starting, waits for it and writes what it wrote), at most 5 minutes: the quit
 (about 8 seconds), the shell coming back (at most 10 seconds), the start on the new launcher (at most 90 seconds) and,
-after a failed one, the pane cleared and the start on its own launcher (the same bounds). The hub waits 7 minutes for a
-message with `apply_switch`, decided by the request (not the cached row), where it waits 90 seconds (5 minutes for a
+after a failed one, the pane cleared and the start on its own launcher (the same bounds). The hub waits 8 minutes for a
+message with `apply_switch` (a switch to the other engine takes longer, "Switching a running Agent to another engine"), decided by the request (not the cached row), where it waits 90 seconds (5 minutes for a
 session that is starting or offline) otherwise.
 
 | Code | When | From |
@@ -616,7 +616,7 @@ start takes the message: nothing is typed again, and the message counts as deliv
 the other engine has it (`plan` both ways, as Codex's read-only flags; `bypassPermissions` to Codex as its bypass flags;
 any other: the launcher's own). The time bounds are the launcher switch's, with up to three starts (the earlier
 session, a fresh one, the agent back on its own launcher) in at most 5½ minutes from the first Ctrl+C: with the checks
-before it, still under the hub's 7 minutes.
+and the handoff built before it, still under the hub's 8 minutes.
 
 **The handoff.** The new or resumed session's first message is a block, then the user's words:
 
@@ -640,8 +640,10 @@ oldest first: `{session_id, agent, until}`, `until` being when the conversation 
 running session's own stretch is the time after the last `until`). A session may be named more than once (switched back
 to and away again): after Claude Code A → Codex B → back to A the row is A with `[A until t1, B until t2]`. Only that
 session's row carries the history (the node clears it on the session it switched away from), and the node leaves every
-session named in another listed session's history, other than that session itself, out of its list: their transcripts
-stay on the computer, and a switch back resumes the most recent one of that engine. The row shows the title of the
+session named in another listed session's history, other than that session itself, out of its list while nothing runs
+it and nothing of it waits for the user: their transcripts stay on the computer, and a switch back resumes the most
+recent one of that engine. A named session that runs again (resumed by hand elsewhere, a Codex thread an app-server
+still has loaded) or needs the user is listed as its own row. The row shows the title of the
 conversation's first stretch unless it has a manual title of its own. The history is kept in the session's state
 record (the hub's Postgres), so a node restart keeps the row joined. While the switch is carried out, the session
 switched away from is listed as `starting` with the new launcher and `agent`.
@@ -652,7 +654,19 @@ of that engine takes the conversation with the whole handoff. One that does not 
 in the same shell. A fresh one that does not come up either rolls the switch back: the pane is cleared, the agent
 resumed on its own launcher in the same shell (`switch_failed`), or stopped when that does not come up either
 (`switch_failed_stopped`); an agent that does not quit runs on (`switch_not_stopped`). The terminal is never closed.
-Every refusal is `409` with `delivered: "none"`, and a failed switch is dropped.
+Every refusal is `409` with `delivered: "none"`, and a failed switch is dropped. Only a start that certainly never got
+the message falls back like this. One that may have it (codex-start read its file and a Codex runs in the pane, or the
+message was typed to a claude that did not take it in time) ends the switch where it is, so the message never runs
+twice: nothing more is pressed or typed in the terminal, the switch is dropped, the message is answered with
+`delivered: "unknown"` (look at the terminal before sending it again), and when the session that start was for is
+known the conversation's history goes on it as after a switch carried out (a fresh Codex thread that did not show is a
+row of its own once it does).
+
+**The earlier session while it is resumed.** From the switch's start of it until that start ends, the session being
+resumed is held as switching: a message to it and the user's Resume of it wait for the switch and then find it running
+(nothing starts a second writer of its conversation), and a stop, a pick or keys are refused as for the session
+switching. It is looked at again first: one that runs again by then is not resumed, and a fresh session takes the
+conversation.
 
 **To-dos.** A pane linked to a to-do (`persona_todo_ref`) gets that link as `persona_from` before the other engine
 starts, so the new session joins the same to-do as a spawned Agent would ([todos.md](../assistant/todos.md) "Following
