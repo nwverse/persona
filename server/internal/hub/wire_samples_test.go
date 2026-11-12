@@ -361,6 +361,29 @@ func wireSamples(t *testing.T) map[string][]wireSample {
 	add("interactions", "interactions_list", "待处理列表使用与事件相同的交互类型。", "interactions", httpJSON(map[string]any{"interactions": ixs}),
 		map[string]any{"/interactions/0/kind": "question", "/interactions/0/questions/1/multi_select": true, "/interactions/4/secret": true}, "server/internal/hub/http.go: Hub.routes", "apple/Shared/Models.swift: Interaction")
 	add("interactions", "interaction_resolved", "已处理事件仅用交互标识撤回卡片。", "event", ws(map[string]any{"type": "interaction_resolved", "id": "ix_question"}), map[string]any{"/type": "interaction_resolved", "/id": "ix_question"}, "server/internal/hub/hub.go: Hub.resolve", "apple/Shared/LiveConnection.swift: ServerEvent.decode")
+	// A question the assistant answered (the manager's fleet.interaction_resolved as the hub passes it on), and the user's
+	// change of answer (the assistant's interaction_reanswered as the hub relays it).
+	{
+		h := newTestHub(t)
+		c := &client{out: make(chan []byte, 1)}
+		addTestClient(h, c)
+		b, _ := json.Marshal(assistantwire.FleetResolved{ID: "ix_question", AnsweredBy: "assistant", Reason: "示例代码只用蓝色",
+			Answers: map[string]string{"选择示例颜色": "蓝色", "选择检查项": "格式, 内容"}})
+		busEvents[assistantwire.EventFleetResolved](h, nil, b)
+		add("interactions", "interaction_resolved_assistant", "助手代答的问题撤回时带上答案和理由，改答从这些答案开始。", "event", wireReceive(t, c),
+			map[string]any{"/type": "interaction_resolved", "/id": "ix_question", "/answered_by": "assistant", "/reason": "示例代码只用蓝色",
+				"/answers/选择示例颜色": "蓝色", "/answers/选择检查项": "格式, 内容"},
+			"server/internal/hub/fleet_link.go: EventFleetResolved", "apple/Shared/LiveConnection.swift: ServerEvent.decode", "docs/protocol/protocol.md: interaction_resolved")
+		raw, _ := json.Marshal(map[string]any{"type": "interaction_reanswered", "id": "ix_question",
+			"resolution": proto.Resolution{Answers: map[string]string{"选择示例颜色": "绿色"}}})
+		if err := h.relayBroadcastFrom(assistantwire.AssistantID, raw); err != nil {
+			t.Fatal(err)
+		}
+		add("interactions", "interaction_reanswered", "用户改答后只带改了的问题及其新答案。", "event", wireReceive(t, c),
+			map[string]any{"/type": "interaction_reanswered", "/id": "ix_question", "/resolution/answers/选择示例颜色": "绿色"},
+			"server/internal/assistant/fleet_delegate.go: Service.reanswer", "server/internal/hub/bus_broadcast.go: Hub.relayBroadcastFrom",
+			"apple/Shared/LiveConnection.swift: ServerEvent.decode", "docs/protocol/protocol.md: interaction_reanswered")
+	}
 
 	working := sessions[0]
 	working.SessionID = "s_working"

@@ -204,7 +204,9 @@ private fun ChatPage(
     val canApprove = session?.canApprove ?: true
     val canTerminal = session?.canTerminal ?: true
     val connection = chrome.connection?.state?.collectAsStateWithLifecycle()?.value
-    val controls = remember(key, chrome.actions, renamer) { ChatChromeState(res, chrome.actions, scope, sessions::refresh, onBack, renamer) }
+    val controls = remember(key, chrome.actions, renamer, interactions) {
+        ChatChromeState(res, chrome.actions, scope, sessions::refresh, onBack, renamer, interactions)
+    }
     var headerOverlay by remember { mutableStateOf(false) }
     var modeOverlay by remember { mutableStateOf(false) }
     var composerOverlay by remember { mutableStateOf(false) }
@@ -1087,6 +1089,9 @@ private fun ChatPage(
                                         }
                                     }
                                 })
+                            // The latest question the assistant answered here, after the agent's own cards (iOS DelegatedCard, #4339 C9).
+                            if (glass && agentChat && !readOnly && composerShown(panel, requestCollapsed))
+                                DelegatedCard(key, interactions, canSend, Modifier.padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.xs))
                             val composerError = snapshot.error.takeIf { errorLine == null }
                             (if (feedback == null) notice ?: composerError else composerError)?.let {
                                 Text(it, Modifier.padding(horizontal = Tokens.Space.m), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
