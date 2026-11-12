@@ -48,6 +48,7 @@ def features():
                 ["sessions_list", "sessions_lookup", "sessions_hierarchy"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
                 ["preview"] if os.environ.get("MOCK_PREVIEW") else []) + (
                 ["task_cron"] if os.environ.get("MOCK_CRON") == "1" else []) + (
+                [] if os.environ.get("MOCK_TODO_SEEN") == "off" else ["todo_seen"]) + (
                 [] if os.environ.get("MOCK_LOOK_UPLOADS") == "off" else ["look_uploads"])
 
 
@@ -21475,6 +21476,19 @@ class H(BaseHTTPRequestHandler):
                         push_machine(mid)
                         push_todos()
                         return self.send_json({"ok": True})
+        # PUT / DELETE /api/v1/todos/{id}/seen (#5707, server/internal/assistant/todo_seen.go): Got it and its Undo. Not
+        # activity: updated_at stays. MOCK_TODO_SEEN=off is a hub without it (no feature, 404 here).
+        if p.startswith("/api/v1/todos/") and p.endswith("/seen") and p.count("/") == 5 and self.command in ("PUT", "DELETE") \
+                and os.environ.get("MOCK_TODO_SEEN") != "off":
+            if is_read_only(self): return self.send_json({"error": "只读角色不能修改待办"}, 403)
+            t = next((x for x in TODOS if x["id"] == p.split("/")[4]), None)
+            if not t: return self.send_json({"error": "待办不存在"}, 404)
+            if self.command == "PUT":
+                t["seen_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            else:
+                t.pop("seen_at", None)
+            push_todos()
+            return self.send_json({"todo": format_todo(t)})
         if p.startswith("/api/v1/todos/") and "/agents/" in p:
             if is_read_only(self): return self.send_json({"error": "只读角色不能修改待办"}, 403)
             parts = p.split("/")  # ['', 'api', 'v1', 'todos', id, 'agents', mid, sid]
