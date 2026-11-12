@@ -935,9 +935,10 @@ nonisolated enum ToolTextMemo {
     }
 }
 
-/// What the user picked in an ask_user card, read back from the tool's result: the hub answers the model with
-/// "The user answered:\n- <question> → <answer>\n" per question (server/internal/assistant/tools.go), and with "The user did
-/// not answer …" when the card was dismissed or expired. A multi-select answer joins its labels with ", ".
+/// What the user picked in an ask_user card or a Claude Code AskUserQuestion, read back from the tool's result: the
+/// hub answers the model with "The user answered:\n- <question> → <answer>\n" per question
+/// (server/internal/assistant/tools.go), and with "The user did not answer …" when the card was dismissed or expired.
+/// A multi-select answer joins its labels with ", ".
 nonisolated enum AskUserAnswers {
     struct Question: Equatable, Sendable {
         var question: String
@@ -953,17 +954,23 @@ nonisolated enum AskUserAnswers {
         }
     }
 
-    /// Each question's answer; empty when the result says nobody answered (or is not the hub's answer at all).
+    /// Each question's answer; empty when the result says nobody answered (or is not an answer at all). Reads the
+    /// hub's ask_user result and Claude Code's AskUserQuestion one (#5937):
+    /// `User has answered your questions: "<q>"="<a>", "<q2>"="<b>". You can now continue …`.
     static func parse(_ result: String, questions: [Question]) -> [String: String] {
-        guard result.hasPrefix("The user answered:") else { return [:] }
+        let claude = result.hasPrefix("User has answered your questions:")
+        guard claude || result.hasPrefix("The user answered:") else { return [:] }
         let marks = questions.compactMap { q -> (String, Range<String.Index>)? in
-            result.range(of: "\n- \(q.question) → ").map { (q.question, $0) }
+            result.range(of: claude ? "\"\(q.question)\"=\"" : "\n- \(q.question) → ").map { (q.question, $0) }
         }.sorted { $0.1.lowerBound < $1.1.lowerBound }
         var out: [String: String] = [:]
         for (n, (question, mark)) in marks.enumerated() {
             let end = n + 1 < marks.count ? marks[n + 1].1.lowerBound : result.endIndex
-            let answer = result[mark.upperBound..<end].trimmingCharacters(in: .whitespacesAndNewlines)
-            if !answer.isEmpty { out[question] = answer }
+            var answer = result[mark.upperBound..<end]
+            // Claude's answer closes with the last quote before the next question (or the closing sentence).
+            if claude { answer = answer.lastIndex(of: "\"").map { answer[..<$0] } ?? "" }
+            let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { out[question] = trimmed }
         }
         return out
     }
@@ -1015,7 +1022,7 @@ struct AskUserDetail: View {
                     if let typed = AskUserAnswers.typed(q, answer: answer) { Self.choice(typed, picked: true) }
                 }
             }
-            // Claude Code's own answer is the result under it (`ToolDetail`), which this does not read.
+            // Claude Code's result shows under it anyway (`ToolDetail`), so only ask_user says nobody answered.
             if ToolNaming.tableName(call.name) == "ask_user", let result = call.result, result.isError != true, answers.isEmpty {
                 Text("No answer").font(Theme.Font.label).foregroundStyle(.secondary)
             }

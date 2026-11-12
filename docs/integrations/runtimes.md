@@ -329,6 +329,11 @@ end to end in `integrations/dsh/e2e/assistant.mjs`.
 
 ### Antigravity CLI
 
+The session's `last_text` preview contains assistant response text after the latest explicit user input. A new user
+input clears the previous reply preview, including input with no visible text. Thinking and tool records leave it empty
+until the assistant writes response text. This keeps user-authored questions out of awaiting-reply detection while
+preserving genuine assistant questions. User messages and tool records remain available in the conversation items.
+
 The implemented integration is for the **Antigravity CLI (`agy`)**, not the Antigravity desktop app. With the node running,
 start `node integrations/antigravity/companion.mjs` from the repository root. The companion connects to the node's runtime
 socket, lists CLI transcripts, and uses `agy acp` for terminal-less session creation, sending and interruption. It can also

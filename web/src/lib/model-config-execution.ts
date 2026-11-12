@@ -22,6 +22,9 @@ export function executionForm(p: ModelPurpose, providers: ModelProvider[] = [], 
   const agent = providerAgent(provider, p.effective?.provider);
   let backend: string;
   if (p.kind === "plugin") backend = providerName(p.effective?.provider, providers) ?? "";
+  // A launcher picked for an API purpose runs Claude Code once per request on the main chat's computer, unless it is a
+  // managed one with a Messages gateway, called over HTTP (#5823; the hub decides by protocol, a key marks a managed one).
+  else if (p.kind === "api" && provider?.kind === "launcher" && ((provider.api && provider.api !== "messages") || !provider.has_key)) backend = "claude -p";
   else if (p.kind === "api") backend = { messages: "Messages", responses: "Responses", chat: "Chat" }[provider?.api || "messages"];
   else if (launch === "headless") {
     backend = agent === "codex" ? "codex app-server"

@@ -572,8 +572,13 @@ data class Session(
      */
     val canDelete: Boolean get() = !assistant && !starting && status in setOf("offline", "done", "idle", "unknown", "interrupted")
     val updated: Instant? get() = parseTime(updatedAt)
-    /** Its workflows still running, newest first. */
-    val runningWorkflows: List<Workflow> get() = workflows.orEmpty().filter { it.isRunning }
+    /**
+     * Its workflows still running, newest first. On a summary row (`summary=1`, one with [waiting]) its [workflowProgress],
+     * the newest running run without its agents and phases, stands for them (#5888), even when the row kept an older
+     * complete row's [workflows] (`keepingDetails`): fresh summary counts win, as in `backgroundWork()`.
+     */
+    val runningWorkflows: List<Workflow> get() = if (waiting != null) listOfNotNull(workflowProgress?.takeIf { it.isRunning })
+        else workflows.orEmpty().filter { it.isRunning }
     /**
      * How much runs in the background without counting a workflow twice: its other background tasks and its running
      * workflows. An older hub sends no [workflows]: every background entry counts, as before.

@@ -93,6 +93,10 @@ class HttpTasksApi internal constructor(
             done?.let { put("done", it) }
         })["todo"] ?: error("no todo in the answer")))
 
+    override suspend fun setTodoSeen(id: String, seen: Boolean): Todo =
+        stamped(JsonCodec.decodeFromJsonElement(call(path("todos", id, "seen"), if (seen) "PUT" else "DELETE",
+            if (seen) JsonObject(emptyMap()) else null)["todo"] ?: error("no todo in the answer")))
+
     override suspend fun setTodoPlan(id: String, plan: persona.core.contracts.TodoPlan): Todo =
         stamped(JsonCodec.decodeFromJsonElement(call(path("todos", id), "PATCH", todoPlanBody(plan))["todo"] ?: error("no todo in the answer")))
 
