@@ -69,8 +69,8 @@ final class MenuSectionTitleTests: XCTestCase {
         sleep(1) // the menu has finished opening
     }
 
-    /// Each title above one of its own rows, somewhere while the menu scrolls from its bottom (where it opens, next to the
-    /// button) to its top. Shots: where it opens, and where it ends.
+    /// Each title on screen above one of its own rows, somewhere while the menu scrolls from its bottom (where it opens,
+    /// next to the button) to its top. Shots: where it opens, and where the last title came into view.
     @MainActor private func checkTitles(_ sections: [(title: String, rows: NSPredicate)], shot name: String) {
         let menu = app.collectionViews.containing(sections[0].rows).firstMatch
         guard menu.waitForExistence(timeout: 5) else {
@@ -83,7 +83,8 @@ final class MenuSectionTitleTests: XCTestCase {
         let from = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: menu.frame.midX, dy: top + 30))
         let to = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: menu.frame.midX, dy: top + 230))
         for step in 0..<7 {
-            for s in sections where above(s.title, s.rows, in: menu) { placed.insert(s.title) }
+            for s in sections where above(s.title, s.rows, in: menu, from: top) { placed.insert(s.title) }
+            print("\(name) step \(step): placed \(placed.sorted())")
             if placed.count == sections.count || step == 6 { break }
             from.press(forDuration: 0.05, thenDragTo: to) // the rows above come down into view
             sleep(1)
@@ -94,10 +95,14 @@ final class MenuSectionTitleTests: XCTestCase {
         }
     }
 
-    /// The title is on screen as a line of the menu, with at least one of its rows below it.
-    @MainActor private func above(_ title: String, _ rows: NSPredicate, in menu: XCUIElement) -> Bool {
+    /// The title is on screen as a line of the menu, with at least one of its rows below it. A line scrolled out of the
+    /// menu's top can still be in the tree with its frame (a dark-mode iPhone run passed with the title out of view): it
+    /// counts only from `top` down, so the shot after it shows the title.
+    @MainActor private func above(_ title: String, _ rows: NSPredicate, in menu: XCUIElement, from top: CGFloat) -> Bool {
         let line = menu.staticTexts.matching(NSPredicate(format: "label == %@", title)).firstMatch
         guard line.exists else { return false }
+        print("\(title): line at \(line.frame.minY), the menu's top at \(top)")
+        guard line.frame.minY >= top - 1 else { return false }
         let notText = NSPredicate(format: "elementType != %d", XCUIElement.ElementType.staticText.rawValue)
         let below = menu.descendants(matching: .any).matching(NSCompoundPredicate(andPredicateWithSubpredicates: [rows, notText]))
         return below.allElementsBoundByIndex.contains { $0.frame.minY >= line.frame.maxY - 1 }
