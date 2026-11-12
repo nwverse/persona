@@ -189,11 +189,12 @@ describe("the shell's session links", () => {
     expect(drawn.chatSid).toBe("lead");
     expect(asked).toBe("mate");
     act(() => doneTeamAsk("mac", "lead"));
-    // a tab link without a pane, whose most urgent pane is the waiting worker: the lead, the worker in its panel
+    // a tab link without a pane, whose most urgent pane is the waiting worker: the lead, not a link to the worker (its
+    // panel opens or not as the lead's page decides)
     await open("/t/mac/ts/tt");
     expect(location.pathname).toBe("/t/mac/ts/tt/lead");
-    expect(asked).toBe("mate");
-    act(() => doneTeamAsk("mac", "lead"));
+    expect(drawn.chatSid).toBe("lead");
+    expect(asked).toBeUndefined();
     act(() => probe.unmount());
   });
 

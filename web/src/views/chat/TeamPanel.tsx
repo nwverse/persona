@@ -43,7 +43,7 @@ export function TeamPanel({ mid, sid, worker, onClose }: { mid: string; sid: str
   const lead = useStore(() => getSession(mid, sid));
   // the lead's folded rows (lib/use-child-sessions.ts): the store's, or on a paging hub one bounded read of them
   const kids = useChildSessions(mid, sid, workerCount(lead) > 0 || Boolean(worker));
-  const workers = useMemo(() => teamWorkers(kids.rows, worker), [kids.rows, worker]);
+  const workers = useMemo(() => teamWorkers(kids.rows), [kids.rows]);
   const shown = shownWorker(workers, mid, sid, worker);
   const running = workers.filter((w) => stateOf(w) === "working").length;
   const body = useId();

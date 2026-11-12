@@ -11,6 +11,7 @@ import { canShowTerminal, composerSlot, otherView, useSessionView, viewOnlyRow }
 import { openLink } from "../../lib/links";
 import { getPanel, openPanel, togglePanel, usePanel } from "../../lib/panel";
 import { machineWithHub } from "../../lib/mesh";
+import { useLayout } from "../../lib/layout";
 import { hasModes, isMuted, toggleMute } from "../../lib/session-actions";
 import { attachLive, flipPin } from "../../lib/agent-actions";
 import { isPinned } from "../../lib/pins";
@@ -262,7 +263,11 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const leads = !embedded && !assistant;
   useTeamReveal(mid, sid, session, leads);
   const panel = usePanel();
-  const teamOpen = Boolean(leads && teamPanelOf(panel, mid, sid));
+  // drawn: ⌘⇧↵ (the middle alone) keeps a wide screen's panel open but not drawn, so it shows nothing there
+  const maximized = useLayout().maximized;
+  const narrowPage = useMedia(NARROW);
+  const panelDrawn = !maximized || narrowPage;
+  const teamOpen = Boolean(leads && panelDrawn && teamPanelOf(panel, mid, sid));
   // the space's other agents, its child sessions folded into their parents (#5120: a child is never one of them)
   const siblings = useStore((s) => (session?.space_id ? foldRows(s.sessions[mid] ?? []).filter((x) => x.space_id === session.space_id && stateOf(x) !== "offline") : []));
   // its own requests and those of the child sessions folded under it (#5120): a child's are answered here, in the order
@@ -1244,7 +1249,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const kids = useChildSessions(mid, sid, Boolean(session?.children?.total) || Boolean(linkedChild));
   // a lead's workers (#5180) are in its Team panel, not cards in its chat; the rest of what folds under it are child cards
   const childRows = useMemo(() => (kids.rows.some(isWorker) ? kids.rows.filter((c) => !isWorker(c)) : kids.rows), [kids.rows]);
-  const workers = useMemo(() => (leads ? teamWorkers(kids.rows, teamOpen ? teamPanelOf(panel, mid, sid)?.worker : undefined) : []), [leads, kids.rows, teamOpen, panel, mid, sid]);
+  const workers = useMemo(() => (leads ? teamWorkers(kids.rows) : []), [leads, kids.rows]);
   // the worker the open Team panel shows: its cards are in its own conversation there, so the dock leaves them out (one
   // request in one place on the page, DESIGN_SYSTEM 3.4); every other worker's wait in this dock, marked as theirs
   const teamShown = teamOpen ? shownWorker(workers, mid, sid, teamPanelOf(panel, mid, sid)?.worker)?.session_id : undefined;

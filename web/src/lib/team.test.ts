@@ -2,9 +2,9 @@
 // A lead's Team (#5180, after cindy): who is a worker, which one the panel shows, and when it opens or closes by itself.
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getPanel, openPanel } from "./panel";
-import { askTeamWorker, isWorker, recordTeam, RECORDS_KEPT, shownWorker, showWorker, teamPanelOf, teamRecord, teamReveal, teamWorkers, useTeamReveal, workerCount } from "./team";
+import { askTeamWorker, isWorker, recordTeam, RECORDS_KEPT, TEAM_GONE_MS, shownWorker, showWorker, teamPanelOf, teamRecord, teamReveal, teamWorkers, useTeamReveal, workerCount } from "./team";
 import type { Session } from "./types";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -46,9 +46,8 @@ describe("teamReveal (cindy's timing)", () => {
 
 describe("the workers and the one shown", () => {
   const kids = [worker("b", 2), row("codex-sub", { folded_under: "lead", parent_session_id: "lead" }), worker("a", 1, { state: "working" }), worker("gone", 3, { state: "offline" }), worker("asks", 4, { state: "needs_you" })];
-  it("are the running workers in pane order; a stopped one only while it is shown", () => {
+  it("are the running workers in pane order", () => {
     expect(teamWorkers(kids).map((s) => s.session_id)).toEqual(["a", "b", "asks"]);
-    expect(teamWorkers(kids, "gone").map((s) => s.session_id)).toEqual(["a", "b", "gone", "asks"]);
     expect(isWorker(kids[1]!)).toBe(false);
     expect(workerCount(row("lead", { children: { total: 3, workers: 2 } }))).toBe(2);
     expect(workerCount(row("x", { children: { total: 3 } }))).toBe(0);
@@ -88,56 +87,84 @@ describe("useTeamReveal on the lead's page", () => {
   let host: HTMLDivElement;
   let root: Root;
   beforeEach(() => {
+    vi.useFakeTimers();
     host = document.createElement("div");
     root = createRoot(host);
   });
-  afterEach(() => act(() => root.unmount()));
+  afterEach(() => {
+    act(() => root.unmount());
+    vi.useRealTimers();
+  });
   const lead = (workers: number) => row("lead", { space_id: "w1", slot_id: "t1", pane_index: 0, children: workers ? { total: workers, workers } : undefined });
   function Page({ s, on = true }: { s?: Session; on?: boolean }) {
     useTeamReveal("mac", "lead", s, on);
     return null;
   }
-  const render = (s?: Session, on = true) => act(() => root.render(createElement(Page, { s, on })));
+  // the panel opens after the page's other effects (a microtask): `await act` lets it
+  const render = async (s?: Session, on = true) => act(async () => root.render(createElement(Page, { s, on })));
+  const gone = () => act(() => void vi.advanceTimersByTime(TEAM_GONE_MS));
 
-  it("opens on arriving (once the row is in), keeps a hand-closed panel closed next time, and opens again for a new team", () => {
-    render(undefined);
+  it("opens on arriving (once the row is in), keeps a hand-closed panel closed next time, and opens again for a new team", async () => {
+    await render(undefined);
     expect(getPanel()).toBeNull();
-    render(lead(2));
+    await render(lead(2));
     expect(teamPanelOf(getPanel(), "mac", "lead")).toBeTruthy();
     expect(teamRecord("mac", "lead")).toBe("open");
     act(() => openPanel(null));
     expect(teamRecord("mac", "lead")).toBe("closed");
     act(() => root.unmount());
     root = createRoot(host);
-    render(lead(2));
+    await render(lead(2));
     expect(getPanel()).toBeNull();
     // the team ends and starts again while the page is on the lead: a new intent
-    render(lead(0));
-    render(lead(1));
+    await render(lead(0));
+    gone();
+    await render(lead(1));
     expect(teamPanelOf(getPanel(), "mac", "lead")).toBeTruthy();
   });
 
-  it("closes when the team ends, without remembering that as the user's choice", () => {
-    render(lead(2));
+  it("closes a moment after the team ends, without remembering that as the user's choice; a blip is no new team", async () => {
+    await render(lead(2));
     expect(teamPanelOf(getPanel(), "mac", "lead")).toBeTruthy();
-    render(lead(0));
+    act(() => openPanel(null));
+    expect(teamRecord("mac", "lead")).toBe("closed");
+    // the fold gone for one push (the lead's pane missing from a list): nothing closes, and nothing reopens
+    await render(lead(0));
+    await render(lead(2));
+    gone();
+    expect(getPanel()).toBeNull();
+    // opened again by hand (the header's button records it open)
+    act(() => {
+      recordTeam("mac", "lead", "open");
+      openPanel({ kind: "team", mid: "mac", sid: "lead" });
+    });
+    await render(lead(0));
+    expect(teamPanelOf(getPanel(), "mac", "lead")).toBeTruthy();
+    gone();
     expect(getPanel()).toBeNull();
     expect(teamRecord("mac", "lead")).toBe("open");
   });
 
-  it("stays shut on a narrow screen until a link to a worker asks for it", () => {
-    narrow = true;
-    render(lead(2));
-    expect(getPanel()).toBeNull();
-    act(() => void askTeamWorker("mac", "lead", "mate"));
+  it("does not replace a panel the page brought back on arriving, but a link to a worker does", async () => {
+    openPanel({ kind: "files", mid: "mac", sid: "lead", cwd: "/code" });
+    await render(lead(2));
+    expect(getPanel()?.kind).toBe("files");
+    await act(async () => void askTeamWorker("mac", "lead", "mate"));
     expect(getPanel()).toEqual({ kind: "team", mid: "mac", sid: "lead", worker: "mate" });
   });
 
-  it("does nothing in a worker's own conversation or a session without workers", () => {
-    render(lead(2), false);
+  it("stays shut on a narrow screen until a link to a worker asks for it", async () => {
+    narrow = true;
+    await render(lead(2));
     expect(getPanel()).toBeNull();
-    render(lead(0));
+    await act(async () => void askTeamWorker("mac", "lead", "mate"));
+    expect(getPanel()).toEqual({ kind: "team", mid: "mac", sid: "lead", worker: "mate" });
+  });
+
+  it("does nothing in a worker's own conversation or a session without workers", async () => {
+    await render(lead(2), false);
+    expect(getPanel()).toBeNull();
+    await render(lead(0));
     expect(getPanel()).toBeNull();
   });
 });
-

@@ -24,11 +24,10 @@ export function teamPanelOf(p: Panel | null, mid: string, sid: string): TeamPane
   return p?.kind === "team" && p.mid === mid && p.sid === sid ? p : undefined;
 }
 
-/** The workers among the rows folded under a lead, in pane order: the running ones, and `keep` (the one shown) even after
- *  it stopped, so the conversation being read does not vanish under the reader. A stopped worker is not folded any more
- *  (the manager folds only running ones) and is a row of its own again; `keep` matters only until that push. */
-export function teamWorkers(rows: readonly Session[], keep?: string): Session[] {
-  return rows.filter((s) => isWorker(s) && (stateOf(s) !== "offline" || s.session_id === keep)).sort(paneOrder);
+/** The workers among the rows folded under a lead, in pane order. A worker that stops is not folded any more (the
+ *  manager folds only running ones): it leaves the strip and is a row of its own again. */
+export function teamWorkers(rows: readonly Session[]): Session[] {
+  return rows.filter((s) => isWorker(s) && stateOf(s) !== "offline").sort(paneOrder);
 }
 
 // the worker picked last on each lead's strip (this browser tab), so the panel opens on it again
@@ -125,6 +124,10 @@ export function teamReveal(r: { workers: number; before: number | undefined; rec
   return r.before === 0 ? "open" : undefined;
 }
 
+/** How long a lead's worker count stays at 0 before the team counts as ended (its panel closes, and workers coming back
+ *  are a new team): a list without the lead's pane, or the lead offline for a push, dissolves the fold for a moment. */
+export const TEAM_GONE_MS = 4000;
+
 /** The lead's page's side of the Team panel: opens and closes it with cindy's timing (`teamReveal`), and keeps what the
  *  user did with it (closed with ×, Esc, ⌘B or the header's Team button while on the lead: kept closed until the team
  *  starts again; opened: kept open). `workers`: how many the lead has (its row's rollup); `session` undefined while the row
@@ -139,21 +142,36 @@ export function useTeamReveal(mid: string, sid: string, session: Session | undef
   const seen = useRef<{ lead: string; workers: number } | undefined>(undefined);
   // the panel this hook closed itself (the team ended): not the user's choice, so not remembered as closed
   const closedItself = useRef(false);
+  const gone = useRef(0);
+  useEffect(() => () => clearTimeout(gone.current), []);
   useEffect(() => {
+    clearTimeout(gone.current);
     if (!known) return;
     const lead = leadKey(mid, sid);
     const before = seen.current?.lead === lead ? seen.current.workers : undefined;
-    seen.current = { lead, workers };
-    const open = teamPanelOf(getPanel(), mid, sid);
-    const what = teamReveal({ workers, before, record: teamRecord(mid, sid), wide, asked: Boolean(asked) });
     if (asked) doneTeamAsk(mid, sid);
-    if (what === "close" && open) {
-      closedItself.current = true;
-      openPanel(null);
+    // the last worker gone: the team ends (the panel closes) only once none came back for a moment
+    if (workers === 0 && before !== undefined && before > 0) {
+      gone.current = window.setTimeout(() => {
+        seen.current = { lead, workers: 0 };
+        if (!teamPanelOf(getPanel(), mid, sid)) return;
+        closedItself.current = true;
+        openPanel(null);
+      }, TEAM_GONE_MS);
+      return;
     }
-    if (what !== "open") return;
-    recordTeam(mid, sid, "open");
-    if (!open || (asked && open.worker !== asked)) openPanel({ kind: "team", mid, sid, worker: asked ?? open?.worker });
+    seen.current = { lead, workers };
+    if (teamReveal({ workers, before, record: teamRecord(mid, sid), wide, asked: Boolean(asked) }) !== "open") return;
+    // after the page's other effects: App keeps the panel of the session being left and may bring back this lead's own
+    // (lib/panel-memory.ts), which an arrival's open does not replace; a link or a team starting does
+    const arriving = !asked && before === undefined;
+    queueMicrotask(() => {
+      const now = getPanel();
+      const open = teamPanelOf(now, mid, sid);
+      if (arriving && now && !open) return;
+      recordTeam(mid, sid, "open");
+      if (!open || (asked && open.worker !== asked)) openPanel({ kind: "team", mid, sid, worker: asked ?? open?.worker });
+    });
     // the panel's own state is decided once per arrival and count: a later resize or panel change does not reopen it
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [known, mid, sid, workers, asked]);

@@ -211,10 +211,12 @@ function pageTarget(s: State, route: Route): PageTarget | undefined {
     // is its lead's page, the worker in its Team panel (#5180)
     const rows = pageRows(s, route.mid);
     const at = resolveTab(rows, route);
-    const worker = workerTarget(rows, route.mid, at, inWorkView(route));
-    // the lead's chat at once: the tab is the lead's too
-    if (worker) return { ...worker, sid: worker.parent };
-    const pane = tabPagePane(at, route, s.loaded);
+    // a link naming a worker: the lead's chat at once (the tab is the lead's too), its panel on the worker
+    const named = at && route.sid === at.session_id ? workerTarget(rows, route.mid, at, inWorkView(route)) : undefined;
+    if (named) return { ...named, sid: named.parent };
+    // a tab opened without a pane whose most urgent one is a worker: its lead, the panel left as the lead's page has it
+    const lead = at && isWorker(at) && !named ? rows.find((r) => r.session_id === at.folded_under) : undefined;
+    const pane = tabPagePane(lead ?? at, route, s.loaded);
     return { link: undefined, to: "", mid: route.mid, sid: pane?.sid };
   }
   if (route.name !== "session") return undefined;
