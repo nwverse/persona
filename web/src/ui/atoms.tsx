@@ -157,6 +157,7 @@ export function Button({
   busy,
   title,
   href,
+  expanded,
 }: {
   children: React.ReactNode;
   tone?: BtnTone;
@@ -169,6 +170,8 @@ export function Button({
   title?: string;
   /** Opens this in a new tab, as a link (noopener, noreferrer: the page gets no handle on this one, nor its address). */
   href?: string;
+  /** A button that shows or hides something: whether it is shown (aria-expanded). */
+  expanded?: boolean;
 }) {
   const base = "inline-flex h-8 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-control px-3 text-[12.5px] font-medium transition-[background-color,color,transform,opacity,filter] duration-150";
   if (href && !disabled && !busy) {
@@ -202,6 +205,7 @@ export function Button({
       disabled={disabled || busy}
       // the spinner is aria-hidden, so without this a busy button just reads as disabled
       aria-busy={busy || undefined}
+      aria-expanded={expanded}
       onClick={onClick}
       className={cx(
         base,
@@ -341,6 +345,7 @@ export function Menu({
   side = "bottom",
   width = 208,
   header,
+  container,
 }: {
   items: MenuItem[];
   anchor: HTMLElement | null;
@@ -351,6 +356,9 @@ export function Menu({
   side?: "top" | "bottom";
   width?: number;
   header?: string;
+  /** Where the menu is put instead of the page's body: a full-screen layer above the menus' own (the image editor),
+   *  whose look (its `dark`) the menu then takes. */
+  container?: Element | null;
 }) {
   const id = useId();
   const [subs, setSubs] = useState<Sub[]>([]); // the open submenus: depth d (d ≥ 1) is subs[d - 1]
@@ -572,7 +580,7 @@ export function Menu({
         <MenuPanel key={`${s.from}-${i}`} {...panelProps(i + 1)} place={{ rect: s.rect, width }} loading={s.loading} loadError={s.error} />
       ))}
     </>,
-    document.body,
+    container ?? document.body,
   );
 }
 

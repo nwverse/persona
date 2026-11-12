@@ -259,8 +259,10 @@ struct LongPressAt: UIGestureRecognizerRepresentable {
 extension View {
     /// The pressable part of a message (the bubble / the text). preview: the same part again, lifted over the dimmed chat
     /// when pressed; card: it is words on the page with nothing around them (an answer), lifted on a card of its own.
-    func messageLongPress<P: View>(id: String, card: Bool = false, @ViewBuilder preview: @escaping () -> P) -> some View {
-        modifier(MessageLongPress(id: id, card: card, preview: preview))
+    /// part: this is one of the rows a message is drawn in (a long answer, #4970), and preview draws all of the message,
+    /// this part marked with `liftPressedPart` (`MessageLift.part`).
+    func messageLongPress<P: View>(id: String, card: Bool = false, part: Bool = false, @ViewBuilder preview: @escaping () -> P) -> some View {
+        modifier(MessageLongPress(id: id, card: card, part: part, preview: preview))
     }
     /// The whole row of a message: hosts the action bar above the press point and lifts the row above its neighbours.
     /// pending: your message not in the transcript yet (`PendingBubble`, #6427): Copy, Select Text and Share only, no
@@ -293,28 +295,40 @@ private struct ClosesMessageBar: ViewModifier {
 private struct MessageLongPress<P: View>: ViewModifier {
     @Environment(MessageMenu.self) private var menu: MessageMenu?
     @Environment(\.messageBar) private var bar
-    @Environment(\.openFile) private var openFile
-    @Environment(\.loadImage) private var loadImage
-    @Environment(\.rowMemoScope) private var memoScope
     let id: String
     let card: Bool
+    let part: Bool
     let preview: () -> P
     /// Where the part is, kept without drawing anything again (it changes on every scrolled frame).
     @State private var place = LiftPlace()
+    /// Pressed: the environment here is read (`EnvironmentCapture`, for one frame), then the part is lifted.
+    @State private var capturing = false
 
     func body(content: Content) -> some View {
         if let menu {
-            content
+            RecordsOffer(place: place) { content }
+                #if DEBUG
+                .modifier(LiftLinesReader { [id] in LiftLines.shared.chat[id] = $0 })
+                #endif
                 .onGeometryChange(for: LiftPlace.Frames.self) { g in
                     LiftPlace.Frames(global: g.frame(in: .global), row: g.frame(in: .named(MessageMenu.row)))
                 } action: { place.frames = $0 }
                 .gesture(LongPressAt(changed: menu.pressChanged) { p in
                     Haptics.tap()
                     menu.anchor = p
-                    lift(menu)
+                    capturing = true
                 })
                 // The screenshot switches (`showMenu`, `showRewind`) pick a message without a press.
-                .onChange(of: menu.selected == id) { _, on in if on, menu.lift?.bar.id != id { lift(menu) } }
+                .onChange(of: menu.selected == id) { _, on in if on, menu.lift?.bar.id != id { capturing = true } }
+                .background {
+                    if capturing {
+                        EnvironmentCapture { env in
+                            capturing = false
+                            place.environment = env
+                            lift(menu)
+                        }
+                    }
+                }
         } else {
             content
         }
@@ -324,15 +338,34 @@ private struct MessageLongPress<P: View>: ViewModifier {
         guard let bar else { return }
         let f = place.frames
         let press = CGPoint(x: menu.anchor.x - f.row.minX, y: menu.anchor.y - f.row.minY)
+        // Drawn over the page, outside the chat, in the environment it had in the chat (`MessageLift.environment`).
         let shown = preview()
-            .environment(\.openFile, openFile)
-            .environment(\.loadImage, loadImage)
-            .environment(\.rowMemoScope, memoScope)
             .environment(\.chatPin, nil) // what opens in the copy does not move the chat under it
+            #if DEBUG
+            .modifier(LiftLinesReader { LiftLines.shared.lift = $0 })
+            #endif
+        #if DEBUG
+        LiftLines.shared.lift = ""
+        LiftLines.shared.select = ""
+        #endif
+        // All of a message drawn in parts is as tall as it takes, at the part's width.
+        let offer = part ? place.offer.map { ProposedViewSize(width: $0.width, height: nil) } : place.offer
         withAnimation(Theme.Motion.state) {
             menu.selected = id
-            menu.lift = MessageLift(bar: bar, frame: f.global, press: press, preview: AnyView(shown), card: card)
+            menu.lift = MessageLift(bar: bar, frame: f.global, press: press, preview: AnyView(shown), card: card,
+                                    offer: offer, environment: place.environment, part: part)
         }
+    }
+}
+
+/// Hands over the environment it is in once, when it appears: read only then, so the views around it don't depend on
+/// all of it the rest of the time.
+private struct EnvironmentCapture: View {
+    @Environment(\.self) private var values
+    let got: (EnvironmentValues) -> Void
+
+    var body: some View {
+        Color.clear.onAppear { got(values) }
     }
 }
 
