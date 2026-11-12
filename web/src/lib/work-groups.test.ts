@@ -260,6 +260,19 @@ describe("the timeline inside a summary", () => {
     expect(groups(b)[0].children.map(shape)).toEqual([["t1", "blank", "t2"], "n1", ["t3"]]);
   });
 
+  it("thoughts without words are no steps (cindy draws none): no summary of them alone, no empty inner group, no split run", () => {
+    const only = blocks([user("u1", 0), think("blank", 1000, ""), say("final", "Done.", 3000)]);
+    expect(only.map((n) => (n.kind === "group" ? "g" : idOf(n)))).toEqual(["final"]);
+    expect(blocks([user("u1", 0), think("blank", 1000, "  ")], true)).toEqual([]);
+    const b = blocks([user("u1", 0), ...tool("t1", "Read", 1000), think("x1", 1500, ""), ...tool("t2", "Grep", 2000, undefined, { pattern: "x" }),
+      say("n1", "First.", 3000), think("x2", 3500, ""), say("n2", "Second.", 4000), ...tool("t3", "Bash", 5000), say("final", "Done.", 6000)]);
+    expect(groups(b)[0].children.map(shape)).toEqual([["t1", "t2"], "n1", "n2", ["t3"]]);
+    expect(folded(b, "x1")).toBe(false);
+    // the first run counts from your message as before; the call is still found
+    expect(groups(groups(b)[0].children)[0].durationMs).toBe(3000);
+    expect(groupsHolding(b, "tu-t2")).toEqual([groups(b)[0].id, groups(groups(b)[0].children)[0].id]);
+  });
+
   it("inner groups keep their keys from live to done and when narration arrives; the outer keeps its own", () => {
     const identity = "exchange-1";
     const draw = (items: Item[], live: boolean) => {
@@ -367,6 +380,41 @@ describe("history gaps", () => {
   it("without words after it, a group's end is its latest result, not its last call", () => {
     const b = blocks([...tool("long", "Bash", 0, 40 * MIN), ...tool("short", "Bash", MIN, 2 * MIN)]);
     expect(groups(b)[0].durationMs).toBe(40 * MIN);
+  });
+});
+
+describe("a work line's time carries on from its running clock (#5119)", () => {
+  const S = 1000;
+  // the mock's tool_turn flow (#3005): a call, its result at 8m 12s, a pause, the answer at 8m 17s
+  const running = () => [user("u1", 0), ...tool("a", "Bash", 2 * S, 492 * S)];
+  const answer = () => say("done", "It was closed by the merge.", 497 * S);
+
+  it("the finished time is never shorter than the running clock showed", () => {
+    const shown: number[] = [];
+    // each tick until the answer is in, then the tick it lands on while the agent is still at work (WorkGroup's Elapsed)
+    for (let tick = 490; tick <= 497; tick++) {
+      const [g] = groups(blocks(running(), true));
+      expect(g.live).toBe(true);
+      shown.push(T0 + tick * S - g.startedAt!);
+    }
+    const [still] = groups(blocks([...running(), answer()], true));
+    expect(still.live).toBe(true);
+    shown.push(T0 + 497 * S - still.startedAt!);
+    const [done] = groups(blocks([...running(), answer()]));
+    expect(done.live).toBe(false);
+    expect(done.durationMs).toBe(497 * S);
+    expect(shown.every((ms) => ms <= done.durationMs!)).toBe(true);
+    expect(workDuration(done.durationMs!)).toBe(workDuration(shown.at(-1)!));
+  });
+
+  it("an exchange stopped before its answer ends at the interrupt", () => {
+    const [g] = groups(blocks([...running(), mk("system", "notice", 495 * S, { id: "stop", text: "已中断" })]));
+    expect(g.durationMs).toBe(495 * S);
+  });
+
+  it("compacted while idle an hour later: the compaction is not part of the time", () => {
+    const b = blocks([...running(), answer(), mk("system", "notice", 3600 * S, { id: "idle", text: "上下文已压缩", compact: { trigger: "idle" } })]);
+    expect(groups(b)[0].durationMs).toBe(497 * S);
   });
 });
 

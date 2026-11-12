@@ -11732,6 +11732,28 @@ LIFT_KEY = "a1f3c2d4-0000-4000-8000-0000000c1e0c"
 # lifted and selected, the quote stays folded (or open, as it was in the chat) and its hidden lines are not selected.
 LIFT_FOLD = "a1f3c2d4-0000-4000-8000-0000000c1e0d"
 LIFT_ASK_KEY = "b2e4d6f8-0000-4000-8000-0000000c1e0c"
+# An answer long enough to be drawn in parts (#4970, `AnswerParts`: 95 lines, three parts): a long press on its middle
+# part lifts, copies and selects all of it (#5221). Its first and last sentences are in its first and last parts.
+LIFT_SPLIT = "a1f3c2d4-0000-4000-8000-0000000c1e0e"
+
+
+def lift_split_answer():
+    topics = [("范围", "这次只迁移订单、库存和结算三张表，用户表和日志表留在旧库，下个季度再动。"),
+              ("步骤", "先双写一周，再把读切到新库，最后停掉旧库的写入；每一步都有开关，可以单独回退。"),
+              ("风险", "最大的风险是结算表的历史数据里有重复的流水号，迁移脚本遇到会停下来，等人工确认。"),
+              ("验证", "每天对一次账：两边的行数、金额合计和最近一小时的流水逐条比对，差异写进日报。"),
+              ("回滚", "回滚只需要把读开关切回旧库，双写期间两边的数据一致，不需要再搬数据。"),
+              ("后续", "旧库保留三十天只读，确认没有人再查之后再下线，下线前会再提醒一次。")]
+    sections = []
+    for n, (name, lead) in enumerate(topics, 1):
+        sections.append(f"### {n}. {name}\n\n第 {n} 节的说明：{lead}"
+                        "这一节的细节都写在迁移手册里，下面只列要点，方便你快速核对。The steps keep the old reader working until every client moved.")
+        sections.append("\n".join(f"- 要点 {n}.{k}：检查第 {k} 项，结果记在 `notes/migration-{n}-{k}.md` 里，有异常就停下来。" for k in range(1, 4)))
+        sections.append(f"```sh\nscripts/migrate.sh --step {n} --dry-run\nscripts/migrate.sh --step {n} --verify\n```")
+        sections.append(f"第 {n} 节小结：这一步预计半天，做完在群里说一声，我再接着做下一节。"
+                        "如果中间有任何一项对不上，就先停在这一步，不要往下走，等我们一起看过日志再决定。")
+    return ("## 迁移总结\n\n开头第一句：这份总结按六个部分说明这次迁移，先说范围，再说步骤、风险、验证、回滚和后续。\n\n"
+            + "\n\n".join(sections) + "\n\n以上是这次迁移的全部总结，有问题随时找我。")
 LIFT_KEY_MINE = "你先把管理密钥存到本机文件，我跑命令读一下。放在 ~/.config/example-gateway/management.key，权限设成 600，别打印到日志里。"
 LIFT_KEY_ANSWER = ("管理 Key 已经存到本机（hub）了：\n`/home/me/.config/example-gateway/management.key`\n\n"
                    "- 文件权限 600，内容 64 位，没有换行，以 `cb3b` 开头、`047f` 结尾。\n"
@@ -11810,6 +11832,8 @@ def mock_message_lift():
     ITEMS[LIFT_ASK_KEY] = [it("user", "text", 6, text=LIFT_KEY_MINE), it("assistant", "text", 5, text=LIFT_KEY_ANSWER)]
     ASSISTANT.append(assistant_sess(LIFT_ASK_KEY, "保存管理密钥", 5, "存好之后要删掉这个文件就跟我说一声。"))
     SESSIONS.append(sess("macbook", LIFT_MIX, "定时核对", repo, "done", "done", "shop-app", 17, "lift", 3, 7, "下一次核对在整点之后五分钟。"))
+    ITEMS[LIFT_SPLIT] = [it("user", "text", 6, text="把这次数据迁移的安排整理成一份总结"), it("assistant", "text", 4, text=lift_split_answer())]
+    SESSIONS.append(sess("macbook", LIFT_SPLIT, "迁移总结", repo, "done", "done", "shop-app", 17, "lift", 6, 4, "以上是这次迁移的全部总结，有问题随时找我。"))
 
 
 if os.environ.get("MOCK_MESSAGE_LIFT") == "1":
@@ -22522,7 +22546,7 @@ def work_timeline_live(send, mid, sid):
     threading.Thread(target=run, daemon=True).start()
 
 
-MOCK_HELP.append("MOCK_WORK_TIMELINE=1  工作摘要展开成 cindy 的时间线（#5155）：天气 Agent（WORKTL）一轮做完、一轮在做，中间有叙述、有字和没字的思考；Persona 主对话同样一轮做完一轮在做；声明了 session_live 的连接订阅这两个会话时每 5 秒推一次「在思考」")
+MOCK_HELP.append("MOCK_WORK_TIMELINE=1  work summaries that open to cindy's timeline (#5155): the weather Agent (WORKTL) and the Persona main conversation each have a finished and a live turn, with narration between runs of steps and thoughts with and without words; a connection that declared session_live and subscribes to either is told every 5 s that it is thinking")
 
 
 # ---------- MOCK_CHAT_CARDS: a crowded composer on a phone (#1996) ----------
@@ -23550,6 +23574,112 @@ MOCK_HELP.append("MOCK_ULTRACODE=1  Claude Code 的 ultracode 开关（#3428）�
 MOCK_HELP.append("MOCK_CUSTOM_MODELS=1|forgetfail|empty|fail  手动输入模型 ID（#1644）：features 带 typed_models；Claude Code / Codex 的模型列表后面带输入过的 ID（custom），"
                  "DELETE …/models/custom?model= 忘掉；新建和 …/modes 用了列表里没有的 ID 就记下。forgetfail：忘掉回 500；empty：Claude Code 的列表是空的；"
                  "fail：读不到列表（502）。GET /mock/custom_models 看记着的，?reset=1 复原")
+
+# A Persona chat's own model (#5033, docs/assistant/model-config.md "A conversation's own model"): MOCK_MODEL_PICK=1
+# advertises `assistant_model_pick`; the main chat's launchers (`?purpose=assistant`) are plain claude, the locked
+# sonnetcc, a Messages-protocol direct API ("Team API", which has no /model list) and codex, with the default and an
+# `unavailable` list (a Responses direct API, a provider out of the computer's scope); PUT / DELETE
+# /api/v1/assistant/conversations/{id}/model keep or drop `model_pick` on the conversation (the out-of-scope one is 409
+# launcher_out_of_scope, an unknown one 409 launcher_missing, another agent than the chat's 409 launcher_other_kind, a
+# model with sonnetcc 400). =picked: the second chat starts
+# with a pick. GET /mock/model_pick: the requests; ?reset=1 drops every pick.
+MODEL_PICK_MODE = os.environ.get("MOCK_MODEL_PICK", "")
+MODEL_PICK_LOG = []
+MODEL_PICK_LAUNCHERS = [
+    {"name": "claude", "model": "opus", "source": "builtin"},
+    {"name": "sonnetcc", "model": "sonnet", "source": "zshrc"},
+    {"name": "team-api", "display_name": "Team API", "model": "claude-sonnet-5-5", "source": "persona"},
+    {"name": "codex", "model": "gpt-5.5", "agent": "codex", "agent_type": "codex", "source": "builtin"},
+]
+MODEL_PICK_REASONS = {
+    "api_protocol": {"en": "This direct API speaks the Responses protocol, which can't run Persona chats",
+                     "zh-Hans": "这个直连 API 用的是 Responses 协议，跑不了 Persona 对话",
+                     "ja": "この直接 API は Responses プロトコルのため、Persona のチャットを実行できません"},
+    "launcher_out_of_scope": {"en": "This provider is only for MacBook, not this computer",
+                              "zh-Hans": "这个服务商只给 MacBook 用，不在这台电脑上",
+                              "ja": "このプロバイダーは MacBook 専用で、このコンピューターでは使えません"},
+    "launcher_other_kind": {"en": "This conversation runs on another agent; start a new conversation to use this launcher",
+                            "zh-Hans": "这个对话跑在另一种 Agent 上，要用这个启动器得新开对话",
+                            "ja": "この会話は別のエージェントで動いています。このランチャーを使うには新しい会話を始めてください"},
+}
+if MODEL_PICK_MODE:
+    LAUNCHER_MODELS["team-api"] = {"agent": "claude", "models": []}
+
+
+def model_pick_reset():
+    for s in ASSISTANT:
+        s.pop("model_pick", None)
+    if MODEL_PICK_MODE == "picked":
+        for s in ASSISTANT:
+            if s["session_id"] == ASK2:
+                s["model_pick"] = {"launcher": "team-api", "effort": "medium"}
+
+
+def model_pick_route(handler, p, body):
+    """MOCK_MODEL_PICK: the main chat's launchers with `unavailable`, PUT / DELETE …/conversations/{id}/model. False otherwise."""
+    if not MODEL_PICK_MODE: return False
+    query = parse_qs(urlparse(handler.path).query)
+    lang = cron_lang(handler.headers.get("Accept-Language"))
+    if p == "/mock/model_pick":
+        if query.get("reset"):
+            model_pick_reset()
+            push_machine(ASSISTANT_CONFIG["machine_id"])
+        return handler.send_json({"requests": MODEL_PICK_LOG}) or True
+    if handler.command == "GET" and re.fullmatch(r"/api/v1/machines/[^/]+/launchers", p) and query.get("purpose") == ["assistant"]:
+        return handler.send_json({
+            "launchers": [dict(l) for l in MODEL_PICK_LAUNCHERS],
+            "default": {"provider": "claude", "model": "opus", "effort": "high"},
+            "unavailable": [
+                {"name": "gpt-direct", "display_name": "GPT direct", "kind": "api", "api": "responses", "code": "api_protocol", "reason": MODEL_PICK_REASONS["api_protocol"][lang]},
+                {"name": "far-gw", "display_name": "Far gateway", "kind": "launcher", "code": "launcher_out_of_scope", "reason": MODEL_PICK_REASONS["launcher_out_of_scope"][lang]},
+            ]}) or True
+    m = re.fullmatch(r"/api/v1/assistant/conversations/([^/]+)/model", p)
+    if not m or handler.command not in ("PUT", "DELETE"): return False
+    s = next((x for x in ASSISTANT if x["session_id"] == m.group(1)), None)
+    if s is None: return handler.send_json({"error": "conversation not found"}, 404) or True
+    req = json.loads(body or b"{}") if handler.command == "PUT" else {}
+    MODEL_PICK_LOG.append({"method": handler.command, "session_id": s["session_id"], **{k: req[k] for k in ("launcher", "model", "effort") if k in req}})
+    if handler.command == "DELETE":
+        s.pop("model_pick", None)
+        push_machine(s["machine_id"])
+        return handler.send_json({"ok": True}) or True
+    launcher = req.get("launcher") or ""
+    if launcher == "far-gw":
+        return handler.send_json({"error": MODEL_PICK_REASONS["launcher_out_of_scope"][lang], "code": "launcher_out_of_scope"}, 409) or True
+    if launcher not in {l["name"] for l in MODEL_PICK_LAUNCHERS}:
+        return handler.send_json({"error": "%s is not on this computer" % launcher, "code": "launcher_missing"}, 409) or True
+    picked = next((l.get("agent_type") or "claude" for l in MODEL_PICK_LAUNCHERS if l["name"] == launcher), "claude")
+    if picked != (s.get("agent") or "claude"):
+        return handler.send_json({"error": MODEL_PICK_REASONS["launcher_other_kind"][lang], "code": "launcher_other_kind"}, 409) or True
+    if launcher == "sonnetcc" and req.get("model"):
+        return handler.send_json({"error": "sonnetcc sets its own model"}, 400) or True
+    pick = {k: req[k] for k in ("launcher", "model", "effort") if req.get(k)}
+    s["model_pick"] = pick
+    push_machine(s["machine_id"])
+    return handler.send_json({"ok": True, "model_pick": pick}) or True
+
+
+if MODEL_PICK_MODE:
+    model_pick_reset()
+
+_plugins_route_without_model_pick = plugins_route
+
+
+def plugins_route(handler, p, body):
+    return model_pick_route(handler, p, body) or _plugins_route_without_model_pick(handler, p, body)
+
+
+_features_without_model_pick = features
+
+
+def features():
+    return _features_without_model_pick() + (["assistant_model_pick"] if MODEL_PICK_MODE else [])
+
+
+MOCK_HELP.append("MOCK_MODEL_PICK=1|picked  Persona 对话自己的模型（#5033）：features 带 assistant_model_pick；主对话的启动器（?purpose=assistant）带默认和 unavailable"
+                 "（一个 Responses 直连 API、一个不对这台电脑开放的服务商）；PUT / DELETE /api/v1/assistant/conversations/{id}/model 记下或清掉 model_pick。"
+                 "picked：第二个对话一开始就有自己的选择。GET /mock/model_pick 看请求，?reset=1 复原")
+
 
 # Switching a running Agent to another provider (#5035, docs/protocol/protocol.md "Switching a running Agent to another
 # provider"): MOCK_LAUNCHER_SWITCH=1 advertises `launcher_switch`, gives every computer a second Claude Code launcher

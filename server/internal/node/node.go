@@ -504,10 +504,14 @@ func (n *Node) reloadState(ctx context.Context) bool {
 // connection ended (it runs on to its end) goes to the next connection's Node, which writes it (switch_share.go).
 func (n *Node) persistState(id string, v sessionState) {
 	if n.peer == nil {
+		devicewire.ShareCreationLog(n.logf, id, "node_notify", "peer_unavailable")
 		return
 	}
 	if err := n.peer.Notify("state.put", map[string]any{"session_id": id, "state": v}); err != nil {
+		devicewire.ShareCreationLog(n.logf, id, "node_notify", "send_error")
 		n.switches().keep(n, id, v)
+	} else if v.CreationID != "" || v.Incarnation != "" {
+		devicewire.ShareCreationLog(n.logf, id, "node_notify", "sent_unacknowledged")
 	}
 }
 
@@ -568,6 +572,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.secretRun(ctx, params)
 	case proto.MethodSecretStage: // a hand-off's values, kept for its start's ticket (secretenv.go); the same
 		return n.secretStageCall(params)
+	case proto.MethodModelHTTP: // an API connection's request sent through this computer (modelhttp.go); the same
+		return modelHTTP(ctx, params)
 	}
 	if strings.HasPrefix(method, "plugin.node.") { // plugins' programs on this computer (plugins.go)
 		return n.handlePlugins(ctx, method, params)
