@@ -23273,7 +23273,12 @@ MOCK_HELP.append("MOCK_INBOX_ITEM_UI=1  （和 MOCK_EXTENSIONS=1 一起）收件
 # run of `live` pushes for it, one per MOCK_LIVE_STATUS_TICK seconds (default 1): thinking, "thought for 3s", tokens
 # growing, the verb changing, the count holding still for a tick; then `live: null` and the session goes idle (the
 # turn is over). Subscribing again once it is over starts another run (the session working again).
-LIVE_STATUS = os.environ.get("MOCK_LIVE_STATUS") == "1"
+# MOCK_LIVE_STATUS=steady (#5312): a long run instead (MOCK_LIVE_STATUS_TICKS, default 150) writing 40 to 60 tokens a
+# tick, counted to the hundred from 1k as Claude's line does, the count holding for six ticks in every thirty (a tool
+# running): the running bar's speed, its history card and the tokens while it pauses. Its time counts from the turn's
+# start (every run is the same turn) and its `at` is in whole seconds, as the node writes them.
+LIVE_STATUS_MODE = os.environ.get("MOCK_LIVE_STATUS", "")
+LIVE_STATUS = LIVE_STATUS_MODE in ("1", "steady")
 LIVE_STATUS_STATE = {"running": set(), "senders": set()}
 LIVE_STATUS_STEPS = [
     {"verb": "Frosting", "elapsed_s": 1, "thinking": True},
@@ -23286,6 +23291,17 @@ LIVE_STATUS_STEPS = [
     {"verb": "Moonwalking", "elapsed_s": 8, "tokens_down": 4800},
     {"verb": "Moonwalking", "elapsed_s": 9, "tokens_down": 22800},
 ]
+
+
+def live_status_steady(ticks):
+    """MOCK_LIVE_STATUS=steady: thinking for two ticks, then a steady count with a pause every thirty ticks."""
+    steps, tokens = [], 0
+    for i in range(1, ticks + 1):
+        if i > 2 and i % 30 not in range(20, 26):
+            tokens += 40 + (i * 37) % 21
+        shown = tokens if tokens < 1000 else int(round(tokens, -2))
+        steps.append({"verb": "Frosting", "elapsed_s": i, **({"tokens_down": shown} if shown else {}), **({"thinking": True} if i <= 2 else {})})
+    return steps
 
 
 def live_status_subscribe(send, mid, sid):
@@ -23307,11 +23323,22 @@ def live_status_subscribe(send, mid, sid):
     def run():
         import time
         tick = float(os.environ.get("MOCK_LIVE_STATUS_TICK", "1"))
-        s.update(status="working", state="working", state_since=utc_now(), updated_at=utc_now())
+        steady = LIVE_STATUS_MODE == "steady"
+        # steady: every run is the turn the session was in when the mock started, and the line counts from its start as
+        # Claude's does; its `at` is in whole seconds, as the node writes it
+        starts = LIVE_STATUS_STATE.setdefault("start", {})
+        if steady and sid not in starts:
+            since = s.get("state_since") if s.get("state") == "working" else None
+            starts[sid] = datetime.fromisoformat(since.replace("Z", "+00:00")).timestamp() if since else time.time()
+        since = datetime.fromtimestamp(starts[sid], timezone.utc).isoformat().replace("+00:00", "Z") if steady else utc_now()
+        s.update(status="working", state="working", state_since=since, updated_at=utc_now())
         push_machine(mid)
-        for step in LIVE_STATUS_STEPS:
+        steps = live_status_steady(int(os.environ.get("MOCK_LIVE_STATUS_TICKS", "150"))) if steady else LIVE_STATUS_STEPS
+        for step in steps:
             time.sleep(tick)
-            push({**step, "at": utc_now()})
+            if steady:
+                step = {**step, "elapsed_s": int(time.time() - starts[sid]), "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+            push({"at": utc_now(), **step})
         time.sleep(tick)
         push(None)
         s.update(status="idle", state="idle", state_since=utc_now(), updated_at=utc_now())
@@ -23320,12 +23347,13 @@ def live_status_subscribe(send, mid, sid):
     threading.Thread(target=run, daemon=True).start()
 
 
-MOCK_HELP.append("MOCK_LIVE_STATUS=1  Claude 会话的实时状态行（session_live，#1963）：声明了 session_live 的连接订阅后按 MOCK_LIVE_STATUS_TICK 秒（默认 1）一条推 live（思考中、thought for、token 增长、动词变化），最后推 null、会话变空闲；结束后再订阅会重来一轮")
+MOCK_HELP.append("MOCK_LIVE_STATUS=1|steady  Claude 会话的实时状态行（session_live，#1963）：声明了 session_live 的连接订阅后按 MOCK_LIVE_STATUS_TICK 秒（默认 1）一条推 live（思考中、thought for、token 增长、动词变化），最后推 null、会话变空闲；结束后再订阅会重来一轮。steady（#5312）：一轮更长（MOCK_LIVE_STATUS_TICKS 条，默认 150），每条多 40–60 个 token（过 1k 按百计，同 Claude 的显示），每 30 条停 6 条（像在跑工具），给运行状态栏的速度和速度历史截图；同时开着 MOCK_WORK_TIMELINE 时它的「思考中」推送不再发")
 
 
 def work_timeline_live(send, mid, sid):
-    """MOCK_WORK_TIMELINE: the two live sessions say they are thinking, every 5 s for 10 minutes or until the page goes."""
-    if sid not in (WORKTL, ASK1):
+    """MOCK_WORK_TIMELINE: the two live sessions say they are thinking, every 5 s for 10 minutes or until the page goes
+    (not with MOCK_LIVE_STATUS=steady, whose own run tells the weather Agent's state, #5312)."""
+    if sid not in (WORKTL, ASK1) or LIVE_STATUS_MODE == "steady":
         return
 
     def run():
