@@ -38,7 +38,7 @@ func normalizeLarkCommand(cmd, cwd string) string {
 		}
 	}
 	vars := map[string]string{}
-	changed := false
+	changed, unsafe := false, false
 	for _, stmt := range tree.Stmts {
 		call := stmt.Cmd.(*syntax.CallExpr)
 		if len(call.Args) == 0 {
@@ -77,8 +77,8 @@ func normalizeLarkCommand(cmd, cwd string) string {
 				}
 			}
 			if dynamicArgs {
-				clear(vars)
-				continue // do not resolve the executable after another argument can change shell state
+				unsafe = true
+				break // do not resolve the executable after another argument can change shell state
 			}
 			word := call.Args[index]
 			if len(word.Parts) == 1 {
@@ -91,12 +91,19 @@ func normalizeLarkCommand(cmd, cwd string) string {
 				}
 			}
 		}
-		// Preserve assignments only across simple commands known not to change shell state.
+		// Only commands that cannot change the parent shell's state can take part.
 		name := words[0]
-		unchanged := resolvedAbsolute || map[string]bool{"echo": true, ":": true, "true": true, "false": true, "ls": true, "git": true, "go": true, "pwd": true, "date": true, "sleep": true, "cat": true, "head": true, "grep": true, "jq": true}[name]
-		if len(call.Assigns) != 0 || len(stmt.Redirs) != 0 || !unchanged {
+		unchanged := resolvedAbsolute || map[string]bool{"echo": true, ":": true, "true": true, "false": true, "ls": true, "git": true, "go": true, "pwd": true, "date": true, "sleep": true, "cat": true, "tee": true, "head": true, "wc": true, "grep": true, "jq": true}[name]
+		if !unchanged {
+			unsafe = true
+			break
+		}
+		if len(call.Assigns) != 0 || len(stmt.Redirs) != 0 {
 			clear(vars)
 		}
+	}
+	if unsafe {
+		return cmd
 	}
 
 	// A heredoc fed only to a file writer is data, except when a later command

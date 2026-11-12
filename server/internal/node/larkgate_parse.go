@@ -344,9 +344,27 @@ func scalarParameter(p *syntax.ParamExp) bool {
 		!p.Excl && !p.Length && !p.Width && p.Index == nil && p.Slice == nil && p.Repl == nil && p.Exp == nil && p.Names == 0
 }
 
+// braceExpansion recognizes braces across the literal and quoted parts of one
+// word. Quoted content is a placeholder because it does not itself expand.
+func braceExpansion(word *syntax.Word) bool {
+	var text strings.Builder
+	for _, part := range word.Parts {
+		if lit, ok := part.(*syntax.Lit); ok {
+			text.WriteString(lit.Value)
+		} else {
+			text.WriteByte('_')
+		}
+	}
+	value := text.String()
+	return strings.Contains(value, "{") && strings.Contains(value, "}") && strings.Contains(value, ",")
+}
+
 // wordExpandsToMany reports shell syntax that can produce extra arguments.
 // Double quotes protect scalar variables, but not "$@" or array expansions.
 func wordExpandsToMany(word *syntax.Word) bool {
+	if braceExpansion(word) {
+		return true
+	}
 	found := false
 	syntax.Walk(word, func(node syntax.Node) bool {
 		switch n := node.(type) {
@@ -365,7 +383,7 @@ func wordExpandsToMany(word *syntax.Word) bool {
 			found = true
 			return false
 		case *syntax.Lit:
-			if strings.ContainsAny(n.Value, "*?[") || strings.Contains(n.Value, "{") && strings.Contains(n.Value, "}") && strings.Contains(n.Value, ",") {
+			if strings.ContainsAny(n.Value, "*?[") {
 				found = true
 				return false
 			}
