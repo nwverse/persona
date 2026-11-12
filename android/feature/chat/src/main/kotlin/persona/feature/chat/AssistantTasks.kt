@@ -56,6 +56,7 @@ import persona.core.contracts.SessionKey
 import persona.core.contracts.TaskPlan
 import persona.core.contracts.Todo
 import persona.core.contracts.draftPlaceholder
+import persona.core.designsystem.DayLine
 import persona.core.designsystem.JButton
 import persona.core.designsystem.JButtonKind
 import persona.core.designsystem.JButtonSize
@@ -118,6 +119,8 @@ internal class AssistantTaskHost(
     val onOpenBackground: (() -> Unit)? = null,
     /** The conversation's own manager (its session row), for plan and Brief writes; null: not known. */
     val manager: String? = null,
+    /** Opens the settings page a briefing's recommended mechanism is turned on at; null: its rows have no button. */
+    val onOpenSetup: ((persona.core.contracts.BriefSetupPage) -> Unit)? = null,
 ) {
     /** Each session's first card ([firstBySession]). */
     val cards: Map<SessionKey, persona.core.contracts.Interaction> by lazy { pending.firstBySession() }
@@ -173,8 +176,7 @@ internal fun openTask(host: AssistantTaskHost, todo: Todo) {
 internal fun AssistantExtraLine(payload: Any, host: AssistantTaskHost?) {
     if (host == null) return
     when (payload) {
-        is AssistantExtra.Day -> Text(AssistantLines.dayLabel(payload.date).text(), Modifier.fillMaxWidth().padding(vertical = Tokens.Space.xs),
-            style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+        is AssistantExtra.Day -> DayLine(payload.date)
         is AssistantExtra.Quick -> QuickResultCard(payload.result)
         is AssistantExtra.Feed -> FeedLine(payload.item, host)
         is persona.core.domain.tasks.DispatchHint -> DispatchLine(payload, host)
@@ -449,40 +451,46 @@ internal fun PlanCard(plan: TaskPlan, host: AssistantTaskHost) {
                 val reason = it.error.orEmpty().trim().ifEmpty { stringResource(R.string.chat_tasks_plan_reason_unknown) }
                 Text(stringResource(R.string.chat_tasks_plan_task_failed, it.title, reason), style = PersonaTheme.type.caption, color = PersonaTheme.palette.danger.text)
             }
+            // what Always made on this plan's suggested rule stays with it once it is started
+            RuleSuggestionLine("plan:${plan.id}", null, host.tasks, host.onError, host.manager)
         }
         return
     }
-    JCard {
-        Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
-            Text(if (plan.tasks.size > 1) pluralStringResource(R.plurals.chat_tasks_plan_split, plan.tasks.size, plan.tasks.size)
-                else stringResource(R.string.chat_tasks_plan_single), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
-            plan.tasks.forEachIndexed { n, t ->
-                if (n > 0) HorizontalDivider(color = PersonaTheme.palette.line)
-                Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-                    Text(if (plan.tasks.size > 1) "${n + 1}. ${t.title}" else t.title, style = PersonaTheme.type.headline, color = PersonaTheme.palette.ink)
-                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-                        JChip(host.machineName(t.machine), icon = PhIcons.Laptop)
-                        JChip(t.project, icon = PhIcons.Folder)
-                        JChip(t.model?.takeIf(String::isNotBlank) ?: t.launcher?.takeIf(String::isNotBlank) ?: stringResource(R.string.chat_tasks_default_model), icon = PhIcons.Cpu)
-                        JChip(if (t.readonly == true) stringResource(R.string.chat_tasks_read_only) else permissionLabel(t.permission), selected = t.readonly == true)
+    // The rule the plan suggests after three Starts of its kind sits under the card (#4929).
+    Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+        JCard {
+            Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
+                Text(if (plan.tasks.size > 1) pluralStringResource(R.plurals.chat_tasks_plan_split, plan.tasks.size, plan.tasks.size)
+                    else stringResource(R.string.chat_tasks_plan_single), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
+                plan.tasks.forEachIndexed { n, t ->
+                    if (n > 0) HorizontalDivider(color = PersonaTheme.palette.line)
+                    Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+                        Text(if (plan.tasks.size > 1) "${n + 1}. ${t.title}" else t.title, style = PersonaTheme.type.headline, color = PersonaTheme.palette.ink)
+                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+                            JChip(host.machineName(t.machine), icon = PhIcons.Laptop)
+                            JChip(t.project, icon = PhIcons.Folder)
+                            JChip(t.model?.takeIf(String::isNotBlank) ?: t.launcher?.takeIf(String::isNotBlank) ?: stringResource(R.string.chat_tasks_default_model), icon = PhIcons.Cpu)
+                            JChip(if (t.readonly == true) stringResource(R.string.chat_tasks_read_only) else permissionLabel(t.permission), selected = t.readonly == true)
+                        }
+                        t.why?.takeIf(String::isNotBlank)?.let { Text(it, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2) }
                     }
-                    t.why?.takeIf(String::isNotBlank)?.let { Text(it, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2) }
+                }
+                Row(Modifier.clickable { remember = !remember }, verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(remember, { remember = it })
+                    Text(stringResource(R.string.chat_tasks_plan_remember), style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink2)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+                    JButton(if (plan.tasks.size > 1) pluralStringResource(R.plurals.chat_tasks_plan_start_count, plan.tasks.size, plan.tasks.size)
+                        else stringResource(R.string.chat_tasks_plan_start), { host.tasks.startPlan(plan, remember, host.onError, manager = host.manager) },
+                        Modifier.weight(1f), size = JButtonSize.Medium, loading = plan.id in busy)
+                    JButton(stringResource(R.string.chat_plan_edit), { editing = true }, kind = JButtonKind.Secondary, size = JButtonSize.Medium,
+                        enabled = plan.id !in busy)
+                    JButton(stringResource(R.string.chat_tasks_plan_dismiss), { host.tasks.dismissPlan(plan, host.onError, host.manager) }, kind = JButtonKind.Secondary, size = JButtonSize.Medium,
+                        enabled = plan.id !in busy)
                 }
             }
-            Row(Modifier.clickable { remember = !remember }, verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(remember, { remember = it })
-                Text(stringResource(R.string.chat_tasks_plan_remember), style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink2)
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                JButton(if (plan.tasks.size > 1) pluralStringResource(R.plurals.chat_tasks_plan_start_count, plan.tasks.size, plan.tasks.size)
-                    else stringResource(R.string.chat_tasks_plan_start), { host.tasks.startPlan(plan, remember, host.onError, manager = host.manager) },
-                    Modifier.weight(1f), size = JButtonSize.Medium, loading = plan.id in busy)
-                JButton(stringResource(R.string.chat_plan_edit), { editing = true }, kind = JButtonKind.Secondary, size = JButtonSize.Medium,
-                    enabled = plan.id !in busy)
-                JButton(stringResource(R.string.chat_tasks_plan_dismiss), { host.tasks.dismissPlan(plan, host.onError, host.manager) }, kind = JButtonKind.Secondary, size = JButtonSize.Medium,
-                    enabled = plan.id !in busy)
-            }
         }
+        RuleSuggestionLine("plan:${plan.id}", plan.suggestion, host.tasks, host.onError, host.manager, enabled = plan.id !in busy)
     }
     // The sheet closes when the started plan comes back; a failed start leaves it open with its edits (#5312).
     if (editing) PlanEditSheet(plan, host, onDismiss = { editing = false }, starting = plan.id in busy) { edits ->

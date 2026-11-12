@@ -2,6 +2,8 @@ package assistant
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -110,13 +112,22 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 		Instructions string          `json:"instructions"`
 		Skills       json.RawMessage `json:"skills"`
 	}
-	if err := s.appCall(ctx, AppPlugins, PluginsAssistant, map[string]any{"machine_id": machine}, &plugins); err != nil {
+	// The digest of the hub's own part lets the extensions' data instructions ride along when it changes (the
+	// conversation restarts for it anyway) instead of restarting it on their own (extmgr extension_assistant_data.go).
+	pluginParams := map[string]any{"machine_id": machine}
+	var own string
+	if space != SpaceHealth {
+		own = s.claudeMD(ctx, machine, conns.LarkCLI)
+		sum := sha256.Sum256([]byte(own))
+		pluginParams["base_digest"] = hex.EncodeToString(sum[:16])
+	}
+	if err := s.appCall(ctx, AppPlugins, PluginsAssistant, pluginParams, &plugins); err != nil {
 		return "", false, err
 	}
 	if len(plugins.Skills) == 0 {
 		plugins.Skills = json.RawMessage("null")
 	}
-	dir, md := s.assistantRel(), s.claudeMD(ctx, machine, conns.LarkCLI)+plugins.Instructions
+	dir, md := s.assistantRel(), own+plugins.Instructions
 	if space == SpaceHealth {
 		dir, md = s.healthRel(), s.healthClaudeMD(ctx, machine)
 	}
