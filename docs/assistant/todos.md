@@ -747,7 +747,7 @@ Not yet: manual editing/undo of conclusions (currently **Replace** in decisions)
 
 | Tool | What it does | Confirmed on the phone |
 | --- | --- | --- |
-| `todo_list` | Open to-dos by default, earliest due first (none last), filtered by state, due before / after, overdue, with or without agents, project, words | — |
+| `todo_list` | Open to-dos and failed starts by default, earliest due first (none last), filtered by state, due before / after, overdue, with or without agents, project, words | — |
 | `todo_get` | One in full: notes, agents, the task it is, decisions in force | — |
 | `todo_create` | `title`, `notes`, `due` (a day, a moment in the user's time zone or RFC 3339, `2h` / `3d`), `remind` (a moment, not past), `priority`, `project`; an open to-do with the same title and due date is returned instead of made twice | No |
 | `todo_update` | Title, notes, due, remind, priority, project; `""` clears | No |
