@@ -63656,28 +63656,6 @@
       },
       "extractionState" : "manual"
     },
-    "Inbox Sources" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Inbox Sources"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "受信箱のソース"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "收件箱来源"
-          }
-        }
-      }
-    },
     "Include Old Chat Summary" : {
       "localizations" : {
         "en" : {

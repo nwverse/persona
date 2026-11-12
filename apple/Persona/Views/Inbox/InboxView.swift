@@ -134,11 +134,7 @@ struct InboxPage: View {
                             // Every source subscription, with the Inbox's other settings, once the hub shows them (#2041).
                             if model.hubFeatures.contains(SubscriptionsUI.feature) {
                                 Button { showingSubscriptions = true } label: {
-                                    if model.hubFeatures.contains(SubscriptionsUI.sourcesFeature) { // every source of the Inbox (#5278)
-                                        Label("Inbox Sources", systemImage: Theme.Icon.subscriptions)
-                                    } else {
-                                        Label("Subscriptions [Source Subscriptions]", systemImage: Theme.Icon.subscriptions)
-                                    }
+                                    Label("Subscriptions [Source Subscriptions]", systemImage: Theme.Icon.subscriptions)
                                 }
                                 .accessibilityIdentifier("inbox.subscriptions")
                             }
