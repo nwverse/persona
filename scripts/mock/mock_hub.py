@@ -6265,7 +6265,8 @@ if MOCK_TASKS:
         for _i, _x in enumerate(ITEMS[ASK1]):
             _x["seq"] = _base + _i
     # MOCK_PLACE_MAP=1 (with MOCK_TASKS=1): "where am I" and "coffee near me" answered with the phone's location tools,
-    # drawn as map cards under their work lines (#5543); the places are made up.
+    # drawn as map cards under their work lines (#5543), then the walk to the second café as a route (#5544) and handed
+    # to Maps (#5545); the places and the route are made up.
     if os.environ.get("MOCK_PLACE_MAP") == "1":
         _cafes = [("街角咖啡", 31.2318, 121.4752, 180), ("安静书房咖啡", 31.2291, 121.4769, 340),
                   ("老弄堂咖啡馆", 31.2335, 121.4711, 420), ("河边烘焙咖啡", 31.2276, 121.4702, 610)]
@@ -6286,8 +6287,20 @@ if MOCK_TASKS:
                                "source": "Apple Maps (MapKit local search)",
                                "note": "Opening hours are not available from Apple Maps to apps."}, ensure_ascii=False), 1.15)
             + [it("assistant", "text", 1.1, text="找到 4 家：最近的是 1 号街角咖啡，180 米；想安静些可以去 2 号安静书房咖啡，340 米。营业时间苹果地图不提供，去之前最好确认一下。")]
+            # How long a walk to the second café takes, worked out without opening anything (#5544): a route card.
+            + [it("user", "text", 0.95, text="走到 2 号要多久")]
+            + tool("mcp__persona__phone_maps_route",
+                   {"latitude": 31.2291, "longitude": 121.4769, "name": "安静书房咖啡", "mode": "walking"},
+                   json.dumps({"destination": "安静书房咖啡", "latitude": 31.2291, "longitude": 121.4769, "mode": "walking",
+                               "distance_meters": 420, "expected_seconds": 330,
+                               "line": [[31.2304, 121.4737], [31.2299, 121.4741], [31.2297, 121.4755],
+                                        [31.2293, 121.4762], [31.2291, 121.4769]],
+                               "from": "current_location", "source": "Apple Maps (MapKit directions)",
+                               "note": "Nothing was opened: Persona draws the route in the chat. Hand it to Maps with "
+                                       "phone_maps_navigate when the user wants to go."}, ensure_ascii=False), 0.9)
+            + [it("assistant", "text", 0.85, text="走过去 420 米，大约 6 分钟，路线在上面。要出发的话我帮你在地图里打开。")]
             # Directions to the second café handed to Maps (#5545): the hand-off's card is the conversation's last.
-            + [it("user", "text", 0.8, text="去 2 号，走过去")]
+            + [it("user", "text", 0.8, text="好，走过去")]
             + tool("mcp__persona__phone_maps_navigate",
                    {"latitude": 31.2291, "longitude": 121.4769, "name": "安静书房咖啡", "mode": "walking"},
                    json.dumps({"opened": "maps", "destination": "安静书房咖啡", "latitude": 31.2291, "longitude": 121.4769,

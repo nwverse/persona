@@ -253,8 +253,33 @@ struct TasksTests {
         #expect(PlaceMapResult(toolCall("phone_maps_navigate", result: #"{"error":"Maps did not open"}"#, error: true)) == nil)
         #expect(PlaceMapResult(toolCall("phone_maps_navigate", result: #"{"opened":"maps","latitude":120,"longitude":121.4}"#)) == nil)
         #expect(PlaceMapResult(toolCall("phone_maps_navigate", result: nil)) == nil) // still running
-        // Only a hand-off carries a mode.
+        // Only a route or a hand-off carries a mode.
         #expect(PlaceMapResult(toolCall("phone_location_current", result: #"{"latitude":31.2,"longitude":121.4,"mode":"walking"}"#))?.mode == nil)
+    }
+
+    /// A route worked out without opening anything becomes a card (#5544): the destination, its mode, time and distance,
+    /// and the line to draw. A transit route has no line; a line with a bad point is dropped, the card kept.
+    @Test func routesComeFromTheRouteTool() throws {
+        let walk = try #require(PlaceMapResult(toolCall("mcp__persona__phone_maps_route", result: """
+            {"destination":"安静书房咖啡","latitude":31.2291,"longitude":121.4769,"mode":"walking","distance_meters":420,
+            "expected_seconds":330,"line":[[31.2304,121.4737],[31.2299,121.4752],[31.2291,121.4769]],"from":"current_location"}
+            """)))
+        #expect(walk.kind == .route && walk.mode == .walking && walk.seconds == 330 && walk.places[0].distance == 420)
+        #expect(walk.line.count == 3 && walk.line.first?.latitude == 31.2304)
+        #expect(PlaceMapText.route(walk) == [PlaceMapText.mode(.walking), PlaceMapText.duration(330), PlaceMapText.distance(420)].joined(separator: " · "))
+        // The map holds the whole line, the start too.
+        let region = walk.region()
+        #expect(region.center.latitude + region.span.latitudeDelta / 2 >= 31.2304)
+        let transit = try #require(PlaceMapResult(toolCall("phone_maps_route",
+            result: #"{"latitude":31.2,"longitude":121.4,"mode":"transit","distance_meters":8000,"expected_seconds":2100}"#)))
+        #expect(transit.line.isEmpty && transit.mode == .transit)
+        let bad = try #require(PlaceMapResult(toolCall("phone_maps_route",
+            result: #"{"latitude":31.2,"longitude":121.4,"line":[[31.2,121.4],[95,121.4]]}"#)))
+        #expect(bad.line.isEmpty && bad.seconds == nil && PlaceMapText.route(bad) == nil)
+        #expect(PlaceMapResult(toolCall("phone_maps_route", result: #"{"error":"no route"}"#, error: true)) == nil)
+        #expect(PlaceMapResult(toolCall("phone_maps_route", result: nil)) == nil) // still running
+        // A route's time reads in minutes, at least one.
+        #expect(PlaceMapText.duration(5) == PlaceMapText.duration(60))
     }
 
     /// The map shows every place, and one place is not drawn at street level.

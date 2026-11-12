@@ -959,6 +959,8 @@ Agents started manually in Agents have no to-do, or a to-do with empty `origin`,
     Successful `phone_location_current`, `phone_location_search` and `phone_maps_search_nearby` results render there as a map (`PlaceMapResult`, `PlaceMapCard`, #5543):
     the phone's dot or up to ten numbered pins in result order (the numbers the answer uses), the first three places listed with Directions to Apple Maps,
     and the whole map in a sheet. The chat draws a cached `MKMapSnapshotter` still; only the sheet's map is live.
+    A route `phone_maps_route` worked out renders there as its line from the phone's dot to the destination, "Walking · 6 min · 420 m" and Start in Maps (#5544);
+    transit has no line, only the destination with its time and distance.
     Directions `phone_maps_navigate` handed to Apple Maps (`opened: maps`) render there too (#5545): the destination on the same map, with Maps' icon,
     the mode and "Opened in Maps", and a button that opens the same directions again; Maps does the navigating.
   - **Today**: first main-chat display each day calls `POST …/today` (`TasksStore.loadToday`), placing the card at midnight: completed tasks, waiting tasks, working count,

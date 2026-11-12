@@ -967,6 +967,29 @@
         }
       }
     },
+    "Map: route to %@, %@ [Place Map]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Map: route to %1$@, %2$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "地図：%1$@への経路、%2$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "地图：到%1$@的路线，%2$@"
+          }
+        }
+      }
+    },
     "Map: your location %@ [Place Map]" : {
       "localizations" : {
         "en" : {
@@ -1127,6 +1150,52 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Start directions to %@ in Maps [Place Map]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start directions to %1$@ in Maps"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@への経路をマップで開始"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在地图中开始前往%1$@的路线"
+          }
+        }
+      }
+    },
+    "Start in Maps [Place Map]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start in Maps"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "マップで開始"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在地图中开始"
+          }
+        }
+      }
     },
     "Time's up: Claude Code allows it" : {
       "extractionState" : "manual",
