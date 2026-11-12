@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -99,6 +101,96 @@ func (d *DB) Interactions(ctx context.Context, machine, session string, limit in
 		}
 		return rec, nil
 	})
+}
+
+// InteractionQuery pages the interaction history by time (GET /api/v1/interactions/history with since, before or
+// kind): newest first, created at or after Since, before the cursor (Before, BeforeID) and of Kind, each when set.
+type InteractionQuery struct {
+	Machine, Session, Kind string
+	Since                  time.Time
+	// Before is the cursor of the page before: rows created before it, or at it with an id before BeforeID.
+	Before   time.Time
+	BeforeID string
+	Limit    int // 1…500; another value is 100
+}
+
+// InteractionPage is a page of the history and, when it was full, the cursor of the next older one.
+type InteractionPage struct {
+	Records      []InteractionRecord
+	NextBefore   *time.Time
+	NextBeforeID string
+}
+
+// InteractionsPage is Interactions with a time range, a kind and a cursor. Its statement is built for the filters
+// given and planned for each call with its values (QueryExecModeExec): the history is read rarely, and a generic plan
+// over optional filters walks every row ever kept (see Interactions). The cursor's created_at bound is written twice,
+// once alone, so the walk down interactions_created starts at it rather than at the newest row.
+func (d *DB) InteractionsPage(ctx context.Context, q InteractionQuery) (InteractionPage, error) {
+	if q.Limit <= 0 || q.Limit > 500 {
+		q.Limit = 100
+	}
+	var where []string
+	args := []any{pgx.QueryExecModeExec}
+	arg := func(v any) string {
+		args = append(args, v)
+		return "$" + strconv.Itoa(len(args)-1)
+	}
+	if q.Machine != "" {
+		where = append(where, "machine_id = "+arg(q.Machine))
+	}
+	if q.Session != "" {
+		where = append(where, "session_id = "+arg(q.Session))
+	}
+	if q.Kind != "" {
+		where = append(where, "kind = "+arg(q.Kind))
+	}
+	if !q.Since.IsZero() {
+		where = append(where, "created_at >= "+arg(q.Since))
+	}
+	if !q.Before.IsZero() {
+		b := arg(q.Before)
+		if q.BeforeID == "" {
+			where = append(where, "created_at < "+b)
+		} else {
+			where = append(where, "created_at <= "+b, "(created_at, id) < ("+b+", "+arg(q.BeforeID)+")")
+		}
+	}
+	sql := `SELECT payload, status, resolution, resolved_at, created_at, id FROM interactions`
+	if len(where) > 0 {
+		sql += " WHERE " + strings.Join(where, " AND ")
+	}
+	sql += " ORDER BY created_at DESC, id DESC LIMIT " + arg(q.Limit)
+	rows, err := d.pool.Query(ctx, sql, args...)
+	if err != nil {
+		return InteractionPage{}, err
+	}
+	var page InteractionPage
+	var lastAt time.Time
+	var lastID string
+	page.Records, err = pgx.CollectRows(rows, func(r pgx.CollectableRow) (InteractionRecord, error) {
+		var rec InteractionRecord
+		var payload, res []byte
+		if err := r.Scan(&payload, &rec.Status, &res, &rec.ResolvedAt, &lastAt, &lastID); err != nil {
+			return rec, err
+		}
+		if err := json.Unmarshal(payload, &rec.Interaction); err != nil {
+			return rec, err
+		}
+		if len(res) > 0 {
+			rec.Resolution = &proto.Resolution{}
+			if err := json.Unmarshal(res, rec.Resolution); err != nil {
+				return rec, err
+			}
+		}
+		return rec, nil
+	})
+	if err != nil {
+		return InteractionPage{}, err
+	}
+	if len(page.Records) == q.Limit {
+		page.NextBefore, page.NextBeforeID = &lastAt, lastID
+	}
+	return page, nil
 }
 
 // InteractionRecord is one interaction with its outcome; nil when there is no such row.

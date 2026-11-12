@@ -70,6 +70,7 @@
   "scope_notify": "给你的设备发通知",
   "scope_assistant_ask": "给 Persona 开对话、读对话动态",
   "scope_assistant_read": "读你和 Persona 的对话（你的消息和它的回复）",
+  "scope_assistant_memory_read": "读 Persona 记住的关于你的内容（只读，不含健康空间）",
   "scope_todos_read": "看待办",
   "scope_todos_write": "新建和修改待办、把对话挂到待办上（不能删待办）",
   "scope_leaders_read": "查看主管对话（方向）和它们的上报",

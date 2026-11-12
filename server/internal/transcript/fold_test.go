@@ -213,3 +213,47 @@ func TestFoldLeavesSubagentCallsOnThePage(t *testing.T) {
 		t.Fatalf("got %v, want %s", got, want)
 	}
 }
+
+// A fold counts its run's failed tool results and names its tools, each once in the order first called and at most
+// proto.FoldToolNamesMax, so a reader tells the run that went wrong without opening it. A run without tools says so
+// with an empty list, never an absent one (absent: an older node, which says neither).
+func TestFoldCountsErrorsAndNamesTools(t *testing.T) {
+	ts := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	seq := 0
+	var page []proto.Item
+	call := func(tool string, failed bool) {
+		seq++
+		id := fmt.Sprintf("t%d", seq)
+		page = append(page,
+			proto.Item{ID: fmt.Sprintf("l%d#0", seq), Seq: seq, TS: ts, Role: "assistant", Kind: proto.KindToolUse, ToolUseID: id, ToolName: tool},
+			proto.Item{ID: fmt.Sprintf("l%d#1", seq), Seq: seq, TS: ts, Role: "user", Kind: proto.KindToolResult, ToolUseID: id, IsError: failed, Text: "out"})
+	}
+	call("Bash", true)
+	call("Bash", false)
+	call("Read", true)
+	call("Edit", false)
+	for i := range 12 {
+		call(fmt.Sprintf("mcp__example__tool_%02d", i), false)
+	}
+	out := FoldWork(page)
+	if len(out) != 1 || out[0].Fold == nil {
+		t.Fatalf("not one fold: %+v", out)
+	}
+	fo := out[0].Fold
+	if fo.Errors != 2 || fo.Tools != 16 {
+		t.Fatalf("errors %d, tools %d", fo.Errors, fo.Tools)
+	}
+	if len(fo.ToolNames) != proto.FoldToolNamesMax || strings.Join(fo.ToolNames[:4], ",") != "Bash,Read,Edit,mcp__example__tool_00" {
+		t.Fatalf("tool names %v", fo.ToolNames)
+	}
+
+	thoughts := []proto.Item{}
+	for i := range 3 {
+		thoughts = append(thoughts, proto.Item{ID: fmt.Sprintf("th%d", i), Seq: i + 1, TS: ts, Role: "assistant", Kind: proto.KindThinking, Text: "thinking"})
+	}
+	out = FoldWork(thoughts)
+	b, _ := json.Marshal(out[0].Fold)
+	if out[0].Fold.Errors != 0 || !strings.Contains(string(b), `"errors":0`) || !strings.Contains(string(b), `"tool_names":[]`) {
+		t.Fatalf("a run of thoughts: %s", b)
+	}
+}

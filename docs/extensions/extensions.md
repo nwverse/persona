@@ -428,7 +428,7 @@ To call the hub's HTTP API, an extension lists the scopes it uses in `permission
 | `kb.write` | Change entries in the knowledge base | `PUT /api/v1/kb/{kind}/{id}`, not with terminal control characters (see below) |
 | `inbox.read` | Read the Inbox | `GET /api/v1/inbox`, `/inbox/{id}`, `/inbox/mutes`, `/inbox/policies` |
 | `inbox.write` | Handle the Inbox | Mark as handled, draft, reply (text only: replies with `changes` or `/agent` still require full access), document status, mute, set policies, refresh |
-| `agents.read` | See the Agents and chats on your computers | `GET /api/v1/sessions…` (list, info, items, images, screen), `/interactions`, `/agents…` (personal Agents), `/workspaces`, `/workspace-board` |
+| `agents.read` | See the Agents and chats on your computers | `GET /api/v1/sessions…` (list, info, items, images, screen), `/interactions`, `/interactions/history` (paged by time, see "Question history"), `/agents…` (personal Agents), `/workspaces`, `/workspace-board`; never the health space's chats or a private card (see "Never shown to extensions") |
 | `agents.control` | Drive Agents | `POST /api/v1/sessions` (create), a chat's `messages` / `interrupt` / `queue` / `queue/send-now` / `seen` / `rename`, `POST /api/v1/interactions/{id}/resolve` (approving a plan, or answering a terminal card with anything but a bare `dismiss`, also needs `agents.permission_mode`), `/choose` and `/reanswer`, sending messages to and marking read for personal Agents; with no terminal control characters in the text it sends (messages, prompts, notes, titles, answers; see below) |
 | `agents.permission_mode` | Change the permission mode of the chats it started itself | A chat's `modes` with `permission_mode` only, `POST /api/v1/sessions` resuming a chat with a `permission_mode`, approving a plan (`POST /api/v1/interactions/{id}/resolve` with `approve: true`, which sets the chat's mode) and answering a terminal card (`kind: "screen"`, whose keys can change it): only of a chat its extension opened (see below) |
 | `machines.read` | See your computers | `GET /api/v1/machines`, `/machines/{id}/metrics`, `/machines/{mid}/stat` |
@@ -438,6 +438,7 @@ To call the hub's HTTP API, an extension lists the scopes it uses in `permission
 | `leaders.read` | See leader conversations (directions) and what they report | `GET /api/v1/assistant/leaders`; the events `leader.changed` and `leader.report` (see "Leader events") |
 | `todos.write` | Create and edit to-dos, attach chats to to-dos | `POST /api/v1/todos`, `PATCH /api/v1/todos/{id}`, a to-do's `agents/{mid}/{sid}` and `spaces/{mid}/{space…}` (`PUT` / `DELETE`), `POST /api/v1/todos/{id}/decisions` (outcome decisions only, see [todos.md](../assistant/todos.md) "API overview"); creating and editing to-dos and adding decisions not with terminal control characters (see below); deleting to-dos, superseding decisions, completion checks and retries still require full access |
 | `assistant.read` | Read your Persona chats (your messages and its replies) | No HTTP route: the `assistant.conversations` / `assistant.messages` RPC (see "Assistant conversations"). `assistant.ask` does not include it |
+| `assistant.memory.read` | Read what Persona remembers about you (read-only, never the health space) | No HTTP route: the `assistant.memory` RPC (see "Assistant memory"). Writing and deleting memory stay with full credentials; `assistant.read` does not include it |
 | `models` | Use the model you pick for it in Settings › Model configuration (never the key) | No HTTP route: the `model.complete` RPC (see "Model calls"). Not covered by the legacy `hub_api` full access |
 | `extensions.call:<extension id>` | Call the API of extension "…" | That extension's own HTTP: `/api/v1/extensions/<id>/…` (excluding the hub's `/-/` endpoints) |
 
@@ -609,6 +610,84 @@ The schema is `schema/extension/assistant.schema.json`; the Go SDK has them as `
 ```json
 {"permissions":{"hub":["kb.read","assistant.read"]}}
 ```
+
+### Assistant memory
+
+The assistant keeps a memory of what it learned about the user, one Markdown file per entry (`docs/assistant/assistant.md`). An
+extension that builds on it (to avoid relearning what is already there, or to compare with what it found) reads it with
+`assistant.memory`, declaring `assistant.memory.read` in `permissions.hub`; the hub checks the grant as for `assistant.read`, which does
+not include it. Read-only: writing and deleting entries stay with full credentials (`PUT` / `DELETE /api/v1/assistant/memory/{name}`
+answer an extension's token 403). The manager answers it from the assistant's computer.
+
+| Method | Parameters | Returns | Scope |
+| --- | --- | --- | --- |
+| `assistant.memory` | `{include_content?}` | `{entries: [{name, description?, type?, size, created?, modified, content?, truncated?}]}` | `assistant.memory.read` |
+
+The schema is `schema/extension/assistant.schema.json`; the Go SDK has it as `ext.Hub.AssistantMemory`.
+
+- **Which memory**: the assistant's own space only. The health space keeps a memory of its own (`docs/assistant/health.md`), which is
+  never read here; the params are strict, so there is no space to ask for. The index file `MEMORY.md` is not an entry.
+- **What each entry says**: `name` is the file name; `description` and `type` come from the file's YAML frontmatter (`type` also from
+  `metadata.type`), empty when it has none, as entries may be in any language or shape. `created` is when the file was made where the
+  computer's file system keeps it (macOS, Windows, and Linux file systems that report a birth time), absent otherwise and from older
+  nodes; `modified` is its last change; `size` is in bytes.
+- **Content**: only with `include_content`. Each entry's text is cut at 16 KB, and once a call has returned 512 KB of text the
+  remaining entries come without it; `truncated` marks either. Read the metadata first and ask for content when it changed.
+- **No memory**: none written yet, or the feature off, is an empty list, not an error.
+- **Errors**: `permission_denied` (`{scope: "assistant.memory.read"}`), `invalid_params`, `assistant_offline`, `machine_offline` (the
+  assistant's computer is not connected or not set up).
+
+```json
+{"permissions":{"hub":["assistant.memory.read"]}}
+```
+
+### Question history
+
+An extension granted `agents.read` reads the cards Agents and the assistant raised (questions, plans, permissions) and how each ended
+with `GET /api/v1/interactions/history`. Without `since`, `before` or `kind` it answers the newest cards (`limit`, at most 500) as it
+always did. With any of them it pages back through the whole history by time:
+
+| Parameter | Meaning |
+| --- | --- |
+| `since` | RFC 3339: cards raised at or after it |
+| `before`, `before_id` | The cursor: cards raised before it. Pass a page's `next_before` and `next_before_id` to read the next older page |
+| `kind` | One kind: `question`, `plan`, `permission`, `screen`… |
+| `machine_id`, `session_id`, `limit` | As before; `limit` is 100 by default, at most 500 |
+
+The answer is `{"interactions": [{interaction, status, resolution?, resolved_at?, reanswerable?}], next_before?, next_before_id?}`,
+newest first; the cursor is there while a page came back full. `interaction` carries the questions, their options and descriptions,
+and the plan or the permission asked for; `resolution` the answers (`answers`, keyed by question), who answered when it was not the
+user in an app (`answered_by`, with `reason`), and how a permission or plan ended. `reanswerable` marks an answer the assistant gave
+on the user's behalf that the user may still change ("Change answer"). A daily reader passes `since`; a first read walks back with the
+cursor.
+
+An extension's token is never shown a private card, one of the health space, or one whose space cannot be told, and a card's
+`resolution.values` (what was filled into its fields on the phone, such as a password) is left out (see "Never shown to
+extensions"). A page may then hold fewer cards than `limit` while the cursor still says there is more.
+
+#### Folded work
+
+The other half of "where did it go wrong" is a chat's own items, read with `agents.read` too: `GET
+/api/v1/sessions/{mid}/{sid}/items?fold_work=1` folds each run of tool calls and thinking into one `fold` item
+(`docs/protocol/protocol.md` "Folded work"). Besides the counts and the changed files, a fold says how many of the run's tool results
+were errors (`errors`) and which tools it called (`tool_names`, each once in the order first called, at most 10), so a reader finds
+the run that went wrong without reading any tool output, then opens only that run with `from_seq` and `through_seq`. A fold without
+`tool_names` comes from an older node and says neither.
+
+### Never shown to extensions
+
+Whatever scopes it was granted, an extension's token never sees:
+
+- **The health space's conversations** (`docs/assistant/health.md`): not in `GET /api/v1/sessions` (the full list, the paged list, its
+  totals and counts) or `/sessions/archived`, and their items, images, info and screen answer 404 as for a chat that does not exist.
+  A chat the hub does not list answers 404 too, as its space cannot be told. `assistant.conversations` and `assistant.messages` leave
+  them out the same way, and `assistant.memory` reads only the assistant's own memory.
+- **Private and health cards**: a card a Just me turn raised (`private`, `docs/assistant/meeting-minutes.md` "Just me"), a card of
+  the health space (by its directory or its conversation's space), and a card without a directory whose conversation cannot be found
+  are left out of `GET /api/v1/interactions` and `/interactions/history`.
+- **Values typed into a card's fields** (`resolution.values` in the history).
+
+The apps' and devices' credentials are not affected.
 
 ### Sent as the user: `sent.record` (#5278)
 

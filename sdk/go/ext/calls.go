@@ -207,6 +207,12 @@ func (h *Hub) AssistantMessages(ctx context.Context, p wire.AssistantMessagesPar
 	return callHub[wire.AssistantMessagesResult](ctx, h, "assistant.messages", p)
 }
 
+// AssistantMemory lists the assistant's memory entries (docs/extensions/extensions.md "Assistant memory"): the
+// permission assistant.memory.read, read-only, only the assistant's own space; IncludeContent adds their text.
+func (h *Hub) AssistantMemory(ctx context.Context, p wire.AssistantMemoryParams) (wire.AssistantMemoryResult, error) {
+	return callHub[wire.AssistantMemoryResult](ctx, h, "assistant.memory", p)
+}
+
 func callHub[R any](ctx context.Context, h *Hub, method string, params any) (R, error) {
 	var r R
 	err := h.Call(ctx, method, params, &r)
