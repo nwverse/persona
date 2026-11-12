@@ -48,7 +48,7 @@ export function ErrorNotice({
         <div className="mt-2 flex flex-wrap items-center gap-2 empty:hidden">
           {actions}
           {details && (
-            <Button tone="quiet" className="touch-hit h-7" expanded={open} onClick={() => setOpen((o) => !o)}>
+            <Button tone="quiet" size="sm" className="touch-hit" expanded={open} onClick={() => setOpen((o) => !o)}>
               <Icon name={open ? "chevron" : "chevronRight"} size={12} stroke={2.2} />
               {t(open ? "ui-errornotice.hide_details" : "ui-errornotice.details")}
             </Button>

@@ -196,12 +196,12 @@ export function FailureCard({ failure, onClose, onHelp, onConfirm, onRetry }: { 
       actions={
         <>
           {onRetry && (
-            <Button tone={action ? "quiet" : "primary"} className="touch-hit h-7" onClick={onRetry}>
+            <Button tone={action ? "quiet" : "primary"} size="sm" className="touch-hit" onClick={onRetry}>
               {t("assistant-readiness.resend")}
             </Button>
           )}
           {action && (
-            <Button tone="primary" className="touch-hit h-7" onClick={() => runAction(action, { launcher: failure.launcher, onHelp, onConfirm })}>
+            <Button tone="primary" size="sm" className="touch-hit" onClick={() => runAction(action, { launcher: failure.launcher, onHelp, onConfirm })}>
               {actionLabel(action)}
             </Button>
           )}

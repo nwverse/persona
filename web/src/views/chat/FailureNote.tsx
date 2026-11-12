@@ -27,11 +27,11 @@ export function FailureNote({ session, onRetry }: { session: Session; onRetry: (
       message={reason}
       actions={
         <>
-          <Button icon="retry" className="touch-hit h-7" testId="chat-failure-retry" title={t("chat-lines.retry_title")} onClick={onRetry}>
+          <Button icon="retry" size="sm" className="touch-hit" testId="chat-failure-retry" title={t("chat-lines.retry_title")} onClick={onRetry}>
             {t("chat-chatview.retry")}
           </Button>
           {link && (
-            <Button icon="external" className="touch-hit h-7" testId="chat-failure-lark" href={link}>
+            <Button icon="external" size="sm" className="touch-hit" testId="chat-failure-lark" href={link}>
               {t("chat-chatview.open_in_lark")}
             </Button>
           )}

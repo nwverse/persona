@@ -313,7 +313,10 @@ describe("tap areas", () => {
     const item = { id: "e1", seq: 1, role: "assistant", kind: "text", text } as Item;
     const html = renderToStaticMarkup(<ErrorBanner line={{ kind: "apiError", id: "err-e1", item, info: parseAPIError(text)!, count: 1 }} onRetry={() => {}} onDismiss={() => {}} />);
     expect(hit(html, "关闭错误提示")).toBe(true);
-    expect(html).toMatch(/<button[^>]*class="[^"]*touch-hit h-7[^"]*"[^>]*>(?:(?!<\/button>).)*重试<\/button>/);
+    // 28 px tall, as cindy's: a height in className would not win over the button's own 32 px
+    const retry = html.match(/<button[^>]*class="([^"]*)"[^>]*>(?:(?!<\/button>).)*重试<\/button>/)![1].split(" ");
+    expect(retry).toEqual(expect.arrayContaining(["touch-hit", "h-7"]));
+    expect(retry).not.toContain("h-8");
   });
 });
 

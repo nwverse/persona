@@ -65,8 +65,9 @@ describe("FailureNote", () => {
     // its actions are the notice's 28 px buttons with a finger-sized target, on one line each
     for (const id of ["chat-failure-retry", "chat-failure-lark"]) {
       const b = host.querySelector<HTMLElement>(`[data-testid="${id}"]`)!;
-      expect(b.className).toContain("touch-hit h-7");
-      expect(b.className).toContain("whitespace-nowrap");
+      const classes = b.className.split(/\s+/);
+      expect(classes).toEqual(expect.arrayContaining(["touch-hit", "h-7", "whitespace-nowrap"]));
+      expect(classes).not.toContain("h-8");
     }
     expect(host.querySelector('[data-testid="chat-failure-lark"]')!.getAttribute("target")).toBe("_blank");
   });

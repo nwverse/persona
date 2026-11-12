@@ -159,6 +159,7 @@ export function Button({
   href,
   expanded,
   testId,
+  size,
 }: {
   children: React.ReactNode;
   tone?: BtnTone;
@@ -175,8 +176,11 @@ export function Button({
   expanded?: boolean;
   /** `data-testid`, for the tests and screenshot scripts that press it. */
   testId?: string;
+  /** "sm": 28 px tall (a row of actions inside a card, as the error notice's). A height in `className` does not win
+   *  over the 32 px one here: the classes are joined, not merged, and the stylesheet's order decides. */
+  size?: "sm";
 }) {
-  const base = "inline-flex h-8 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-control px-3 text-[12.5px] font-medium transition-[background-color,color,transform,opacity,filter] duration-150";
+  const base = cx("inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-control px-3 text-[12.5px] font-medium transition-[background-color,color,transform,opacity,filter] duration-150", size === "sm" ? "h-7" : "h-8");
   if (href && !disabled && !busy) {
     // an <a> is never :enabled, so the link has its own hover / press
     const links: Record<BtnTone, string> = {
