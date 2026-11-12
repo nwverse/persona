@@ -6,5 +6,7 @@
   "close": "Close panel",
   "preview": "Preview",
   "review": "Review",
-  "team": "Team"
+  "team": "Team",
+  "task": "Task",
+  "agent": "Agent"
 }

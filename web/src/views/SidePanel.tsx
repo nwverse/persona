@@ -14,14 +14,16 @@ import { t } from "../i18n";
 import { PageBoundary } from "./PageBoundary";
 
 // Files, Git, the file viewer and a link load when one is first opened (#2673): with their viewers (sheets, Office,
-// compare, documents) they are a large part of the main bundle no first screen needs. The assistant's task / agent
-// panels stay static: small, and part of the assistant flow.
+// compare, documents) they are a large part of the main bundle no first screen needs. So do a task's and an Agent's
+// panels (#5424), opened from a conversation while Agents open in the side panel (lib/agent-open.ts).
 const FilesPanel = lazy(() => import("./session/FilesPanel").then((m) => ({ default: m.FilesPanel })));
 const FileViewerPanel = lazy(() => import("./session/FileViewer").then((m) => ({ default: m.FileViewerPanel })));
 const GitPanel = lazy(() => import("./session/GitPanel").then((m) => ({ default: m.GitPanel })));
 const PreviewPanel = lazy(() => import("./session/PreviewPanel").then((m) => ({ default: m.PreviewPanel })));
 const ReviewPanel = lazy(() => import("./session/ReviewPanel").then((m) => ({ default: m.ReviewPanel })));
 const LinkPanel = lazy(() => import("./link/LinkPanel").then((m) => ({ default: m.LinkPanel })));
+const TaskPanel = lazy(() => import("./assistant/TaskPanel").then((m) => ({ default: m.TaskPanel })));
+const AgentPanel = lazy(() => import("./assistant/TaskPanel").then((m) => ({ default: m.AgentPanel })));
 // a lead's Team (#5180): only on a lead's page, outside the first screen
 const TeamPanel = lazy(() => import("./chat/TeamPanel").then((m) => ({ default: m.TeamPanel })));
 
@@ -134,7 +136,7 @@ export function SidePanel() {
 }
 
 function panelLabel(p: Panel) {
-  return p.kind === "files" ? t("sidepanel.files") : p.kind === "git" ? "Git" : p.kind === "review" ? t("sidepanel.review") : p.kind === "file" ? t("sidepanel.files") : p.kind === "preview" ? t("sidepanel.preview") : p.kind === "team" ? t("sidepanel.team") : t("sidepanel.link");
+  return p.kind === "files" ? t("sidepanel.files") : p.kind === "git" ? "Git" : p.kind === "review" ? t("sidepanel.review") : p.kind === "file" ? t("sidepanel.files") : p.kind === "preview" ? t("sidepanel.preview") : p.kind === "team" ? t("sidepanel.team") : p.kind === "task" ? t("sidepanel.task") : p.kind === "agent" ? t("sidepanel.agent") : t("sidepanel.link");
 }
 
 function body(p: Panel) {
@@ -149,6 +151,11 @@ function body(p: Panel) {
       return <FileViewerPanel key={`${p.mid}:${p.path}:${p.line ?? ""}-${p.to ?? ""}`} mid={p.mid} sid={p.sid} path={p.path} cwd={p.cwd} line={p.line} to={p.to} onClose={closePanel} />;
     case "link":
       return <LinkPanel key={`${p.manager ?? ""} ${p.url}`} url={p.url} title={p.title} manager={p.manager} onClose={closePanel} />;
+    case "task":
+      return <TaskPanel key={p.todo} todoId={p.todo} onClose={closePanel} />;
+    case "agent":
+      // never a subagent's own conversation: openPanel opens its parent's instead (#5030, lib/subagent-link.ts)
+      return <AgentPanel key={`${p.mid}/${p.sid}`} mid={p.mid} sid={p.sid} onClose={closePanel} />;
     case "team":
       return <TeamPanel key={`${p.mid}/${p.sid}`} mid={p.mid} sid={p.sid} worker={p.worker} onClose={closePanel} />;
     case "preview":

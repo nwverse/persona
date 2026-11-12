@@ -4,6 +4,7 @@
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { setAgentOpenMode } from "./agent-open";
 import { closePanel, getPanel, openPanel, type Panel } from "./panel";
 import { KEPT, arriving, belongsTo, chatKey, leaving, notePlace, useSessionPanels, type PanelMemory, type SessionPanel } from "./panel-memory";
 
@@ -138,8 +139,8 @@ describe("moving between Persona chats", () => {
     return null;
   };
   const show = (chat?: string) => act(() => root.render(createElement(Page, { chat })));
-  const agent: Panel = { kind: "preview", mid: "m1", sid: "s1", cwd: "/work/web" };
-  const task: Panel = { kind: "file", mid: "m1", path: "/notes/today.md" };
+  const agent: Panel = { kind: "agent", mid: "m1", sid: "s1" };
+  const task: Panel = { kind: "task", todo: "t1" };
 
   beforeEach(() => {
     sessionStorage.clear();
@@ -151,6 +152,7 @@ describe("moving between Persona chats", () => {
     act(() => closePanel());
     act(() => root.unmount());
     host.remove();
+    setAgentOpenMode("panel");
   });
 
   it("closes chat A's agent on switching to B, and brings it back on A", () => {
@@ -184,13 +186,30 @@ describe("moving between Persona chats", () => {
     expect(getPanel()).toEqual(link);
   });
 
-  it("brings back no panel of a kind the page no longer has (the task and Agent panels, #5096; the plan's, #5156)", () => {
-    sessionStorage.setItem("persona.panel.back", JSON.stringify({ [chatKey("A")]: { kind: "task", todo: "t1" }, [chatKey("B")]: task, [chatKey("C")]: { kind: "plan", mid: "m1", sid: "s1" } }));
+  it("brings back no panel of a kind the page no longer has (the plan's, #5156)", () => {
+    const file: Panel = { kind: "file", mid: "m1", path: "/notes/today.md" };
+    sessionStorage.setItem("persona.panel.back", JSON.stringify({ [chatKey("B")]: file, [chatKey("C")]: { kind: "plan", mid: "m1", sid: "s1" } }));
+    show("B");
+    expect(getPanel()).toEqual(file);
+    show("C");
+    expect(getPanel()).toBeNull();
+  });
+
+  it("brings back a task's or an Agent's panel only while Agents open in the side panel (#5424)", () => {
+    const kept = JSON.stringify({ [chatKey("A")]: task, [chatKey("B")]: agent });
+    sessionStorage.setItem("persona.panel.back", kept);
+    show("A");
+    expect(getPanel()).toEqual(task);
+    act(() => closePanel());
+    show("B");
+    expect(getPanel()).toEqual(agent);
+    act(() => closePanel());
+    // set to "Full page": what the chat kept in the panel is not reopened beside it
+    setAgentOpenMode("page");
+    sessionStorage.setItem("persona.panel.back", kept);
     show("A");
     expect(getPanel()).toBeNull();
     show("B");
-    expect(getPanel()).toEqual(task);
-    show("C");
     expect(getPanel()).toBeNull();
   });
 

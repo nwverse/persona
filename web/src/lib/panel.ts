@@ -1,9 +1,11 @@
-// The page's right-hand panel: a session's files / Git, or a link opened in the page (docs/web/web.md "Side panel"). A
-// session's terminal is the page's own view now (lib/session-view.ts), not a panel.
+// The page's right-hand panel (docs/web/web.md "Side panel"): a session's files / Git, a link opened in the page, or an
+// Agent or task opened from a conversation (lib/agent-open.ts). A session's terminal is the page's own view now
+// (lib/session-view.ts), not a panel.
 // One panel at a time; opening another replaces it. Session panels close when the page moves to another conversation;
-// a link stays until closed (it is not tied to the conversation it came from).
+// a link, a task and an Agent stay until closed (they are not tied to the conversation they came from).
 import { useSyncExternalStore } from "react";
 import type { DiffScope } from "./comments";
+import { followSubagentLink } from "./subagent-link";
 
 /** A diff opened straight at a line (a comment's card, lib/comments.ts): which diff, which file, which line. */
 export interface GitSpot {
@@ -39,6 +41,12 @@ export type Panel =
   | { kind: "file"; mid: string; path: string; cwd?: string; line?: number; to?: number; sid?: string }
   /** `manager`: the chat's it was opened from, which reads it (none: the default's). */
   | { kind: "link"; url: string; title?: string; manager?: string }
+  /** A task of a conversation, opened from it while Agents open in the side panel (lib/agent-open.ts, #5424): its
+   *  Agent's chat (docs/assistant/unified-entry.md "Task details"). */
+  | { kind: "task"; todo: string }
+  /** An Agent opened from a conversation while Agents open in the side panel (#5424), one no task stands for (#1113)
+   *  included: its chat. */
+  | { kind: "agent"; mid: string; sid: string }
   /** A lead's Team (#5180, lib/team.ts): its workers' strip and the conversation of `worker` (else the one lib/team.ts
    *  shownWorker picks). `sid` is the lead's: the panel stays while the page shows the lead. */
   | { kind: "team"; mid: string; sid: string; worker?: string }
@@ -56,6 +64,8 @@ let opener: Element | null = null;
 const listeners = new Set<() => void>();
 
 export function openPanel(p: Panel | null) {
+  // a subagent's conversation is not opened (#5030): its parent's chat, at the subagent's card
+  if (p?.kind === "agent") p = { ...p, sid: followSubagentLink(p.mid, p.sid) };
   // what had the focus when the panel opened (its header button): closing gives the focus back to it (#5155). Called
   // from the click, before the panel renders, so it is never something inside the panel; a panel replacing another keeps
   // the first one's.

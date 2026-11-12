@@ -68,6 +68,31 @@ describe("Header", () => {
   });
 });
 
+describe("Header in a task's or an Agent's side panel (#3333, #5424)", () => {
+  const todoSession = { ...session, todo: { id: "t1", title: "代理的待办" } } as unknown as Session;
+
+  it("is the panel's only header: the task's title and subtitle, a close button, no 同空间", () => {
+    const html = header({ session: todoSession, panel: { onClose: () => {}, title: "修登录崩溃", sub: "在做 · MacBook" } });
+    expect(html).toContain(">修登录崩溃</h1>");
+    expect(html).toContain("在做 · MacBook");
+    expect(html).toContain('aria-label="关闭面板"');
+    expect(html).not.toContain("同空间");
+    // the agent's own todo line would repeat the task
+    expect(html).not.toContain("代理的待办");
+  });
+
+  it("puts what the panel gives beside the title (a task's ⌄ for its agents)", () => {
+    const html = header({ panel: { onClose: () => {}, title: "修登录崩溃", beside: <button aria-label="切换 Agent" /> } });
+    expect(html).toMatch(/>修登录崩溃<\/h1><button aria-label="切换 Agent">/);
+  });
+
+  it("is as before outside a panel", () => {
+    const html = header();
+    expect(html).not.toContain('aria-label="关闭面板"');
+    expect(html).toContain("同空间");
+  });
+});
+
 describe("spaceAgentsItem, ⋯'s 同空间 row on a phone (#3576)", () => {
   it("counts the others, opens the space's menu and marks attention when one needs you", () => {
     let opened = 0;
