@@ -38,11 +38,15 @@ type probeInput struct {
 	Model   string  `json:"model"`
 	// Preset fills in the address and the model left empty (GET /api/v1/launchers/presets), so a key alone is tested.
 	Preset string `json:"preset"`
+	// ViaMachine: the computer the requests go through (models_via.go); nil keeps the stored one, "" this manager.
+	ViaMachine *string `json:"via_machine"`
 }
 
 // probeTarget is a resolved gateway: everything needed for one request.
 type probeTarget struct {
-	base, key, headers, model, proxy, noProxy, api, kind string
+	base, key, headers, model, proxy, noProxy, api, kind, via string
+	// through sends the requests through via's node (models_via.go).
+	through http.RoundTripper
 }
 
 func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, error) {
@@ -65,14 +69,15 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 		if err != nil {
 			return t, i18n.Err("assistant-models_probe.err_open_headers")
 		}
-		t = probeTarget{base: l.BaseURL, key: key, headers: headers, model: l.Model, proxy: l.Proxy, noProxy: l.NoProxy, api: l.API, kind: l.Kind}
+		t = probeTarget{base: l.BaseURL, key: key, headers: headers, model: l.Model, proxy: l.Proxy, noProxy: l.NoProxy, api: l.API, kind: l.Kind, via: l.ViaMachine}
 		if t.kind == "" {
 			t.kind = "launcher" // Stored entries without kind are legacy launchers.
 		}
 	}
 	if b := strings.TrimSpace(in.BaseURL); b != "" {
 		// The stored key and headers only go to the stored gateway: another address gets just what the request brings.
-		if in.Name != "" && strings.TrimRight(b, "/") != strings.TrimRight(strings.TrimSpace(t.base), "/") {
+		// A trailing /v1 is the same gateway (saving drops it from a Messages base); the host never differs.
+		if in.Name != "" && proto.MessagesBaseURL(b) != proto.MessagesBaseURL(t.base) {
 			t.key, t.headers = "", ""
 		}
 		t.base = b
@@ -82,6 +87,9 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 	}
 	if in.Headers != nil {
 		t.headers = *in.Headers
+	}
+	if in.ViaMachine != nil {
+		t.via = strings.TrimSpace(*in.ViaMachine)
 	}
 	if m := strings.TrimSpace(in.Model); m != "" {
 		t.model = m
@@ -130,11 +138,18 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 		return t, err
 	}
 	t.base = strings.TrimRight(strings.TrimSpace(t.base), "/")
+	if t.via != "" {
+		t.through = viaNode{s: s, machine: t.via}
+	}
 	return t, nil
 }
 
-// endpoint is <base>/v1/<path>, a base already ending in /v1 not doubled.
+// endpoint is <base>/v1/<path>, a base already ending in /v1 not doubled. A Messages base is read as the node hands it
+// to Claude Code (proto.MessagesBaseURL), so a test passes for the address Agents will call.
 func (t probeTarget) endpoint(path string) string {
+	if messagesAPI(t.api) {
+		return proto.MessagesBaseURL(t.base) + "/v1/" + path
+	}
 	if strings.HasSuffix(t.base, "/v1") {
 		return t.base + "/" + path
 	}
@@ -190,6 +205,9 @@ func (t probeTarget) do(ctx context.Context, method, endpoint string, body io.Re
 			transport.Proxy = http.ProxyURL(u)
 		}
 		client.Transport = transport
+	}
+	if t.through != nil {
+		client.Transport = t.through
 	}
 	return client.Do(req)
 }
