@@ -74,8 +74,9 @@ import java.io.File
 /**
  * Persona's conversation with a queue (#4339 C6, iOS QueueStrip in a Persona chat), on the real page: the user's two
  * messages, then one relayed from another conversation (`queued_relayed`), under the In progress entry and right above
- * the composer, folded, opened and with Send Now's confirmation in Persona's words. Glass only; Brief and Board draw
- * no queue there, as before. Every style, light and dark (`build/assistant-queue-shots/`, or `-Dpersona.shots=<dir>`).
+ * the composer, folded, opened and with Send Now's confirmation in Persona's words on Glass; Brief and Board draw it as
+ * their Agent chat's strip (always open, no Send now). Then the same page with nothing queued, which every style draws
+ * as before. Every style, light and dark (`build/assistant-queue-shots/`, or `-Dpersona.shots=<dir>`).
  */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -198,6 +199,13 @@ class AssistantQueueShotsTest {
                 // Folded again for the next pass.
                 rule.onAllNodesWithContentDescription("queued · Persona", substring = true)[0].performClick(); settle()
             }
+        }
+        // Nothing queued: the page as it was before the queue came to it.
+        sessions.sessions.value = listOf(persona.copy(queued = null), web)
+        for (s in AppStyle.entries) for (d in listOf(false, true)) {
+            style = s; dark = d
+            settle()
+            shot("noqueue-${s.name.lowercase()}-${if (d) "dark" else "light"}")
         }
     }
 
