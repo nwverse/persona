@@ -116,6 +116,29 @@
       },
       "extractionState" : "manual"
     },
+    "All [Source Relationships]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "All"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "すべて"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全部"
+          }
+        }
+      }
+    },
     "Allowed automatically in %@" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -208,6 +231,29 @@
         }
       }
     },
+    "Can't Read [Source Relationships]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Can't Read"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "読めない"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "读不到"
+          }
+        }
+      }
+    },
     "Choose models for each use.": {
       "extractionState": "manual",
       "localizations": {
@@ -250,6 +296,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Claude Code 提醒这条命令可能有风险"
+          }
+        }
+      }
+    },
+    "Couldn't read the relationships: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't read the relationships: %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "関係図を読めませんでした：%@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "读不到关系图：%@"
           }
         }
       }
@@ -342,6 +411,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "診断"
+          }
+        }
+      }
+    },
+    "Direct [Source Relationships]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Direct"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "直接"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "直接读"
           }
         }
       }
@@ -507,6 +599,52 @@
         }
       }
     },
+    "Extension [Source Relationships]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Extension"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拡張機能"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "扩展"
+          }
+        }
+      }
+    },
+    "Goes to" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Goes to"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "入る先"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "进到哪"
+          }
+        }
+      }
+    },
     "Hide Original" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -526,6 +664,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "隐藏原文"
+          }
+        }
+      }
+    },
+    "How it's read" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "How it's read"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "読み方"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "怎么读"
           }
         }
       }
@@ -645,6 +806,29 @@
         }
       }
     },
+    "May bring the same things as “%@”. If they do, turn one of them off." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "May bring the same things as “%@”. If they do, turn one of them off."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%@」と同じものを持ってくる可能性があります。重複していたらどちらかをオフにしてください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "可能和「%@」重复。真重复了就关掉其中一个。"
+          }
+        }
+      }
+    },
     "Models": {
       "extractionState": "manual",
       "localizations": {
@@ -737,6 +921,29 @@
         }
       }
     },
+    "Nothing brings things into the Inbox or the knowledge base yet." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing brings things into the Inbox or the knowledge base yet."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "受信箱やナレッジベースに入れているソースはまだありません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还没有来源往收件箱或知识库里放东西。"
+          }
+        }
+      }
+    },
     "Only the current assistant's settings are shown. Switch assistants to change another's settings.": {
       "extractionState": "manual",
       "localizations": {
@@ -756,6 +963,52 @@
           "stringUnit": {
             "state": "translated",
             "value": "現在のアシスタントの設定だけを表示しています。別のアシスタントを変更するには切り替えてください。"
+          }
+        }
+      }
+    },
+    "Open Settings [Source Relationships]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open Settings"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "設定を開く"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开设置"
+          }
+        }
+      }
+    },
+    "Persona reads it directly" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona reads it directly"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona が直接読む"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 直接读取"
           }
         }
       }
@@ -848,6 +1101,75 @@
           "stringUnit": {
             "state": "translated",
             "value": "設定を検索"
+          }
+        }
+      }
+    },
+    "Set Up with %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Set Up with %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ で設定"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用 %@ 配置"
+          }
+        }
+      }
+    },
+    "Set Up with the Assistant" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Set Up with the Assistant"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アシスタントで設定"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用助手配置"
+          }
+        }
+      }
+    },
+    "Source Relationships" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Source Relationships"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ソースの関係図"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "来源关系图"
           }
         }
       }
@@ -2025,6 +2347,52 @@
         }
       }
     },
+    "To Inbox [Source Relationships]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "To Inbox"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "受信箱へ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "进收件箱"
+          }
+        }
+      }
+    },
+    "To Knowledge [Source Relationships]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "To Knowledge"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ナレッジへ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "进知识库"
+          }
+        }
+      }
+    },
     "Transit [Place Map]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -2067,6 +2435,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "步行"
+          }
+        }
+      }
+    },
+    "Where each source comes from, how it's read and where it goes. Tap one to see its whole path." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Where each source comes from, how it's read and where it goes. Tap one to see its whole path."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "各ソースがどの拡張機能から来て、どう読まれ、どこへ入るか。タップすると経路全体が見えます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每个来源从哪个扩展来、用什么读、进到哪里。点一个看它的整条路。"
           }
         }
       }
@@ -3102,6 +3493,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "要等这个会话的下一次回复，才知道实际用的是哪个模型。"
+          }
+        }
+      }
+    },
+    "With “%@”" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "With “%@”"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%@」で"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用「%@」"
           }
         }
       }
