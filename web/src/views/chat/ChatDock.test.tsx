@@ -32,17 +32,22 @@ const session = {
 const sibling = { ...session, session_id: "s2" } as Session;
 
 const header = (extra: Partial<Parameters<typeof Header>[0]> = {}) =>
-  renderToStaticMarkup(<Header session={session} title="补齐网络层的单元测试" machineName="MacBook" siblings={[session, sibling]} onInterrupt={() => {}} onStopLoop={() => {}} onToggleSidebar={() => {}} {...extra} />);
+  renderToStaticMarkup(<Header session={session} title="补齐网络层的单元测试" machineName="MacBook" siblings={[session, sibling]} onInterrupt={() => {}} onToggleSidebar={() => {}} {...extra} />);
+/** The header's markup with the brand marks' long inline pictures left out, so a failure prints what matters. */
+const bare = (html: string) => html.replace(/<img src="data:[^"]*"/g, "<img");
 
 describe("Header", () => {
   it("puts the switch it is given in the middle on a narrow screen, in place of the title", () => {
     const html = header({ topCenter: <span data-switch>助手 | Agents</span> });
     expect(html).toContain("data-switch");
     expect(html).toMatch(/class="flex min-w-0 flex-1 justify-center lg:hidden"><span data-switch/);
-    expect(html).toMatch(/class="min-w-0 flex-1 max-lg:hidden"/);
+    expect(html).toMatch(/data-chat-title-row="true" class="flex min-w-0 flex-1 items-center gap-0.5 max-lg:hidden"/);
     // the buttons either side sit in slots of one least width, which grow to fit them (#5036)
     expect(html).toContain(`class="${HEADER_SLOT} ${HEADER_SLOT_START} lg:contents"`);
     expect(html).toContain(`class="${HEADER_SLOT} ${HEADER_SLOT_END} lg:contents"`);
+    // the title is hidden there, so ⋯ goes to the right end on a narrow screen and stays after the title on a wide one
+    expect(html).toMatch(/<span class="relative flex shrink-0 max-lg:hidden"><button[^>]*aria-label="更多操作"/);
+    expect(html).toMatch(/<span class="relative flex shrink-0 lg:hidden"><button[^>]*aria-label="更多操作"/);
   });
 
   it("is as before without one", () => {
@@ -50,25 +55,79 @@ describe("Header", () => {
     expect(html).not.toContain("justify-center lg:hidden");
     expect(html).not.toContain("max-lg:hidden");
     expect(html).not.toContain("max-lg:min-w-16");
+    expect(html.match(/aria-label="更多操作"/g)).toHaveLength(1);
   });
 
-  it("leaves the title room on a phone: no state pill, 同空间 only from ⋯ (#3576)", () => {
-    const html = header();
-    expect(html).toMatch(/<span class="hidden @min-\[800px\]:contents"><span[^>]*>.*?需要你/);
-    // the "Same space" button is there from sm up, gone below
-    expect(html).toMatch(/<button[^>]*aria-label="同空间 1"[^>]*class="[^"]*\bmax-sm:hidden\b/);
-    expect(html).toContain("<span>同空间</span>");
+  it("is cindy's one line: the Agent's mark, the title, then ⋯ (#5421)", () => {
+    const html = bare(header());
+    // spoken: which Agent and where it runs; on hover cindy's sentence
+    const mark = html.indexOf('aria-label="Claude Code。Agent 在 MacBook 上运行" title="Agent 在 MacBook 上运行"');
+    const title = html.indexOf("data-chat-title=");
+    const more = html.indexOf('aria-label="更多操作"');
+    expect(mark).toBeGreaterThan(-1);
+    expect(mark).toBeLessThan(title);
+    expect(title).toBeLessThan(more);
+    // the mark carries the "on another computer" arc
+    expect(html).toContain("data-agent-remote");
+    // no state pill or dot, no second line, no model, no permission mode in the bar
+    expect(html).not.toContain("需要你");
+    expect(html).not.toContain("status-mark");
+    expect(html).not.toContain("MacBook ›");
+    expect(html).not.toContain("text-[11.5px]");
+    // the title is cindy's 14 px medium
+    expect(html).toMatch(/<h1[^>]*class="[^"]*text-\[14px\] font-medium/);
   });
 
-  it("marks ⋯ on a phone when a sibling needs you, as the 同空间 button does wider", () => {
-    expect(header()).toMatch(/aria-label="更多"[^]*?<span aria-hidden="true" class="[^"]*bg-attention[^"]*sm:hidden"/);
+  it("says the computer is offline in the mark's words, and dims it", async () => {
+    const { getState: state } = await import("../../lib/store");
+    const machines = state().machines;
+    state().machines = [{ id: "m", name: "MacBook", online: false } as (typeof machines)[number]];
+    try {
+      const html = bare(header());
+      expect(html).toMatch(/title="Agent 在 MacBook 上运行，那台电脑现在离线，连上后才能继续"[^>]*data-agent-device="offline"[^>]*opacity-75/);
+    } finally {
+      state().machines = machines;
+    }
+  });
+
+  it("shows the branch after ⋯, wide only", () => {
+    const html = bare(header({ session: { ...session, branch: "feat/net-tests" } as Session }));
+    expect(html).toMatch(/aria-label="更多操作"[^]*data-chat-branch="true"[^>]*@max-\[800px\]:hidden[^>]*>[^]*feat\/net-tests/);
+    expect(header()).not.toContain("data-chat-branch");
+  });
+
+  it("has no 同空间 button: the space's other agents are in ⋯ at every width, which carries their attention", () => {
+    const html = bare(header());
+    expect(html).not.toContain("同空间");
+    expect(html).toMatch(/aria-label="更多操作"[^]*?<span aria-hidden="true" class="[^"]*bg-attention/);
     const calm = { ...sibling, state: "idle" } as Session;
     const quiet = { ...session, state: "idle" } as Session;
-    expect(header({ session: quiet, siblings: [quiet, calm] })).not.toMatch(/bg-attention[^"]*sm:hidden/);
+    expect(header({ session: quiet, siblings: [quiet, calm] })).not.toContain("bg-attention");
+  });
+
+  it("puts the loop mark before the Agent's mark and a Background tasks button at the right end (#5421)", () => {
+    const looping = { ...session, loop: { kind: "interval", interval_seconds: 1800, prompt: "/loop check CI" } } as Session;
+    const html = bare(header({ session: looping }));
+    const loop = html.indexOf("data-loop-mark");
+    expect(loop).toBeGreaterThan(-1);
+    expect(loop).toBeLessThan(html.indexOf("data-agent-device"));
+    expect(html).toMatch(/aria-label="循环 · 每 30 分钟"/);
+    expect(html).toMatch(/<button[^>]*aria-label="后台任务"/);
+    expect(bare(header())).not.toContain('aria-label="后台任务');
+    // a running background task: the button counts it
+    const busy = { ...session, background: [{ id: "b1", kind: "bash", command: "npm test" }] } as Session;
+    const counted = bare(header({ session: busy }));
+    expect(counted).toMatch(/aria-label="后台任务，1 个在运行"/);
+    expect(counted).toMatch(/data-background-count="true"[^>]*>1</);
+  });
+
+  it("keeps the goal out of the bar (it is over the composer)", () => {
+    const html = header({ session: { ...session, goal: { objective: "让测试全绿", status: "active" } } as Session });
+    expect(html).not.toContain("让测试全绿");
   });
 });
 
-describe("spaceAgentsItem, ⋯'s 同空间 row on a phone (#3576)", () => {
+describe("spaceAgentsItem, ⋯'s 同空间 row (#3576, #5421)", () => {
   it("counts the others, opens the space's menu and marks attention when one needs you", () => {
     let opened = 0;
     const item = spaceAgentsItem([sibling], () => opened++);
@@ -81,33 +140,20 @@ describe("spaceAgentsItem, ⋯'s 同空间 row on a phone (#3576)", () => {
   });
 });
 
-describe("Header, the 终端 | 对话 switch (#2419)", () => {
-  it("has the two views in that order, the one showing checked", () => {
-    const html = header({ view: "chat", onView: () => {} });
-    expect(html).toMatch(/role="radiogroup" aria-label="终端或对话"/);
-    expect(html.indexOf("终端</button>")).toBeLessThan(html.indexOf("对话</button>"));
-    expect(html).toMatch(/aria-checked="true"[^>]*>对话</);
-    expect(html).toMatch(/aria-checked="false"[^>]*>终端</);
-    expect(header({ view: "term", onView: () => {} })).toMatch(/aria-checked="true"[^>]*>终端</);
+describe("Header, the terminal view (#2419, #5421)", () => {
+  it("is one button to the other view at every width", () => {
+    const chat = bare(header({ view: "chat", onView: () => {} }));
+    expect(chat).toMatch(/<span class="relative flex shrink-0"><button[^>]*aria-label="终端"/);
+    expect(chat).not.toContain("radiogroup");
+    const term = bare(header({ view: "term", onView: () => {} }));
+    expect(term).toMatch(/<span class="relative flex shrink-0"><button[^>]*aria-label="对话"/);
   });
-  it("is not there without a terminal to switch to, and the old terminal button is gone", () => {
-    expect(header()).not.toContain("终端或对话");
-    // the only "Terminal" button is the phone's one-button switch below
-    expect(header({ view: "chat", onView: () => {} }).match(/aria-label="终端"/g)).toHaveLength(1);
+  it("is not there without a terminal to switch to", () => {
     expect(header()).not.toContain('aria-label="终端"');
   });
-
-  it("is one button to the other view on a phone, the two-part switch from sm up (#3576)", () => {
-    const chat = header({ view: "chat", onView: () => {} });
-    expect(chat).toMatch(/<span class="hidden sm:contents"><div[^>]*role="radiogroup" aria-label="终端或对话"/);
-    expect(chat).toMatch(/<span class="relative flex shrink-0 sm:hidden"><button[^>]*aria-label="终端"/);
-    const term = header({ view: "term", onView: () => {} });
-    expect(term).toMatch(/<span class="relative flex shrink-0 sm:hidden"><button[^>]*aria-label="对话"/);
-    expect(header({ view: "term", onView: () => {}, viewDot: true })).toMatch(/aria-label="对话"[^]*?<\/button><span aria-hidden="true" class="pointer-events-none absolute[^"]*bg-attention"/);
-  });
   it("marks 对话 when the terminal shows and something wants an answer", () => {
-    expect(header({ view: "term", onView: () => {}, viewDot: true })).toMatch(/对话<span aria-hidden="true" class="absolute/);
-    expect(header({ view: "term", onView: () => {} })).not.toMatch(/对话<span/);
+    expect(header({ view: "term", onView: () => {}, viewDot: true })).toMatch(/aria-label="对话"[^]*?<\/button><span aria-hidden="true" class="pointer-events-none absolute[^"]*bg-attention"/);
+    expect(header({ view: "term", onView: () => {} })).not.toMatch(/aria-label="对话"[^]*?<\/button><span aria-hidden/);
   });
 });
 
@@ -289,10 +335,10 @@ describe("tap areas", () => {
   afterEach(() => vi.unstubAllGlobals());
   const hit = (html: string, label: string) => new RegExp(`<button[^>]*aria-label="${label}"[^>]*class="touch-hit `).test(html) || new RegExp(`<button[^>]*class="touch-hit [^"]*"[^>]*aria-label="${label}"`).test(html);
 
-  it("covers the composer's row: + @ / and send", () => {
+  it("covers the composer's row: + and send", () => {
     vi.stubGlobal("localStorage", { getItem: () => null });
     const html = renderToStaticMarkup(<Composer draftKey="t" placeholder="…" machineId="m" mention={{ self: "t", files: () => [] }} onSend={async () => true} />);
-    for (const label of ["添加图片或文件", "引用文件或会话", "命令", "发送"]) expect(hit(html, label), label).toBe(true);
+    for (const label of ["添加文件、图片等", "发送"]) expect(hit(html, label), label).toBe(true);
   });
 
   it("covers a card's hand back, a question's options and its arrows", () => {

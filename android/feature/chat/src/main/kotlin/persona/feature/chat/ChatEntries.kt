@@ -199,6 +199,7 @@ fun ChatDestination(
     val handToPersona = rememberHandToPersona(wiring?.mainSender?.takeIf { style != ChatRenderStyle.Assistant }, navigator)
     val composer by (editor?.composer ?: remember { MutableStateFlow<ChatComposerState?>(null) }).collectAsStateWithLifecycle()
     val error by (editor?.error ?: remember { MutableStateFlow<Int?>(null) }).collectAsStateWithLifecycle()
+    ComposerFocusAskEffect(session, composer)
     androidx.compose.runtime.CompositionLocalProvider(LocalUsageRead provides wiring?.usage) {
         ChatScreen(session, services.chats(), services.messages(),
             services.interactions(), services.sessions(), onBack = onHistoryBack ?: navigator::back,

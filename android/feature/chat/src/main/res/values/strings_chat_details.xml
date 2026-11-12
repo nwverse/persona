@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Smaller details of an Agent's chat in iOS's words (docs/plans/android-ios-alignment/chats.md, C9). -->
+<resources>
+    <string name="chat_placeholder_agent">Message %1$s</string>
+    <string name="chat_getting_ready">%1$s is getting ready…</string>
+    <string name="chat_recap_open_spoken">Recap while you were away: %1$s. Tap to close</string>
+    <string name="chat_plan_sheet_title">Plan</string>
+    <string name="chat_plan_sheet_step">Step %1$d of %2$d</string>
+    <plurals name="chat_plan_sheet_all_done">
+        <item quantity="one">%1$d step done</item>
+        <item quantity="other">All %1$d steps done</item>
+    </plurals>
+    <string name="chat_plan_sheet_summary">%1$s · %2$s</string>
+    <string name="chat_plan_pill_opens">Shows the plan</string>
+</resources>

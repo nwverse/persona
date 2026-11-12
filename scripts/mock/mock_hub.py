@@ -682,6 +682,8 @@ SESSIONS = [
                     + ([{"id": "wdemo1", "kind": "workflow", "description": "widget-audit", "run_id": "wf_demo1", "started_at": ago(minutes=14)}]
                        if os.environ.get("MOCK_WORKFLOWS") in ("1", "legacy") else []),
          **({"workflows": MOCK_WORKFLOW_RUNS} if os.environ.get("MOCK_WORKFLOWS") == "1" else {}),
+         # MOCK_BRANCH=1: the git branch its folder is on (#5421: the chat's top bar shows it on a wide screen)
+         **({"branch": "feat/hourly-widget"} if os.environ.get("MOCK_BRANCH") else {}),
          # MOCK_QUEUE=1: input typed while it works and not taken yet (POST …/queue edits it)
          **({"queued": ["顺便把 README 里的截图也换成新的小组件", "改完以后跑一遍 UI 测试，把失败的截图发给我"]}
             if os.environ.get("MOCK_QUEUE") else {})),
@@ -708,6 +710,13 @@ SESSIONS = [
     sess("macbook", RECIPE, "菜谱网站加搜索", "/Users/me/code/recipes", "offline", "offline", "", 0, "", 0, 60 * 26,
          "搜索做好了，支持按食材和用时筛选。", space_kind=None, space_id=None, space_name=None, slot_id=None, slot_name=None),
 ]
+
+if os.environ.get("MOCK_NEXT_SUGGESTIONS") == "1":  # see NEXT_SUGGESTIONS
+    for _s in SESSIONS:
+        if _s["session_id"] == ORDERS:
+            _s.update(status="idle", state="idle", activity=None, suggestion="好，改完跑一遍压测对比一下")
+        elif _s["session_id"] == REVIEW:
+            _s["suggestion"] = "按这两条建议改一下命名"
 
 # #2430 agent-details: what the node reads off a transcript for the "Show details on agent rows" line and the usage row
 # below the composer (#5056) — the model id as Claude Code records it, the latest reply's input tokens, the model's window.
@@ -1716,9 +1725,18 @@ if os.environ.get("MOCK_PERSONA_QUEUE") == "1":
     ASSISTANT[0].update({"state": "working", "status": "working", "queued_relayed": 1,
                          "queued": list(PERSONA_QUEUE_MESSAGES)})
 
+# MOCK_NEXT_SUGGESTIONS=1 (#4644, docs/assistant/assistant.md "Next-message suggestions"): the switch is on and sessions carry
+# the suggestion as the manager lists them: the main Persona chat and the Codex session (stopped) the suggest.next model's,
+# the PR review agent (Claude Code in a terminal) Claude Code's own, and the morning briefing chat a risky one
+# (suggestion_risky: filled in, no one-tap send).
+NEXT_SUGGESTIONS = os.environ.get("MOCK_NEXT_SUGGESTIONS") == "1"
+if NEXT_SUGGESTIONS:
+    ASSISTANT[0]["suggestion"] = "先处理第一件，其余两件下午再说"
+    ASSISTANT[1].update(suggestion="把会议纪要发给参会的人", suggestion_risky=True)
+
 # MOCK_ORIGINS=1 (#3264, docs/protocol/protocol.md "Origin of assistant chats"): conversations the hub opened by itself — the inbox's AI twin,
 # scheduled tasks, a Feishu /agent, one another conversation started — next to the user's own; one of them runs, one
-# waits for the user. The sidebar keeps them out of "Recent" under "Automatic conversations".
+# waits for the user. The sidebar's Recent lists them with the user's own, each with its origin's mark (#5195).
 if os.environ.get("MOCK_ORIGINS") == "1":
     ASSISTANT[1]["origin"], ASSISTANT[1]["origin_ref"] = "task", "morning"
     ASSISTANT[1]["title"] = "1106 | 定时 | 早报"
@@ -1842,7 +1860,7 @@ if os.environ.get("MOCK_ASSISTANT_SIDEBAR") == "1":
 # MOCK_AUTO_CONVERSATIONS=1 (#3264, docs/protocol/protocol.md "Origin of assistant chats"): the hub says who opened each assistant
 # conversation (`origin`, feature conversation_origin): the user's own say "user", and ten more were opened by Persona
 # itself: Inbox's AI twin (one waits for the user, one works), scheduled tasks, Lark /agent and one conversation another
-# started. The sidebar keeps those in "Automatic conversations"; the list of conversations filters them by source.
+# started. The sidebar's Recent lists them with the user's own, each with its source's mark (#5195); All Chats filters them by source.
 if os.environ.get("MOCK_AUTO_CONVERSATIONS") == "1":
     for _s in ASSISTANT:
         _s.setdefault("origin", "user")
@@ -2143,6 +2161,8 @@ ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "A
                     # supervised task reach its supervisor (#4293), off by default; closed sessions archive themselves
                     # after this many idle days (#3618), 0 is never. Left out with MOCK_LEGACY_HUB.
                     "agent_tasks": False, "inbox_signals": False, "archive_closed_days": 3,
+                    # The manager's next-message suggestions (#4644), off by default; MOCK_NEXT_SUGGESTIONS=1 starts on.
+                    "next_suggestions": os.environ.get("MOCK_NEXT_SUGGESTIONS") == "1",
                     # The main chat follows up its own tasks instead of the background supervisor (#4927), off by
                     # default. Left out with MOCK_LEGACY_HUB.
                     "main_supervises_own_tasks": False,
@@ -2175,7 +2195,7 @@ def assistant_state(space="", archived=False):
     if not os.environ.get("MOCK_LEGACY_HUB"):
         out.update(agent_tasks=cfg["agent_tasks"], inbox_signals=cfg["inbox_signals"], archive_closed_days=cfg["archive_closed_days"],
                    idle_close_hours=cfg["idle_close_hours"], kb_topics=cfg["kb_topics"],
-                   main_supervises_own_tasks=cfg["main_supervises_own_tasks"])
+                   main_supervises_own_tasks=cfg["main_supervises_own_tasks"], next_suggestions=cfg["next_suggestions"])
         if BACKGROUND_SUPERVISOR and not space:  # once the hub has made it (#4927)
             out.update(background_supervisor=BACKGROUND_SUPERVISOR, background_supervisor_machine_id=cfg["machine_id"])
     if cfg["notes"] is not None:
@@ -5567,6 +5587,14 @@ if os.environ.get("MOCK_REWIND"):
     if os.environ.get("MOCK_REWIND") == "safeguards":
         ITEMS[REVIEW][-2]["text"] = "> Example quote\n\nRevise this paragraph"
         ITEMS[REVIEW][-1]["text"] = "API Error: Opus 5.5's safeguards flagged this message. Details: [frontier_llm]"
+# MOCK_REPLY_CUT=1|error (#5314): the review chat's last turn stopped right after its first words (a read, the words, then
+# the interrupt notice; =error: a model API error instead), so the web's reply bar says the reply did not complete.
+if os.environ.get("MOCK_REPLY_CUT"):
+    ITEMS[REVIEW] = ITEMS[REVIEW] + [it("user", "text", 12, text="再看一下新加的重试测试")] + tool(
+        "Read", {"file_path": "/Users/me/code/weather/Tests/RetryTests.swift"}, "func testRetriesThreeTimes() {}", 11) + [
+        it("assistant", "text", 10, text="重试测试一共三个用例：前两个覆盖了超时和 503，第三个"),
+        it("assistant", "text", 9, text="API Error: 529 Overloaded") if os.environ.get("MOCK_REPLY_CUT") == "error"
+        else it("system", "notice", 9, text="已中断")]
 # MOCK_WORKFLOW=1 (#3436): the Workflow calls that launched the review agent's runs, each drawn as its run's card (the
 # parity-audit one in a turn the hub folds: the app fetches that fold for the card), and each agent's own conversation.
 if os.environ.get("MOCK_WORKFLOW") == "1":
@@ -6773,6 +6801,30 @@ if os.environ.get("MOCK_ASK_LONG") == "1":
                 for n in range(1, 9)]},
             {"question": "整理完发给谁？", "header": "发送", "multi_select": True, "options": [
                 {"label": "组里"}, {"label": "老板"}, {"label": "只给我"}]}]})
+# MOCK_ASK_LONG=actions: one long multi-select question, so Submit is enabled by a deliberate pick without advancing
+# to another, shorter question (#4839). =swipe is a short single-select card for the auto-send gesture path; =review
+# has six single-select questions whose review is taller than a small phone's pending-card area. Reset restores them.
+ASK_LONG_INTERACTIONS = []
+if os.environ.get("MOCK_ASK_LONG") in ("actions", "swipe", "review"):
+    mode = os.environ["MOCK_ASK_LONG"]
+    if mode == "review":
+        questions = [{"question": "第 %d 题的回答要保留完整，复核时这一行会占用足够的高度" % n,
+                      "header": "第 %d 题" % n, "multi_select": False,
+                      "options": [{"label": "第 %d 个答案" % n,
+                                   "description": "这是第 %d 个答案的完整说明，用来让复核内容超过首屏" % n}]}
+                     for n in range(1, 7)]
+    elif mode == "swipe":
+        questions = [{"question": "短拖动也不要替我选", "header": "手势", "multi_select": False,
+                      "options": [{"label": "选项 1"}, {"label": "选项 2"}]}]
+    else:
+        questions = [{"question": "这周先处理哪件事？", "header": "下一步", "multi_select": True, "options": [
+            {"label": "选项 %d" % n, "description": "第 %d 件事的说明：要多长时间、会碰到谁、做完之后接着做什么" % n}
+            for n in range(1, 9)]}]
+    ASK_LONG_INTERACTIONS.append({
+        "id": "ix_ask_long", "machine_id": "server", "session_id": ASK1, "session_title": "Persona",
+        "kind": "question", "created_at": ago(minutes=1), "expires_at": later(minutes=29), "tool_name": "ask_user",
+        "questions": questions})
+    INTERACTIONS.extend(copy.deepcopy(ASK_LONG_INTERACTIONS))
 # A very long `python3 -c …` script for a Feishu permission card (MOCK_ASK_LONG=perm|agent): taller than the dock on
 # every width, so its buttons have to stay reachable.
 def _long_lark_cmd(verb):
@@ -8805,7 +8857,10 @@ if os.environ.get("MOCK_GITHUB") == "guide":  # a status with the steps to fix i
                         "capabilities": ["status", "hosts"], "hosts": ["github.com"]}
 # Feishu and mail as connectors (GET /api/v1/connectors?all=1, migration M6): the app draws them as their own rows.
 LEGACY_CONNECTORS = [{"id": "lark", "name": "飞书", "status": "ok", "capabilities": ["tools", "inbox", "archive"], "enabled": True},
-                     {"id": "mail", "name": "邮件", "status": "ok", "capabilities": ["tools", "actions", "inbox", "archive"], "enabled": True}]
+                     {"id": "mail", "name": "邮件", "status": "ok", "capabilities": ["tools", "actions", "archive"], "enabled": True,
+                      "archive": True, "inbox": True}]  # mail's Add to Inbox (#5307): MOCK_MAIL_INBOX=off starts it off
+if os.environ.get("MOCK_MAIL_INBOX") == "off":
+    LEGACY_CONNECTORS[1]["inbox"] = False
 
 # Telegram (the Telegram extension, #1704; docs/archive/extensions/plan-telegram.md): the user's own account, signed in from Settings › Connectors › Telegram a step at a time.
 # All made up: api_id 1234567 (a hash of 32 zeros is refused), any phone starting with +, the code 12345, the 2FA
@@ -10880,6 +10935,8 @@ LAUNCHER_PRESETS = [
 # provider out of a group of several), and POST /api/v1/launchers/import/parse (also in every mode) reads pasted text into
 # provider drafts with the hub's rules (parse_paste): shell aliases / exports / K=V lines, settings.json, a curl command,
 # cindy's custom providers. A draft on gw_full's address matches it, with the same key when it carries sk-example-gw.
+# With the feature launcher_auth_auto (#5329): a typed-in gateway's test and model list take `auth` "auto" (Bearer, then
+# x-api-key) and the test says which one worked; the methods the fake gateway takes come from its address (_gateway_takes).
 MOCK_PROVIDERS = os.environ.get("MOCK_PROVIDERS") == "1"
 PROVIDER_LOG = {"post": None, "put": None, "test": [], "discover": [], "catalog": [], "import": None, "parse": []}
 PROVIDER_FIELDS = ("kind", "api", "base_url", "model", "small_model", "subagent_model", "custom_model", "custom_model_name",
@@ -10956,7 +11013,7 @@ if MOCK_PROVIDERS:
     _features_without_providers = features
 
     def features():
-        return _features_without_providers() + ["launcher_auto_name", "launcher_import_parse"]
+        return _features_without_providers() + ["launcher_auto_name", "launcher_import_parse", "launcher_auth_auto"]
 
 
 # The hub's names for providers it names itself (server/internal/assistant/models_presets.go): the slug rule, the
@@ -11561,6 +11618,50 @@ def _catalog_route(h, body):
     h.send_json({"models": out})
 
 
+# A probe's `auth` (#5329): "" (what is stored for `name`, else both headers as older clients get), a method, or "auto".
+PROBE_AUTHS = ("", "api_key", "bearer", "auto")
+
+
+def _gateway_takes(base_url):
+    """The sign-in methods the fake gateway at this address takes: only x-api-key with "xapikey" in it, only Bearer with
+    "bearer-only", else both."""
+    u = base_url or ""
+    if "xapikey" in u: return ("api_key",)
+    if "bearer-only" in u: return ("bearer",)
+    return ("bearer", "api_key")
+
+
+def _probe_signed_in(b):
+    """Whether the fake gateway takes a typed-in gateway's probe, and the method "auto" found: the hub's probeTarget picks
+    the headers (Responses and Chat Completions Bearer only; a method as asked; "" what `name` stores, else both), and
+    "auto" sends Bearer, then x-api-key once that is refused. (ok, method or None)."""
+    auth = b.get("auth") or ""
+    takes = _gateway_takes(b.get("base_url"))
+    stored = next((x for x in LAUNCHERS if b.get("name") and x["name"] == b.get("name")), None)
+    # the stored key goes only to the stored address (the hub's probeTarget)
+    keyed = b.get("api_key") or (stored and stored.get("has_key") and
+                                 (b.get("base_url") or "").rstrip("/") in ("", (stored.get("base_url") or "").rstrip("/")))
+    if b.get("api") in ("responses", "chat"):
+        sent = ("bearer",)
+    elif auth == "auto" and keyed:  # no key, no header: nothing to find
+        found = next((m for m in ("bearer", "api_key") if m in takes), None)
+        return bool(found), found
+    elif auth and auth != "auto":
+        sent = (auth,)
+    elif stored and not auth:
+        sent = ("bearer",) if stored.get("auth") == "bearer" else ("api_key",)
+    else:
+        sent = ("bearer", "api_key")
+    return any(m in takes for m in sent), None
+
+
+def _hub_text(h, key):
+    """The hub's text for key in the request's language (its own catalogs, server/internal/i18n)."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import readiness_mock
+    return readiness_mock.t(readiness_mock.lang_of(h.headers.get("Accept-Language", "")), key)
+
+
 def providers_route(h, method, p, q, body):
     """The provider endpoints under MOCK_PROVIDERS; True when it answered. The import (import_route, parse_route) and the
     catalog lookup (_catalog_route) answer with or without MOCK_PROVIDERS, and so do a typed-in gateway's "Test connection"
@@ -11586,6 +11687,8 @@ def providers_route(h, method, p, q, body):
         if not isinstance(b, dict) or b.get("preset"): return False
     if p == "/api/v1/launchers/test" and method == "POST":
         PROVIDER_LOG["test"].append(_provider_redacted(b))
+        if (b.get("auth") or "") not in PROBE_AUTHS:
+            h.send_json({"ok": False, "ms": 0, "model": b.get("model", ""), "error": _hub_text(h, "assistant-models_launchers.err_auth")}); return True
         stored = next((x for x in LAUNCHERS if x["name"] == b.get("name")), None)
         if not b.get("api_key") and not (stored and stored.get("has_key")):
             h.send_json({"ok": False, "ms": 0, "model": b.get("model", ""), "error": "要填 API Key"}); return True
@@ -11594,11 +11697,20 @@ def providers_route(h, method, p, q, body):
         if BUILTIN_PRESETS and "region" in (b.get("api_key") or ""):  # Anthropic refusing the network's region (#4482), in the hub's words
             msg, code = readiness_mock.region_blocked(readiness_mock.lang_of(h.headers.get("Accept-Language", "")))
             h.send_json({"ok": False, "ms": 180, "model": b.get("model", ""), "error": msg, "code": code}); return True
-        h.send_json({"ok": True, "ms": 412, "model": b.get("model", "")}); return True
+        signed_in, found = _probe_signed_in(b)
+        if not signed_in:
+            h.send_json({"ok": False, "ms": 233, "model": b.get("model", ""), "error": _hub_text(h, "assistant-models_probe.status_401"), "code": "auth"}); return True
+        out = {"ok": True, "ms": 412, "model": b.get("model", "")}
+        if found: out["auth"] = found
+        h.send_json(out); return True
     if p == "/api/v1/launchers/discover" and method == "POST":
         PROVIDER_LOG["discover"].append(_provider_redacted(b))
+        if (b.get("auth") or "") not in PROBE_AUTHS:
+            h.send_json({"models": [], "error": _hub_text(h, "assistant-models_launchers.err_auth")}); return True
         if "bad" in (b.get("base_url") or ""):
             h.send_json({"models": [], "error": "网关没有 /v1/models", "code": "not_found"}); return True
+        if not _probe_signed_in(b)[0]:  # no method named back: only the test says what a launch needs
+            h.send_json({"models": [], "error": _hub_text(h, "assistant-models_probe.status_401"), "code": "auth"}); return True
         h.send_json({"models": PROVIDER_DISCOVERED}); return True
     if p == "/api/v1/launchers" and method == "POST" and not b.get("preset"):
         PROVIDER_LOG["post"] = _provider_redacted(b)
@@ -13251,6 +13363,10 @@ for attempt in 0..<3 {{
     for _x in ITEMS[ASK1]:  # seq goes up through the conversation
         _seq[0] += 1
         _x.update(seq=_seq[0], id=f"{uuid.UUID(int=_seq[0])}#0")
+
+# MOCK_FOLD_DELAY=<seconds>: opening a fold (its steps fetched by from_seq / through_seq) answers that late, as the hub
+# does over a phone's network: what the steps push in comes a moment after the tap, not in the same frame (#3757).
+FOLD_DELAY = float(os.environ.get("MOCK_FOLD_DELAY", "0"))
 
 # MOCK_RICH=1: a reply with a link in Chinese prose (full-width brackets right after it), a three-column table whose
 # last column is long Chinese text, and a seven-column table that cannot fit (RichReplyTests).
@@ -17087,7 +17203,8 @@ def agent_live(step, n):
 
 
 # MOCK_TOOL_TURN=1 (#3005): an agent in the middle of a turn of shell calls with long outputs, a message of the user's
-# queued behind it, history above it. GET /mock/tool_turn?step=… moves it on one push at a time, as the hub pushes them:
+# queued behind it, twelve finished exchanges above it (each with a work line). GET /mock/tool_turn?step=… moves it on one
+# push at a time, as the hub pushes them:
 #   call     a new call starts (its tool_use alone: running)
 #   result   the running call's result lands
 #   answer   the agent's answer lands and the turn is over (the agent idle)
@@ -17133,11 +17250,16 @@ if TOOL_TURN:
                          "subs", 1, 0, "Find the PR that closed it", state_since=ago(minutes=7),
                          queued=["顺便看一下静音开关那条还缺什么"]))
     _earlier = []
-    for _q, _a in (("把收件箱的折叠改一下", "收件箱的折叠改好了：已处理的分组默认收起，网页和 iOS 都在里面。"),
-                   ("网页那边部署了吗", "部署了，网页已经是新版本，iOS 跟下次 TestFlight 走。")):
-        _earlier += [it("user", "text", 30, text=_q)] + tool("Bash", {"command": "git log --oneline -3", "description": "Recent commits"},
-                                                              "abc1234 fix(web): fold handled groups\nbcd2345 docs: inbox folds", 30) \
-            + [it("assistant", "text", 29, text=_a + "\n\n" + "\n".join("- 第 %d 项：已经核对过，没有遗留问题。" % _k for _k in range(1, 9)))]
+    # Ten older exchanges first, each with a work line of its own: work lines all the way back, to open one in the middle
+    # of the chat and at its oldest end (KeepTappedRowTests).
+    _asks = [("第 %d 处改动：顺便看一下这一块的写法有没有问题？" % _k, "看过了，第 %d 处没有问题，两处重复的判断已经合并。" % _k, 240 - _k * 20)
+             for _k in range(1, 11)]
+    _asks += [("把收件箱的折叠改一下", "收件箱的折叠改好了：已处理的分组默认收起，网页和 iOS 都在里面。", 30),
+              ("网页那边部署了吗", "部署了，网页已经是新版本，iOS 跟下次 TestFlight 走。", 30)]
+    for _q, _a, _m in _asks:
+        _earlier += [it("user", "text", _m, text=_q)] + tool("Bash", {"command": "git log --oneline -3", "description": "Recent commits"},
+                                                              "abc1234 fix(web): fold handled groups\nbcd2345 docs: inbox folds", _m) \
+            + [it("assistant", "text", _m - 1, text=_a + "\n\n" + "\n".join("- 第 %d 项：已经核对过，没有遗留问题。" % _k for _k in range(1, 9)))]
     ITEMS[TOOL_TURN_SID] = _earlier + [it("user", "text", 7, text="来源订阅的需求推进情况如何")]
     for _n in range(3):
         ITEMS[TOOL_TURN_SID] += list(tool_turn_call(_n))
@@ -19305,6 +19427,7 @@ MOCK_HELP = [
     "MOCK_NEEDS=none|two  Persona 首页「现在要你处理的事」：什么都没有 / 一个请求加一件收件箱（默认超过三件）",
     "MOCK_HISTORY=1  很长的 Persona 对话历史（最近 30 个 + 查看全部）、一段交接对话、一个置顶，置顶写入会保存",
     "MOCK_MODELS_SECONDS=<秒>  新建 Agent 里列一个启动器的模型要多久（默认 0.8，CLI 起来回答的时间）",
+    "MOCK_REPLY_CUT=1|error  The review chat's last turn stopped right after its first words (interrupted; =error: a model API error): its reply says it did not complete (#5314)",
 ]
 
 _features_without_voice = features
@@ -20038,7 +20161,7 @@ class H(BaseHTTPRequestHandler):
             BUMPED.pop("blocked", None)
             TODOS[:] = copy.deepcopy(TODOS_INIT)
             TODO_DECISIONS[:] = copy.deepcopy(TODO_DECISIONS_INIT)
-            again = CODEX_INTERACTIONS + SCREEN_MULTI_INTERACTIONS  # the cards back, unanswered
+            again = CODEX_INTERACTIONS + SCREEN_MULTI_INTERACTIONS + ASK_LONG_INTERACTIONS  # the cards back, unanswered
             ids = {x["id"] for x in again}
             INTERACTIONS[:] = [x for x in INTERACTIONS if x["id"] not in ids] + copy.deepcopy(again)
             RESOLVED[:] = [r for r in RESOLVED if r["id"] not in ids]
@@ -20490,6 +20613,7 @@ class H(BaseHTTPRequestHandler):
                 LOG.write("  items after_seq=%d\n" % a); LOG.flush()
                 return self.send_json({"items": lazy_images([x for x in items if x["seq"] > a]), "more_after": False, **span(items, a, max(a, last))})
             if "through_seq" in q:  # opening a fold
+                if FOLD_DELAY: time.sleep(FOLD_DELAY)
                 frm, thru = int(q.get("from_seq", ["0"])[0]), int(q["through_seq"][0])
                 inside = [x for x in items if frm <= x["seq"] <= thru]
                 out = {"items": lazy_images(inside[:1000]), "more": len(inside) > 1000}
@@ -21134,6 +21258,15 @@ class H(BaseHTTPRequestHandler):
             port = int(p.split("/")[6])
             if not port_listening(port): return self.send_json({"error": "nothing is listening on port %d" % port}, 404)
             return self.send_json({"port": port, "listening": True, "http": True})
+        if self.command == "PUT" and p == "/api/v1/connectors/mail/settings":  # mail's Add to Inbox (#5307)
+            body = json.loads(self.last_body or b"{}")
+            mail_c = LEGACY_CONNECTORS[1]
+            for feed in ("inbox", "archive"):
+                if feed in body:
+                    if not isinstance(body[feed], bool):
+                        return self.send_json({"error": feed + ": true or false"}, 400)
+                    mail_c[feed] = body[feed]
+            return self.send_json(mail_c)
         if self.command == "PUT" and p == "/api/v1/connectors/github/settings":  # GitHub's inbox options
             body = json.loads(self.last_body or b"{}")
             if "inbox" in body:  # "Send to inbox" (MOCK_GITHUB_EXTENSION), from the connector's page or the extension's
@@ -21905,6 +22038,8 @@ class H(BaseHTTPRequestHandler):
                 ASSISTANT_CONFIG["main_supervises_own_tasks"] = body["main_supervises_own_tasks"]
             if isinstance(body.get("kb_topics"), bool):
                 ASSISTANT_CONFIG["kb_topics"] = body["kb_topics"]
+            if isinstance(body.get("next_suggestions"), bool):
+                ASSISTANT_CONFIG["next_suggestions"] = body["next_suggestions"]
             if body.get("machine_id"):
                 if not any(m["id"] == body["machine_id"] for m in MACHINES):
                     return self.send_json({"error": "unknown machine"}, 400)
@@ -22828,7 +22963,7 @@ MOCK_HELP.append("MOCK_EXTENSION_OPS=1|fail  （配合 MOCK_EXTENSIONS）扩展�
 MOCK_HELP.append("MOCK_MANAGER_NAS=1  （默认的三个管理者）NAS 归离线的「家里」：像 hub 一样显示成离线，error 是 hub 的「助手暂时连不上，稍后再试」；它的一个 agent（备份脚本）状态 unknown")
 MOCK_HELP.append("MOCK_ASSISTANT_BASH=1  主对话自己的第一条 Bash 在等批准（#4883），是它唯一的卡片：对话里输入区上方显示「在等你批准」，不只在收起的「需要你」里")
 MOCK_HELP.append("MOCK_LONG_REPORT=1|<items.json>  An Agent chat (macbook/a1f3c2d4-0000-4000-8000-000000000090) ending in one ~33,000-character report with nine tables and a dozen code blocks after 120 folded tool calls (#4970); a path serves that file's transcript items instead")
-MOCK_HELP.append("MOCK_ASK_LONG=1|perm|agent  卡片比输入区上方的盒子还高（#3112）：1 主对话的 ask_user 提问卡（八个带说明的选项）；perm 主对话的飞书授权卡（超长命令）；agent MacBook 上补测试的 Agent 对话里两张这样的授权卡、没有别的卡（手机和侧边面板把第二张折在「还有 1 件」后面）")
+MOCK_HELP.append("MOCK_ASK_LONG=1|actions|swipe|review|perm|agent  卡片比输入区上方的盒子还高（#3112）：1 主对话的 ask_user 提问卡（八个带说明的选项）；actions 单道八个带说明选项的多选题，swipe 短单选拖动不误发，review 六道单选题的长复核页，Submit 首屏可达（#4839）；perm 主对话的飞书授权卡（超长命令）；agent MacBook 上补测试的 Agent 对话里两张这样的授权卡、没有别的卡（手机和侧边面板把第二张折在「还有 1 件」后面）")
 MOCK_HELP.append("MOCK_MANAGER_NEEDS_YOU=0  名册不带 inbox_needs_you（旧 hub，或还不上报这个数的旧管理者）；默认每个在线的管理者带它收件箱里「需要你处理」的未完成条目数，数变了推 managers")
 MOCK_HELP.append("MOCK_MANAGER_OUTDATED=1  设置 › 管理者：「工作」带 needs_update（它还不读自己的 manager.json，hub 在它在线时这样标）")
 MOCK_HELP.append("MOCK_MANAGERS=1  只有 hub 自己的管理者（没有切换、不分组，电脑、会话、卡片和合并的列表照样带 manager）；默认三个装好的（一个离线）：电脑、收件箱、扩展带 manager，会话和卡片跟它的电脑走；默认管理者换成别的时，模拟助手发的实时消息带它的 manager；助手页按 X-Persona-Manager 切换（工作：还没有主对话、有自己的说明，PUT 改它的；家里：503 assistant_offline；不认识的 404 no_manager）；POST /api/v1/managers/{id}/machines、…/sources 移电脑 / 邮箱，删掉的管理者的电脑回到 hub 自己的")
@@ -22843,7 +22978,7 @@ MOCK_HELP.append("MOCK_CHANNELS=1  设置 › 插件 › 渠道：App、飞书�
 MOCK_HELP.append("MOCK_EXCHANGES=1  主对话新布局的素材（#1666）：Persona 发给任务的长消息、任务带链接和证据的长汇报、督办消息")
 MOCK_HELP.append("MOCK_MARKDOWN=1  任务往来和回执里带 **粗体**、`代码`、标题的原话（#2363）：应渲染成 Markdown，不露标记")
 MOCK_HELP.append("MOCK_TASK_RENAMED=1  整理发布说明这个任务在回执写好后改了名：回执应显示新名字「写本周发布说明」（#3036）")
-MOCK_HELP.append("MOCK_AUTO_CONVERSATIONS=1  助手对话带来源 origin（feature conversation_origin）：另有 10 段自动对话（收件箱 6、定时任务 2、飞书 /agent、对话派生），侧边栏收进「自动对话」（#3264）")
+MOCK_HELP.append("MOCK_AUTO_CONVERSATIONS=1  助手对话带来源 origin（feature conversation_origin）：另有 10 段自动对话（收件箱 6、定时任务 2、飞书 /agent、对话派生），侧边栏「最近」和用户自己的一起列、带来源标记，「全部对话」按来源筛（#3264、#5195）")
 MOCK_HELP.append("MOCK_EXTERNAL=1  和 MOCK_AUTO_CONVERSATIONS=1 一起用：飞书 /agent 那段带上请求和上下文，另加一段别的扩展开的（origin extension），两段都是外部的（#3758）")
 MOCK_HELP.append("MOCK_BACKGROUND_SUPERVISOR=1  The hub's built-in background supervisor conversation exists (#4927): origin task with no origin_ref, "
                  "named by GET /api/v1/assistant as background_supervisor, and archiving it is refused. Without it the setting "
@@ -23183,7 +23318,12 @@ MOCK_HELP.append("MOCK_INBOX_ITEM_UI=1  （和 MOCK_EXTENSIONS=1 一起）收件
 # run of `live` pushes for it, one per MOCK_LIVE_STATUS_TICK seconds (default 1): thinking, "thought for 3s", tokens
 # growing, the verb changing, the count holding still for a tick; then `live: null` and the session goes idle (the
 # turn is over). Subscribing again once it is over starts another run (the session working again).
-LIVE_STATUS = os.environ.get("MOCK_LIVE_STATUS") == "1"
+# MOCK_LIVE_STATUS=steady (#5312): a long run instead (MOCK_LIVE_STATUS_TICKS, default 150) writing 40 to 60 tokens a
+# tick, counted to the hundred from 1k as Claude's line does, the count holding for six ticks in every thirty (a tool
+# running): the running bar's speed, its history card and the tokens while it pauses. Its time counts from the turn's
+# start (every run is the same turn) and its `at` is in whole seconds, as the node writes them.
+LIVE_STATUS_MODE = os.environ.get("MOCK_LIVE_STATUS", "")
+LIVE_STATUS = LIVE_STATUS_MODE in ("1", "steady")
 LIVE_STATUS_STATE = {"running": set(), "senders": set()}
 LIVE_STATUS_STEPS = [
     {"verb": "Frosting", "elapsed_s": 1, "thinking": True},
@@ -23196,6 +23336,17 @@ LIVE_STATUS_STEPS = [
     {"verb": "Moonwalking", "elapsed_s": 8, "tokens_down": 4800},
     {"verb": "Moonwalking", "elapsed_s": 9, "tokens_down": 22800},
 ]
+
+
+def live_status_steady(ticks):
+    """MOCK_LIVE_STATUS=steady: thinking for two ticks, then a steady count with a pause every thirty ticks."""
+    steps, tokens = [], 0
+    for i in range(1, ticks + 1):
+        if i > 2 and i % 30 not in range(20, 26):
+            tokens += 40 + (i * 37) % 21
+        shown = tokens if tokens < 1000 else int(round(tokens, -2))
+        steps.append({"verb": "Frosting", "elapsed_s": i, **({"tokens_down": shown} if shown else {}), **({"thinking": True} if i <= 2 else {})})
+    return steps
 
 
 def live_status_subscribe(send, mid, sid):
@@ -23217,11 +23368,22 @@ def live_status_subscribe(send, mid, sid):
     def run():
         import time
         tick = float(os.environ.get("MOCK_LIVE_STATUS_TICK", "1"))
-        s.update(status="working", state="working", state_since=utc_now(), updated_at=utc_now())
+        steady = LIVE_STATUS_MODE == "steady"
+        # steady: every run is the turn the session was in when the mock started, and the line counts from its start as
+        # Claude's does; its `at` is in whole seconds, as the node writes it
+        starts = LIVE_STATUS_STATE.setdefault("start", {})
+        if steady and sid not in starts:
+            since = s.get("state_since") if s.get("state") == "working" else None
+            starts[sid] = datetime.fromisoformat(since.replace("Z", "+00:00")).timestamp() if since else time.time()
+        since = datetime.fromtimestamp(starts[sid], timezone.utc).isoformat().replace("+00:00", "Z") if steady else utc_now()
+        s.update(status="working", state="working", state_since=since, updated_at=utc_now())
         push_machine(mid)
-        for step in LIVE_STATUS_STEPS:
+        steps = live_status_steady(int(os.environ.get("MOCK_LIVE_STATUS_TICKS", "150"))) if steady else LIVE_STATUS_STEPS
+        for step in steps:
             time.sleep(tick)
-            push({**step, "at": utc_now()})
+            if steady:
+                step = {**step, "elapsed_s": int(time.time() - starts[sid]), "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+            push({"at": utc_now(), **step})
         time.sleep(tick)
         push(None)
         s.update(status="idle", state="idle", state_since=utc_now(), updated_at=utc_now())
@@ -23230,12 +23392,13 @@ def live_status_subscribe(send, mid, sid):
     threading.Thread(target=run, daemon=True).start()
 
 
-MOCK_HELP.append("MOCK_LIVE_STATUS=1  Claude 会话的实时状态行（session_live，#1963）：声明了 session_live 的连接订阅后按 MOCK_LIVE_STATUS_TICK 秒（默认 1）一条推 live（思考中、thought for、token 增长、动词变化），最后推 null、会话变空闲；结束后再订阅会重来一轮")
+MOCK_HELP.append("MOCK_LIVE_STATUS=1|steady  Claude 会话的实时状态行（session_live，#1963）：声明了 session_live 的连接订阅后按 MOCK_LIVE_STATUS_TICK 秒（默认 1）一条推 live（思考中、thought for、token 增长、动词变化），最后推 null、会话变空闲；结束后再订阅会重来一轮。steady（#5312）：一轮更长（MOCK_LIVE_STATUS_TICKS 条，默认 150），每条多 40–60 个 token（过 1k 按百计，同 Claude 的显示），每 30 条停 6 条（像在跑工具），给运行状态栏的速度和速度历史截图；同时开着 MOCK_WORK_TIMELINE 时它的「思考中」推送不再发")
 
 
 def work_timeline_live(send, mid, sid):
-    """MOCK_WORK_TIMELINE: the two live sessions say they are thinking, every 5 s for 10 minutes or until the page goes."""
-    if sid not in (WORKTL, ASK1):
+    """MOCK_WORK_TIMELINE: the two live sessions say they are thinking, every 5 s for 10 minutes or until the page goes
+    (not with MOCK_LIVE_STATUS=steady, whose own run tells the weather Agent's state, #5312)."""
+    if sid not in (WORKTL, ASK1) or LIVE_STATUS_MODE == "steady":
         return
 
     def run():
@@ -23327,6 +23490,7 @@ if os.environ.get("MOCK_AGENT_PLANS") == "1":
         if _s["session_id"] == TESTS:
             _s["plan"] = {"done": 1, "total": 4, "at": ago(minutes=10)}
     MOCK_HELP.append("MOCK_AGENT_PLANS=1  小组件的 Agent 计划 3/5（在复现崩溃），网络层测试的 Agent 1/4（#5302）")
+MOCK_HELP.append("MOCK_BRANCH=1  macbook 上「给天气 App 加主屏幕小组件」的文件夹在 git 分支 feat/hourly-widget 上，聊天顶栏宽屏时显示它（#5421）")
 MOCK_HELP.append("MOCK_GOAL=1|stopped  macbook 上「给天气 App 加主屏幕小组件」有一个进行中的 goal（带最近一次检查的理由），「检查 PR #42 的改动」的 goal 已达成；stopped 时小组件那个 goal 用完了 token 预算（#2420）")
 
 # ---------- MOCK_EXTENSIONS: a hub from #1844 on (docs/extensions/extensions.md "Naming and compatibility") ----------

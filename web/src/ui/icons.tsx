@@ -33,6 +33,8 @@ const P: Record<string, React.ReactNode> = {
   agent: <g><rect x="4" y="8" width="16" height="12" rx="3" /><path d="M12 8V4M9 14h.01M15 14h.01" /></g>,
   todo: <g><path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></g>,
   hand: <g><path d="M5 12.5l3.5 3.5L19 5.5" /><path d="M4 19h16" /></g>,
+  // a raised hand (Lucide's hand, as cindy's Default permissions): the composer picker's default mode (#5324)
+  palm: <g><path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2" /><path d="M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2" /><path d="M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8" /><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15" /></g>,
   tool: <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />,
   bell: <g><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" /><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" /></g>,
   stop: <rect x="6" y="6" width="12" height="12" rx="2.5" fill="currentColor" stroke="none" />,
@@ -41,6 +43,8 @@ const P: Record<string, React.ReactNode> = {
   machine: <g><rect x="2" y="4" width="20" height="13" rx="2" /><path d="M8 21h8M12 17v4" /></g>,
   phone: <g><rect x="6" y="2" width="12" height="20" rx="2" /><path d="M11 18h2" /></g>,
   watch: <g><rect x="6" y="7" width="12" height="10" rx="2" /><path d="M9 7V2h6v5M9 17v5h6v-5" /></g>,
+  // the running bar's background subtasks and its speed card (Lucide's activity, as cindy's)
+  activity: <path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2" />,
   layers: <g><path d="M12 2 2 7l10 5 10-5-10-5z" /><path d="M2 17l10 5 10-5M2 12l10 5 10-5" /></g>,
   // a Claude Code workflow run (#2935, #3434; Lucide's workflow): the same mark wherever one is named, in the ai color,
   // as iOS (flowchart) and Android (TreeStructure) draw it
@@ -61,7 +65,7 @@ const P: Record<string, React.ReactNode> = {
   // a drag handle: two columns of three dots (the composer's queued messages, #5327)
   grip: <g fill="currentColor" stroke="none"><circle cx="9" cy="5" r="1.7" /><circle cx="9" cy="12" r="1.7" /><circle cx="9" cy="19" r="1.7" /><circle cx="15" cy="5" r="1.7" /><circle cx="15" cy="12" r="1.7" /><circle cx="15" cy="19" r="1.7" /></g>,
   menu: <path d="M4 7h16M4 12h16M4 17h16" />,
-  // "Branch to new chat": a path that splits in two
+  // "Start a new session" (a branch of the chat): a path that splits in two
   fork: <path d="M16 3h5v5M8 3H3v5M12 22v-8.3a4 4 0 0 0-1.17-2.87L3 3M15 9l6-6" />,
   sidebar: <g><rect x="3" y="4" width="18" height="16" rx="2.5" /><path d="M9 4v16" /></g>,
   loop: <path d="M17 2l4 4-4 4M3 11v-1a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 13v1a4 4 0 0 1-4 4H3" />,
