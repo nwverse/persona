@@ -1,5 +1,13 @@
 # Lessons: hub / node and networking
 
+## A preference clients report is not "the last one wins" (#5238)
+
+The user language was whatever full-role client sent `client_hello.locale` last. An English test simulator paired with
+a real hub, or simply an English Mac next to a Chinese iPhone, flipped it at every reconnect, and with it the Inbox
+summaries, folder names, the assistant's answers and pushes. Connecting is not choosing: remember what each device
+last reported and take only a device's own change (`server/internal/hub/locale.go`, `docs/protocol/i18n.md` "Protocol:
+telling hub the language"). Apply the same rule to any hub-wide value inferred from what several devices report.
+
 ## Authority handover must include the trusted keeper roster (#5228)
 
 A machine its manager keeps has moved out of hub.json, but its hub-owned keeper
