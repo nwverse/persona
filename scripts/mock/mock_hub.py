@@ -14039,7 +14039,9 @@ if os.environ.get("MOCK_CHAT_CONTENT") == "1":
         + tool("AskUserQuestion", {"questions": [{"question": "快照测试放在哪个 target？", "header": "Target", "multiSelect": False,
                                                   "options": [{"label": "WeatherWidgetTests (Recommended)", "description": "和小组件放在一起"},
                                                               {"label": "新建 SnapshotTests", "description": "单独的 target，跑得更快"}]}]},
-               "User answered: WeatherWidgetTests", 28)
+               # Claude Code's own answer shape (#5937)
+               'User has answered your questions: "快照测试放在哪个 target？"="WeatherWidgetTests (Recommended)". '
+               "You can now continue with the user's answers in mind.", 28)
         + tool("Task", {"description": "补齐深色模式的快照测试", "subagent_type": "general-purpose",
                         "prompt": "在 WeatherWidgetTests 里给 WidgetView 补快照测试：\n1. 深色、浅色各一套\n2. 六个城市：上海、北京、Tokyo、"
                                   "Lisbon、Reykjavík、Nairobi\n3. 每张图检查温度文字和背景的对比度，低于 4.5:1 就失败\n4. 跑一遍 "
