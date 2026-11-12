@@ -3,7 +3,7 @@
 // rows as the Lark card, with an Accept button for each task to verify and a Handled button for each question that can wait
 // (docs/extensions/bots.md "Morning and evening briefings").
 import { openTask } from "../../lib/handoff";
-import { useRef, useState } from "react";
+import { type ReactNode, useRef, useState } from "react";
 import { errorText } from "../../lib/api";
 import { putTodo, refreshTodos } from "../../lib/store";
 import { updateTodo } from "../../lib/todos";
@@ -72,12 +72,14 @@ function acceptLabel(row: BriefRow): { label: string; title: string } {
   return { label: t("assistant-brief.accept"), title: t("assistant-brief.accept_row", { title: row.title }) };
 }
 
-export function AcceptRow({ row, stacked = false, admission, onBusyChange, blocked = false }: { row: BriefRow; stacked?: boolean; admission?: { current: boolean }; onBusyChange?: (busy: boolean) => void; blocked?: boolean }) {
+export function AcceptRow({ row, stacked = false, admission, onBusyChange, blocked = false, secondary, hideTitle = false }: { row: BriefRow; stacked?: boolean; admission?: { current: boolean }; onBusyChange?: (busy: boolean) => void; blocked?: boolean; secondary?: ReactNode; hideTitle?: boolean }) {
   const [state, setState] = useState<Accepting>("idle");
   // Admit either action synchronously, before React disables the other button.
   const ownAdmission = useRef(false);
   const admitted = admission ?? ownAdmission;
   const button = acceptLabel(row);
+  // the primary button (and the settled word) on its own full-width line while the row is narrow
+  const full = stacked ? "w-full" : "@max-md:w-full";
   const deciding = row.outcome === "decide";
   const settled = state === "accepted" || state === "handled" || state === "finished";
   // A decision with nothing recommended can still be finished, but has nothing to take.
@@ -120,10 +122,12 @@ export function AcceptRow({ row, stacked = false, admission, onBusyChange, block
     );
   };
   return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 py-1.5" data-brief-row="accept">
-      {/* the text keeps at least 12rem: on a phone the buttons drop under it instead of squeezing it to a few characters */}
-      <div className={stacked ? "w-full min-w-0" : "min-w-[12rem] flex-1"}>
-        <div className="text-[13.5px] font-medium [overflow-wrap:anywhere]">{row.title}</div>
+    <div className="@container" data-brief-row="accept">
+    {/* Narrow (the tray, a phone's chat column; `stacked` always): the words take the whole width, the secondary buttons
+        one row under them and the primary its own full-width line, so the words are never a four-letter column (#5569). */}
+    <div className={cx("flex items-center gap-3 py-1.5", stacked ? "flex-wrap gap-y-2" : "@max-md:flex-wrap @max-md:gap-y-2")}>
+      <div className={cx("min-w-0", stacked ? "w-full" : "flex-1 @max-md:w-full @max-md:flex-none")}>
+        {!hideTitle && <div className="text-[13.5px] font-medium [overflow-wrap:anywhere]">{row.title}</div>}
         {row.verdict && (
           <div className="text-[12.5px] [overflow-wrap:anywhere]" data-brief-verdict={row.outcome ?? "deployed"}>
             {row.verdict}
@@ -142,15 +146,17 @@ export function AcceptRow({ row, stacked = false, admission, onBusyChange, block
           {t("assistant-brief.finish")}
         </Button>
       )}
+      {!settled && secondary}
       {settled ? (
-        <span className="shrink-0 text-[12.5px] text-ink-2" data-brief-accepted={state}>
+        <span className={cx("shrink-0 text-[12.5px] text-ink-2", full)} data-brief-accepted={state}>
           {t(state === "finished" ? "assistant-brief.finished" : state === "handled" ? "assistant-brief.handled" : deciding ? "assistant-brief.taken" : row.outcome ? "assistant-brief.noted" : "assistant-brief.accepted")}
         </span>
       ) : takes ? (
-        <Button tone="primary" busy={state === "busy"} disabled={blocked || !row.asked_at || state === "finishing"} title={button.title} onClick={accept}>
+        <Button tone="primary" className={full} busy={state === "busy"} disabled={blocked || !row.asked_at || state === "finishing"} title={button.title} onClick={accept}>
           {button.label}
         </Button>
       ) : null}
+    </div>
     </div>
   );
 }

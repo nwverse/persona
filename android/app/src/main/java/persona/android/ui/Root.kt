@@ -136,6 +136,8 @@ private fun PersonaRootContent(
     val link = MainActivity.pendingPairLink.value
     // One toast slot for the window, as iOS: the newest notice replaces the one showing; the host plays its haptic.
     LaunchedEffect(shell) { shell.feedback.notices.collect { toast.show(it) } }
+    // The GitHub star toast owed since first setup finished (#5761): here, so leaving the checklist for the shell keeps it.
+    persona.feature.settings.StarPromptWelcome(toast::show)
     CompositionLocalProvider(LocalAppFeedback provides shell.feedback) {
         Surface(Modifier.fillMaxSize()) {
             Box(Modifier.fillMaxSize()) {

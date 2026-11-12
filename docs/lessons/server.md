@@ -1,5 +1,28 @@
 # Lessons: hub / node and networking
 
+## An app connection's read loop must not wait for a node (2026-11-13, #5915)
+
+`subscribe` and `unsubscribe` called the node (`session.watch` / `session.unwatch`, up to 10 s each) from the app
+connection's only read loop, and the cleanup after a disconnect did the same for each session in turn. While such a
+call waited, nothing else the app sent was read: its `ping`, a phone tool's `tool_result`, terminal keys, and the pong
+of the hub's own protocol ping, so the hub closed a healthy app with `pong_timeout`. No faulty component is needed:
+for 30 s after a manager restart a call for a computer still shown online waits for its node to come back
+(`waitWarm`), and that is when every app subscribes again. One open with a ping behind it took 9.51 s; an open and a
+leave across the hub's ping closed the socket 37 s after it connected.
+
+In the read loop, change only what the hub keeps (the subscription and its count), in the order the messages came,
+and call the node from a goroutine. That is safe because the call is decided by state, not by the message:
+`syncWatch` takes the session's turn (`watchLock`) and looks at the subscriber count when its turn comes, so the
+goroutines may run in any order. The count cannot move to the goroutine too: a leave that ran ahead of its join would
+find nothing to take away, and the join would stay counted for good. What must keep its order with the app's other
+messages (terminal keys) is a one-way `notify` written in place, never a call.
+
+Test it by keeping the node's answer back, waiting until the call is at the node, and then checking that a message
+sent behind it is taken: the fix is told apart by whether the hub reads, not by how long something took. Run the
+scenario through the manager as well, where the wait is the manager's own
+(`server/internal/hub/subscribe_readloop_test.go`). As of this change `fs_watch` still calls the node from the read
+loop (`fsWatchSet`, up to 10 s).
+
 ## A Go file named after a platform builds only there (#5563)
 
 Go reads a file name's last `_<word>` (before `_test`) as a build constraint when the word is a GOOS or GOARCH:
@@ -2028,3 +2051,25 @@ computer every 2 s): the manager allocated 555 MB and used about 2.1 s of CPU a 
 - The node sent an assistant chat's messages to its agent runtime under a `client_msg_id` of its own, new on every call. The runtime protocol lets a runtime put the id it was sent with on the message's item, and the node forwards an item a runtime tied as it is (`echo.go`). So the line carried an id no app had, the app's pending bubble stayed beside it, and the message showed twice: the same failure as #5200, in another place.
 - Hand a message on with the id it came with, or with none. A made-up id deduplicates nothing either: it is new on every retry. A message without an id leaves its line without one, and the apps match it by its words.
 - In-repo runtimes (DSH, Antigravity) did not tie their lines, so nothing showed it. The test that does is a fake runtime that ties its line as the protocol allows (`TestAssistantOnARuntimeSendsTheMessagesOwnID`).
+
+## A wait for a person takes its deadline from the card, not from the bus default (2026-11-13, #5907)
+
+- `callBus` gives up after two minutes when its context has no deadline. That suits a call a program answers. A call
+  that waits for a person is different, and nothing upstream of the hub gives a tool call a deadline: the MCP
+  process's own timeout is not carried over the socket, so `app.call` arrives without `timeout_ms`. A
+  `persona_settings` card good for 15 minutes was withdrawn after 2.
+- It was worse where the wait is relayed. For the manager's own settings the hub calls `extensions.hub_call`, which
+  was not in the hub peer's `Cancels`. The hub's deadline failed the tool call, the manager never heard of it, its
+  card stayed on the phone, and a later approval made the change after the assistant had been told it failed.
+- A call that waits for a card takes its deadline from the card: its `ExpiresAt` plus a margin when the card is the
+  caller's (`waitInteraction`), none of its own when the card is the other side's (`callBusAsIs`, as
+  `managerSettingsTool` does for a change). The margin lets the side that holds the card end it and say how.
+- Whoever may stop waiting on a call that holds a card says so (`Peer.Cancels`), and the side that holds the card
+  makes no change once its caller is gone: check `ctx.Err()` before a change that does not take the context (adding
+  a mail account). The answer and the caller's end can cross, and the queue still hands back an answer it had taken.
+- What the caller is told and what becomes of the card are one assertion: test both ends together. `protocol.md`
+  already said `extensions.hub_call` sent `rpc.cancel`; no test held the code to it.
+- The hub's real bus endpoint runs inside a `testing/synctest` bubble over a `net.Pipe` (`playManager` in
+  `server/internal/hub/settings_card_wait_test.go`), so fifteen minutes pass at once. Give the hub's end a loopback
+  address (the bus refuses plaintext from an address it cannot place), and let what the hub does after a hang-up
+  (`devicesGone` waits half a second) pass in a cleanup: the bubble's clock stops when the test's goroutine is done.

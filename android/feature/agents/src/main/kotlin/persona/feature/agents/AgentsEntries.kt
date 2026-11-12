@@ -123,12 +123,14 @@ fun EntryProviderScope<NavKey>.agentsEntries(
                 rows[key] = row.copy(draft = draft.text, hasAttachments = row.hasAttachments || draft.hasAttachments)
             }
             val creationService = LocalAgentCreationService.current
+            val starPrompt = persona.core.designsystem.LocalStarPrompt.current
             val creationModel = creationService?.let { service ->
                 viewModel(key = "new-agent:${service.scope}:${System.identityHashCode(service)}") {
                     NewAgentViewModel(service, wiring.creationPreferences?.let { AgentCreationPreferences(context, it) }
                         ?: AgentCreationPreferences(context), dependencies.sessions().machines,
                         sender = dependencies.sender(), adopt = dependencies.sessions()::adopt,
-                        usage = dependencies.machines()?.let { m -> { id: String -> m.usageWindows(id) } })
+                        usage = dependencies.machines()?.let { m -> { id: String -> m.usageWindows(id) } },
+                        launched = { starPrompt?.launched() })
                 }
             }
             val groups by dependencies.groups().groups.collectAsStateWithLifecycle()
