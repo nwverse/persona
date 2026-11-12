@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 /// file (cookies.txt, or an extension's JSON). The file is read here, its sites ticked by the user (none at first), and
 /// only the ticked ones go to the hub, which passes them to the Mac and keeps nothing. The Mac must be online.
 /// Three sites or fewer are listed here; more fold behind one summary row that opens them all on their own page
-/// (`BrowserLoginsListView`, #5821, docs/design/DESIGN_SYSTEM.md 3.4「Long lists on a detail page」).
+/// (`BrowserLoginsListView`, #5821, docs/design/DESIGN_SYSTEM.md「Long lists on a detail page」).
 struct BrowserLoginsSection: View {
     @Environment(AppModel.self) private var model
     let ref: MachineRef

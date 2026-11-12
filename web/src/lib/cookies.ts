@@ -152,7 +152,7 @@ export function picked(sites: CookieSite[], ticked: Set<string>): Cookie[] {
 }
 
 /** How many sites a computer's page lists in place; more fold behind one summary row that opens the whole list
- *  (docs/design/DESIGN_SYSTEM.md 3.4 "Long lists on a detail page", #5821). */
+ *  (docs/design/DESIGN_SYSTEM.md ("Long lists on a detail page"), #5821). */
 export const SITES_IN_PLACE = 3;
 
 /** The whole list's order: by name, or the soonest to expire first (expired ones on top, those that end with the browser last). */

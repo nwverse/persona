@@ -32,10 +32,10 @@ nonisolated struct BrowserCookieSite: Codable, Hashable, Sendable, Identifiable 
 
 extension BrowserCookieSite {
     /// Every cookie of the site has expired: its latest one is past.
-    func expired(at now: Date = .now) -> Bool { expires.map { $0 <= now } ?? false }
+    nonisolated func expired(at now: Date = .now) -> Bool { expires.map { $0 <= now } ?? false }
 }
 
-/// A computer's sign-ins on its page (#5821, docs/design/DESIGN_SYSTEM.md 3.4「Long lists on a detail page」): a few are
+/// A computer's sign-ins on its page (#5821, docs/design/DESIGN_SYSTEM.md「Long lists on a detail page」): a few are
 /// listed in place, more fold behind one summary row that opens the whole list, searched by domain and in an order. The
 /// web's lib/cookies.ts (`SITES_IN_PLACE`, `siteList`, `siteSummary`) does the same; BrowserCookiesTests holds this one.
 nonisolated enum BrowserSiteList {

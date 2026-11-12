@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Every browser sign-in of a computer (#5821): what its page folds behind one row once there are more than a few
-/// (docs/design/DESIGN_SYSTEM.md 3.4「Long lists on a detail page」; the web opens the same list in place). Searched by
+/// (docs/design/DESIGN_SYSTEM.md「Long lists on a detail page」; the web opens the same list in place). Searched by
 /// domain, settled a moment after the last key; by name, or the soonest to expire first; expired sites marked. A site
 /// clears from its swipe or its long press, several from Select; every clear asks first. A leaf: nothing is pushed from it.
 struct BrowserLoginsListView: View {

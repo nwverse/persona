@@ -3,7 +3,7 @@
 // cookie file (cookies.txt, or an extension's JSON). The file is read here, its sites ticked by the user (none at first),
 // and only the ticked ones go to the hub, which passes them to the Mac and keeps nothing. The Mac must be online.
 // A few sites are listed in place; more fold behind one summary row that opens the whole list here, with a search, an
-// order and checkboxes (#5821, docs/design/DESIGN_SYSTEM.md 3.4 "Long lists on a detail page").
+// order and checkboxes (#5821, docs/design/DESIGN_SYSTEM.md ("Long lists on a detail page")).
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, enc, errorText, pastHub } from "../../lib/api";
 import { parseCookies, picked, siteExpired, siteList, sitesOf, siteSummary, SITES_IN_PLACE, type CookieSite, type CookieSiteNow, type SiteOrder } from "../../lib/cookies";
