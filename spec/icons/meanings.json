@@ -465,6 +465,10 @@
       "sf": "shield",
       "phosphor": "shield"
     },
+    "pullRequest": {
+      "sf": "arrow.triangle.pull",
+      "phosphor": "git-diff"
+    },
     "queueDown": {
       "sf": "arrowshape.down",
       "phosphor": "arrow-down"
@@ -496,6 +500,10 @@
     "reply": {
       "sf": "arrowshape.turn.up.left",
       "phosphor": "arrow-bend-up-left"
+    },
+    "reported": {
+      "sf": "arrow.up.message",
+      "phosphor": "chat-circle"
     },
     "retry": {
       "sf": "arrow.clockwise",
