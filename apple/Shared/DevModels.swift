@@ -208,6 +208,50 @@ extension APIClient {
     func trashFiles(machine: String, paths: [String], cwd: String) async throws -> [TrashedFile] {
         try await post(mp(machine) + "/files/trash", body: TrashRequest(paths: paths, cwd: cwd), timeout: 130, as: TrashResponse.self).trashed ?? []
     }
+    // New folders, text files and zips (#5828, #5829; docs/protocol/protocol.md "Changing files").
+    private struct MkdirRequest: Encodable { var dir, cwd, name: String }
+    /// Makes folder name in dir; returns its path (absolute).
+    func makeDir(machine: String, dir: String, cwd: String, name: String) async throws -> String {
+        try await post(mp(machine) + "/files/mkdir", body: MkdirRequest(dir: dir, cwd: cwd, name: name), as: RenameResponse.self).path
+    }
+    private struct WriteRequest: Encodable {
+        var path, cwd, text: String
+        var create: Bool?
+        var revision: String?
+        var sha256: String?
+        var force: Bool?
+    }
+    struct WrittenFile: Decodable, Sendable {
+        var path: String
+        var size: Int64
+        var revision: String
+        var mtime: Date?
+    }
+    /// Writes a text file: create makes a new one (409 `exists` when taken); otherwise it replaces the file while it is
+    /// still at revision (or hashes to sha256), else 409 `file_changed`; force: Overwrite Anyway.
+    func writeFile(machine: String, path: String, cwd: String, text: String, create: Bool = false, revision: String? = nil,
+                   sha256: String? = nil, force: Bool = false) async throws -> WrittenFile {
+        try await post(mp(machine) + "/files/write",
+                       body: WriteRequest(path: path, cwd: cwd, text: text, create: create ? true : nil, revision: revision,
+                                          sha256: sha256, force: force ? true : nil),
+                       timeout: 60, as: WrittenFile.self)
+    }
+    private struct ZipRequest: Encodable {
+        var paths: [String]
+        var cwd: String
+        var dir: String?
+        var name: String
+    }
+    struct ZippedFile: Decodable, Sendable {
+        var path: String
+        var name: String
+        var size: Int64
+        var files: Int
+    }
+    /// Zips paths into dir as name, or with no dir into a temporary file on the computer for a download.
+    func zipFiles(machine: String, paths: [String], cwd: String, dir: String?, name: String) async throws -> ZippedFile {
+        try await post(mp(machine) + "/files/zip", body: ZipRequest(paths: paths, cwd: cwd, dir: dir, name: name), timeout: 610, as: ZippedFile.self)
+    }
     private struct RestoreRequest: Encodable {
         var trashIDs: [String]
         enum CodingKeys: String, CodingKey { case trashIDs = "trash_ids" }
