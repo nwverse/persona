@@ -17,6 +17,7 @@ import persona.core.contracts.api.AssistantManagement
 import persona.core.contracts.api.AssistantRepository
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PersonaIcons
+import persona.core.domain.ConversationTitle
 
 /**
  * What the conversation history keeps of its own edits, for the Persona page's list and the app's sidebar alike (iOS
@@ -155,14 +156,16 @@ internal fun RenameConversationDialog(session: Session, onDismiss: () -> Unit, o
 /**
  * Archived (iOS `ArchivedConversationsView`): the conversations archived from the list (or by Persona), newest first. A tap
  * opens one; a swipe left, its Unarchive or a long press brings it back into the list. Nothing here deletes. The rows are
- * the Agents archive's (`AgentArchivesScreen`): the title, when, and the action at the end.
+ * the Agents archive's (`AgentArchivesScreen`): the title (on Glass a hub title's day and kind quiet before its topic), when
+ * as the history says it ([historyTime]), and the action at the end.
  */
 @Composable
 internal fun ArchivedConversationsSheet(
     sessions: List<Session>, onDismiss: () -> Unit, onOpen: (Session) -> Unit, onUnarchive: (Session) -> Unit,
 ) {
     val words = conversationWords()
-    val locale = currentLocale
+    val resources = androidx.compose.ui.platform.LocalResources.current
+    val glass = PersonaTheme.style == AppStyle.Glass
     val unarchive = stringResource(R.string.assistant_unarchive)
     var menu by remember { mutableStateOf<Session?>(null) }
     JSheet(onDismiss, title = stringResource(R.string.assistant_archived)) {
@@ -171,7 +174,10 @@ internal fun ArchivedConversationsSheet(
         else LazyColumn(Modifier.weight(1f, fill = false).testTag("archived-conversations")) {
             items(sessions, key = { it.key.path }) { session ->
                 JSwipeActions(end = SwipeAction(unarchive, PersonaIcons.unarchive, Status.Working, { onUnarchive(session) })) {
-                    JRow(session.conversationTitle(words), subtitle = conversationTime(session.updated, locale),
+                    // A hub title's day and kind in the quiet ink, the topic after it (iOS `ConversationTitle`); Glass.
+                    val title = session.conversationTitle(words)
+                    val dated = if (glass) ConversationTitle.parse(title) else null
+                    JRow(dated?.topic ?: title, titleLead = dated?.head, subtitle = historyTime(session.updated, resources),
                         onClick = { onOpen(session) }, onLongClick = { menu = session }, trailing = {
                             JButton(unarchive, { onUnarchive(session) }, kind = JButtonKind.Quiet, size = JButtonSize.Small)
                         })

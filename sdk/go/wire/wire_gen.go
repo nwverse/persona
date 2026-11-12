@@ -341,12 +341,25 @@ func (v Contributes) MarshalJSON() ([]byte, error) {
 }
 
 // SkillItem: A skill (docs "Declarative contributions"): a directory of the package with SKILL.md, put in with the
-// assistant's skills.
+// assistant's skills. With source data (docs "Assistant content from the data directory"): a directory of the
+// extension's data directory whose subdirectories with a SKILL.md are skills its program writes (Markdown files only,
+// 256 KB and 32 skills per extension).
 type SkillItem struct {
 	ID string `json:"id"`
-	// The directory, relative to the package.
-	Dir string `json:"dir"`
+	// The directory, relative to the package (or to the data directory with source data).
+	Dir    string `json:"dir"`
+	Source string `json:"source,omitempty"`
 }
+
+// ContentSource: where a skill's or a prompt's files are: package (the default) or data, the extension's data
+// directory, which its program writes and upgrades keep.
+const (
+	ContentSourcePackage = "package"
+	ContentSourceData    = "data"
+)
+
+// ContentSources are the values of ContentSource, in order.
+var ContentSources = []string{"package", "data"}
 
 // Values of PromptKind.
 const (
@@ -357,12 +370,13 @@ const (
 // PromptKinds are the values of PromptKind, in order.
 var PromptKinds = []string{"instructions", "quick"}
 
-// PromptItem: A prompt: instructions (a .md of the package added to the assistant's CLAUDE.md) or quick (a template
-// the apps offer in the message box).
+// PromptItem: A prompt: instructions (a .md of the package, or with source data of the data directory, added to the
+// assistant's CLAUDE.md) or quick (a template the apps offer in the message box).
 type PromptItem struct {
-	ID   string `json:"id"`
-	Kind string `json:"kind"`
-	// instructions: the .md file.
+	ID     string `json:"id"`
+	Kind   string `json:"kind"`
+	Source string `json:"source,omitempty"`
+	// instructions: the .md file (with source data: at most 6 KB, adopted at most once a day).
 	File string `json:"file,omitempty"`
 	// quick: what the apps show.
 	Title string `json:"title,omitempty"`
@@ -4833,10 +4847,10 @@ type ModelRefusal struct {
 	Usage      ModelUsage `json:"usage"`
 }
 
-// AssistantErrorCode: error.code of the assistant calls besides permission_denied (data {scope: "assistant.read"}):
-// invalid_params; not_found (assistant.messages: no such conversation in the assistant's own space);
-// assistant_offline (the manager is away: try again); machine_offline (the assistant's computer is not connected or
-// not set up: try again).
+// AssistantErrorCode: error.code of the assistant calls besides permission_denied (data {scope: "assistant.read"}, or
+// "assistant.memory.read" for assistant.memory): invalid_params; not_found (assistant.messages: no such conversation
+// in the assistant's own space); assistant_offline (the manager is away: try again); machine_offline (the assistant's
+// computer is not connected or not set up: try again).
 const (
 	AssistantErrorCodeInvalidParams    = "invalid_params"
 	AssistantErrorCodeNotFound         = "not_found"
@@ -4913,11 +4927,112 @@ const (
 // AssistantRoles are the values of AssistantRole, in order.
 var AssistantRoles = []string{"user", "assistant"}
 
+// AssistantMemoryParams: assistant.memory (assistant.memory.read): the assistant's memory entries of its own space
+// (never the health space's), by name. Read-only.
+type AssistantMemoryParams struct {
+	// Return each entry's text too: cut at 16 KB each, and left out once a page holds 512 KB of text (truncated says
+	// so).
+	IncludeContent bool `json:"include_content,omitempty"`
+}
+
+type AssistantMemoryEntry struct {
+	// The entry's file name.
+	Name string `json:"name"`
+	// The frontmatter's description; empty without one.
+	Description string `json:"description,omitempty"`
+	// The frontmatter's type (or metadata.type); empty without one.
+	Type string `json:"type,omitempty"`
+	// The file's size in bytes.
+	Size int `json:"size"`
+	// When the file was made, where the computer's file system keeps it.
+	Created  time.Time `json:"created,omitzero"`
+	Modified time.Time `json:"modified"`
+	// With include_content: the text, perhaps cut.
+	Content string `json:"content,omitempty"`
+	// content was cut or left out for its size.
+	Truncated bool `json:"truncated,omitempty"`
+}
+
+// AssistantMemoryResult: an assistant without memory (none written yet, or the feature off) has no entries.
+type AssistantMemoryResult struct {
+	Entries []AssistantMemoryEntry `json:"entries"`
+}
+
 // AssistantMessagesResult: next_seq is set while there is more to read (pass it as after_seq), even when this page
 // has no messages.
 type AssistantMessagesResult struct {
 	Messages []AssistantMessage `json:"messages"`
 	NextSeq  *int               `json:"next_seq,omitempty"`
+}
+
+// AssistantDataStatusParams: assistant.data_status takes no parameters.
+type AssistantDataStatusParams struct {
+}
+
+// AssistantDataState: what the assistant reads of the contribution: adopted (the content as it is now; skills: sent),
+// pending (instructions: an older version, the new one waits for next_adopt_at), kept (instructions: an older
+// version, the new one cannot be used, see reason), none (nothing: none written yet, none usable, or the extension or
+// contribution is switched off).
+const (
+	AssistantDataStateAdopted = "adopted"
+	AssistantDataStatePending = "pending"
+	AssistantDataStateKept    = "kept"
+	AssistantDataStateNone    = "none"
+)
+
+// AssistantDataStates are the values of AssistantDataState, in order.
+var AssistantDataStates = []string{"adopted", "pending", "kept", "none"}
+
+// AssistantDataReason: why what the assistant reads is not the content as it is now: too_large (over its limit),
+// invalid (not UTF-8 text), not_regular (not a plain file inside the data directory: a directory, or a link out of
+// it), unreadable, rate_limited (a new version of instructions waits for its turn), disabled (the extension is
+// switched off or cannot run), switched_off (this contribution is switched off).
+const (
+	AssistantDataReasonTooLarge    = "too_large"
+	AssistantDataReasonInvalid     = "invalid"
+	AssistantDataReasonNotRegular  = "not_regular"
+	AssistantDataReasonUnreadable  = "unreadable"
+	AssistantDataReasonRateLimited = "rate_limited"
+	AssistantDataReasonDisabled    = "disabled"
+	AssistantDataReasonSwitchedOff = "switched_off"
+)
+
+// AssistantDataReasons are the values of AssistantDataReason, in order.
+var AssistantDataReasons = []string{"too_large", "invalid", "not_regular", "unreadable", "rate_limited", "disabled", "switched_off"}
+
+// AssistantDataItem: one data contribution of the extension.
+type AssistantDataItem struct {
+	// Its id, as the manifest has it.
+	Contribution string `json:"contribution"`
+	// instructions or skills.
+	Kind string `json:"kind"`
+	// Its file or directory, relative to the data directory.
+	Path string `json:"path"`
+	// The most it may weigh, in bytes.
+	Limit int `json:"limit"`
+	// What it weighs now (all files, for skills).
+	Bytes  int    `json:"bytes"`
+	State  string `json:"state"`
+	Reason string `json:"reason,omitempty"`
+	// The rest of a file's problem, for logs.
+	Detail string `json:"detail,omitempty"`
+	// The digest of the content as it is now (instructions: the cleaned text, the first 16 hex digits of its sha256;
+	// skills: of every skill's name and digest).
+	Hash string `json:"hash,omitempty"`
+	// instructions: the digest of the text the assistant reads (for a contribution or extension switched off: read
+	// last); empty when that is no text.
+	AdoptedHash string `json:"adopted_hash,omitempty"`
+	// instructions: when that text was adopted (RFC 3339).
+	AdoptedAt string `json:"adopted_at,omitempty"`
+	// instructions, state pending: the new version is adopted by then at the latest (RFC 3339); sooner when the hub's
+	// own instructions change or the user applies it.
+	NextAdoptAt string `json:"next_adopt_at,omitempty"`
+	// skills: the skills sent.
+	Skills []string `json:"skills,omitempty"`
+}
+
+type AssistantDataStatusResult struct {
+	Items []AssistantDataItem `json:"items"`
 }
 
 type StorageEmptyParams struct {
@@ -6130,7 +6245,13 @@ var newDef = map[string]func() any{
 	"AssistantConversationsResult":  func() any { return new(AssistantConversationsResult) },
 	"AssistantMessagesParams":       func() any { return new(AssistantMessagesParams) },
 	"AssistantMessage":              func() any { return new(AssistantMessage) },
+	"AssistantMemoryParams":         func() any { return new(AssistantMemoryParams) },
+	"AssistantMemoryEntry":          func() any { return new(AssistantMemoryEntry) },
+	"AssistantMemoryResult":         func() any { return new(AssistantMemoryResult) },
 	"AssistantMessagesResult":       func() any { return new(AssistantMessagesResult) },
+	"AssistantDataStatusParams":     func() any { return new(AssistantDataStatusParams) },
+	"AssistantDataItem":             func() any { return new(AssistantDataItem) },
+	"AssistantDataStatusResult":     func() any { return new(AssistantDataStatusResult) },
 	"StorageEmptyParams":            func() any { return new(StorageEmptyParams) },
 	"StorageRequestResult":          func() any { return new(StorageRequestResult) },
 	"StorageKeyParams":              func() any { return new(StorageKeyParams) },
@@ -6251,6 +6372,8 @@ var Calls = map[string]Call{
 	"model.complete":                 {Name: "model.complete", From: "program", Params: "ModelCompleteParams", Result: "ModelCompleteResult"},
 	"assistant.conversations":        {Name: "assistant.conversations", From: "program", Params: "AssistantConversationsParams", Result: "AssistantConversationsResult"},
 	"assistant.messages":             {Name: "assistant.messages", From: "program", Params: "AssistantMessagesParams", Result: "AssistantMessagesResult"},
+	"assistant.memory":               {Name: "assistant.memory", From: "program", Params: "AssistantMemoryParams", Result: "AssistantMemoryResult"},
+	"assistant.data_status":          {Name: "assistant.data_status", From: "program", Params: "AssistantDataStatusParams", Result: "AssistantDataStatusResult"},
 	"storage.request":                {Name: "storage.request", From: "program", Params: "StorageEmptyParams", Result: "StorageRequestResult"},
 	"storage.get":                    {Name: "storage.get", From: "program", Params: "StorageKeyParams", Result: "StorageEntry"},
 	"storage.list":                   {Name: "storage.list", From: "program", Params: "StorageListParams", Result: "StorageListResult"},
