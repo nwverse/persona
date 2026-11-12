@@ -483,7 +483,8 @@ list. The provider settings (the add-a-provider steps, the connection test and t
 chat's subagent and workflow cards (`web/src/views/chat/TaskCard.tsx`, after cindy's `AgentTaskCard`: layout, states and
 wording) and the main chat's hand-off cards with the way-back strip on an Agent's page (`web/src/views/assistant/Handoff.tsx`,
 `web/src/views/chat/HandoffBack.tsx`, after cindy's `SessionHandoffCard` and its return pill: layout, states and wording)
-follow cindy's design. No code is copied for those.
+and a lead's Team side panel (`web/src/views/chat/TeamPanel.tsx`, after cindy's Team tab, `OrcaWorkerPanel` and its worker
+strip: layout, states, wording and when it opens) follow cindy's design. No code is copied for those.
 
 The web chat's work summary follows cindy's chat at the owner's request (2026-11-12): the timeline inside an opened
 summary (`web/src/lib/work-groups.ts`, after `createCompletedWorkGroup` in `messageWorkGroups.ts`), the thought rows
