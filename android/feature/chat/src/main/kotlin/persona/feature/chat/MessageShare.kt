@@ -386,7 +386,7 @@ internal fun MessageShareContent(message: MessagePicture, onDismiss: () -> Unit,
             }
         }) { padding ->
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(padding)
-                .padding(horizontal = Tokens.Space.xl, vertical = Tokens.Space.l), horizontalAlignment = Alignment.CenterHorizontally) {
+                .padding(start = Tokens.Space.xl, end = Tokens.Space.xl, top = Tokens.Space.xxl, bottom = Tokens.Space.l), horizontalAlignment = Alignment.CenterHorizontally) {
                 ShareCardPicture(message, dark, layer, Modifier.clip(RoundedCornerShape(Tokens.Radius.card)))
             }
         }
