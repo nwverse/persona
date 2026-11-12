@@ -1490,7 +1490,7 @@ Specification in [assistant-views.md](../assistant/assistant-views.md). Uses the
 - `open`: https opens App link card; `persona://session/…` converts to App link; task/kb/file currently say "This target isn't available on Android yet", never hand to another App.
 - Exact hub-format trailing `<persona-action view=… action=…>{"values":{…}}</persona-action>` in user message is hidden and bubble labeled From card; other positions, extra attributes or non-string values are not recognized.
 - Answers require hello `assistant_views` (`HttpTasksApi.features` follows same connection's `serverFeatures`): reply, submit, search, filter, load more;
-  HTML bridge also needs `assistant_html_bridge`. Old hub, disabled `persona_view`, or no hello (unknown capabilities) means render-only, no requests (`AssistantCardActions` also blocks with `Unsupported`);
+  HTML bridge also needs `assistant_html_bridge`. An old hub (one with its `persona_view` switch off included, from before #5509), or no hello (unknown capabilities) means render-only, no requests (`AssistantCardActions` also blocks with `Unsupported`);
   open/push/pop local actions still work. A later hello adding capability makes existing card actionable in place.
 - Search/filter/load more are card replies. Extension `ExtensionSearchBar` records `q` while typing, no debounce auto-send; adjacent Search (`SearchSubmit`, absent if extension supplies none, preserving extension behavior) sends search action + `q`; selecting filter sends `q` and filter value.
   Submit includes all page fields, `q`, filters per hub rules (`AssistantCard.fields`). Load more is a tap-only button (extension load-more auto-requests when visible, not allowed here).

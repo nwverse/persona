@@ -27,7 +27,6 @@ func TestInlineViewsUseOnlyTrustedAssistantItems(t *testing.T) {
 	}
 	t.Cleanup(database.Close)
 	f := newFakeHub().withMachine()
-	f.hello.PersonaView = true
 	conversation := "inline-" + randomHex(8)
 	f.setSessions("server", proto.Session{SessionID: conversation, Assistant: true}, proto.Session{SessionID: "ordinary", Assistant: false})
 	s := newServiceOn(t, f, database)
@@ -127,7 +126,6 @@ func TestInlineTurnRegistersWithoutAnAppAndReadsFullText(t *testing.T) {
 	if err != nil || len(keys) != 0 {
 		t.Fatalf("disabled keys %v %v", keys, err)
 	}
-	f.hello.PersonaView = true
 	s.registerInlineTurn(ctx, SessionRef{MachineID: "server", SessionID: "ordinary"})
 	keys, err = database.AssistantViewBlockKeys(ctx, "ordinary")
 	if err != nil || len(keys) != 0 {

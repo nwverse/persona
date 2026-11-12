@@ -1991,7 +1991,7 @@ it records off-screen ones and draws them when they appear.
 
 Cards in assistant replies use the same components and renderer as extension Views (but are not interactive: `action`, `push`, `field`, `search`, `filter` and `more` have no effect in assistant cards; links work as usual).
 
-- **```` ```persona-view ````**: a View (`{"sections": […]}`) in a code block, or a component directly (`{"type": "metric", …}`). When hub.json has `assistant.persona_view: true`, the assistant prompt teaches it to write these
+- **```` ```persona-view ````**: a View (`{"sections": […]}`) in a code block, or a component directly (`{"type": "metric", …}`). The assistant prompt teaches it to write these
   (`prompts/assistant/claude_md.md`); off by default, to be enabled once every client can draw UI version 3.
 - **```` ```persona-card ````** (#886, old format) still renders: clients **convert it to components** before drawing. The rules are documented in `sdk/go/wire/personacard.go` (the Go reference implementation), consistently across all four clients;
   `schema/extension/examples/persona-card/` contains cases (card → expected View; `null` means it cannot be drawn and stays a code block; iOS shows such a card in words, see below), used by each client's tests:
