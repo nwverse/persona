@@ -115,8 +115,10 @@ class Router(
             "extension" -> {
                 val extension = parameters["extension"] ?: return null
                 val ui = parameters["ui"]
-                if (ui == null) ExtensionRoute(extension, manager = parameters["manager"])
-                else ExtensionUiRoute(extension, ui, parameters["title"].orEmpty(), parameters["state"],
+                if (ui == null) {
+                    if (parameters["trigger"] != "content") return null
+                    ExtensionRoute(extension, manager = parameters["manager"])
+                } else ExtensionUiRoute(extension, ui, parameters["title"].orEmpty(), parameters["state"],
                     manager = parameters["manager"], notificationActionToken = parameters["notification"])
             }
             "inbox" -> InboxItemRoute(parameters["item"] ?: return null)

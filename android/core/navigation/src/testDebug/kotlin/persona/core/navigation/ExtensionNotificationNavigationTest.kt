@@ -15,7 +15,7 @@ class ExtensionNotificationNavigationTest {
     }
 
     @Test fun notificationWithoutUiOpensTheExtensionDetailsInsteadOfInventingAPage() {
-        val route = router.parse(RouteInput.DeepLink("persona://open?target=extension&extension=example-gateway&manager=assistant"))!!
+        val route = router.parse(RouteInput.DeepLink("persona://open?target=extension&extension=example-gateway&manager=assistant&trigger=content"))!!
         assertEquals(ExtensionRoute("example-gateway", manager = "assistant"), route.key)
     }
 
