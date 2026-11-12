@@ -79,7 +79,7 @@ type NotifyPrefs struct {
 	// `personad notify`) skips this device; the hub's own (pairing, a computer joining, updates) and the Live Activity
 	// are no manager's and still come.
 	MutedManagers []string `json:"muted_managers"`
-	// Widgets: the app has Persona's Home Screen widgets (docs/apple/home-widgets.md): while it is not open, the hub
+	// Widgets: the app has Persona's Home Screen widgets (#5664): while it is not open, the hub
 	// wakes it to write them again when the agents' counts change (widget_wake.go). Set by the app; false from an older one.
 	Widgets bool `json:"widgets,omitempty"`
 }

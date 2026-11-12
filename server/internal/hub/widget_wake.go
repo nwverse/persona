@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// The Home Screen widgets (docs/apple/home-widgets.md, #5721) draw only what the iPhone app last wrote into its App
+// The Home Screen widgets (#5664, #5721) draw only what the iPhone app last wrote into its App
 // Group. While the app is open it writes on every change; when it is not, the hub wakes it with a silent push
 // (wakeDevices "widgets", the push the phone_* tools use) when what the widgets count changes, and the app writes again.
 // Background pushes are budgeted by iOS (a few an hour) and never reach an app the user force-quit, so:
