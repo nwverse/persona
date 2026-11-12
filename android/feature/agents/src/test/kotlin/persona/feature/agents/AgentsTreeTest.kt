@@ -133,6 +133,38 @@ class AgentsTreeTest {
         assertEquals(listOf("group:repo/mac//code/app", "group:tree/mac//code/notes"), folded.take(2).map { it.key })
     }
 
+    @Test fun byRepositoryOnGlassPutsEachRepositoryInACardWithItsLinesAndRowsAtTheirLevel() {
+        // iOS `repoCard` (#4338 A7): a card per repository, the header level 0, a working tree's line 1 with its agents at
+        // its level; a repository with its main checkout alone has its agents a level in under its header.
+        fun at(id: String, cwd: String, state: String, machine: String = "mac") = AgentSession(Session(machineId = machine, sessionId = id,
+            state = state, cwd = cwd, updatedAt = "2026-01-01T00:00:00Z"))
+        val rows = listOf(at("main", "/code/app", "working"), at("fix", "/code/app/.worktrees/fix", "needs_you"),
+            at("notes", "/code/notes", "unread"), at("old", "/code/old", "idle"), at("api", "/srv/api", "working", machine = "box"))
+        val entries = agentTreeEntries(buildAgentList(rows, machines, settings = AgentListSettings(grouping = AgentGrouping.Repo)), "")
+        val slots = repoCardSlots(entries)
+        assertEquals(listOf("machine-header:machine/mac", "group:repo/mac//code/app", "group:tree/mac//code/app", "session:mac/main",
+            "group:tree/mac//code/app/.worktrees/fix", "session:mac/fix", "group:tree/mac//code/notes", "session:mac/notes",
+            "group:tree/mac//code/old", "machine-header:machine/box", "group:tree/box//srv/api", "session:box/api"), entries.map { it.key })
+        assertNull("a computer's heading is outside the cards", slots["machine-header:machine/mac"])
+        assertEquals(RepoCardSlot(first = true, last = false, level = 0), slots["group:repo/mac//code/app"])
+        assertEquals(RepoCardSlot(first = false, last = false, level = 1), slots["group:tree/mac//code/app"])
+        assertEquals(RepoCardSlot(first = false, last = false, level = 1), slots["session:mac/main"])
+        assertEquals(RepoCardSlot(first = false, last = true, level = 1), slots["session:mac/fix"])
+        // The main checkout alone: its agent a level in under the repository's header.
+        assertEquals(RepoCardSlot(first = true, last = false, level = 0), slots["group:tree/mac//code/notes"])
+        assertEquals(RepoCardSlot(first = false, last = true, level = 1), slots["session:mac/notes"])
+        // A quiet repository starts folded: its header is the whole card.
+        assertEquals(RepoCardSlot(first = true, last = true, level = 0), slots["group:tree/mac//code/old"])
+        assertEquals(RepoCardSlot(first = false, last = true, level = 1), slots["session:box/api"])
+        // Folded, a repository's card is its header alone.
+        val folded = repoCardSlots(agentTreeEntries(buildAgentList(rows, machines,
+            settings = AgentListSettings(grouping = AgentGrouping.Repo, folded = setOf("repo/mac//code/app"))), ""))
+        assertEquals(RepoCardSlot(first = true, last = true, level = 0), folded["group:repo/mac//code/app"])
+        assertNull(folded["session:mac/main"])
+        // Other groupings have no cards.
+        assertTrue(repoCardSlots(agentTreeEntries(buildAgentList(rows, machines, settings = MachineSpaceTree), "")).isEmpty())
+    }
+
     @Test fun aSharedCheckoutPathKeepsEachRepositoryAndItsSessionsInTheTree() {
         val path = "/home/user"
         fun at(id: String, repo: String) = AgentSession(Session(machineId = "mac", sessionId = id,
