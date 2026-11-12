@@ -1157,7 +1157,7 @@ private fun ChatPage(
                             if (historyOnly) footer?.invoke()
                             else if (readOnly) Text(stringResource(R.string.chat_screen_subagent_read_only), Modifier.padding(Tokens.Space.m), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
                             else {
-                                // What waits in the agent's queue sits right above the composer, while the composer shows (Agents only, as iOS).
+                                // What waits in the agent's queue sits right above the composer, while the composer shows (Persona's further down).
                                 // Not while a "/" quick message is being picked: the list opens above the field, and with the
                                 // keyboard up the queue, the list and the status line together climbed over the top bar.
                                 if (renderStyle != ChatRenderStyle.Assistant && SlashCommand.suggestions(composer.value.text, clear = true).isEmpty())
@@ -1186,11 +1186,16 @@ private fun ChatPage(
                                         backgroundRecords = host.backgroundRecords.isNotEmpty(), onBackground = host.onOpenBackground,
                                         under = computerPill?.let { pill -> { pill(Modifier) } },
                                         groupByOrigin = foldsBackground)
+                                    // Where the next message goes, never only inside the In progress tray (iOS RouteChip, #4339 C15).
+                                    TaskRouteChip(host)
                                 }
-                                // Persona's cards under its entries and over the composer (DESIGN_SYSTEM.md 4.8, #4339 C10).
+                                // Persona's cards under its entries and the route chip, over its queue and the composer, as iOS's
+                                // footer has them (DESIGN_SYSTEM.md 4.8, #4339 C10).
                                 if (renderStyle == ChatRenderStyle.Assistant) pendingCards(keyboard)
-                                // Where the next message goes, with the composer, never only inside the In progress tray (iOS RouteChip, #4339 C15).
-                                if (renderStyle == ChatRenderStyle.Assistant) taskHost?.let { TaskRouteChip(it) }
+                                // Persona's queue: its own messages, then those relayed from elsewhere, under its entries and right
+                                // above the composer, as iOS's footer has it (Glass, #4339 C6).
+                                if (renderStyle == ChatRenderStyle.Assistant && glass && SlashCommand.suggestions(composer.value.text, clear = true).isEmpty())
+                                    ChatQueueStrip(session, chrome.actions, composer, { notice = it }, sessions::refresh)
                                 val claudeCommands = session?.canTypeClaudeCommands == true
                                 ChatComposer(key, composer, session?.status == "working", sending || submittedDraft != null,
                                     // /clear and /model type into Claude's pane: Claude in a terminal engine only (positive check).
