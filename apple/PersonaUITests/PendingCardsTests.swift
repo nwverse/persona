@@ -29,7 +29,7 @@ final class PendingCardsTests: XCTestCase {
         app.launchPinned()
     }
 
-    private func launchMainQuestion(_ scheme: String? = nil, hubKey: String = "PERSONA_MOCK_HUB") {
+    private func launchMainQuestion(_ scheme: String? = nil, hubKey: String = "PERSONA_MOCK_HUB", largestText: Bool = false) {
         let hub = ProcessInfo.processInfo.environment[hubKey]!
         _ = try? Data(contentsOf: URL(string: hub + "/mock/reset")!)
         app = XCUIApplication()
@@ -37,6 +37,7 @@ final class PendingCardsTests: XCTestCase {
         app.launchArguments = ["-pairURL", pair, "-app.tab", "assistant", "-tab", "assistant",
                                "-openAssistant", Self.askLong, "-openChatsFresh", "YES"]
         if let scheme { app.launchArguments += ["-ui.scheme", scheme] }
+        if largestText { app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] }
         app.launchPinned()
     }
 
@@ -156,8 +157,8 @@ final class PendingCardsTests: XCTestCase {
     /// A long ask_user card in Persona's main conversation (#4839): its action row is usable on arrival, before any
     /// scrolling, and a drag through the options neither picks one nor advances to the next question.
     func testLongQuestionActionsAreVisibleWithoutScrolling() {
-        for scheme in ["light", "dark"] {
-            launchMainQuestion(scheme)
+        for scheme in ["light", "dark", "largest"] {
+            launchMainQuestion(scheme == "largest" ? nil : scheme, largestText: scheme == "largest")
             XCTAssertTrue(app.staticTexts["这周先处理哪件事？"].firstMatch.waitForExistence(timeout: 20), "no long question")
             let first = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "选项 1")).firstMatch
             XCTAssertTrue(first.waitForExistence(timeout: 5), "no first option")
@@ -167,10 +168,10 @@ final class PendingCardsTests: XCTestCase {
             XCTAssertTrue(cards.exists, "the cards' area")
             let action = app.buttons.matching(NSPredicate(format: "label IN %@", ["提交", "Submit"])).firstMatch
             XCTAssertTrue(action.waitForExistence(timeout: 5), "no Submit:\n\(app.debugDescription)")
-            shot("long-question-actions-\(scheme)")
             XCTAssertTrue(action.isEnabled, "Submit is not enabled after a deliberate pick")
             XCTAssertTrue(action.isHittable && cards.frame.insetBy(dx: -1, dy: -1).contains(action.frame),
                           "Submit needs scrolling first (\(action.frame) in \(cards.frame))")
+            shot("long-question-actions-\(scheme)")
             action.tap()
             let deadline = Date().addingTimeInterval(10)
             while resolutionCount("ix_ask_long") == before && Date() < deadline { usleep(300_000) }
@@ -200,8 +201,8 @@ final class PendingCardsTests: XCTestCase {
 
     func testLongReviewActionsAreVisibleWithoutScrolling() throws {
         let hub = try XCTUnwrap(ProcessInfo.processInfo.environment["PERSONA_REVIEW_HUB"])
-        for scheme in ["light", "dark"] {
-            launchMainQuestion(scheme, hubKey: "PERSONA_REVIEW_HUB")
+        for scheme in ["light", "dark", "largest"] {
+            launchMainQuestion(scheme == "largest" ? nil : scheme, hubKey: "PERSONA_REVIEW_HUB", largestText: scheme == "largest")
             let before = resolutionCount("ix_ask_long", hub: hub)
             for n in 1...6 {
                 let question = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "第 \(n) 题")).firstMatch
@@ -214,7 +215,6 @@ final class PendingCardsTests: XCTestCase {
             if !submit.waitForExistence(timeout: 2) { app.buttons["提交"].firstMatch.tap() }
             XCTAssertTrue(submit.waitForExistence(timeout: 5), "no long review:\n\(app.debugDescription)")
             let cards = app.scrollViews["pending-cards"]
-            shot("long-review-actions-\(scheme)")
             var reachable = false
             let hitDeadline = Date().addingTimeInterval(5)
             while Date() < hitDeadline {
@@ -227,6 +227,7 @@ final class PendingCardsTests: XCTestCase {
             let submitFrame = submit.frame
             XCTAssertTrue(submit.isEnabled, "review Submit is disabled")
             XCTAssertTrue(reachable, "review Submit needs scrolling first (\(submitFrame) in \(cards.frame))")
+            shot("long-review-actions-\(scheme)")
             // Tap its visible centre directly: XCUIElement.tap() may first try to make a nested-scroll child hittable.
             app.coordinate(withNormalizedOffset: .zero)
                 .withOffset(CGVector(dx: submitFrame.midX, dy: submitFrame.midY)).tap()
