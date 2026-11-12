@@ -267,7 +267,7 @@ Chat page:
   (/clear uses existing confirmation); an exact inserted command such as /context does not reopen the list until draft changes. Beyond 5½ rows scroll internally.
   Assistant chats have none, like web. In `Composer` VStack, not overlay, because the composer's own hosting controller makes out-of-bounds overlays untappable (#518).
   + Shortcuts unchanged; `-openSlashMenu YES` screenshots, `PersonaUITests/SlashMenuTests` both layouts.
-- **Typing @ offers files, folders and sessions** (#2319, matches web `MentionMenu` / `lib/mentions.ts`): in `ShellComposerBar` (Agent and assistant chats, and the shell's
+- **Typing @ offers files, folders and sessions** (#2319, matches web `ComposerPanel` / `lib/mentions.ts`): in `ShellComposerBar` (Agent and assistant chats, and the shell's
   new conversation, `StarterComposer`), an `@word` before the caret, at the start or after whitespace (an e-mail address opens nothing) and not while the keyboard still
   has marked text (Pinyin; `TypedText.composingFocused`), shows `ComposerMentionMenu` above the input where `SlashMenu` sits: the files this chat's tools read or wrote
   (at most 12, newest first, read once per opening), the session folder's entries (at most 12, folders first; `listDir`, the web's `/fs`, cached while the list is open),
