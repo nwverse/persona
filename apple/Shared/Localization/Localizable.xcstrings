@@ -2736,6 +2736,52 @@
         }
       }
     },
+    "%@ key": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ key"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "「%1$@」のキー"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "「%1$@」的 Key"
+          }
+        }
+      }
+    },
+    "%@ key on %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ key on %2$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%2$@の「%1$@」のキー"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%2$@ 上「%1$@」的 Key"
+          }
+        }
+      }
+    },
     "%@ needs you" : {
       "localizations" : {
         "en" : {
@@ -2804,6 +2850,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "%@ on %@ [Handoff Rule]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ on %2$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%2$@の「%1$@」"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%2$@ 上的「%1$@」"
+          }
+        }
+      }
     },
     "%@ on %@: %lld tasks interrupted" : {
       "extractionState" : "manual",
@@ -18811,6 +18880,29 @@
       },
       "extractionState" : "manual"
     },
+    "Always Allow %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Always Allow %1$@."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "常に許可：%1$@。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "总是允许：%1$@。"
+          }
+        }
+      }
+    },
     "Always Allow in Session" : {
       "localizations" : {
         "en" : {
@@ -19108,6 +19200,29 @@
       },
       "extractionState" : "manual"
     },
+    "Always for Agents": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Always for Agents"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agent に常に渡す"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "总是交给 Agent"
+          }
+        }
+      }
+    },
     "Ambient" : {
       "localizations" : {
         "en" : {
@@ -19150,6 +19265,75 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Agent 还能回答它所在项目的情况。工作电脑上的会话、从不先问就动手的会话不能参会。"
+          }
+        }
+      }
+    },
+    "An Agent gets these for this run only:": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "An Agent gets these for this run only:"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agent が今回の実行だけ受け取ります："
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agent 只在这一次运行中拿到："
+          }
+        }
+      }
+    },
+    "An Agent on %@ gets these for this run only:": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "An Agent on %1$@ gets these for this run only:"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ の Agent が今回の実行だけ受け取ります："
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ 上的 Agent 只在这一次运行中拿到："
+          }
+        }
+      }
+    },
+    "An Agent with this launcher on this computer gets the value without asking, when you start it yourself. Swipe a rule to remove it.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "An Agent with this launcher on this computer gets the value without asking, when you start it yourself. Swipe a rule to remove it."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このコンピュータでこのランチャーを使い、あなたが自分で始めた Agent は確認なしで値を受け取ります。ルールをスワイプすると削除できます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在这台电脑上用这个启动器、由你自己发起的 Agent 会直接拿到值，不再询问。左滑一条规则即可移除。"
           }
         }
       }
@@ -20609,6 +20793,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Approve it on its card in the chat.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Approve it on its card in the chat."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "チャットのカードで承認してください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请在聊天里的卡片上批准。"
+          }
+        }
+      }
     },
     "Approve, Auto-Accept Edits" : {
       "localizations" : {
@@ -54439,6 +54646,29 @@
       },
       "extractionState" : "manual"
     },
+    "Follow Main Chat" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Follow Main Chat"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跟随主对话"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メインチャットに従う"
+          }
+        }
+      }
+    },
     "FYI" : {
       "localizations" : {
         "en" : {
@@ -65665,6 +65895,29 @@
       },
       "extractionState" : "manual"
     },
+    "Its provider gives the value whenever this extension needs it. Persona keeps only the reference.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Its provider gives the value whenever this extension needs it. Persona keeps only the reference."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この拡張機能が必要なときにプロバイダーが値を渡します。Persona は参照だけを保存します。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这个扩展需要时由它的提供方给出值，Persona 只保存引用。"
+          }
+        }
+      }
+    },
     "Its settings and data are deleted too. You can install it again from the market later." : {
       "localizations" : {
         "en" : {
@@ -71977,6 +72230,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Main Chat Supervises Its Own Tasks" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Main Chat Supervises Its Own Tasks"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主对话自己督办它派出的任务"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メインチャットが自分のタスクを監督する"
+          }
+        }
+      }
     },
     "MCP Form Needs You" : {
       "extractionState" : "manual",
@@ -90839,6 +91115,29 @@
         }
       }
     },
+    "Only applies to the background supervisor, the conversation that follows up tasks for the main chat. Empty fields follow Main Chat. Changing the provider clears the previous model and thinking effort. Choose Follow Main Chat and save to clear the independent settings." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Only applies to the background supervisor, the conversation that follows up tasks for the main chat. Empty fields follow Main Chat. Changing the provider clears the previous model and thinking effort. Choose Follow Main Chat and save to clear the independent settings."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅用于后台督办，即替主对话跟进任务的对话。留空的字段跟随主对话。更换供应商会清除原来的模型和思考强度。选择「跟随主对话」并保存，即可清除独立设置。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックグラウンド監督（メインチャットに代わってタスクをフォローする会話）のみに適用されます。空欄はメインチャットの設定に従います。プロバイダーを変更すると、以前のモデルと思考量がクリアされます。「メインチャットに従う」を選んで保存すると、個別設定を解除できます。"
+          }
+        }
+      }
+    },
     "Only CI failures on the default branch go to the Inbox, as Needs you." : {
       "localizations" : {
         "en" : {
@@ -96255,6 +96554,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Persona and the assistant never see the values.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona and the assistant never see the values."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona とアシスタントは値を見ません。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona 和助手都看不到这些值。"
+          }
+        }
+      }
     },
     "Persona answers only from meeting material: earlier minutes, project progress and who owns a to-do. It never brings up private chats, mail or health." : {
       "extractionState" : "manual",
@@ -106152,6 +106474,29 @@
         }
       }
     },
+    "Remove [Handoff Rule]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "削除"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "移除"
+          }
+        }
+      }
+    },
     "Remove [Task Sheets 6135d4]" : {
       "localizations" : {
         "en" : {
@@ -106335,6 +106680,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Remove this rule?": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove this rule?"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このルールを削除しますか？"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "移除这条规则？"
+          }
+        }
+      }
     },
     "Remove “%@”?" : {
       "localizations" : {
@@ -134656,6 +135024,29 @@
       },
       "extractionState" : "manual"
     },
+    "The next time an Agent asks for it, you approve it again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The next time an Agent asks for it, you approve it again."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "次に Agent が必要とするとき、もう一度承認します。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "下次 Agent 需要它时，会重新请你批准。"
+          }
+        }
+      }
+    },
     "The node restarted; %lld background tasks stopped" : {
       "localizations" : {
         "en" : {
@@ -137054,6 +137445,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "这些已保存的权限仅适用于这段对话。记录只保留工具名，没有目录或命令的详细范围。"
+          }
+        }
+      }
+    },
+    "These settings take their values from this provider. Saving a setting lets it keep taking its value.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "These settings take their values from this provider. Saving a setting lets it keep taking its value."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "これらの設定はこのプロバイダーから値を取ります。設定を保存すると、その後も値を取ることを許可したことになります。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这些设置会从它这里取值；保存设置就等于长期允许它们取用。"
           }
         }
       }
@@ -150226,6 +150640,29 @@
         }
       }
     },
+    "Use a Reference": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use a Reference"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "参照を使う"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "使用引用"
+          }
+        }
+      }
+    },
     "Use a whole number from 1 to 36500, or leave it empty." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -150433,6 +150870,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Used By": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Used By"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "使用中"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "使用方"
+          }
+        }
+      }
     },
     "Used for this start only. Once it runs, it's listed under Typed Before." : {
       "extractionState" : "manual",
@@ -156080,6 +156540,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "While this is off, the background supervisor follows up the tasks Persona hands out, so the main chat answers you first." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "While this is off, the background supervisor follows up the tasks Persona hands out, so the main chat answers you first."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭时，Persona 派出的任务由后台督办跟进，主对话优先回复你。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オフのあいだは、Persona が任せたタスクをバックグラウンド監督がフォローし、メインチャットはあなたへの返信を優先します。"
+          }
+        }
+      }
     },
     "While You Were Away" : {
       "localizations" : {
@@ -164343,6 +164826,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "“%@” on %@ gets these for this run only:": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "“%1$@” on %2$@ gets these for this run only:"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%2$@ の「%1$@」が今回の実行だけ受け取ります："
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%2$@ 上的「%1$@」只在这一次运行中拿到："
+          }
+        }
+      }
     },
     "“%@” reported to Persona" : {
       "localizations" : {

@@ -250,6 +250,10 @@ data class ImageEdits(
     }
 }
 
+/** What the editor left (iOS `EditedImage` without the pictures): the edits and their history, to carry on where it stopped. */
+@Immutable
+data class ImageEditState(val edits: ImageEdits = ImageEdits(), val history: EditHistory = EditHistory())
+
 /** Undo and Redo over whole edits: each finished change (a mark drawn, a crop let go, a turn, a shape, a reset, Clear) is a step. */
 @Immutable
 data class EditHistory(val past: List<ImageEdits> = emptyList(), val future: List<ImageEdits> = emptyList()) {
