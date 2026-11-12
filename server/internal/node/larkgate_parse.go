@@ -363,13 +363,7 @@ func larkVariableScopeStable(cmd string) bool {
 				return false
 			}
 		case *syntax.BinaryCmd:
-			syntax.Walk(n, func(inner syntax.Node) bool {
-				if _, ok := inner.(*syntax.Assign); ok {
-					stable = false
-					return false
-				}
-				return true
-			})
+			stable = false
 			return false
 		case *syntax.ParamExp:
 			if n.Exp != nil {
