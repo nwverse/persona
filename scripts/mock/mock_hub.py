@@ -8,7 +8,7 @@ It serves machines, agents, conversations, interactions and the inbox, enough fo
 does not know are logged to stderr as MISSING. Timestamps are relative to when it starts. See docs/operations/testing.md.
 """
 import base64, unicodedata
-import argparse, copy, hashlib, json, math, os, re, shutil, signal, socket, ssl, struct, subprocess, sys, tempfile, threading, time, uuid, zlib
+import argparse, copy, hashlib, itertools, json, math, os, posixpath, re, shlex, shutil, signal, socket, ssl, struct, subprocess, sys, tempfile, threading, time, uuid, zlib
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -5688,6 +5688,18 @@ if os.environ.get("MOCK_COMMENTS") == "1":
             "整体可以，改完这三处再提交。"])),
         it("assistant", "text", 0.4, text="好，三处都改：城市名改成可选，解析失败回退到上次的缓存，保存按钮改成整行宽的主按钮。"),
     ]
+    # And Persona's main conversation has a quote of words picked in its answer and a comment on others (#5204): the
+    # blocks sit in the new layout's box, whatever the style's bubble.
+    _answer = next(i["id"] for i in ITEMS[ASK1] if i["role"] == "assistant" and i["kind"] == "text")
+    ITEMS[ASK1] = ITEMS[ASK1] + [
+        it("user", "text", 2.1, text=f'<persona-context kind="quote" title="Persona" url="" msg="{_answer}" part="selection">\n'
+           "照片同步脚本（Mac Studio）的计划写好了，等你批准。\n</persona-context>\n这个下周再看。"),
+        it("assistant", "text", 2.0, text="好，下周一提醒你看照片同步脚本的计划。"),
+        it("user", "text", 1.9, text="\n".join([
+            "> Comment 1", "> Selected text:", "> > 韩梅梅在飞书问你周五的发布能不能赶上", "> ", "> 她说的是哪个版本？", "",
+            "先帮我问清楚再答复她。"])),
+        it("assistant", "text", 1.7, text="好，我先在飞书问她是哪个版本，问清楚了再告诉你。"),
+    ]
 # MOCK_LIVE_STEP=bash|command|reads|parallel|thinking|thinking-folded (#2987): the widget chat is a minute into a new turn whose newest
 # step is still going, for the running work line that names it: `bash` a command Claude described (its description alone),
 # `command` a long command with no description (cut in its middle, the clock whole), `reads` three files read at once
@@ -10864,8 +10876,12 @@ LAUNCHER_PRESETS = [
 # node is too old (409 node_outdated), nas is offline (503). Keys and headers are kept only as has_key / has_headers.
 # With the feature launcher_auto_name (#5029): a provider added with no name gets one (launcher_name_for), and "New Agent"'s
 # launchers list the managed providers with their display names (gw_full has one, anthropic_main shows its ID).
+# With the feature launcher_import_parse (#5193): the import takes `alias` (one alias of the machine: its group, or its own
+# provider out of a group of several), and POST /api/v1/launchers/import/parse (also in every mode) reads pasted text into
+# provider drafts with the hub's rules (parse_paste): shell aliases / exports / K=V lines, settings.json, a curl command,
+# cindy's custom providers. A draft on gw_full's address matches it, with the same key when it carries sk-example-gw.
 MOCK_PROVIDERS = os.environ.get("MOCK_PROVIDERS") == "1"
-PROVIDER_LOG = {"post": None, "put": None, "test": [], "discover": [], "catalog": [], "import": None}
+PROVIDER_LOG = {"post": None, "put": None, "test": [], "discover": [], "catalog": [], "import": None, "parse": []}
 PROVIDER_FIELDS = ("kind", "api", "base_url", "model", "small_model", "subagent_model", "custom_model", "custom_model_name",
                    "custom_model_description", "args", "auth", "models", "opus_model", "sonnet_model", "haiku_model", "fable_model",
                    "subagent_force", "proxy", "no_proxy", "timeout_ms", "compact_window", "max_context", "effort")
@@ -10878,7 +10894,15 @@ PROVIDER_IMPORT = [
      "models": [{"id": "example-opus", "context_window": 1000000}, {"id": "example-haiku", "context_window": 200000}],
      "aliases": ["cc_full", "cc_full_haiku"],
      "sources": [{"alias": "cc_full", "file": "~/.zshrc", "hide": "ok"},
-                 {"alias": "cc_full_haiku", "file": "~/.zshrc", "hide": "in_use", "uses": ["模型档位「性能」的 Agent 预设「strong」"]}]},
+                 {"alias": "cc_full_haiku", "file": "~/.zshrc", "hide": "in_use", "uses": ["模型档位「性能」的 Agent 预设「strong」"]}],
+     "variants": [
+         {"name": "cc_full", "base_url": "https://gw.example.com", "auth": "bearer", "has_key": True, "own_service": "use", "model": "example-opus",
+          "models": [{"id": "example-opus", "context_window": 1000000}], "aliases": ["cc_full"],
+          "sources": [{"alias": "cc_full", "file": "~/.zshrc", "hide": "ok"}]},
+         {"name": "cc_full_haiku", "base_url": "https://gw.example.com", "auth": "bearer", "has_key": True, "own_service": "use",
+          "model": "example-haiku", "models": [{"id": "example-haiku", "context_window": 200000}], "aliases": ["cc_full_haiku"],
+          "sources": [{"alias": "cc_full_haiku", "file": "~/.zshrc", "hide": "in_use", "uses": ["模型档位「性能」的 Agent 预设「strong」"]}]},
+     ]},
     {"name": "cc_glm", "base_url": "https://open.bigmodel.example.com/api/anthropic", "auth": "bearer", "has_key": True, "own_service": "use",
      "model": "glm-5.3", "models": [{"id": "glm-5.3", "context_window": 200000}], "aliases": ["cc_glm"],
      "sources": [{"alias": "cc_glm", "file": "~/.zshrc", "hide": "ok"}]},
@@ -10929,10 +10953,10 @@ if MOCK_PROVIDERS:
         {"name": "cc_kimi_fast", "source": "zshrc", "base_url": "https://api.moonshot.example.com/anthropic", "model": "kimi-k3-turbo", "machines": ["macbook"], "rc_files": ["~/.zshrc"]},
         {"name": "cc_relay", "source": "zshrc", "base_url": "https://relay.example.org", "model": "relay-pro", "machines": ["macbook", "server"], "rc_files": ["~/.bashrc"]},
     ]
-    _features_without_auto_name = features
+    _features_without_providers = features
 
     def features():
-        return _features_without_auto_name() + ["launcher_auto_name"]
+        return _features_without_providers() + ["launcher_auto_name", "launcher_import_parse"]
 
 
 # The hub's names for providers it names itself (server/internal/assistant/models_presets.go): the slug rule, the
@@ -11006,12 +11030,17 @@ def _import_name(name, taken):
     return out
 
 
-def import_preview():
+def import_preview(alias=""):
     """The preview: each group and variant with its `existing`, its sources' hide checks and, for one that will be
     created under another name, `create_as`. A group and its variants are alternatives, so they are named against the
-    same launchers; the names a group may take are taken for the groups after it."""
+    same launchers; the names a group may take are taken for the groups after it. With alias (#5193) the hub reads only
+    that alias: its group, or its variant as a group of its own; none when the machine has no such alias."""
+    groups = copy.deepcopy(PROVIDER_IMPORT)
+    if alias:
+        groups = [g if len(g["aliases"]) == 1 else next(v for v in g["variants"] if v["aliases"] == [alias])
+                  for g in groups if alias in g["aliases"]]
     out, taken = [], {l["name"] for l in LAUNCHERS}
-    for g in copy.deepcopy(PROVIDER_IMPORT):
+    for g in groups:
         names = set()
         for x in [g] + g.get("variants", []):
             x["sources"] = [_import_hide(src) for src in x.get("sources", [])]
@@ -11040,7 +11069,7 @@ def _provider_apply(l, b):
         if k in b:
             if b[k] in ("", 0, False, [], None): l.pop(k, None)
             else: l[k] = b[k]
-    if b.get("api_key"): l["has_key"] = True
+    if b.get("api_key"): l["has_key"], PROVIDER_KEYS[l["name"]] = True, b["api_key"]
     if "headers" in b:
         if b["headers"]: l["has_headers"] = True
         else: l.pop("has_headers", None)
@@ -11059,20 +11088,21 @@ def _display_name_refused(h, b):
 
 
 def import_route(h, method, q, body):
-    """GET / POST /api/v1/launchers/import (#2455, #5024), in every mode. POST takes {machine, providers, split?, hide_aliases?}:
-    a split group comes in as its variants, a provider that is there takes the new models, a new one is saved under its
-    previewed `create_as` (a name taken gets -2); with hide_aliases the aliases whose check is still ok once saved are
-    hidden, the others kept with why."""
+    """GET / POST /api/v1/launchers/import (#2455, #5024), in every mode. POST takes {machine, providers, split?, hide_aliases?,
+    alias?}: a split group comes in as its variants, a provider that is there takes the new models, a new one is saved
+    under its previewed `create_as` (a name taken gets -2); with hide_aliases the aliases whose check is still ok once
+    saved are hidden, the others kept with why. `alias` (?alias= on GET) previews and imports only that alias."""
     b = json.loads(body or b"{}") if method == "POST" else {}
     machine = (q.get("machine") or [""])[0] if method == "GET" else b.get("machine", "")
+    alias = (q.get("alias") or [""])[0] if method == "GET" else b.get("alias", "")
     if machine == "studio":
         h.send_json({"code": "node_outdated", "error": "这台机器上的 personad 太旧，不能读取 alias，需要更新 node"}, 409); return
     if not machine_online(machine):
         h.send_json({"code": "offline", "error": "这台机器离线，连上后再导入"}, 503); return
     if method == "GET":
-        h.send_json({"machine": machine, "providers": import_preview()}); return
+        h.send_json({"machine": machine, "providers": import_preview(alias)}); return
     PROVIDER_LOG["import"] = b
-    groups = {g["name"]: g for g in import_preview()}
+    groups = {g["name"]: g for g in import_preview(alias)}
     names, split = b.get("providers") or [], b.get("split") or []
     unknown = [n for n in names if n not in groups] + [n for n in split if n not in names]
     if unknown:
@@ -11105,6 +11135,388 @@ def import_route(h, method, q, body):
             elif src["hide"] != "none":
                 kept.append({k: v for k, v in src.items() if k != "file"})
     h.send_json({"created": created, "updated": updated, "hidden": hidden, "kept": kept})
+
+
+# POST /api/v1/launchers/import/parse (#5193): the wizard's "Paste a configuration", in every mode like the import. A small
+# reader with the hub's rules (newImportGroup's env mapping, mergeZshrcAliases' grouping): drafts carry the pasted key as the
+# hub's do; notes name aliases, variables, headers and options, never a value. Only the text's length is logged.
+PROVIDER_KEYS = {"gw_full": "sk-example-gw"}  # the managed providers' keys, for matches' same_key only
+PASTE_FIELDS = {"opus_model": "ANTHROPIC_DEFAULT_OPUS_MODEL", "sonnet_model": "ANTHROPIC_DEFAULT_SONNET_MODEL",
+                "haiku_model": "ANTHROPIC_DEFAULT_HAIKU_MODEL", "fable_model": "ANTHROPIC_DEFAULT_FABLE_MODEL",
+                "small_model": "ANTHROPIC_SMALL_FAST_MODEL", "subagent_model": "CLAUDE_CODE_SUBAGENT_MODEL",
+                "custom_model": "ANTHROPIC_CUSTOM_MODEL_OPTION", "custom_model_name": "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME",
+                "custom_model_description": "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION", "effort": "CLAUDE_CODE_EFFORT_LEVEL",
+                "compact_window": "CLAUDE_CODE_AUTO_COMPACT_WINDOW", "max_context": "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
+                "timeout_ms": "API_TIMEOUT_MS"}
+PASTE_MAPPED = {*PASTE_FIELDS.values(), "ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL",
+                "ANTHROPIC_CUSTOM_HEADERS", "CLAUDE_CODE_SUBAGENT_MODEL_FORCE"}
+PASTE_PROXY, PASTE_NO_PROXY = ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"), ("NO_PROXY", "no_proxy")
+PASTE_COMPUTER = ("PATH", "HOME", "PWD", "OLDPWD", "SHELL", "USER", "LOGNAME", "TMPDIR", "CLAUDE_CONFIG_DIR")
+PASTE_SECRETS = {"KEY", "KEYS", "APIKEY", "TOKEN", "SECRET", "SECRETS", "PASSWORD", "PASSWD", "CREDENTIAL", "CREDENTIALS",
+                 "COOKIE", "COOKIES"}
+PASTE_PROTOCOL = ("anthropic-version", "anthropic-beta", "content-type", "accept", "accept-encoding", "user-agent")
+CURL_ARGS = {"-H": "header", "--header": "header", "-d": "data", "--data": "data", "--data-raw": "data", "--data-binary": "data",
+             "--json": "data", "-x": "proxy", "--proxy": "proxy", "--noproxy": "no_proxy", "--url": "url", "-X": "", "--request": ""}
+CURL_UNUSED_ARGS = ("-u", "--user", "-o", "--output", "-A", "--user-agent", "-b", "--cookie", "-e", "--referer", "-m", "--max-time",
+                    "--connect-timeout", "-F", "--form", "-w", "--write-out", "-E", "--cert", "--key", "--cacert")
+CURL_QUIET = re.compile(r"-[sSivNL]+|--(silent|show-error|no-buffer|compressed|location)")
+# (the path's end, the API): the base is what comes before it, a direct API's with its /v1
+CURL_ENDPOINTS = (("/messages", "messages"), ("/v1/chat/completions", "chat"), ("/v1/responses", "responses"), ("/v1/models", "messages"))
+CINDY_APIS = {"anthropic-messages": "messages", "openai-responses": "responses", "openai-chat": "chat"}
+
+
+def _note(code, **where):
+    return {"code": code, **{k: v for k, v in where.items() if v}}
+
+
+def _shell_value(v): return "$" in v or "`" in v or v.startswith("~")
+
+
+def _secret_name(name, extra=()):
+    return any(w.upper() in PASTE_SECRETS or w.upper() in extra for w in re.split(r"[-_]", name))
+
+
+def _url_user(v):
+    """urlWithUser: the address's authority has an @ (an e-mail address counts too)."""
+    v = v.strip()
+    rest = re.sub(r"^[A-Za-z][A-Za-z0-9+.-]*://", "", v)
+    return "@" in re.split(r"[/?#]", rest if rest != v else v.removeprefix("//"))[0]
+
+
+def _messages_base(url):
+    """proto.MessagesBaseURL: the address without the /v1 ending its path, which Claude Code adds itself."""
+    url = url.strip().rstrip("/")
+    u = urlparse(url)
+    if not u.netloc or u.query or u.fragment: return url
+    while url.endswith("/v1") and urlparse(url).path: url = url[:-3].rstrip("/")
+    return url
+
+
+def _strip1m(model):
+    model = model.strip()
+    return (model[:-4], 1000000) if model.endswith("[1m]") else (model, 0)
+
+
+def _shell_words(s):
+    """s split as the shell does (quotes; ; & | as words of their own), up to a comment."""
+    lex = shlex.shlex(s, posix=True, punctuation_chars=";&|")
+    lex.whitespace_split, lex.commenters = True, ""
+    return list(itertools.takewhile(lambda w: not w.startswith("#"), lex))
+
+
+def _commands(words):
+    """A line's commands: its words split at ; && || |."""
+    cmd = []
+    for w in words:
+        if w and set(w) <= set(";&|"): yield cmd; cmd = []
+        else: cmd.append(w)
+    yield cmd
+
+
+def _command(words):
+    """commandIndex: the variables a command sets in front of itself (env, exec… passed over) and its words from the
+    command on."""
+    env = {}
+    for i, w in enumerate(words):
+        if re.match(r"[A-Za-z_][A-Za-z0-9_]*=", w): env.update([w.split("=", 1)])
+        elif w not in ("env", "command", "exec", "noglob", "nocorrect"): return env, words[i:]
+    return env, []
+
+
+def _is_claude(cmd): return bool(cmd) and os.path.basename(cmd[0]) == "claude"
+
+
+def _alias_claude(value):
+    """claudeAlias: (env, args) of the first claude command in an alias's value, the exports before it included; None
+    when it runs no claude."""
+    exported = {}
+    for cmd in _commands(_shell_words(value)):
+        if cmd[:1] == ["export"]:
+            exported.update(_command(cmd[1:])[0])
+            continue
+        env, cmd = _command(cmd)
+        if _is_claude(cmd): return {**exported, **env}, cmd[1:]
+    return None
+
+
+def _paste_headers(pairs, protocol=False, direct=False):
+    """A draft's headers ("Name: value" lines) and the ones left out: the protocol's own (curl, cindy), credential-looking
+    names, and all of a direct API's, which takes none."""
+    kept, skipped = [], []
+    for name, value in pairs:
+        name = name.strip()
+        why = ("protocol" if protocol and name.lower() in PASTE_PROTOCOL else
+               "credential" if _secret_name(name, ("AUTHORIZATION", "AUTH")) else "unsupported" if direct else "")
+        if why: skipped.append({"name": name, "reason": why})
+        else: kept.append("%s: %s" % (name, str(value).strip()))
+    return "\n".join(kept), skipped
+
+
+def _paste_env(env):
+    """importEnv: the variables without a field as env lines (by name), their names, and the ones left out with why."""
+    lines, names, skipped = [], [], []
+    for k in sorted(env):
+        v = env[k]
+        if k in PASTE_PROXY + PASTE_NO_PROXY:
+            if _url_user(v): skipped.append({"name": k, "reason": "credential"})
+            continue
+        if k in PASTE_MAPPED: continue
+        why = ("computer" if k in PASTE_COMPUTER else "credential" if _secret_name(k) or _url_user(v) else
+               "shell" if _shell_value(v) or re.search(r"[\n\r\x00]", v) or ('"' in v and "'" in v) or
+               not re.match(r"[A-Za-z_][A-Za-z0-9_]*$", k) else "limit" if len(names) == 50 else "")
+        if why:
+            skipped.append({"name": k, "reason": why})
+            continue
+        quote = "" if not re.search(r"[\s#\"']", v) else "'" if '"' in v else '"'
+        lines.append("%s=%s%s%s" % (k, quote, v, quote))
+        names.append(k)
+    return "\n".join(lines), names, skipped
+
+
+def _draft(p, key, notes=(), **extra):
+    """A draft of provider p (empty fields left out) with its key, or a note why it has none; extra's empty ones left out."""
+    notes = list(notes)
+    if _shell_value(key): notes.append(_note("key_shell"))
+    elif key: p["api_key"] = key
+    elif not any(n["code"] in ("key_helper", "cindy_auth") for n in notes): notes.append(_note("no_key"))
+    return {**{k: v for k, v in extra.items() if v}, "provider": {k: v for k, v in p.items() if v}, "notes": notes}
+
+
+def _env_draft(env, base, args, notes):
+    """newImportGroup with importKey / importProxy / importEnv: a claude command's variables as a draft."""
+    token = env.get("ANTHROPIC_AUTH_TOKEN", "").strip()
+    key = token.removeprefix("Bearer ").strip() if token else env.get("ANTHROPIC_API_KEY", "").strip()
+    model, window = _strip1m(env.get("ANTHROPIC_MODEL", ""))
+    p = {"kind": "launcher", "agent": "claude", "api": "messages", "base_url": base, "auth": "bearer" if token else "api_key",
+         "model": model, "models": [{"id": model, **({"context_window": window} if window else {})}] if model else [], "args": args}
+    for f, k in PASTE_FIELDS.items():
+        v = env.get(k, "").strip()
+        p[f] = (int(v) if v.isdigit() else 0) if f in ("compact_window", "max_context", "timeout_ms") else \
+            _strip1m(v)[0] if f.endswith("_model") and f != "custom_model" else v
+    p["subagent_force"] = env.get("CLAUDE_CODE_SUBAGENT_MODEL_FORCE", "").strip().lower() in ("1", "true")
+    proxy = next((env[k].strip() for k in PASTE_PROXY if env.get(k, "").strip()), "")
+    p["proxy"] = "" if _url_user(proxy) else proxy
+    p["no_proxy"] = next((env[k].strip() for k in PASTE_NO_PROXY if env.get(k, "").strip()), "")
+    p["headers"], skipped_headers = _paste_headers(h.split(":", 1) for h in env.get("ANTHROPIC_CUSTOM_HEADERS", "").splitlines() if ":" in h)
+    p["env"], env_names, skipped_env = _paste_env(env)
+    return _draft(p, key, notes, env_names=env_names, skipped_env=skipped_env, skipped_headers=skipped_headers)
+
+
+def _past_model(d):
+    """A draft but for its model: what aliases merged into one draft share."""
+    return {**d, "provider": {**d["provider"], "model": None, "models": None}}
+
+
+def _env_drafts(exported, cmds, notes=()):
+    """The drafts of claude commands [(alias or None, line, own env, args)], each from the exported variables with its own
+    over them: aliases on one address and key merged unless they differ in more than the model (mergeZshrcAliases), with
+    a suggested name. ([draft], [(line, note)] for the commands that make none)."""
+    groups, marks = [], []
+    for alias, line, env, args in cmds:
+        env, where = {**exported, **env}, {"name": alias, "line": None if alias else line}
+        base = _messages_base(env.get("ANTHROPIC_BASE_URL", ""))
+        bad = "no_gateway" if not base else "url_shell" if _shell_value(base) else "url_user" if _url_user(base) else ""
+        if bad:
+            marks.append((line or math.inf, _note(bad, **where)))
+            continue
+        d = _env_draft(env, base, args, notes)
+        gateway = (base, d["provider"].get("api_key"))
+        g = next((g for g in groups if g[0] == gateway), None)
+        if g: g[1].append((alias, d))
+        else: groups.append((gateway, [(alias, d)]))
+    drafts, taken = [], {l["name"] for l in LAUNCHERS}
+    for _, g in groups:
+        for part in [g] if all(_past_model(d) == _past_model(g[0][1]) for _, d in g) else [[x] for x in g]:
+            d = part[0][1]
+            for _, x in part[1:]:
+                for m in x["provider"].get("models", []):
+                    old = next((o for o in d["provider"].setdefault("models", []) if o["id"] == m["id"]), None)
+                    if old is None: d["provider"]["models"].append(m)
+                    elif m.get("context_window", 0) > old.get("context_window", 0): old["context_window"] = m["context_window"]
+            aliases = [a for a, _ in part if a]
+            if aliases:
+                d["provider"]["name"] = _import_name("zshrc_" + aliases[0] if aliases[0] in RESERVED_LAUNCHER_NAMES else aliases[0], taken)
+                taken.add(d["provider"]["name"])
+                d = {"label": ", ".join(aliases), "aliases": aliases, **d}
+            drafts.append(d)
+    return drafts, marks
+
+
+def _paste_shell(lines):
+    """Shell lines: exports and K=V lines collect the variables, aliases and K=V … claude lines are the claude commands
+    (with none, the variables alone make the draft); another command is not Claude Code, a line it can't read unused.
+    None, as the hub, when there is no alias, no claude command and no variable of Claude Code's."""
+    exported, cmds, marks, aliased = {}, [], [], False
+    for n, line in lines:
+        try: words = next(_commands(_shell_words(line)))
+        except ValueError: words = []
+        if words[:1] == ["alias"]:
+            aliased = True
+            for name, eq, value in (w.partition("=") for w in words[1:]):
+                if not eq or not re.match(r"[A-Za-z_][A-Za-z0-9_-]*$", name): continue
+                try: found = _alias_claude(value)
+                except ValueError: found = None
+                if found: cmds.append((name, n) + found)
+                else: marks.append((n, _note("not_claude", name=name)))
+            continue
+        export = words[:1] == ["export"]
+        env, cmd = _command(words[1:] if export else words)
+        if export or (env and not cmd): exported.update(env)
+        elif _is_claude(cmd): cmds.append((None, n, env, cmd[1:]))
+        else: marks.append((n, _note("not_claude" if cmd else "line_unused", line=n)))
+    if not cmds and not aliased and not any(k.startswith(("ANTHROPIC_", "CLAUDE_")) for k in exported): return None
+    drafts, more = _env_drafts(exported, cmds or ([(None, None, {}, [])] if exported else []))
+    return drafts, [x for _, x in sorted(marks + more, key=lambda m: m[0])]
+
+
+def _paste_settings(data):
+    """settings.json: its env (string values) with `model` as ANTHROPIC_MODEL when env has none, read as shell's variables
+    alone; apiKeyHelper runs a command for the key, which a paste can't."""
+    env = {k: v for k, v in data["env"].items() if isinstance(v, str)} if isinstance(data.get("env"), dict) else {}
+    if isinstance(data.get("model"), str) and not env.get("ANTHROPIC_MODEL"): env["ANTHROPIC_MODEL"] = data["model"]
+    drafts, marks = _env_drafts(env, [(None, None, {}, [])], [_note("key_helper")] if data.get("apiKeyHelper") else [])
+    return drafts, [x for _, x in marks]
+
+
+def _paste_curl(words, line):
+    """A curl command: the endpoint its URL names (Messages as a Claude Code gateway, Chat / Responses as a direct API),
+    its key header and other headers, the body's model, its proxy."""
+    url, headers, model, proxy, notes, rest = "", [], "", {}, [], iter(words[1:])
+    for w in rest:
+        if w in CURL_ARGS:
+            what, v = CURL_ARGS[w], next(rest, "")
+            if what == "header" and ":" in v: headers.append(v.split(":", 1))
+            elif what in ("proxy", "no_proxy"): proxy[what] = (w, v)
+            elif what == "url": url = url or v
+            elif what == "data":
+                try: body = json.loads(v)
+                except ValueError: body = None
+                if isinstance(body, dict) and isinstance(body.get("model"), str): model = body["model"]
+        elif w.startswith("-"):
+            if not CURL_QUIET.fullmatch(w): notes.append(_note("curl_option", name=w))
+            if w in CURL_UNUSED_ARGS: next(rest, "")
+        else: url = url or w
+    if not url: return [], [_note("unrecognized")]
+    if _shell_value(url) or _url_user(url): return [], [_note("url_shell" if _shell_value(url) else "url_user", line=line)]
+    bare = re.split(r"[?#]", url)[0].rstrip("/")
+    path = urlparse(bare).path
+    end, api = next(((e, a) for e, a in CURL_ENDPOINTS if path.endswith(e)), ("", "messages"))
+    if end: bare = bare[:len(bare) - len(end.removeprefix("/v1"))]
+    else: notes.append(_note("curl_path", name=path))
+    key, auth, kept = "", "", []
+    for name, value in headers:
+        name, value = name.strip(), value.strip()
+        if name.lower() == "x-api-key": key, auth = value, "api_key"
+        elif name.lower() == "authorization" and value[:7].lower() == "bearer ": key, auth = value[7:].strip(), "bearer"
+        else: kept.append((name, value))
+    launcher = api == "messages"
+    p = {"kind": "launcher" if launcher else "api", "agent": "claude" if launcher else "", "api": api,
+         "base_url": _messages_base(bare) if launcher else bare, "auth": auth, "model": model, "models": [{"id": model}] if model else []}
+    p["headers"], skipped = _paste_headers(kept, protocol=True, direct=not launcher)
+    for what, (option, v) in proxy.items():
+        if not launcher: notes.append(_note("curl_option", name=option))
+        elif what == "no_proxy" or not _url_user(v): p[what] = v
+    return [_draft(p, key, notes, skipped_headers=skipped)], []
+
+
+def _cindy_model(m):
+    """A cindy model ("id" or {id, name, contextWindow, reasoningEfforts, reasoningDefaultEffort}) as a provider's."""
+    if isinstance(m, str): return {"id": m}
+    if not isinstance(m, dict) or not isinstance(m.get("id"), str): return None
+    efforts = [e for e in m.get("reasoningEfforts") or [] if e in _CLAUDE_EFFORTS]
+    out = {"id": m["id"], "name": m.get("name"), "context_window": m.get("contextWindow"), "efforts": efforts,
+           "default_effort": m.get("reasoningDefaultEffort") if m.get("reasoningDefaultEffort") in efforts else None}
+    return {k: v for k, v in out.items() if v}
+
+
+def _paste_cindy(data):
+    """cindy v1 (one provider or {providers: […]}): a custom provider's first Messages endpoint as a Claude Code gateway,
+    else its first Responses / Chat endpoint as a direct API; its other endpoints, presets, built-ins and OAuth as notes."""
+    drafts, notes = [], []
+    for c in data["providers"] if isinstance(data.get("providers"), list) else [data]:
+        if not isinstance(c, dict): continue
+        auth = c["auth"] if isinstance(c.get("auth"), dict) else {}
+        if c.get("kind", "custom") != "custom":
+            notes.append(_note("cindy_kind", name=str(c["kind"])))
+            continue
+        if auth.get("method") == "oauth":
+            notes.append(_note("cindy_auth", name="oauth"))
+            continue
+        eps = [e for e in c.get("endpoints") or [] if isinstance(e, dict)]
+        ep = next((e for e in eps if e.get("protocol") == "anthropic-messages"), None) or \
+            next((e for e in eps if e.get("protocol") in ("openai-responses", "openai-chat")), None)
+        others = [_note("cindy_endpoint", name=str(e.get("protocol") or "")) for e in eps if e is not ep]
+        if ep is None:
+            notes += others
+            continue
+        base = str(ep.get("baseUrl") or "").strip().rstrip("/")
+        if _url_user(base): notes.append(_note("url_user"))
+        if not base or _url_user(base): continue
+        api, none = CINDY_APIS[ep["protocol"]], auth.get("method") == "none"
+        models = [m for m in map(_cindy_model, ep.get("models") or c.get("models") or []) if m]
+        p = {"kind": "launcher" if api == "messages" else "api", "agent": "claude" if api == "messages" else "", "api": api,
+             "display_name": c.get("name"), "base_url": _messages_base(base) if api == "messages" else base,
+             "auth": "api_key" if api == "messages" else "bearer", "model": models[0]["id"] if models else "", "models": models}
+        p["headers"], skipped = _paste_headers(ep["headers"].items() if isinstance(ep.get("headers"), dict) else [], True, api != "messages")
+        key = "" if none else str(ep.get("apiKey") or auth.get("apiKey") or "")
+        drafts.append(_draft(p, key, ([_note("cindy_auth", name="none")] if none else []) + others, label=c.get("name"), skipped_headers=skipped))
+    return drafts, notes
+
+
+def _paste_lines(text):
+    """(line number, line) of each line that is not blank or a comment, a line ending in \\ joined with the next."""
+    out, start, buf = [], 0, ""
+    for n, line in enumerate(text.split("\n") + [""], 1):
+        start, buf = (start, buf + line) if buf else (n, line)
+        if buf.endswith("\\"):
+            buf = buf[:-1]
+            continue
+        if buf.strip() and not buf.strip().startswith("#"): out.append((start, buf.strip()))
+        buf = ""
+    return out
+
+
+def _paste_read(text):
+    """(format, drafts, notes): JSON as cindy's or settings.json, a curl command, else shell lines."""
+    if text.strip().startswith(("{", "[")):
+        try: data = json.loads(text)
+        except ValueError: return "", [], [_note("invalid_json")]
+        keys = set(data) if isinstance(data, dict) else set()
+        if keys & {"providers", "kind", "endpoints"}: return ("cindy", *_paste_cindy(data))
+        if keys & {"env", "apiKeyHelper", "model"}: return ("settings", *_paste_settings(data))
+        return "", [], [_note("unrecognized")]
+    lines = _paste_lines(text)
+    try: cmd = _command(next(_commands(_shell_words(lines[0][1]))))[1] if lines else []
+    except ValueError: cmd = []
+    if cmd and os.path.basename(cmd[0]) == "curl": return ("curl", *_paste_curl(cmd, lines[0][0]))
+    shell = _paste_shell(lines)
+    return ("shell", *shell) if shell else ("", [], [_note("unrecognized")])
+
+
+def parse_paste(text):
+    """The parse route's answer: what text was read as, its drafts (at most 50) with the managed providers on their
+    address (the ones with the draft's key first), and its notes."""
+    fmt, drafts, notes = _paste_read(text.replace("\r\n", "\n"))
+    for d in drafts:
+        key = d["provider"].get("api_key")
+        d["matches"] = sorted(({"name": l["name"], **({"display_name": l["display_name"]} if l.get("display_name") else {}),
+                                "same_key": bool(key) and PROVIDER_KEYS.get(l["name"]) == key}
+                               for l in LAUNCHERS if l["source"] == "persona" and l.get("base_url") == d["provider"]["base_url"]),
+                              key=lambda m: not m["same_key"])
+    if len(drafts) > 50: drafts, notes = drafts[:50], notes + [_note("too_many")]
+    return {"format": fmt, "drafts": drafts, "notes": notes or ([] if drafts else [_note("unrecognized")])}
+
+
+def parse_route(h, body):
+    """POST /api/v1/launchers/import/parse: 413 over 256 KiB, 400 without text."""
+    if len(body or b"") > 256 << 10:
+        h.send_json({"code": "too_large", "error": "粘贴的内容太长"}, 413); return
+    try: text = json.loads(body or b"{}").get("text")
+    except (ValueError, AttributeError): text = None
+    if not isinstance(text, str) or not text.strip():
+        h.send_json({"error": "先粘贴一段配置"}, 400); return
+    PROVIDER_LOG["parse"].append({"length": len(text)})
+    h.send_json(parse_paste(text))
 
 
 # POST /api/v1/launchers/catalog (#4975): the hub's built-in model catalog for ids typed by hand, read from the file the
@@ -11150,12 +11562,14 @@ def _catalog_route(h, body):
 
 
 def providers_route(h, method, p, q, body):
-    """The provider endpoints under MOCK_PROVIDERS; True when it answered. The import (import_route) and the catalog lookup
-    (_catalog_route) answer with or without MOCK_PROVIDERS, and so do a typed-in gateway's "Test connection" and "Fetch
-    models" (#4881): the catch-all {"ok": true} has no `ms`, which the wizard shows. A built-in preset's test keeps its own
-    answers then (_builtin_preset_route)."""
+    """The provider endpoints under MOCK_PROVIDERS; True when it answered. The import (import_route, parse_route) and the
+    catalog lookup (_catalog_route) answer with or without MOCK_PROVIDERS, and so do a typed-in gateway's "Test connection"
+    and "Fetch models" (#4881): the catch-all {"ok": true} has no `ms`, which the wizard shows. A built-in preset's test
+    keeps its own answers then (_builtin_preset_route)."""
     if p == "/api/v1/launchers/import":
         import_route(h, method, q, body); return True
+    if p == "/api/v1/launchers/import/parse" and method == "POST":
+        parse_route(h, body); return True
     if p == "/api/v1/launchers/catalog" and method == "POST":
         _catalog_route(h, body); return True
     probe = method == "POST" and p in ("/api/v1/launchers/test", "/api/v1/launchers/discover")
@@ -12229,6 +12643,70 @@ if os.environ.get("MOCK_EDIT_DIFF") == "1":
     mock_edit_diff()
 
 
+# MOCK_TURN_CHANGES=1 (#5157): the changed-files card at the end of a finished Agent turn. One chat edits five files of
+# this checkout (one of them twice; an edit that failed does not count), a line of narration between the edits so the
+# page does not fold them (fold_work leaves runs under 3 items, docs/protocol/protocol.md "Folded work") and the card
+# counts the calls themselves; a Codex chat changes two files by their diffs. MOCK_EDIT_DIFF's chat comes folded, and
+# its card comes from the fold's `changes`. The main conversation's last exchange writes a file too and shows no card
+# (super rules 0 and 4). With MOCK_REVIEW=1, Review opens the review of the same checkout. Made-up code.
+TURN_CHANGES = "a1f3c2d4-0000-4000-8000-000000005157"
+TURN_CHANGES_CODEX = "a1f3c2d4-0000-4000-8000-000000005158"
+
+
+def mock_turn_changes():
+    w = "/Users/me/code/weather"
+    say = lambda t, text: it("assistant", "text", t, text=text)
+    _c = [it("user", "text", 26, text="Show 12 hours of rain, in the units the user picked, and document it")]
+    _c += tool("Edit", {"file_path": w + "/WeatherWidget/Provider.swift", "old_string": "let hours = hourly.prefix(6)",
+                        "new_string": "let hours = hourly.prefix(12)\nlet rain = hours.map(\\.chance)"}, "ok", 25.9)
+    _c.append(say(25.85, "The widget takes 12 hours now; the forecast model needs the same."))
+    _c += tool("MultiEdit", {"file_path": w + "/Sources/App/Forecast.swift", "edits": [
+        {"old_string": "var hourly: [Double]", "new_string": "var hourly: [Double]\nvar unit: UnitTemperature"},
+        {"old_string": "func high() -> Double {\n    hourly.max() ?? 0\n}",
+         "new_string": "func high() -> Measurement<UnitTemperature> {\n    Measurement(value: hourly.max() ?? 0, unit: unit)\n}"}]}, "ok", 25.8)
+    _c.append(say(25.75, "Next the units."))
+    _c += tool("Edit", {"file_path": w + "/README.md", "old_string": "## Units", "new_string": "## Units and hours"},
+               "String to replace not found in file.", 25.7, err=True)
+    _c.append(say(25.65, "The README has no Units section; the units go in their own file."))
+    _c += tool("Write", {"file_path": w + "/Sources/App/Units.swift",
+                         "content": "import Foundation\n\nlet celsius = UnitTemperature.celsius\nlet fahrenheit = UnitTemperature.fahrenheit\n"}, "ok", 25.6)
+    _c.append(say(25.55, "And the doc."))
+    _c += tool("Write", {"file_path": w + "/docs/hourly.md", "content": "# Hourly rain\n\nThe widget shows the next 12 hours.\n"
+                                                                      "Each bar is the chance of rain in that hour.\n"}, "ok", 25.5)
+    _c.append(say(25.45, "One more case in the provider, then the tests."))
+    _c += tool("Edit", {"file_path": w + "/WeatherWidget/Provider.swift", "old_string": "let temp = current.temperature",
+                        "new_string": "let temp = current.feelsLike"}, "ok", 25.4)
+    _c.append(say(25.35, "Tests for the new hours."))
+    _c += tool("Write", {"file_path": w + "/Tests/AppTests/ForecastTests.swift", "content": "\n".join([
+        "import XCTest", "@testable import App", "", "final class ForecastTests: XCTestCase {",
+        "    func testTwelveHours() {", "        XCTAssertEqual(Forecast.sample.hourly.prefix(12).count, 12)", "    }", "}"]) + "\n"},
+        "ok", 25.3)
+    _c.append(say(25, "Done: the widget shows 12 hours of rain and the feels-like temperature, the forecast keeps its unit, "
+                      "the units have their own file, and docs/hourly.md says what the bars mean."))
+    ITEMS[TURN_CHANGES] = _c
+    SESSIONS.append(sess("macbook", TURN_CHANGES, "Twelve hours of rain", w, "done", "read", "weather", 1, "changes", 20, 25,
+                         "Done: the widget shows 12 hours of rain."))
+    _x = [it("user", "text", 24, text="Use the feels-like temperature in the forecast and the widget")]
+    _x += tool("Edit", {"file_path": w + "/Sources/App/Forecast.swift", "change": "update",
+                        "diff": "@@ -3,3 +3,4 @@\n struct Forecast {\n-    var temperature: Double\n+    var feelsLike: Double\n+    var hourly: [Double]\n }\n"},
+               "update " + w + "/Sources/App/Forecast.swift", 23.9)
+    _x.append(say(23.85, "Now the widget."))
+    _x += tool("Edit", {"file_path": w + "/WeatherWidget/WidgetView.swift", "change": "update",
+                        "diff": "@@ -8,2 +8,2 @@\n-        Text(entry.temperature, format: .number)\n+        Text(entry.feelsLike, format: .number)\n     }\n"},
+               "update " + w + "/WeatherWidget/WidgetView.swift", 23.8)
+    _x.append(say(23.5, "The forecast and the widget both use the feels-like temperature now."))
+    ITEMS[TURN_CHANGES_CODEX] = _x
+    SESSIONS.append(sess("macbook", TURN_CHANGES_CODEX, "Feels-like temperature", w, "done", "read", "weather", 1, "changes-codex", 21,
+                         23.5, "The forecast and the widget both use the feels-like temperature now.", agent="codex"))
+    ITEMS[ASK1] = ITEMS[ASK1] + [it("user", "text", 1.5, text="把周末的行程整理成一个文件")] + tool(
+        "Write", {"file_path": "/Users/me/Documents/weekend.md", "content": "# 周末\n\n- 周六：爬山\n- 周日：看展\n"}, "ok", 1.4) + [
+        it("assistant", "text", 1.3, text="整理好了：周六爬山，周日看展，放在“文稿”里的 weekend.md。")]
+
+
+if os.environ.get("MOCK_TURN_CHANGES") == "1":
+    mock_turn_changes()
+
+
 # MOCK_TOOL_NAMES=1 (#2986): one finished turn that calls Claude Code's newer tools (ToolSearch, TaskCreate, TaskUpdate,
 # NotebookEdit, Monitor, SendMessage, ScheduleWakeup), another server's MCP tool (mcp__github__create_issue) and a tool
 # no table knows, with nested arguments (RenderChart), so each reads in words, the MCP one as "GitHub · Create issue",
@@ -13086,6 +13564,106 @@ def fold_task_snapshots(items):
     return snapshots
 
 
+CLIPPED_NOTE = re.compile("\n…（已截断，共 \\d+ 字节）$")
+
+
+def _edit_lines(old, new):
+    """transcript.editLines: a final newline ends the last line on a side whose other side is empty or ends in one."""
+    def split(s, strip):
+        return (s[:-1] if strip else s).split("\n") if s else []
+    old_ends, new_ends = old.endswith("\n"), new.endswith("\n")
+    return split(old, old_ends and (not new or new_ends)), split(new, new_ends and (not old or old_ends))
+
+
+def _clean_path(p):
+    """path.Clean, as transcript.editPath cleans an edit's file (no "./", "../" or doubled slashes)."""
+    return posixpath.normpath(re.sub("/+", "/", p))
+
+
+def _line_changes(old, new):
+    """transcript.lineChanges: lines added and removed by Myers' line diff; everything past its limits."""
+    a, b = _edit_lines(old, new)
+    n, m = len(a), len(b)
+    if n + m <= 60000:
+        most = min(n + m, 6000)
+        off, v = most + 1, [0] * (2 * most + 3)
+        for d in range(most + 1):
+            for k in range(-d, d + 1, 2):
+                x = v[off + k + 1] if k == -d or (k != d and v[off + k - 1] < v[off + k + 1]) else v[off + k - 1] + 1
+                y = x - k
+                while x < n and y < m and a[x] == b[y]:
+                    x, y = x + 1, y + 1
+                v[off + k] = x
+                if x >= n and y >= m:
+                    return (m - n + d) // 2, (n - m + d) // 2
+    return m, n
+
+
+def _patch_changes(patch, change):
+    """transcript.patchLines: a Codex file change's unified diff, or the whole file without hunks."""
+    lines = patch.split("\n")
+    if not any(l.startswith("@@") for l in lines):
+        if not patch:
+            return 0, 0
+        count = len((patch[:-1] if patch.endswith("\n") else patch).split("\n"))
+        return (0, count) if change == "delete" else (count, 0)
+    add = rm = 0
+    inside = False
+    for l in lines:
+        if l.startswith("diff --git"):
+            inside = False
+        elif not inside and l.startswith(("index ", "--- ", "+++ ")):
+            continue
+        elif l.startswith("@@"):
+            inside = True
+        elif inside and l.startswith("+"):
+            add += 1
+        elif inside and l.startswith("-"):
+            rm += 1
+    return add, rm
+
+
+def fold_changes(run):
+    """transcript.foldChanges (#5157): the files the run's successful Edit / Write / MultiEdit calls changed, in the
+    order first edited, each with the lines added and removed and whether the input was whole."""
+    ok = {x.get("tool_use_id"): not x.get("is_error") for x in run if x["kind"] == "tool_result"}
+    out, at = [], {}
+
+    def clipped(v):
+        if isinstance(v, str):
+            return bool(CLIPPED_NOTE.search(v))
+        if isinstance(v, list):
+            return any(clipped(e) for e in v)
+        return isinstance(v, dict) and any(clipped(e) for e in v.values())
+    for x in run:
+        name = x.get("tool_name")
+        if x["kind"] != "tool_use" or name not in ("Edit", "Write", "MultiEdit") or not ok.get(x.get("tool_use_id")):
+            continue
+        inp = x.get("tool_input") or {}
+        path = next((_clean_path(inp[k].strip()) for k in ("file_path", "notebook_path", "path") if isinstance(inp.get(k), str) and inp[k].strip()), "")
+        if not path:
+            continue
+        add = rm = 0
+        if name == "Edit" and isinstance(inp.get("diff"), str):
+            add, rm = _patch_changes(inp["diff"], inp.get("change") or "")
+        elif name == "Edit" and (isinstance(inp.get("old_string"), str) or isinstance(inp.get("new_string"), str)):
+            add, rm = _line_changes(inp.get("old_string") or "", inp.get("new_string") or "")
+        elif name == "Write" and isinstance(inp.get("content"), str):
+            add, rm = _line_changes("", inp["content"])
+        elif name == "MultiEdit":
+            for e in inp.get("edits") or []:
+                a, r = _line_changes(e.get("old_string") or "", e.get("new_string") or "")
+                add, rm = add + a, rm + r
+        exact = not clipped(inp)
+        if path in at:
+            c = out[at[path]]
+            c["add"], c["del"], c["exact"] = c["add"] + add, c["del"] + rm, c["exact"] and exact
+        else:
+            at[path] = len(out)
+            out.append({"path": path, "add": add, "del": rm, "exact": exact})
+    return out
+
+
 def fold_work(items):
     """transcript.FoldWork: each run of tool calls (with their results) and thoughts becomes one fold item."""
     uses = {x.get("tool_use_id") for x in items if x["kind"] == "tool_use"}
@@ -13122,7 +13700,8 @@ def fold_work(items):
                         "fold": {"items": len(run), "tools": sum(x["kind"] == "tool_use" for x in run),
                                  "thoughts": sum(x["kind"] == "thinking" and bool((x.get("text") or "").strip()) for x in run),
                                  "until": run[-1]["ts"], "through_seq": run[-1]["seq"], "through_id": run[-1]["id"],
-                                 **({"tasks": tasks} if tasks else {}), **({"images": images} if images else {}), **narration}})
+                                 **({"tasks": tasks} if tasks else {}), **({"images": images} if images else {}), **narration,
+                                 "changes": fold_changes(run)}})
         i = j
     return out
 

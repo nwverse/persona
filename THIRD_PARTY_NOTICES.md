@@ -498,6 +498,10 @@ The web chat's plan (`web/src/views/chat/PlanCard.tsx`, #5156) is ported from ci
 the inline card that opens in place (`InlinePlanCard`), the pill above the composer with its hover / pinned flyout and
 Close Plan (`TodoListCard`), the progress ring's arithmetic and the in-progress arc's path and sizes.
 
+The changed-files card (`web/src/views/chat/TurnChanges.tsx`, #5157) and the error notice (`web/src/ui/ErrorNotice.tsx`)
+are ported from cindy's `TurnChangesCard.tsx` and `components/ui/error-notice.tsx` with changes: their layout, sizes and
+states; the counting, review targets and fold data are Persona's own.
+
 https://github.com/makecindy/cindy
 
 Licensed under the Apache License, Version 2.0 (the "License"); you may not use these files except in compliance with

@@ -420,32 +420,65 @@ final class VNCTests: XCTestCase {
     /// On its side at the largest text size with the keyboard up (#3075) the leading rail is short: Close, Help and ⋯
     /// stay above the keyboard, and Picture in Picture goes into ⋯ when it has no room under Close.
     @MainActor func testTheRailFitsAtTheLargestTextWithTheKeyboardUp() throws {
-        let (app, _) = try signedInMachinePage(["-showPiPSource", "YES", "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"])
+        try railMenusWithTheKeyboardUp(["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"],
+                                       name: "vnc-largest-text-landscape-keyboard")
+    }
+
+    /// On its side with the keyboard up at the default text size, where the rails close up (#5289): ⋯ and the clipboard
+    /// open their menus and the app keeps running.
+    @MainActor func testTheRailMenusOpenWithTheKeyboardUp() throws {
+        try railMenusWithTheKeyboardUp([], name: "vnc-landscape-keyboard-menus")
+    }
+
+    /// Turned on its side with the keyboard up: Close, Help, ⋯, the clipboard and the keyboard button in sight above the
+    /// keyboard, then ⋯ and the clipboard open their menus. A menu hides the keyboard and the rails get room; the app
+    /// keeps running (#5289: a rail that put other views in for the roomier way lost the menu's button under its morph
+    /// and the app stopped), and Picture in Picture is in one place, under Close or in ⋯.
+    @MainActor private func railMenusWithTheKeyboardUp(_ more: [String], name: String) throws {
+        let (app, _) = try signedInMachinePage(["-showPiPSource", "YES"] + more)
         defer { XCUIDevice.shared.orientation = .portrait }
-        let window = app.windows.firstMatch, more = app.buttons["vnc-more"].firstMatch
-        XCTAssertTrue(more.waitForExistence(timeout: 10), "no ⋯:\n\(app.debugDescription)")
+        let window = app.windows.firstMatch, menu = app.buttons["vnc-more"].firstMatch, clipboard = app.buttons["vnc-clipboard"].firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 10), "no ⋯:\n\(app.debugDescription)")
         XCUIDevice.shared.orientation = .landscapeLeft
         let wide = NSPredicate { _, _ in window.frame.width > window.frame.height }
         XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: wide, object: nil)], timeout: 10), .completed,
                        "the page did not turn: \(window.frame)")
         rest(2)
         let keys = app.keyboards.firstMatch
-        if !keys.exists { app.buttons["vnc-keyboard"].firstMatch.tap() }
-        XCTAssertTrue(keys.waitForExistence(timeout: 5), "the keyboard:\n\(app.debugDescription)")
-        rest()
+        func keyboardUp(_ when: String) {
+            for _ in 0..<2 where !keys.waitForExistence(timeout: 3) { app.buttons["vnc-keyboard"].firstMatch.tap() }
+            XCTAssertTrue(keys.waitForExistence(timeout: 5), "the keyboard \(when):\n\(app.debugDescription)")
+            rest()
+        }
+        keyboardUp("at first")
         let top = keys.frame.minY
-        for id in ["screen-close", "vnc-pip", "vnc-help", "vnc-more"] {
+        for id in ["screen-close", "vnc-pip", "vnc-help", "vnc-more", "vnc-clipboard", "vnc-keyboard"] {
             let b = app.buttons[id].firstMatch
             if id == "vnc-pip", !b.exists { continue }
             XCTAssertTrue(b.isHittable && window.frame.contains(b.frame) && b.frame.maxY <= top + 1,
                           "\(id) in sight above the keyboard: \(b.frame), the keyboard from \(top) in \(window.frame)")
         }
-        let pipButton = app.buttons["vnc-pip"].exists
-        shot(app, "vnc-largest-text-landscape-keyboard"); hold("vnc-largest-text-landscape-keyboard")
-        more.tap()
+        shot(app, name); hold(name)
+
+        menu.tap()
+        XCTAssertTrue(app.buttons["指针居中"].firstMatch.waitForExistence(timeout: 5), "⋯ opened:\n\(app.debugDescription)")
+        rest()
+        XCTAssertEqual(app.state, .runningForeground, "the app went on ⋯")
         let item = app.buttons.matching(NSPredicate(format: "label == '小窗' AND identifier != 'vnc-pip'")).firstMatch
-        XCTAssertEqual(item.waitForExistence(timeout: pipButton ? 2 : 5), !pipButton, "Picture in Picture under Close or in ⋯, once:\n\(app.debugDescription)")
-        shot(app, "vnc-largest-text-landscape-more")
+        XCTAssertNotEqual(app.buttons["vnc-pip"].exists, item.exists, "Picture in Picture under Close or in ⋯, once:\n\(app.debugDescription)")
+        shot(app, name + "-more"); hold(name + "-more")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.15)).tap()
+        XCTAssertTrue(app.buttons["指针居中"].firstMatch.waitForNonExistence(timeout: 5), "⋯ closed")
+
+        keyboardUp("after ⋯")
+        clipboard.tap()
+        XCTAssertTrue(app.buttons["从 iPhone 粘贴"].firstMatch.waitForExistence(timeout: 5), "the clipboard opened:\n\(app.debugDescription)")
+        rest()
+        XCTAssertEqual(app.state, .runningForeground, "the app went on the clipboard")
+        shot(app, name + "-clipboard"); hold(name + "-clipboard")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.15)).tap()
+        XCTAssertTrue(app.buttons["从 iPhone 粘贴"].firstMatch.waitForNonExistence(timeout: 5), "the clipboard closed")
+        XCTAssertEqual(app.state, .runningForeground)
     }
 
     /// On its side (#3075): the page turns to either landscape, the picture takes the height between two rails of buttons
