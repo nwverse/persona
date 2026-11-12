@@ -220,8 +220,12 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * From #5760 on, firstScreenBytes also normalizes local bindings (placeholderLocalNames): a minifier renaming a chunk's
  * locals no longer moves the count. On this main, that is 470,502 B en / 474,216 B ja / 471,480 B zh-Hans; the budget
  * is rebased to the new ja baseline, with 0 B of room. That is a rebase of the measurement, not new room for first-screen code.
+ * And 228 B for Resume in terminal (#5521: ja 474,444 B against 474,216 B on main at 9223f7f92: the rule that offers it in
+ * an Agent's ⋯ or disables it where its computer has no terminal engine, the item and its two strings, the one action it
+ * shares with the stopped line's Resume, Codex threads counted as stopped Agents, and a stable Terminal handler so the
+ * header still draws only when it changes).
  */
-export const FIRST_SCREEN_BUDGET = 474_216;
+export const FIRST_SCREEN_BUDGET = 474_444;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
