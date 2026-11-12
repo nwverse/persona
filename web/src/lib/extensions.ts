@@ -85,7 +85,10 @@ export interface ExtensionSandbox {
   active: boolean;
   why?: string;
   trusted?: boolean;
-  egress?: { allowed: number; denied: number; last_denied?: string; denied_at?: string };
+  /** recent_denied: the last different hosts the proxy refused, the latest first (#5697). */
+  egress?: { allowed: number; denied: number; last_denied?: string; denied_at?: string; recent_denied?: { target: string; count: number; at: string }[] };
+  /** The hosts the owner allowed it in /admin (#5697): no port is any port. */
+  owner_allowed?: { host: string; port?: string; at?: string }[];
 }
 
 /** The sandbox's state in words: in effect, asked for but not in effect, or off (Android ExtensionModelText.sandbox). */
