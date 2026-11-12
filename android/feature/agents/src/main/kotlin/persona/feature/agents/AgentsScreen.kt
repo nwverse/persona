@@ -827,7 +827,7 @@ private fun AgentsListPlaceholder() {
                 horizontalArrangement = Arrangement.spacedBy(Tokens.Space.m),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Box(Modifier.size(Tokens.Space.xxl).background(fill, shape))
+                Box(Modifier.size(Tokens.Space.Standard.xxl).background(fill, shape))
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
                     Box(Modifier.fillMaxWidth(0.48f).height(Tokens.Space.m).background(fill, shape))
                     Box(Modifier.fillMaxWidth(0.68f).height(Tokens.Space.s).background(fill, shape))

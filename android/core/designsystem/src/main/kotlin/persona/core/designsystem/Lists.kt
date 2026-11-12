@@ -43,7 +43,7 @@ internal fun Modifier.holder(color: androidx.compose.ui.graphics.Color, width: D
 
 /** Horizontal page padding of the active style; list items assume they sit inside it. */
 /** Side padding of page content, plus the room that keeps it to [ReadingWidth] in wide panes. */
-val pagePadding: Dp @Composable get() = when (PersonaTheme.style) { AppStyle.Glass -> 16.dp; AppStyle.Brief -> 20.dp; AppStyle.Board -> 12.dp } + LocalReadingInset.current
+val pagePadding: Dp @Composable get() = when (PersonaTheme.style) { AppStyle.Glass -> 16.dp; AppStyle.Brief -> 20.dp; AppStyle.Board -> 12.dp } * LayoutDensity.spaceScale + LocalReadingInset.current
 
 /** Where an item sits in a group, so lazy lists can draw one continuous container out of separate items. */
 @Immutable

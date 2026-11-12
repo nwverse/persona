@@ -424,14 +424,14 @@ private fun PhaseMark(block: PhaseBlock) {
         block.state == PhaseState.Stopped -> R.string.designsystem_workflow_phase_stopped
         else -> R.string.designsystem_workflow_phase_next
     })
-    FadeOnChange(block.state to block.current, Modifier.size(Tokens.Space.l).semantics { contentDescription = label }) {
+    FadeOnChange(block.state to block.current, Modifier.size(Tokens.Space.Standard.l).semantics { contentDescription = label }) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             when (block.state) {
                 PhaseState.Done -> if (block.failed > 0) JIcon(PhIcons.X, null, size = 13.dp, tint = palette.danger.dot)
                     else JIcon(PhIcons.Check, null, size = 13.dp, tint = palette.positive)
-                PhaseState.Current -> Box(Modifier.size(Tokens.Space.s).clip(CircleShape).background(if (block.current) palette.ai else palette.ai.copy(alpha = 0.5f)))
-                PhaseState.Stopped -> Box(Modifier.size(Tokens.Space.s).clip(RoundedCornerShape(2.dp)).background(palette.ink3))
-                PhaseState.Next -> Box(Modifier.size(Tokens.Space.s).border(1.5.dp, palette.ink3, CircleShape))
+                PhaseState.Current -> Box(Modifier.size(Tokens.Space.Standard.s).clip(CircleShape).background(if (block.current) palette.ai else palette.ai.copy(alpha = 0.5f)))
+                PhaseState.Stopped -> Box(Modifier.size(Tokens.Space.Standard.s).clip(RoundedCornerShape(2.dp)).background(palette.ink3))
+                PhaseState.Next -> Box(Modifier.size(Tokens.Space.Standard.s).border(1.5.dp, palette.ink3, CircleShape))
             }
         }
     }
@@ -498,7 +498,7 @@ private fun AgentDot(state: AgentState) {
         AgentState.Failed -> {
             val danger = PersonaTheme.palette.danger
             val shape = if (PersonaTheme.style == AppStyle.Board) RoundedCornerShape(2.dp) else CircleShape
-            Box(Modifier.size(Tokens.Space.s).clip(shape).background(danger.dot).border(1.dp, danger.text, shape))
+            Box(Modifier.size(Tokens.Space.Standard.s).clip(shape).background(danger.dot).border(1.dp, danger.text, shape))
         }
     }
 }

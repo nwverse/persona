@@ -145,9 +145,9 @@ fun UserBubbleFrame(modifier: Modifier = Modifier, footer: (@Composable () -> Un
                 AppStyle.Brief -> Modifier.background(if (own) palette.statusSurface else palette.surface)
                 AppStyle.Board -> Modifier.background(if (own) palette.statusSurface else palette.surface).border(1.dp, palette.line, shape)
             })
-            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .padding(horizontal = Tokens.Space.l, vertical = Tokens.Space.m)
     }
-    Column(modifier.fillMaxWidth().padding(vertical = 6.dp), horizontalAlignment = Alignment.End) {
+    Column(modifier.fillMaxWidth().padding(vertical = Tokens.Space.sm), horizontalAlignment = Alignment.End) {
         if (leading == null && !faded) Column(bubble(Modifier.fillMaxWidth(0.86f).wrapContentWidth(Alignment.End))) { content() }
         else Row(Modifier.fillMaxWidth(0.86f).wrapContentWidth(Alignment.End), verticalAlignment = Alignment.Bottom) {
             leading?.invoke()
@@ -214,7 +214,7 @@ fun WorkGroup(
                 .padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.sm),
         ) {
-            if (running) JSpinner(Modifier.size(Tokens.Space.m), stroke = Tokens.Space.xxs)
+            if (running) JSpinner(Modifier.size(Tokens.Space.Standard.m), stroke = Tokens.Space.Standard.xxs)
             Text(summary, style = type.caption, color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
             trailing?.let { CompositionLocalProvider(LocalContentColor provides palette.ink2, LocalTextStyle provides type.micro) { it() } }
             JIcon(if (expanded) persona.core.designsystem.icons.PersonaIcons.expand else PhIcons.CaretRight, null, size = Tokens.Space.m, tint = palette.ink3)
@@ -233,11 +233,11 @@ fun WorkGroup(
     }
     when (PersonaTheme.style) {
         AppStyle.Glass -> Column(modifier.fillMaxWidth().animateContentSize(PersonaTheme.motion.size())) { glassHeader(); body() }
-        AppStyle.Brief -> Column(modifier.fillMaxWidth().padding(vertical = 6.dp).animateContentSize(PersonaTheme.motion.size())) {
+        AppStyle.Brief -> Column(modifier.fillMaxWidth().padding(vertical = Tokens.Space.sm).animateContentSize(PersonaTheme.motion.size())) {
             header(); if (expanded || peek != null) { Spacer(Modifier.height(4.dp)); body() }
         }
         AppStyle.Board -> Column(
-            modifier.fillMaxWidth().padding(vertical = 6.dp).clip(RoundedCornerShape(10.dp)).background(palette.surface)
+            modifier.fillMaxWidth().padding(vertical = Tokens.Space.sm).clip(RoundedCornerShape(10.dp)).background(palette.surface)
                 .border(1.dp, palette.line, RoundedCornerShape(10.dp)).animateContentSize(PersonaTheme.motion.size()),
         ) { header(); body() }
     }
@@ -271,13 +271,13 @@ fun PlanCard(
     val spoken = stringResource(R.string.designsystem_with_state, stringResource(R.string.designsystem_plan_spoken, step, total, current),
         stringResource(if (open) R.string.designsystem_expanded else R.string.designsystem_collapsed))
     Column(
-        modifier.fillMaxWidth().padding(horizontal = inset, vertical = 6.dp).clip(shape).background(palette.surface)
+        modifier.fillMaxWidth().padding(horizontal = inset, vertical = Tokens.Space.sm).clip(shape).background(palette.surface)
             .border(1.dp, palette.line, shape).animateContentSize(PersonaTheme.motion.size()),
     ) {
         Row(
             Modifier.fillMaxWidth().heightIn(min = 44.dp).clickable(role = Role.Button) { open = !open }
                 .semantics { contentDescription = spoken }
-                .padding(horizontal = 14.dp, vertical = 10.dp),
+                .padding(horizontal = 14.dp.dense, vertical = 10.dp.dense),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             JIcon(PhIcons.ListChecks, null, size = 17.dp, tint = palette.ink)
@@ -300,7 +300,7 @@ fun PlanCard(
             .semantics { progressBarRangeInfo = ProgressBarRangeInfo(done.toFloat(), 0f..total.toFloat().coerceAtLeast(1f)) }) {
             Box(Modifier.fillMaxWidth(if (total > 0) done.toFloat() / total else 0f).fillMaxHeight().background(palette.ink))
         }
-        if (open) Column(Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, bottom = 10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        if (open) Column(Modifier.fillMaxWidth().padding(start = 14.dp.dense, end = 14.dp.dense, bottom = 10.dp.dense), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Box(Modifier.fillMaxWidth().height(1.dp).background(palette.line))
             Spacer(Modifier.height(6.dp))
             val doneLabel = stringResource(R.string.designsystem_plan_item_done)
@@ -323,7 +323,7 @@ fun PlanCard(
             }
         }
         // A failed update says so folded or open.
-        note?.let { Text(it, Modifier.padding(start = 14.dp, end = 14.dp, top = if (open) 0.dp else 6.dp, bottom = 10.dp), style = type.caption, color = palette.danger.text) }
+        note?.let { Text(it, Modifier.padding(start = 14.dp.dense, end = 14.dp.dense, top = if (open) 0.dp else Tokens.Space.sm, bottom = 10.dp.dense), style = type.caption, color = palette.danger.text) }
     }
 }
 
@@ -417,7 +417,7 @@ fun WorkStep(
                 if (!last) Box(Modifier.width(1.5.dp).weight(1f).background(palette.ink3.copy(alpha = 0.35f)))
             }
             Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f).padding(top = 4.dp, bottom = if (last) 4.dp else 12.dp)) {
+            Column(Modifier.weight(1f).padding(top = Tokens.Space.xs, bottom = if (last) Tokens.Space.xs else Tokens.Space.m)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(title, style = titleStyle, color = palette.ink, maxLines = titleLines, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                     Spacer(Modifier.weight(1f)); diff()
@@ -629,7 +629,7 @@ fun JumpToLatest(count: Int, onClick: () -> Unit, modifier: Modifier = Modifier)
                 AppStyle.Board -> Modifier.clip(shape).background(palette.surface).border(1.dp, palette.line, shape)
             })
             .clickable(role = Role.Button, onClick = onClick).semantics { contentDescription = spoken }
-            .padding(horizontal = 14.dp),
+            .padding(horizontal = 14.dp.dense),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         val ink = if (style == AppStyle.Brief) palette.onAction else palette.ink
@@ -661,7 +661,7 @@ fun PlanPill(step: Int, total: Int, done: Int, onClick: () -> Unit, modifier: Mo
             })
             .clickable(onClickLabel = onClickLabel, role = Role.Button, onClick = onClick)
             .semantics { contentDescription = description; progressBarRangeInfo = ProgressBarRangeInfo(done.toFloat(), 0f..total.toFloat().coerceAtLeast(1f)) }
-            .padding(horizontal = 14.dp),
+            .padding(horizontal = 14.dp.dense),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -715,10 +715,10 @@ fun IncomingBubbleFrame(
         AppStyle.Brief -> RoundedCornerShape(22.dp, 22.dp, 22.dp, 6.dp)
         AppStyle.Board -> RoundedCornerShape(10.dp)
     }
-    Row(modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.Top) {
+    Row(modifier.fillMaxWidth().padding(vertical = Tokens.Space.sm), verticalAlignment = Alignment.Top) {
         avatar?.let { it(); Spacer(Modifier.width(10.dp)) }
         Column(Modifier.weight(1f)) {
-            if (author != null || time != null) Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 4.dp, start = 2.dp)) {
+            if (author != null || time != null) Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = Tokens.Space.xs, start = Tokens.Space.xxs)) {
                 author?.let { Text(it, style = PersonaTheme.type.caption, color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false)) }
                 time?.let { Spacer(Modifier.width(6.dp)); Text(it, style = PersonaTheme.type.micro, color = palette.ink3, maxLines = 1) }
             }
@@ -729,7 +729,7 @@ fun IncomingBubbleFrame(
                         AppStyle.Brief -> Modifier.background(palette.surface)
                         AppStyle.Board -> Modifier.background(palette.surface).border(1.dp, palette.line, shape)
                     })
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                    .padding(horizontal = 14.dp.dense, vertical = 10.dp.dense),
                 content = content,
             )
             footer?.let { Spacer(Modifier.height(4.dp)); it() }

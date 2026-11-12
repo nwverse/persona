@@ -492,7 +492,7 @@ private fun PageTitle(title: String, subtitle: String?, summary: String?, greet:
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
     val click = if (onClick != null) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier
-    Column(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 12.dp)) {
+    Column(Modifier.fillMaxWidth().padding(top = Tokens.Space.s, bottom = Tokens.Space.m)) {
         when (PersonaTheme.style) {
             AppStyle.Brief -> if (summary != null) {
                 if (greet) Text(todayLabel(), style = type.caption, color = palette.ink3)

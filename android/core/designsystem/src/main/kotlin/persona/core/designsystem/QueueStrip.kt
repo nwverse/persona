@@ -108,7 +108,7 @@ private fun GlassQueueStrip(
         ) {
             JIcon(PhIcons.Tray, null, size = Tokens.Space.l, tint = palette.ink2)
             Text(title, style = line, color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-            if (busy) JSpinner(Modifier.size(Tokens.Space.m), stroke = Tokens.Space.xxs)
+            if (busy) JSpinner(Modifier.size(Tokens.Space.Standard.m), stroke = Tokens.Space.Standard.xxs)
             else sendNow?.let { SendNowButton(it, line, onSendNow) }
             JIcon(if (expanded) PersonaIcons.expand else PhIcons.CaretRight, null, size = Tokens.Space.m, tint = palette.ink3)
         }

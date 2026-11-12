@@ -93,13 +93,13 @@ private val Holder = 26.dp
 private val None = 0.dp
 
 /** Glass's leading well (iOS `Theme.Size.wellL`), the agent's mark in it (`markL`) and the rim around its corner (`rule`). */
-private val AvatarWell = Tokens.Space.xxl + Tokens.Space.xs
-private val AvatarMark = Tokens.Space.l + Tokens.Space.xxs / 2
-private val AvatarRim = Tokens.Space.xxs
+private val AvatarWell = Tokens.Space.Standard.xxl + Tokens.Space.Standard.xs
+private val AvatarMark = Tokens.Space.Standard.l + Tokens.Space.Standard.xxs / 2
+private val AvatarRim = Tokens.Space.Standard.xxs
 /** Between the well and the row's words (iOS's Avatar row: `Theme.Space.m`). */
-private val AvatarGap = Tokens.Space.m
+private val AvatarGap get() = Tokens.Space.m
 /** Between Two Lines' dot and its words (iOS style B: `Theme.Space.s`). */
-private val TwoLineGap = Tokens.Space.s
+private val TwoLineGap get() = Tokens.Space.s
 /** The background-waiting clock against the dot it stands in for (as on the space page's cards). */
 private const val WaitClockScale = 1.7f
 /** A State Card that needs you, tinted in its blue (iOS `StatusPalette.needsYouWash`: the system blue at this opacity). */
@@ -855,7 +855,7 @@ private fun HolderGlyph(status: Status) {
     val ink = PersonaTheme.palette.status(status).text
     when (status) {
         Status.Working, Status.Waiting -> if (PersonaTheme.reduceMotion) JIcon(PhIcons.Play, null, size = Caret, tint = ink, selected = true)
-            else JSpinner(Modifier.size(Caret), color = ink, stroke = Tokens.Space.xxs)
+            else JSpinner(Modifier.size(Caret), color = ink, stroke = Tokens.Space.Standard.xxs)
         Status.NeedsYou -> JIcon(PhIcons.Hand, null, size = Caret, tint = ink, selected = true)
         Status.Unread -> JIcon(PhIcons.Check, null, size = Caret, tint = ink)
         Status.Offline -> JIcon(PhIcons.Power, null, size = Caret, tint = ink)

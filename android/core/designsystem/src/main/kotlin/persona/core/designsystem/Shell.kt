@@ -156,7 +156,7 @@ fun MessageItem(
 fun DraftPreview(text: String, modifier: Modifier = Modifier, label: String = stringResource(R.string.designsystem_draft_ready), actions: (@Composable RowScope.() -> Unit)? = null) {
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
-    Column(modifier.fillMaxWidth().padding(top = 12.dp)) {
+    Column(modifier.fillMaxWidth().padding(top = Tokens.Space.m)) {
         when (PersonaTheme.style) {
             AppStyle.Brief -> {
                 Row(verticalAlignment = Alignment.CenterVertically) {

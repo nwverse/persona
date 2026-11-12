@@ -61,14 +61,15 @@ fun AppearanceSettings(modifier: Modifier = Modifier, agentsDisplay: AgentListDi
     val palette = PersonaTheme.palette
     Column(modifier.fillMaxWidth()) {
         Text(stringResource(R.string.settings_style_intro), style = PersonaTheme.type.callout, color = palette.ink2)
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(Tokens.Space.l))
         AppStyle.entries.forEach { style ->
             StyleOption(style, selected = style == current) { store.setStyle(style) }
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(Tokens.Space.m))
         }
         ThemeColorOptions(store)
         ExtensionThemeOptions()
         SchemeOptions(store)
+        DensityOptions(store)
         if (current == AppStyle.Glass) {
             JSectionHeader(stringResource(R.string.settings_style_transparency))
             JSegmented(GlassPreference.entries.map { JSegment(it.label) }, GlassPreference.entries.indexOf(glass), { store.setGlass(GlassPreference.entries[it]) })
@@ -328,7 +329,7 @@ fun PersonaSettings(demo: Boolean, modifier: Modifier = Modifier) {
                 }) else null) {
                 Box(contentAlignment = Alignment.Center) {
                     PackAvatar(packs, p, Tokens.Space.xxl * 2)
-                    if (busy) JSpinner(Modifier.size(Tokens.Space.xl))
+                    if (busy) JSpinner(Modifier.size(Tokens.Space.Standard.xl))
                 }
             }
             Spacer(Modifier.height(Tokens.Space.m))
@@ -472,7 +473,17 @@ private fun ColorSwatch(color: androidx.compose.ui.graphics.Color?) {
     val palette = PersonaTheme.palette
     Box(Modifier.size(Tokens.Size.iconXS).clip(CircleShape)
         .background(color ?: palette.surfaceStrong)
-        .border(Tokens.Space.xxs / 2, if (color == null) palette.accent else palette.line, CircleShape))
+        .border(Tokens.Space.Standard.xxs / 2, if (color == null) palette.accent else palette.line, CircleShape))
+}
+
+/** "Layout density": "Standard" (the default) or "Compact", which tightens the space around and between things (#5564). */
+@Composable
+private fun DensityOptions(store: AppStyleStore) {
+    val density by store.density.collectAsState()
+    JSectionHeader(stringResource(R.string.settings_density))
+    JSegmented(LayoutDensity.entries.map { JSegment(it.label) }, LayoutDensity.entries.indexOf(density), { store.setDensity(LayoutDensity.entries[it]) })
+    Spacer(Modifier.height(Tokens.Space.s))
+    SettingsCaption(stringResource(R.string.settings_density_note))
 }
 
 /** "Appearance": "Match system" (the default), "Light", "Dark", on this phone. */
