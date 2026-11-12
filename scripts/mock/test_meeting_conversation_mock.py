@@ -151,7 +151,9 @@ class MeetingConversationMockTests(Conversation, unittest.TestCase):
         self.assertNotIn("revs", out)
         self.assertNotIn("attending_session", out)
         live = self.live(rid)
-        self.assertEqual(set(live["revs"]), {"asks", "room", "private", "lines", "topics"})  # lines and topics: live view
+        # lines and topics: live view; highlights: phase 2b, unless the manager has none (MOCK_NO_MEETING_HIGHLIGHTS=1)
+        highlights = set() if os.environ.get("MOCK_NO_MEETING_HIGHLIGHTS") == "1" else {"highlights"}
+        self.assertEqual(set(live["revs"]), {"asks", "room", "private", "lines", "topics"} | highlights)
         self.assertEqual(live["revs"]["asks"], 0)
         only = self.live(rid, "?parts=room,asks,photos")
         self.assertEqual(set(only), {"room", "asks", "revs"})
@@ -162,7 +164,8 @@ class MeetingConversationMockTests(Conversation, unittest.TestCase):
         self.assertEqual(items[0]["client_msg_id"], f"meeting-{rid}")
         self.assertIn('"kind": "meeting"', items[0]["text"])
         batch = self.last_text(live["room"]["session_id"])
-        self.assertIn("[0:05] Ada: Today we look at the export flow.", batch["text"])
+        # Each line at its clock time, as the hub's batches write it: started_at plus its start, in the assistant's zone.
+        self.assertIn("[14:00] Ada: Today we look at the export flow.", batch["text"])
         self.assertEqual(batch["source"]["kind"], "meeting")
         row = next(s for s in self.call("GET", "/api/v1/sessions")[1]["sessions"] if s["session_id"] == live["room"]["session_id"])
         self.assertEqual((row["origin"], row["origin_ref"]), ("meeting", rid))
@@ -233,7 +236,7 @@ class MeetingConversationMockTests(Conversation, unittest.TestCase):
         self.upload(rid, room={"attendance": "listener"}, segments=LINES[:1])
         room = self.wait(lambda: (r := self.live(rid).get("room")) and r["state"] == "ready" and r, "the room")
         so_far = self.last_text(room["session_id"])["text"]
-        self.assertIn("[0:05] Ada: Today we look at the export flow.", so_far)
+        self.assertIn("[14:00] Ada: Today we look at the export flow.", so_far)
         self.assertIn("Q: Who owns the test?", so_far)
         # Told once: the next batch has only its new lines.
         self.call("POST", f"/api/v1/recordings/{rid}/live", {"from": 1, "segments": LINES[1:]})
