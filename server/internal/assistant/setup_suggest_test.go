@@ -93,8 +93,8 @@ func TestSetupCountTriageReadsTheHandResumesASwitchWouldHaveMade(t *testing.T) {
 		resumed(1, "user", handDecide),
 		resumed(1, "user", handAutoContinue), resumed(1, "user", handAutoContinue),
 		resumed(1, "user", handWake), resumed(1, "user", handWake), resumed(1, "user", handWake),
-		resumed(1, "user", ""), // by "user", but nothing says a switch would have gone on with it: a /loop, a rework
-		resumed(1, "hub", ""),  // the triage went on with it
+		resumed(1, "user", ""),       // by "user", but nothing says a switch would have gone on with it: a /loop, a rework
+		resumed(1, "hub", ""),        // the triage went on with it
 		resumed(9, "user", handWake), // before the window
 	}})
 	if got[setupDecide].n != 1 || got[setupAutoContinue].n != 2 || got[setupWake].n != 3 {

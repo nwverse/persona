@@ -1057,6 +1057,78 @@ What the numbers do and do not say:
 - **A lower tier for supervision is not suggested.** The proposal ties it to K1's numbers (reviews and tokens per
   supervisor model), which are not recorded yet; the block leaves it out until they are.
 
+## Supervision by model (#5086)
+
+Step K1 of the same proposal (section 9c): what supervision costs per accepted task, by the model the supervisor ran
+on, so a cheaper or a stronger model for the background supervisor (`assistant.supervise`,
+`docs/assistant/model-config.md` "Models for each role") can be judged on this install. It is the `supervision` field
+of `GET /api/v1/assistant/availability`; nothing shows it in an app or a briefing, and nothing acts on it. Each number
+in one sentence:
+
+- **Accepted** (`by_model[].accepted`): the acceptances in the window, each a `task_review` that accepted a task and
+  closed it, by the model and effort the reviewer ran on when it reviewed; a task accepted, reopened and accepted
+  again counts twice.
+- **Settled** (`by_model[].settled`): those of the acceptances that were made at least 24 hours before the read, whose
+  day to be reopened in is over.
+- **Reopened** (`by_model[].reopened`): the settled acceptances whose task was reopened within 24 hours of the
+  acceptance, whichever way (by hand, a change asked on its "Please verify" card, its agent set to work again). The
+  rate to compare between models is `reopened` over `settled`.
+- **Rework rounds** (`by_model[].rework_rounds`, `rework_rounds_per_task`): the times the accepted tasks were sent
+  back between their previous acceptance (or their start) and this one, whoever sent them back, in all and divided
+  by the acceptances.
+- **Output tokens per day** (`days[].output_tokens`, next to `days[].accepted`): per day and supervisor conversation,
+  the output tokens the conversation generated in the rounds that ended that day, beside the tasks it accepted that
+  day.
+
+**Tokens are not attributed to tasks.** Nothing recorded says which task a supervisor's turn was spent on: one
+supervision message gathers several tasks' signals, the token usage the nodes report (`docs/server/usage-windows.md`,
+the usage buckets) is per computer, model and launcher with no conversation, and a conversation's own count is one
+running total. So the read does not give "tokens per accepted task"; it puts a supervisor conversation's day of output
+next to that day's acceptances and leaves the division to the reader, who knows what else the conversation did that
+day. The count is **output tokens only** (no input, no cache reads or writes, which are most of a long conversation's
+cost) and is **the conversation's whole output**: for the main conversation that includes its talk with the owner, for
+the background supervisor nearly all of it is supervision.
+
+How they are recorded (`server/internal/assistant/availability_supervision.go`), as work events with no new table:
+
+- One `task_reviewed` row per `task_review` (any verdict). An acceptance is written once it closed the task: not for
+  a task that was closed already, nor when the close failed or closed nothing (a concern, which only its report
+  closes), so a retry is not a second acceptance. The row has the task, the verdict as written, the task's rework
+  rounds in all (`round`) and since its previous acceptance (`rework_rounds`, counted from the ledger's reviews, of
+  which it keeps the last 20), the reviewer, its role (`main`, `background`, `leader`, `conversation` for a side
+  conversation reviewing what it handed out, or `task_leader` for a task leader's agent reviewing its workers) and
+  the model and effort it ran on. Those are what the reviewer's node lists for it (`Session.model`,
+  `Session.effort`); for the main conversation and the background supervisor, what the node does not say is filled
+  from their purpose's binding. Both read `""` when neither says (the launcher's own default, which the manager
+  cannot name).
+- The `round` row of "Availability metrics" also carries the conversation's `model`, `effort` and `output_tokens` as
+  its node listed them when the round ended; `output_tokens` is the conversation's running total
+  (`Session.output_tokens`), and the read counts the difference between two rounds.
+- A reopen is the `todo_reopened` row that already existed (`docs/assistant/agent-work.md` "Evaluation"); it counts
+  against the task's latest acceptance before it, once, when it came within 24 hours of that acceptance. That is the
+  same day the work stats' `wrong_done.reopened` gives a close by the done judge, so "reopened" means a reopen within
+  24 hours in both; the two count different closes (a review's here, the judge's there).
+
+What the numbers do and do not say:
+
+- Only a conversation's own `task_review` counts. A task the done judge closed for its supervisor
+  (`review_sample_percent` below 100) has no reviewing conversation and is in none of these numbers.
+- `by_model` is keyed by model and effort alone: the main conversation, the background supervisor, leaders and task
+  leaders' agents on the same model and effort share a row. `days` has one row per conversation with its role, for
+  telling them apart; a task leader's agent has no `days` row, because an agent's rounds are not recorded as an
+  assistant conversation's and there is no output count to put beside its acceptances.
+- A model's name is whatever the node lists (an alias, a gateway's own id), so one model may appear under two names
+  when a binding was changed from one form to the other.
+- The first round recorded for a conversation counts no tokens: there is nothing to take the difference from. Rounds
+  from up to 48 hours before the window supply that for the window's first round. A count that goes down (a new
+  transcript) counts from zero again. A node that lists no output count (a runtime that reports none) gives 0.
+- A day's `model` and `effort` are those of the conversation's last round that day; a conversation whose model was
+  changed during the day has one row for it.
+- Every row's reopens are counted by one rule, so a model in use for three days and one in use for a month compare:
+  an acceptance younger than 24 hours is in `accepted` but in neither `settled` nor `reopened` yet, and a reopen
+  later than 24 hours after the acceptance is not held against it. An acceptance from before the window that is
+  reopened inside it is not counted.
+
 ## Chat titles
 
 Requested: "Generate titles after starting new chats; standardize as ‘MMDD | Type | Topic’." Implemented as follows:
