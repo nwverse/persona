@@ -12,8 +12,10 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
+import androidx.compose.ui.focus.FocusOwner
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
@@ -44,9 +46,13 @@ fun HardwareShortcutHost(modifier: Modifier = Modifier, content: @Composable () 
     val large = LocalLargeWindowInput.current
     val controller = remember { HardwareShortcutController() }
     val focus = remember { FocusRequester() }
-    // Only the first large composition may take focus; a resize must not steal it from a child.
-    LaunchedEffect(Unit) { if (large) runCatching { focus.requestFocus() } }
-    LaunchedEffect(large) { if (!large) controller.closeHelp() }
+    val focusOwner = LocalFocusManager.current as? FocusOwner
+    LaunchedEffect(large) {
+        if (large) {
+            // Fill an empty focus tree so Ctrl+/ has a receiver, but never take an existing child or dialog focus.
+            if (focusOwner?.rootState?.hasFocus != true) runCatching { focus.requestFocus() }
+        } else controller.closeHelp()
+    }
     val keys = if (large) Modifier.onKeyEvent(controller::handle).focusable() else Modifier
     CompositionLocalProvider(LocalHardwareShortcutController provides (if (large) controller else null)) {
         Box(modifier.focusRequester(focus).then(keys)) {

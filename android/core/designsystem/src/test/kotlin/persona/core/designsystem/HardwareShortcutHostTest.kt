@@ -27,6 +27,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -157,6 +158,46 @@ class HardwareShortcutHostTest {
         rule.onNodeWithTag("draft-field").assertIsFocused()
     }
 
+    @Test fun initialCompactWithoutChildFocusGetsHostFocusForHelp() {
+        var large by mutableStateOf(false)
+        rule.setContent {
+            CompositionLocalProvider(LocalLargeWindowInput provides large) {
+                PersonaTheme(darkTheme = false, reduceMotion = true) {
+                    HardwareShortcutHost(Modifier.fillMaxSize().testTag("empty-host")) {
+                        Box(Modifier.fillMaxSize())
+                    }
+                }
+            }
+        }
+        large = true
+        rule.waitForIdle()
+        rule.onNodeWithTag("empty-host").assertIsFocused()
+        rule.onNodeWithTag("empty-host").performKeyInput {
+            withKeyDown(Key.CtrlLeft) { pressKey(Key.Slash) }
+        }
+        rule.onNodeWithTag("keyboard-shortcuts").assertExists()
+    }
+
+    @Test fun enteringLargeDoesNotStealExistingInputFocus() {
+        var large by mutableStateOf(false)
+        rule.setContent {
+            CompositionLocalProvider(LocalLargeWindowInput provides large) {
+                PersonaTheme(darkTheme = false, reduceMotion = true) {
+                    HardwareShortcutHost(Modifier.fillMaxSize().testTag("host-with-field")) {
+                        val field = remember { FocusRequester() }
+                        LaunchedEffect(Unit) { runCatching { field.requestFocus() } }
+                        BasicTextField("draft", {}, Modifier.testTag("compact-focused-field").focusRequester(field))
+                    }
+                }
+            }
+        }
+        rule.onNodeWithTag("compact-focused-field").assertIsFocused()
+        large = true
+        rule.waitForIdle()
+        rule.onNodeWithTag("compact-focused-field").assertIsFocused()
+        rule.onNodeWithTag("host-with-field").assertIsNotFocused()
+    }
+
     @Test fun mainShellContentSurvivesLargeWindowChanges() {
         var large by mutableStateOf(true)
         var effectStarts = 0
@@ -166,7 +207,7 @@ class HardwareShortcutHostTest {
         rule.setContent {
             CompositionLocalProvider(LocalLargeWindowInput provides large) {
                 PersonaTheme(darkTheme = false, reduceMotion = true) {
-                    HardwareShortcutHost(Modifier.fillMaxSize()) {
+                    HardwareShortcutHost(Modifier.fillMaxSize().testTag("continuous-host")) {
                         val remembered = remember { Any() }
                         val scroll = rememberLazyListState()
                         var draft by remember { mutableStateOf("draft") }
@@ -210,5 +251,6 @@ class HardwareShortcutHostTest {
         assertEquals(0, disposals)
         rule.onNodeWithTag("continuous-draft").assertTextEquals("draft")
         rule.onNodeWithTag("continuous-draft").assertIsFocused()
+        rule.onNodeWithTag("continuous-host").assertIsNotFocused()
     }
 }
