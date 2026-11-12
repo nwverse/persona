@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // Minutes, a recording's summary and a day's recap are written in the recording's language, whatever languages its
@@ -70,7 +73,7 @@ func TestMinutesInTheRecordingsLanguage(t *testing.T) {
 			  "actions":[{"who":"Bo","what":"回帰テストを追加する","by":"金曜日まで","line":4}],
 			  "open":[{"text":"上限は件ごとか録音ごとか","line":5}]}`,
 			want: []string{"- 日時：2026-11-10 14:00–14:01", "- 参加者：Ada、Bo", "## 要点\n", "落ちる（Ada）", "## 決定事項\n",
-				"## ToDo\n", "- [14:00:30] Bo：回帰テストを追加する（金曜日まで）", "## 未解決の課題\n"},
+				"## アクション項目\n", "- [14:00:30] Bo：回帰テストを追加する（金曜日まで）", "## 未解決の質問\n"},
 			never: []string{"时间：", "参会", "讨论要点", "结论与决定", "待办", "未决问题"}},
 	} {
 		t.Run(tc.tag, func(t *testing.T) {
@@ -113,6 +116,32 @@ func TestMinutesInTheRecordingsLanguage(t *testing.T) {
 			}
 			if md := readFile(t, e, recID, "minutes.md"); strings.TrimSpace(md) != got.Markdown {
 				t.Errorf("minutes.md %q", md)
+			}
+		})
+	}
+}
+
+// Minutes nothing names (no title from the user, the calendar or the model, no summary's title yet) are called when the
+// meeting started in their language, not by the recording's Chinese name in lists: English minutes never start with
+// 「# 录音」. Chinese ones keep that name.
+func TestUntitledMinutesInTheRecordingsLanguage(t *testing.T) {
+	for tag, want := range map[string]string{"en-US": "Recording 2026-11-10 14:00", "ja-JP": "録音 2026-11-10 14:00",
+		"zh-CN": "录音 2026-11-10 14:00"} {
+		t.Run(tag, func(t *testing.T) {
+			e := goldenEngine(t, &captureModel{reply: `{"title":"","points":[{"text":"The export drops entries","line":2}]}`})
+			start := time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone)
+			u := meetingUpload(1, start, mixedMeeting...)
+			u.Language = tag
+			putRecording(t, e, recID, u, start.Add(time.Hour))
+			if n := e.WriteMinutes(context.Background(), 2); n != 1 {
+				t.Fatalf("wrote %d", n)
+			}
+			m, err := e.Store.ReadMinutes(recID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if m.Title != want || !strings.HasPrefix(m.Markdown, "# "+want+"\n") {
+				t.Errorf("title %q, markdown:\n%s", m.Title, m.Markdown)
 			}
 		})
 	}
@@ -249,8 +278,87 @@ func TestDayRecapInTheRecordingsLanguage(t *testing.T) {
 	}
 }
 
-// Minutes keep their language when a photo's delete renders them again: English ones stay English, and ones written
-// before minutes said a language stay Chinese.
+// A recap keeps its language when an erase writes its Markdown again (repairDayRecap), whatever the recording says
+// now: an English one stays English after a PUT that says Japanese, and one an older hub wrote of an English day
+// (recap.json saying no language) stays Chinese.
+func TestDayRecapRepairedKeepsItsLanguage(t *testing.T) {
+	for _, tc := range []struct {
+		name, later string
+		old         bool   // recap.json without its language, as written before it was kept
+		code        string // recap.json's language after the erase
+		want, never []string
+	}{
+		{name: "recording changed", later: "ja-JP", code: "en",
+			want: []string{"# Day recap · 2026-11-11\n", "- Recorded: 08:00–09:00 (so far)", "- Not recorded: 08:02–08:03 (erased)",
+				"## Meetings\n", "- 08:00–08:02 Morning standup", "## Suggested to-dos\n", "- [08:01] Bo: Ship the release"},
+			never: []string{"Hallway"}},
+		{name: "old", later: "en-US", old: true, code: "<none>",
+			want: []string{"# 2026-11-11 全天回顾\n", "- 时段：08:00–09:00（截至目前）", "- 没有录到：08:02–08:03（已擦除）", "## 会议\n",
+				"## 建议待办\n", "- [08:01] Bo：Ship the release"},
+			never: []string{"Hallway", "Day recap", "Not recorded", "Meetings"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := dayClock.Add(2 * time.Hour)
+			f := &dayFake{merge: func(string) (string, error) {
+				return `{"summary":"Standup, then a hallway chat.","timeline":[
+				  {"from_line":1,"to_line":3,"kind":"meeting","title":"Morning standup","points":[{"text":"Ada runs the tests","line":3,"who":"Ada"}]},
+				  {"from_line":4,"to_line":4,"kind":"outside","title":"Hallway chat","points":[{"text":"The hallway chat","line":4}]}],
+				  "actions":[{"who":"Bo","what":"Ship the release","line":2}]}`, nil
+			}}
+			e := dayEngine(t, f, &now)
+			texts := []string{"Morning standup", "Bo ships the release", "Ada runs the tests", "a hallway chat"}
+			u := dayUpload(1, texts...)
+			u.Language, u.Coverage.To = "en-US", 3600
+			mustPut(t, e, dayID, u, now)
+			writeTestRecapWith(t, e, dayID, f)
+			if lang := storedLanguage(t, e, dayID, recapFile); lang != "en" {
+				t.Fatalf("recap.json language %q", lang)
+			}
+			if tc.old {
+				path := e.Store.Path(KindRecording, dayID, recapFile)
+				var raw map[string]any
+				if err := json.Unmarshal([]byte(readFile(t, e, dayID, recapFile)), &raw); err != nil {
+					t.Fatal(err)
+				}
+				delete(raw, "language")
+				b, _ := json.MarshalIndent(raw, "", "  ")
+				if err := os.WriteFile(path, append(b, '\n'), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// The phone erased 08:03 (line 4).
+			erase := dayUpload(5, texts[0], texts[1], texts[2], "")
+			erase.Language = tc.later
+			erase.Coverage = &RecordingCoverage{To: 3600, Gaps: []CoverageGap{{From: 170, To: 200, Reason: GapErased}}}
+			mustPut(t, e, dayID, erase, now)
+			rc, err := e.ReadDayRecap(dayID)
+			if err != nil || rc.Version != 2 || len(rc.Gaps) != 1 {
+				t.Fatalf("after the erase: %+v %v", rc, err)
+			}
+			md := readFile(t, e, dayID, recapMarkdown)
+			for _, want := range tc.want {
+				if !strings.Contains(md, want) {
+					t.Errorf("recap.md lacks %q:\n%s", want, md)
+				}
+			}
+			for _, never := range tc.never {
+				if strings.Contains(md, never) {
+					t.Errorf("recap.md has %q:\n%s", never, md)
+				}
+			}
+			if tc.code == "en" && cjkText.MatchString(md) {
+				t.Errorf("an English recap with CJK text:\n%s", md)
+			}
+			if lang := storedLanguage(t, e, dayID, recapFile); lang != tc.code {
+				t.Errorf("recap.json language %q, want %q", lang, tc.code)
+			}
+		})
+	}
+}
+
+// Minutes keep their language when a photo's delete renders them again, whatever the recording says now: English ones
+// stay English, after a PUT that says Japanese too, and ones an older hub wrote of an English recording (minutes.json
+// saying no language) stay Chinese.
 func TestMinutesRenderedAgainKeepTheirLanguage(t *testing.T) {
 	reply := func(_ int, _, user string) (string, error) {
 		if strings.Contains(user, "[P1] ") {
@@ -259,16 +367,19 @@ func TestMinutesRenderedAgainKeepTheirLanguage(t *testing.T) {
 		}
 		return `{"title":"Review","points":[{"text":"The first line","line":1}]}`, nil
 	}
+	english := []string{"## Key points\n", "## Action items\n", "- [14:00:10] Bo: Send the notes"}
 	for _, tc := range []struct {
 		name, tag string
-		old       bool // minutes.json without its language, as written before it was kept
+		old       bool   // minutes.json without its language, as written before it was kept
+		later     string // the language a PUT after the minutes says, before the delete
 		want      []string
 		never     []string
 	}{
-		{name: "english", tag: "en-US", want: []string{"## Key points\n", "## Action items\n", "- [14:00:10] Bo: Send the notes"},
-			never: []string{"讨论要点", "待办", "照片"}},
-		{name: "old", tag: "zh-CN", old: true, want: []string{"- 时间：", "## 讨论要点\n", "## 待办\n", "- [14:00:10] Bo：Send the notes"},
-			never: []string{"Key points", "Action items"}},
+		{name: "english", tag: "en-US", want: english, never: []string{"讨论要点", "待办", "照片"}},
+		{name: "recording changed", tag: "en-US", later: "ja-JP", want: english,
+			never: []string{"要点", "アクション項目", "日時", "讨论要点", "待办"}},
+		{name: "old", tag: "en-US", old: true, want: []string{"- 时间：", "## 讨论要点\n", "## 待办\n", "- [14:00:10] Bo：Send the notes"},
+			never: []string{"Key points", "Action items", "When:"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := goldenEngine(t, &funcModel{f: reply})
@@ -280,6 +391,17 @@ func TestMinutesRenderedAgainKeepTheirLanguage(t *testing.T) {
 			putRecording(t, e, recID, u, start.Add(time.Minute))
 			addPhoto(t, e, recID, photoUpload(1, 0, "whiteboard", "budget"), false)
 			e.WriteMinutes(context.Background(), 2)
+			if lang := storedLanguage(t, e, recID, "minutes.json"); lang != "en" {
+				t.Fatalf("minutes.json language %q", lang)
+			}
+			if tc.later != "" {
+				again := meetingUpload(2, start, "第一句 the first line", "Bo sends the notes", "第三句")
+				again.Language, again.EndedAt = tc.later, &end
+				putRecording(t, e, recID, again, start.Add(2*time.Minute))
+				if r := recordingNow(t, e, recID); r.Language != tc.later {
+					t.Fatalf("the recording says %q", r.Language)
+				}
+			}
 			if tc.old {
 				path := e.Store.Path(KindRecording, recID, "minutes.json")
 				var raw map[string]any
@@ -300,6 +422,9 @@ func TestMinutesRenderedAgainKeepTheirLanguage(t *testing.T) {
 				t.Fatalf("after the delete: %+v %v", m, err)
 			}
 			md := readFile(t, e, recID, "minutes.md")
+			if strings.Contains(md, "The whiteboard") {
+				t.Fatalf("minutes.md not written again:\n%s", md)
+			}
 			for _, want := range tc.want {
 				if !strings.Contains(md, want) {
 					t.Errorf("minutes.md lacks %q:\n%s", want, md)
@@ -311,5 +436,26 @@ func TestMinutesRenderedAgainKeepTheirLanguage(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The minutes' and the recap's Markdown name their sections as the web's recording page does in every language, so
+// minutes copied from it read like the screen (web/src/i18n/locales/<lang>/knowledge-kbdetail.json).
+func TestMinutesHeadingsAreTheWebsSections(t *testing.T) {
+	for _, l := range i18n.Langs {
+		raw, err := os.ReadFile(filepath.Join("..", "..", "..", "web", "src", "i18n", "locales", string(l), "knowledge-kbdetail.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var web map[string]string
+		if err := json.Unmarshal(raw, &web); err != nil {
+			t.Fatal(err)
+		}
+		for hub, page := range map[string]string{"kb-minutes.points": "minutes_points", "kb-minutes.decisions": "minutes_decisions",
+			"kb-minutes.actions": "minutes_actions", "kb-minutes.open": "minutes_open", "kb-day-recap.actions": "recap_actions"} {
+			if got := i18n.T(l, hub); got != web[page] {
+				t.Errorf("%s: %s is %q, the web's %s %q", l, hub, got, page, web[page])
+			}
+		}
 	}
 }

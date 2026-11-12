@@ -11,9 +11,10 @@ import (
 // minutes.json and recap.json keep it, so a later render of their Markdown (a photo deleted, an erase) says the same.
 
 // outputLang is what recording r's minutes, summary or recap are written in: the recording's language (the one the
-// phone transcribed it in: zh-CN, en-US, ja-JP), else the owner's (OwnerLanguage), else zh-Hans.
+// phone transcribed it in: zh-CN, en-US, ja-JP), else the owner's (OwnerLanguage), else zh-Hans. A recording's language
+// the hub has no catalog for (ko-KR) counts as none: its headings could not be said in it.
 func (e *Engine) outputLang(r *Recording) i18n.Lang {
-	if l := i18n.Resolve(r.Language); l != "" {
+	if l := i18n.Match(r.Language); l != "" {
 		return l
 	}
 	if e.OwnerLanguage != nil {

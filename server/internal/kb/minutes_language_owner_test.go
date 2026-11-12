@@ -29,6 +29,10 @@ func TestOutputLanguage(t *testing.T) {
 		{"", owner("fr"), i18n.ZhHans}, // not one of the hub's
 		{"", owner(""), i18n.ZhHans},
 		{"", nil, i18n.ZhHans},
+		// A language the hub has no catalog for is not said: the owner's, not en (#5906).
+		{"ko-KR", owner(i18n.Ja), i18n.Ja},
+		{"fr-FR", owner(i18n.ZhHans), i18n.ZhHans},
+		{"yue-CN", nil, i18n.ZhHans},
 	} {
 		e := &Engine{OwnerLanguage: tc.owner}
 		if got := e.outputLang(&Recording{Language: tc.recording}); got != tc.want {
@@ -37,21 +41,23 @@ func TestOutputLanguage(t *testing.T) {
 	}
 }
 
-// A meeting that says no language is written in the owner's; with no owner's language either it stays Chinese, its
-// system prompt the one the zh golden has.
+// A meeting that says no language is written in the owner's, and so is one in a language the hub has no catalog for
+// (not in English); with no owner's language either it stays Chinese, its system prompt the one the zh golden has.
 func TestMinutesInTheOwnersLanguage(t *testing.T) {
 	zh, err := os.ReadFile(filepath.Join("testdata", "prompts", "minutes.system.golden"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
-		name  string
-		owner func() i18n.Lang
-		ask   string
-		want  []string
-		code  string
+		name, tag string
+		owner     func() i18n.Lang
+		ask       string
+		want      []string
+		code      string
 	}{
 		{name: "ja", owner: func() i18n.Lang { return i18n.Ja }, ask: "都用日本語写", want: []string{"## 要点\n", "- 日時："}, code: "ja"},
+		{name: "unsupported", tag: "ko-KR", owner: func() i18n.Lang { return i18n.Ja }, ask: "都用日本語写",
+			want: []string{"## 要点\n", "- 日時："}, code: "ja"},
 		{name: "none", ask: string(zh), want: []string{"## 讨论要点\n", "- 时间："}, code: "zh-Hans"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -60,7 +66,7 @@ func TestMinutesInTheOwnersLanguage(t *testing.T) {
 			e.OwnerLanguage = tc.owner
 			start := time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone)
 			u := meetingUpload(1, start, mixedMeeting...)
-			u.Language = ""
+			u.Language = tc.tag
 			putRecording(t, e, recID, u, start.Add(time.Hour))
 			if n := e.WriteMinutes(context.Background(), 2); n != 1 || len(m.calls) != 1 {
 				t.Fatalf("wrote %d in %d calls", n, len(m.calls))

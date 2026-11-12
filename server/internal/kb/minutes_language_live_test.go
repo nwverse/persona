@@ -158,7 +158,7 @@ func TestMinutesLanguageLive(t *testing.T) {
 	for _, tc := range []struct{ tag, lang, heading, recapHeading string }{
 		{"zh-CN", "zh-Hans", "## 讨论要点", "全天回顾"},
 		{"en-US", "en", "## Key points", "# Day recap · "},
-		{"ja-JP", "ja", "## 要点", "の 1 日のまとめ"},
+		{"ja-JP", "ja", "## 要点", "の1日のまとめ"},
 	} {
 		e := goldenEngine(t, model)
 		e.Logf = t.Logf

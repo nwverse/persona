@@ -576,11 +576,11 @@ func (e *Engine) writeMinutes(ctx context.Context, id string) error {
 		}
 		read = notedLines(read, merge.Parts) // the merging call saw the notes, not the transcript
 	}
-	m, err := e.buildMinutes(&r, ans, read, zone)
+	m, err := e.buildMinutes(&r, ans, read, zone, lang)
 	if err != nil {
 		return err
 	}
-	m.Partial, m.Language = partial, string(lang)
+	m.Partial = partial
 	return e.storeMinutes(ctx, &r, m)
 }
 
@@ -599,6 +599,19 @@ func (e *Engine) minutesInput(r *Recording, zone *time.Location) prompts.KBMinut
 }
 
 var weekdayZH = [...]string{"周日", "周一", "周二", "周三", "周四", "周五", "周六"}
+
+// untitledMinutes is the title of r's minutes in lang when neither the user, the calendar nor the model gives one: r's
+// summary's title, else when it started, said in lang (kb-minutes.untitled). Chinese minutes take r's name in lists,
+// which says the same (Store.recordingName).
+func untitledMinutes(r *Recording, zone *time.Location, lang i18n.Lang) string {
+	switch {
+	case lang == i18n.ZhHans:
+		return r.Name
+	case r.AITitle != "":
+		return r.AITitle
+	}
+	return i18n.T(lang, "kb-minutes.untitled", i18n.Args{"when": r.StartedAt.In(zone).Format("2006-01-02 15:04")})
+}
 
 // calendarTitle is the phone calendar's title of r, else the matched calendar item's ("" without either).
 func calendarTitle(r *Recording) string {
@@ -757,8 +770,8 @@ func clipRunes(s string, n int) string { return clip(strings.Join(strings.Fields
 
 // buildMinutes checks the model's answer against the lines it read: every item must cite one of them (a transcript
 // line, or a photo: its time then), a person must be named in them or in the calendar, a due date must be a real day
-// from the meeting on (within a year). A photo's words count as said.
-func (e *Engine) buildMinutes(r *Recording, a minutesAnswer, read []minutesLine, zone *time.Location) (*Minutes, error) {
+// from the meeting on (within a year). A photo's words count as said. The minutes are in lang.
+func (e *Engine) buildMinutes(r *Recording, a minutesAnswer, read []minutesLine, zone *time.Location, lang i18n.Lang) (*Minutes, error) {
 	at, photoSec := map[int]float64{}, map[int]float64{}
 	var saidB strings.Builder
 	for _, l := range read {
@@ -806,7 +819,8 @@ func (e *Engine) buildMinutes(r *Recording, a minutesAnswer, read []minutesLine,
 		}
 		return sec, 0, ok
 	}
-	m := &Minutes{Title: cmp.Or(r.Title, calendarTitle(r), oneLine(a.Title), r.Name), When: minutesWhen(r, zone)}
+	m := &Minutes{Title: cmp.Or(r.Title, calendarTitle(r), oneLine(a.Title), untitledMinutes(r, zone, lang)),
+		When: minutesWhen(r, zone), Language: string(lang)}
 	m.Start, m.End = minutesSpan(r, zone)
 	if r.Calendar != nil && r.Calendar.Location != "" {
 		m.Where = r.Calendar.Location
