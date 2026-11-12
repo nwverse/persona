@@ -113,9 +113,11 @@ func (c *conversation) handOverBound(name, task, delegation string, gen int, at 
 		r := c.newBoundRun(task, delegation, gen)
 		c.logf("run %s: for %s, in session %d", r.ID, name, sessionNo(gen))
 		switch {
-		case !spoken && task != "" && anyway:
+		case !spoken && task != "" && anyway && r.task == strings.TrimSpace(task):
 			// Kept as it would have gone: the user may send it anyway (the app's Send Anyway, #5904), their own
 			// confirmation past the gate. An app from before it has no such button: nothing kept, nothing said of it.
+			// Only a task the run shows whole (taskMost): the app quotes the run's task beside the button, and the
+			// user must see all of what they confirm; a longer one is only said again.
 			r.message = c.message(task, recent)
 			c.runs.notSent(r, sendFail{state: runRefused, code: "unprompted", prompt: "unprompted", resendable: true})
 		case !spoken:
