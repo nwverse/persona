@@ -257,7 +257,8 @@ class AssistantTraysShotsTest {
         val reported = running.copy(sessionId = "reported", title = "Background checks", plan = null, activity = null, backgroundWorking = true)
         val sleeping = running.copy(sessionId = "sleeping", title = "Wait for the deploy", plan = null, activity = null,
             backgroundWorking = true, backgroundWaiting = true)
-        val hand = manual.copy(title = "Watch the logs", activity = null, backgroundWorking = true, backgroundWaiting = true)
+        val hand = manual.copy(title = "Watch the logs", activity = null, lastText = "Following the deploy log",
+            backgroundWorking = true, backgroundWaiting = true)
         val fixture = Fixture().apply {
             requests.value = emptyList(); drafts.value = emptyList()
             returnedTodos = listOf(reported, sleeping).mapIndexed { i, agent -> Todo("bg-$i", agent.title, origin = "main", createdAt = at, updatedAt = at,
