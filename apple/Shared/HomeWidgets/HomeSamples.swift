@@ -28,7 +28,7 @@ enum HomeSamples {
             ? .init(name: t("Milk Frog", "奶蛙"), package: "nwverse/sample", primaryLight: 0xF6C23E, primaryDark: 0xF6C23E)
             : .init(name: "Mochi")
         s.agents.rows = [
-            .init(id: "studio/s1", title: t("Fix the sign-in redirect", "修好登录后的跳转"), state: .needsYou, kind: .coding, machine: "studio",
+            .init(id: "studio/s1", title: t("Fix the sign-in redirect", "修好登录后的跳转"), state: .needsYou, kind: .coding, machine: "studio", place: t("Studio", "工作室"),
                   since: ago(4), ask: t("Plan Awaiting Approval", "计划等你审批")),
             .init(id: "hub/s2", title: t("Draft the weekly report", "写周报初稿"), state: .needsYou, kind: .assistant, machine: "hub",
                   since: ago(12), ask: t("Persona Has a Question", "Persona 在问你")),
@@ -46,14 +46,17 @@ enum HomeSamples {
                 .init(title: t("1:1 with Alex", "和 Alex 一对一"), start: at(16, 30), end: at(17, 0)),
                 .init(title: t("Dinner with Sam", "和小林吃晚饭"), start: at(19, 0), end: at(21, 0)),
             ],
-            todos: [
-                .init(id: "t1", title: t("Renew the passport", "续签护照"), overdue: true, high: true),
-                .init(id: "t2", title: t("Call the bank", "给银行回电话")),
+            source: .calendar)
+        s.todos = .init(
+            items: [
+                .init(id: "t1", title: t("Renew the passport", "续签护照"), due: at(9, 0), overdue: true),
+                .init(id: "t2", title: t("Call the bank", "给银行回电话"), due: at(15, 30)),
                 .init(id: "t3", title: t("Buy a birthday gift", "买生日礼物")),
                 .init(id: "t4", title: t("Book the dentist", "约牙医")),
                 .init(id: "t5", title: t("Reply to the landlord", "回复房东")),
+                .init(id: "t6", title: t("Water the plants", "给植物浇水")),
             ],
-            todoCount: 6, overdue: 1)
+            count: 6, overdue: 1)
         s.usage = .init(
             accounts: [
                 .init(id: "a1", name: "Claude Max", windows: [.init(label: "5h", minutes: 300, percent: 86, resetsAt: at(15, 40)),
@@ -65,12 +68,13 @@ enum HomeSamples {
             hourly: [0, 0, 0, 0, 0, 0, 0, 12_000, 48_000, 96_000, 150_000, 132_000, 88_000, 210_000],
             costToday: 3.4)
         s.machines = [
-            .init(id: "studio", name: t("Studio", "工作室"), online: true, working: 2, needsYou: 1, load: 46),
+            .init(id: "studio", name: t("Studio", "工作室"), online: true, working: 2, needsYou: 1, load: 46, icon: "desktop"),
             .init(id: "air", name: "MacBook Air", online: true, working: 1, load: 18),
-            .init(id: "hub", name: t("Home Server", "家里的服务器"), online: true, load: 8),
-            .init(id: "mini", name: t("Old Mac mini", "旧 Mac mini"), online: false),
+            .init(id: "hub", name: t("Home Server", "家里的服务器"), online: true, load: 8, icon: "server"),
+            .init(id: "mini", name: t("Old Mac mini", "旧 Mac mini"), online: false, icon: "desktop"),
         ]
-        s.health = .init(steps: 6842, stepsAverage: 7900, sleepHours: 7.2, restingHeartRate: 58, activeEnergy: 412)
+        s.health = .init(steps: 6842, stepsAverage: 7900, sleepHours: 7.2, restingHeartRate: 58, activeEnergy: 412,
+                         week: [9120, 7340, 10480, 6210, 8890, 7210, 6842])
         s.inbox = .init(needsYou: 3, unread: 9, latest: [
             .init(id: "m1", sender: "Alex", summary: t("Can you confirm the venue for Friday?", "周五的场地你能确认一下吗？"), at: at(12, 42), needsYou: true),
             .init(id: "m2", sender: t("Team chat", "项目群"), summary: t("The release went out; two follow-ups for you", "版本发出去了，有两件事要你跟进"), at: at(11, 10), needsYou: true),
@@ -78,6 +82,24 @@ enum HomeSamples {
             .init(id: "m4", sender: t("School", "学校"), summary: t("Parent evening moved to next Tuesday", "家长会改到下周二"), at: at(8, 55)),
             .init(id: "m5", sender: "Sam", summary: t("Dinner at 7 still good?", "晚上 7 点吃饭还行吗？"), at: at(8, 20)),
         ])
+        return s
+    }
+
+    /// The same day with nothing to show: every widget's empty state.
+    static func empty(zh: Bool = false) -> HomeSnapshot {
+        var s = busy(zh: zh)
+        s.agents = .init()
+        s.today?.events = []
+        s.todos = .init()
+        s.inbox = .init(needsYou: 0, unread: 0, latest: [])
+        return s
+    }
+
+    /// To-dos just ticked on the widget: one on its way to the hub, one the hub refused.
+    static func ticked(zh: Bool = false) -> HomeSnapshot {
+        var s = busy(zh: zh)
+        s.todos?.items[1].tick = .ticking
+        s.todos?.items[2].tick = .failed
         return s
     }
 

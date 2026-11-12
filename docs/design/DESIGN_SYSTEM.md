@@ -887,13 +887,13 @@ The watch widget extension doesn't build `Theme`, so complications take their fo
 
 ### 3.14 Home Screen and Lock Screen widgets
 
-The widget extension doesn't build `Theme`: Persona's own widgets take their colors, type, sizes and marks from `HomeWidgetTokens` (`apple/Shared/Design/HomeWidgetTokens.swift`), whose symbols mirror `Theme.Icon` with an `// icon:` note, as the watch's complications do. The numerals and faces are fixed sizes (the system sets a widget's size); every line of words is a text style. Rules and every widget in `docs/apple/home-widgets.md`.
+The widget extension doesn't build `Theme`: Persona's widgets take their colors, type, sizes and marks from `HomeWidgetTokens` (`apple/Shared/Design/HomeWidgetTokens.swift`), whose symbols mirror `Theme.Icon` with an `// icon:` note, as the watch's complications do. Heroes, rings and faces are fixed sizes (the system sets a widget's size); every line of words is a text style. Every widget in `docs/apple/home-widgets.md`.
 
-- **The stage**: every widget stands on the app icon's paper (its dark in the dark) with the icon's ink; the only strong colors are the agent states' (`StatusPalette`), a recording's red and the persona's glow. A row of them reads as one family.
-- **The Persona widget**: the persona between four tiles of modules the user chose, the face cut out where the tiles meet (`PersonaHero`). A module's own widget has its name top left and the persona top right, its face telling how that module is (`ModuleWidgetView`).
-- **Moods**: the Live Activity's persona states plus Done (an agent finished, unseen), in the same order; a snapshot over 30 minutes old makes the face offline and the tiles step back.
-- **Every rendering mode**: in tinted, clear and Lock Screen modes tiles become a faint wash, Mochi a line drawing (`MochiGlyph`), a package's picture gray, and every state color, cue and button goes in the accent group (`homeAccent()`); a mark on a filled shape is knocked out of it.
-- **Counts** are the app's own (Needs You per session, section 4.8; the Inbox's Needs You; the Machines page's windows); inbox and health content is `privacySensitive`.
+- **One widget, one job, one hero**: a number, a ring, a chart or a button, as the system's own widgets (Calendar, Reminders, Fitness, Batteries). A plain surface, no card inside a card; a small widget never holds a list.
+- **One color per widget**, on its name at the top left and its hero; the agent states keep `StatusPalette`'s.
+- **The persona is an accent**: a small face at the top right whose mood says how that widget's subject is, the empty states, and the state before pairing. It never takes the hero's place.
+- **Every rendering mode**: in tinted, clear and Lock Screen modes every colored part goes in the accent group (`homeTone`, `homeAccent()`); a mark on a filled disc is knocked out of it; Mochi becomes a line drawing (`MochiGlyph`).
+- **Counts** are the app's own (Needs You per session, section 4.8; the Inbox's Needs You; the Machines page's windows); inbox and health content is `privacySensitive`. A to-do ticked on a widget shows done at once and says so in red when the hub refuses it.
 
 ## 4. Interaction patterns
 

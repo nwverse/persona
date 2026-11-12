@@ -171059,6 +171059,29 @@
         }
       }
     },
+    "%lld of %lld online [Home Widgets]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld of %2$lld online"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$lld 台中 %1$lld 台在线"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$lld台中%1$lld台オンライン"
+          }
+        }
+      }
+    },
     "%lld steps [Home Widgets]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -171090,52 +171113,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%lld歩"
-          }
-        }
-      }
-    },
-    "%lld bpm [Home Widgets]" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld bpm"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld 次/分"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld bpm"
-          }
-        }
-      }
-    },
-    "%lld of %lld online [Home Widgets]" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$lld of %2$lld online"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%2$lld 台中 %1$lld 台在线"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%2$lld台中%1$lld台オンライン"
           }
         }
       }
@@ -171175,7 +171152,7 @@
         }
       }
     },
-    "%lld to-dos [Home Widgets]" : {
+    "%lld to-dos today [Home Widgets]" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
@@ -171184,13 +171161,13 @@
               "one" : {
                 "stringUnit" : {
                   "state" : "translated",
-                  "value" : "%lld to-do"
+                  "value" : "%lld to-do today"
                 }
               },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
-                  "value" : "%lld to-dos"
+                  "value" : "%lld to-dos today"
                 }
               }
             }
@@ -171199,36 +171176,36 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld 个待办"
+            "value" : "今天 %lld 个待办"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ToDo %lld件"
+            "value" : "今日のToDo %lld件"
           }
         }
       }
     },
-    "%lld done [Home Widgets]" : {
+    "%lld just finished [Home Widgets]" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld done"
+            "value" : "%lld just finished"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld 个完成"
+            "value" : "%lld 个刚完成"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "完了%lld件"
+            "value" : "%lld件が完了"
           }
         }
       }
@@ -171256,29 +171233,6 @@
         }
       }
     },
-    "%lld kcal [Home Widgets]" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld kcal"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld 千卡"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld kcal"
-          }
-        }
-      }
-    },
     "%lld more [Home Widgets]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -171291,13 +171245,48 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "还有 %lld 个"
+            "value" : "还有 %lld 条"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "ほか%lld件"
+          }
+        }
+      }
+    },
+    "%lld more events [Home Widgets]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld more event"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld more events"
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还有 %lld 个日程"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ほかの予定%lld件"
           }
         }
       }
@@ -171348,25 +171337,25 @@
         }
       }
     },
-    "Active [Home Widgets]" : {
+    "Account [Home Widgets]" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Active"
+            "value" : "Account"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "活动"
+            "value" : "账户"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "アクティブ"
+            "value" : "アカウント"
           }
         }
       }
@@ -171394,6 +171383,75 @@
         }
       }
     },
+    "Agents on Your Computers [Home Widgets]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agents on Your Computers"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "电脑上的 Agent"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コンピューターのAgent"
+          }
+        }
+      }
+    },
+    "All Agents [Home Widgets]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "All Agents"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全部 Agent"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "すべてのAgent"
+          }
+        }
+      }
+    },
+    "All Computers [Home Widgets]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "All Computers"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全部电脑"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "すべてのコンピューター"
+          }
+        }
+      }
+    },
     "All Day [Home Widgets]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -171417,25 +171475,94 @@
         }
       }
     },
-    "All Quiet [Home Widgets]" : {
+    "All done for today [Home Widgets]" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "All Quiet"
+            "value" : "All done for today"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "一切安好"
+            "value" : "今天的都做完了"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "特になし"
+            "value" : "今日の分はすべて完了"
+          }
+        }
+      }
+    },
+    "Allow Calendars in Persona to see your events [Home Widgets]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Allow Calendars in Persona to see your events"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 Persona 里允许访问日历后显示日程"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Personaでカレンダーを許可すると予定が表示されます"
+          }
+        }
+      }
+    },
+    "Allow Health in Persona to see today [Home Widgets]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Allow Health in Persona to see today"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 Persona 里允许访问健康后显示"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Personaでヘルスケアを許可すると表示されます"
+          }
+        }
+      }
+    },
+    "Any Computer [Home Widgets]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Any Computer"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "任意电脑"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "すべて"
           }
         }
       }
@@ -171486,6 +171613,75 @@
         }
       }
     },
+    "Complete [Home Widgets]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Complete"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完成"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完了"
+          }
+        }
+      }
+    },
+    "Complete To-Do [Home Widgets]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Complete To-Do"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完成待办"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ToDoを完了"
+          }
+        }
+      }
+    },
+    "Computer [Home Widgets]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Computer"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "电脑"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コンピューター"
+          }
+        }
+      }
+    },
     "Computers [Home Widgets]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -171509,6 +171705,29 @@
         }
       }
     },
+    "Couldn't complete — tap to try again [Home Widgets]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't complete — tap to try again"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没勾上，点一下重试"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完了できませんでした。タップで再試行"
+          }
+        }
+      }
+    },
     "Health [Home Widgets]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -171528,6 +171747,52 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "ヘルスケア"
+          }
+        }
+      }
+    },
+    "How full your subscription windows are, and today's tokens. [Home Widgets]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "How full your subscription windows are, and today's tokens."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "订阅额度用了多少，以及今天的 token。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サブスクリプションの使用状況と今日のトークン。"
+          }
+        }
+      }
+    },
+    "How many agents need you, and the one waiting longest. [Home Widgets]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "How many agents need you, and the one waiting longest."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "几个 Agent 在等你，以及等得最久的那个。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "対応を待つAgentの数と、いちばん長く待っているもの。"
           }
         }
       }
@@ -171578,25 +171843,71 @@
         }
       }
     },
-    "Load [Home Widgets]" : {
+    "Just Finished [Home Widgets]" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Load"
+            "value" : "Just Finished"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "负载"
+            "value" : "刚完成"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "負荷"
+            "value" : "完了したばかり"
+          }
+        }
+      }
+    },
+    "Load %lld%% [Home Widgets]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Load %lld%%"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "负载 %lld%%"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "負荷 %lld%%"
+          }
+        }
+      }
+    },
+    "Messages that need you, and the newest. [Home Widgets]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Messages that need you, and the newest."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要你处理的消息，以及最新的几条。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "対応が必要なメッセージと最新のもの。"
           }
         }
       }
@@ -171647,6 +171958,29 @@
         }
       }
     },
+    "Need You [Home Widgets]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Need You"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "条要你处理"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "件の要対応"
+          }
+        }
+      }
+    },
     "No computers yet [Home Widgets]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -171666,6 +172000,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "コンピューターはまだありません"
+          }
+        }
+      }
+    },
+    "No messages need you [Home Widgets]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No messages need you"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有要你处理的消息"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "対応が必要なメッセージはありません"
           }
         }
       }
@@ -171716,71 +172073,48 @@
         }
       }
     },
-    "No to-dos today [Home Widgets]" : {
+    "Nothing needs you [Home Widgets]" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No to-dos today"
+            "value" : "Nothing needs you"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "今天没有待办"
+            "value" : "没有要你处理的事"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "今日のToDoはありません"
+            "value" : "対応が必要なものはありません"
           }
         }
       }
     },
-    "Nothing needs you. [Home Widgets]" : {
+    "of %lld online [Home Widgets]" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Nothing needs you."
+            "value" : "of %lld online"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "没有要你处理的事。"
+            "value" : "/ %lld 台在线"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "対応が必要なものはありません。"
-          }
-        }
-      }
-    },
-    "Nothing new [Home Widgets]" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Nothing new"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "没有新消息"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "新着なし"
+            "value" : "/ %lld台オンライン"
           }
         }
       }
@@ -171808,29 +172142,6 @@
         }
       }
     },
-    "Online [Home Widgets]" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Online"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "在线"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "オンライン"
-          }
-        }
-      }
-    },
     "Open Persona to connect [Home Widgets]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -171854,25 +172165,25 @@
         }
       }
     },
-    "Out of Date [Home Widgets]" : {
+    "Persona's Tasks [Home Widgets]" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Out of Date"
+            "value" : "Persona's Tasks"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已过时"
+            "value" : "Persona 的任务"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "古いデータ"
+            "value" : "Personaのタスク"
           }
         }
       }
@@ -171946,48 +172257,48 @@
         }
       }
     },
-    "Resting [Home Widgets]" : {
+    "Resting bpm [Home Widgets]" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Resting"
+            "value" : "Resting bpm"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "静息"
+            "value" : "静息心率"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "安静時"
+            "value" : "安静時心拍数"
           }
         }
       }
     },
-    "Schedule [Home Widgets]" : {
+    "Show [Home Widgets]" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Schedule"
+            "value" : "Show"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "日程"
+            "value" : "显示"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "予定"
+            "value" : "表示"
           }
         }
       }
@@ -172015,6 +172326,29 @@
         }
       }
     },
+    "Start a meeting recording with one tap. [Home Widgets]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start a meeting recording with one tap."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一点就开始会议录音。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ワンタップで会議の録音を開始。"
+          }
+        }
+      }
+    },
     "Steps [Home Widgets]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -172027,13 +172361,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "步数"
+            "value" : "步"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "歩数"
+            "value" : "歩"
           }
         }
       }
@@ -172084,6 +172418,52 @@
         }
       }
     },
+    "The Fullest [Home Widgets]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The Fullest"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用得最多的"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最も使用しているもの"
+          }
+        }
+      }
+    },
+    "To-Do [Home Widgets]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "To-Do"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "待办"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ToDo"
+          }
+        }
+      }
+    },
     "To-Dos [Home Widgets]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -172130,48 +172510,94 @@
         }
       }
     },
-    "Tokens [Home Widgets]" : {
+    "Today's date and what's next on your calendar. [Home Widgets]" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tokens"
+            "value" : "Today's date and what's next on your calendar."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Token"
+            "value" : "今天的日期和接下来的日程。"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "トークン"
+            "value" : "今日の日付と次の予定。"
           }
         }
       }
     },
-    "Tokens a Minute [Home Widgets]" : {
+    "Today's steps, last night's sleep and your resting heart rate. [Home Widgets]" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tokens a Minute"
+            "value" : "Today's steps, last night's sleep and your resting heart rate."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "每分钟 token"
+            "value" : "今天的步数、昨晚的睡眠和静息心率。"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "毎分のトークン"
+            "value" : "今日の歩数、昨夜の睡眠、安静時心拍数。"
+          }
+        }
+      }
+    },
+    "Today's To-Dos [Home Widgets]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Today's To-Dos"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今天的待办"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今日のToDo"
+          }
+        }
+      }
+    },
+    "Today's to-dos. Tick them off right on the widget. [Home Widgets]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Today's to-dos. Tick them off right on the widget."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今天的待办，直接在组件上勾掉。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今日のToDo。ウィジェットでそのまま完了できます。"
           }
         }
       }
@@ -172241,6 +172667,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "使用量"
+          }
+        }
+      }
+    },
+    "Your computers: how busy they are, and which are offline. [Home Widgets]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your computers: how busy they are, and which are offline."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的电脑：忙不忙、哪台离线。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コンピューターの忙しさとオフラインのもの。"
           }
         }
       }

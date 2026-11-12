@@ -5,149 +5,144 @@ import UIKit
 
 /// The Home Screen and Lock Screen widgets (docs/apple/home-widgets.md). The widget extension builds this file but not
 /// `Theme`, as it does `IslandMetrics` and `WatchFaceTokens`: a table of its own. Widget sizes are the system's, so the
-/// big numerals and the faces are fixed sizes (the documented exception in DESIGN_SYSTEM.md 2.2); every line of words
-/// is a text style and follows the text size.
+/// hero numbers, rings and faces are fixed sizes (the documented exception in DESIGN_SYSTEM.md 2.2); every line of
+/// words is a text style and follows the text size.
 ///
-/// The look: the persona's stage. Every widget stands on the paper of the app icon (its dark in the dark) with the
-/// icon's ink for words, so a row of them reads as one family; the only strong colors are the agent states'
-/// (`StatusPalette`), a recording's red and the persona's own color behind its face.
+/// The look is the system's own widgets': a plain surface, one widget one job, one hero (a number, a ring, a chart, a
+/// button), one color that says which widget it is. The persona is an accent: a small face in the corner, the empty
+/// states, the hint that something needs you.
 nonisolated enum HomeWidgetTokens {
-    // MARK: Stage
+    // MARK: Surface
 
-    /// The widget's background, top to bottom: the icon's paper, or its dark (`MochiInk`'s disc, lifted a little so
-    /// the face's own disc still shows on it).
-    static let stageTop = Color(light: 0xFBF5EE, dark: 0x2B2421)
-    static let stageBottom = Color(light: 0xF1E5D6, dark: 0x181311)
-    /// A module's tile on the stage.
-    static let tile = dynamic(light: (0xFFFFFF, 0.72), dark: (0xFFFFFF, 0.07))
-    /// A tile's hairline edge, so white on paper still has a shape.
-    static let tileEdge = dynamic(light: (0x1D1816, 0.06), dark: (0xFFFFFF, 0.06))
-    /// The same tile in the tinted, clear and Lock Screen modes, where the system paints every opaque pixel in one
-    /// color: only a faint wash, or a tile would be a solid block.
-    static let tileMono = Color.white.opacity(0.14)
-    /// A track under a bar or a ring.
-    static let track = dynamic(light: (0x1D1816, 0.08), dark: (0xFFFFFF, 0.12))
-    static let trackMono = Color.white.opacity(0.25)
+    /// The widget's background: the system widgets' white, and their dark gray.
+    static let surface = Color(light: 0xFFFFFF, dark: 0x1C1C1E)
+    /// A ring's or a bar's track, and a monogram's disc.
+    static let track = dynamic(light: (0x787880, 0.16), dark: (0x787880, 0.32))
+    /// The same in the tinted, clear and Lock Screen modes, where the system paints every opaque pixel in one color.
+    static let trackMono = Color.white.opacity(0.22)
+    /// A line between rows (the large widgets' lists).
+    static let rule = dynamic(light: (0x3C3C43, 0.12), dark: (0x545458, 0.6))
 
-    // MARK: Ink
+    // MARK: Each widget's color
 
-    /// Words: the icon's ink on paper, the paper on the dark.
-    static let ink = Color(light: 0x1D1816, dark: 0xF6EEE6)
-    /// Second lines and labels.
-    static let inkSoft = Color(light: 0x6E6763, dark: 0xB3AAA4)
-    /// Times, counts of the quiet kind, empty states.
-    static let inkFaint = Color(light: 0x9C938D, dark: 0x7D746F)
-
-    // MARK: States (the app's, StatusPalette; done is the app's unread)
-
+    /// Agents: the agent states' own (`StatusPalette`), Needs You first.
     static let needsYou = StatusPalette.needsYou
     static let working = StatusPalette.working
     static let done = StatusPalette.unread
-    /// A recording in progress and the Record button: the system's red (`Palette.recordingRed`, its darker button red
-    /// under a white mark).
-    static let recording = Palette.recordingRed
-    static let recordButton = Palette.recordingButton
-    /// The persona's glow behind its face when it has nothing to say: Mochi's cheek, a package's primary.
-    static let mochiGlow = Mochi.cheekColor
-    /// How strong a state's glow is behind the face, and how far it reaches past the face (× its side).
-    static let glowOpacity = 0.2
-    static let glowReach: CGFloat = 0.62
-
-    /// A subscription window's fill by how full it is: calm, getting there (≥ 80 %, `UsageWindows.isWarn`), full.
+    /// Today: the app icon's coral, on the weekday and the events.
+    static let today = Palette.coral
+    /// To-dos: orange, its overdue ones red.
+    static let todos = Color(light: 0xF08A00, dark: 0xFF9F0A)
+    static let overdue = Color(light: 0xD93A3A, dark: 0xFF5F57)
+    /// Usage: a window by how full it is: calm, getting there (≥ 80 %, `UsageWindows.isWarn`), full (≥ 95 %).
     static let usageCalm = Color(light: 0x248A3D, dark: 0x30D158)
     static let usageWarn = Color(light: 0xF08A00, dark: 0xFF9F0A)
     static let usageFull = Color(light: 0xD93A3A, dark: 0xFF5F57)
     static let warnAt = 80.0
-    /// Content from a snapshot older than `HomeSnapshot.staleAfter`.
-    static let staleOpacity = 0.55
     static let fullAt = 95.0
-
-    /// An event on Today: the app icon's coral.
-    static let event = Palette.coral
-
-    /// Health's three measures.
-    static let steps = Color(light: 0xE0457B, dark: 0xFF5C8F)
+    /// Today's tokens by the hour; the current hour in full.
+    static let tokens = Color(light: 0x2A78D6, dark: 0x3987E5)
+    /// Computers: a computer's ring when it is calm (its load); working or waiting take the agent states'.
+    static let computerCalm = usageCalm
+    /// Record: the system's recording red, and the button's darker red under a white mark.
+    static let recording = Palette.recordingRed
+    static let recordButton = Palette.recordingButton
+    /// Health: steps, sleep, heart.
+    static let steps = Color(light: 0xE0336E, dark: 0xFF4F87)
     static let sleep = Color(light: 0x5B4FD6, dark: 0x9C94FF)
     static let heart = Color(light: 0xD93A3A, dark: 0xFF5F57)
+    /// Inbox: Needs You's blue.
+    static let inbox = StatusPalette.needsYou
 
     // MARK: Type
 
-    /// The one number a widget is about ("2" need you): rounded, bold, as large as the size allows.
-    static let numeralHero = Font.system(size: 48, weight: .bold, design: .rounded)
-    static let numeralLarge = Font.system(size: 34, weight: .bold, design: .rounded)
-    static let numeral = Font.system(size: 24, weight: .bold, design: .rounded)
-    static let numeralSmall = Font.system(size: 17, weight: .bold, design: .rounded)
-    /// How far a numeral may shrink to fit ("1.2M").
-    static let numeralMinScale: CGFloat = 0.5
+    /// The widget's name, in its color, at the top (as Calendar's weekday).
+    static let title = Font.system(.footnote, weight: .semibold)
+    /// The one number a widget is about.
+    static let hero = Font.system(size: 52, weight: .semibold, design: .rounded)
+    static let heroMedium = Font.system(size: 40, weight: .semibold, design: .rounded)
+    static let heroSmall = Font.system(size: 28, weight: .semibold, design: .rounded)
     /// The day of the month on Today.
-    static let day = Font.system(size: 34, weight: .heavy, design: .rounded)
-    /// A module's name above its content.
-    static let label = Font.system(.caption2, design: .rounded, weight: .bold)
-    /// A line of content and its emphasized form.
-    static let line = Font.system(.footnote)
-    static let lineStrong = Font.system(.footnote, weight: .semibold)
-    /// The persona's words in its bubble.
-    static let speech = Font.system(.subheadline, design: .rounded, weight: .semibold)
-    /// Times and second lines.
-    static let meta = Font.system(.caption2)
-    static let metaStrong = Font.system(.caption2, weight: .semibold)
+    static let day = Font.system(size: 44, weight: .regular)
+    /// How far a hero may shrink to fit ("1.2M", "12,480").
+    static let heroMinScale: CGFloat = 0.5
+    /// The line under a hero, and the first line of a row.
+    static let headline = Font.system(.subheadline, weight: .semibold)
+    /// A row's or a hero's second line.
+    static let body = Font.system(.footnote)
+    /// Times, counts beside, chart labels.
+    static let caption = Font.system(.caption)
+    static let captionStrong = Font.system(.caption, weight: .semibold)
+    /// A ring's number in its middle.
+    static let ringNumber = Font.system(size: 30, weight: .semibold, design: .rounded)
+    static let ringNumberSmall = Font.system(size: 15, weight: .semibold, design: .rounded)
     /// Lock Screen: the rectangular widget's first line and the rest.
     static let lockTitle = Font.system(.headline)
     static let lockLine = Font.system(.caption)
 
-    // MARK: Spacing and shape
+    // MARK: Spacing
 
-    /// Between a widget's parts, and inside a tile.
     static let gap: CGFloat = 8
     static let tight: CGFloat = 4
     static let hair: CGFloat = 2
-    static let tilePadding: CGFloat = 10
-    /// A tile's corners; the tiles in a widget's corners follow the widget's own (`ContainerRelativeShape`).
-    static let tileRadius: CGFloat = 14
-    static let chipRadius: CGFloat = 6
-    static let bar: CGFloat = 6
-    static let barThin: CGFloat = 4
-    static let dot: CGFloat = 7
-    static let ring: CGFloat = 5
-    static let ringThin: CGFloat = 3.5
+    /// Between a large widget's rows.
+    static let row: CGFloat = 10
+    /// Between a medium widget's two halves.
+    static let halves: CGFloat = 16
 
-    // MARK: Faces
+    // MARK: Shapes
 
-    /// The persona at the middle of the Persona widget, by size.
-    static let faceSmall: CGFloat = 60
-    static let faceMedium: CGFloat = 76
-    static let faceLarge: CGFloat = 100
-    static let faceExtraLarge: CGFloat = 136
-    /// The stage's color around the middle face, so the face stands clear of the four tiles it sits between.
-    static let faceGap: CGFloat = 5
-    /// The persona in a module widget's corner, saying how that module is.
-    static let faceBadge: CGFloat = 30
+    /// An event's color bar.
+    static let bar: CGFloat = 4
+    /// Rings: the hero ring of a small widget, the medium row's, the computers' four.
+    static let ringHero: CGFloat = 96
+    static let ringMedium: CGFloat = 64
+    static let ringSmall: CGFloat = 50
+    static let ringStroke: CGFloat = 10
+    static let ringStrokeSmall: CGFloat = 7
+    /// The charts' height and their bars' corner.
+    static let chartHeight: CGFloat = 92
+    static let chartBar: CGFloat = 3
+    /// The Record button.
+    static let recordHero: CGFloat = 88
+    static let recordMedium: CGFloat = 76
+    static let recordMark = Font.system(size: 30, weight: .semibold)
+    static let recordMarkLock = Font.system(size: 24, weight: .semibold)
+    /// A state's dot.
+    static let dot: CGFloat = 8
+
+    // MARK: The persona (an accent)
+
+    /// In the corner beside the widget's name.
+    static let faceCorner: CGFloat = 22
+    /// Where a widget has nothing to show (and before pairing).
+    static let faceEmpty: CGFloat = 46
     /// The Lock Screen's rectangular widget.
-    static let faceLock: CGFloat = 44
+    static let faceLock: CGFloat = 40
     /// Done's check, × the face's side.
-    static let checkShare: CGFloat = 0.34
-
-    /// The Record button's side in a small widget, and its mark.
-    static let recordSide: CGFloat = 64
-    static let recordMark = Font.system(size: 26, weight: .semibold)
+    static let checkShare: CGFloat = 0.42
+    /// Content from a snapshot older than `HomeSnapshot.staleAfter`.
+    static let staleOpacity = 0.5
 
     // MARK: Symbols (the extension doesn't build Theme.Icon; each mirrors its token)
 
     static let agentsSymbol = "chevron.left.forwardslash.chevron.right" // icon: mirrors Theme.Icon.agents
-    static let todaySymbol = "sun.max.fill" // icon: mirrors Theme.Icon.today
+    static let todaySymbol = "calendar" // icon: mirrors Theme.Icon.calendarView
     static let todoSymbol = "checklist" // icon: mirrors Theme.Icon.todo
-    static let calendarSymbol = "calendar" // icon: mirrors Theme.Icon.calendarView
+    static let todoOpen = "circle" // icon: an open to-do's box, as the To-dos page draws it
+    static let todoDone = "checkmark.circle.fill" // icon: a to-do just ticked
+    static let todoFailed = "exclamationmark.circle.fill" // icon: mirrors Theme.Icon.error, filled
     static let usageSymbol = "gauge.with.dots.needle.50percent" // icon: mirrors Theme.Icon.effort (how much is used)
-    static let machinesSymbol = "desktopcomputer" // icon: mirrors Theme.Icon.machine
+    static let laptopSymbol = "laptopcomputer" // icon: mirrors Theme.Icon.laptop
+    static let desktopSymbol = "desktopcomputer" // icon: mirrors Theme.Icon.machine
+    static let serverSymbol = "server.rack" // icon: mirrors Theme.Icon.server
     static let recordSymbol = "waveform" // icon: mirrors RecordingSymbol.recording (the bare waveform on the red disc)
-    static let stopSymbol = "stop.fill" // icon: mirrors Theme.Icon.interrupt
-    static let healthSymbol = "heart" // icon: mirrors Theme.Icon.health
+    static let stopSymbol = "stop.fill" // icon: mirrors RecordingSymbol.stop
+    static let healthSymbol = "heart.fill" // icon: Theme.Icon.health, filled for the small mark
     static let stepsSymbol = "figure.walk" // icon: steps, as the Health app marks them
-    static let sleepSymbol = "bed.double" // icon: sleep, as the Health app marks it
-    static let energySymbol = "flame" // icon: active energy, as the Health app marks it
+    static let sleepSymbol = "bed.double.fill" // icon: sleep, as the Health app marks it
     static let inboxSymbol = "tray.full" // icon: mirrors Theme.Icon.inbox
     static let checkSymbol = "checkmark" // icon: mirrors Theme.Icon.done
-    static let personaSymbol = "sparkle" // icon: mirrors Theme.Icon.persona
 
     #if canImport(UIKit)
     private static func dynamic(light: (UInt32, CGFloat), dark: (UInt32, CGFloat)) -> Color {

@@ -48,6 +48,7 @@ enum HomeGallery {
     static let corner: CGFloat = 24
     static let margin: CGFloat = 16
     static let pad: CGFloat = 18
+    static let tileCorner: CGFloat = 14
 }
 
 /// What sits behind a widget in a shot: a made-up wallpaper.
@@ -71,8 +72,7 @@ struct HomeGalleryWallpaper: View {
 
 /// One widget as the system would frame it.
 struct HomeGalleryCell: View {
-    enum Kind { case persona, module(HomeModule) }
-    var kind: Kind
+    var kind: HomeKind
     var family: WidgetFamily
     var look: HomeGallery.Look
     var entry: HomeEntry
@@ -82,12 +82,11 @@ struct HomeGalleryCell: View {
     var body: some View {
         let size = HomeGallery.size(family)
         let accessory = family == .accessoryCircular || family == .accessoryRectangular || family == .accessoryInline
-        content
-            .padding(margins(accessory: accessory))
+        HomeWidgetView(kind: kind, entry: entry, size: family)
+            .padding(accessory ? 0 : HomeGallery.margin)
             .frame(width: size.width, height: size.height)
             .background { if !accessory { background } }
             .clipShape(RoundedRectangle(cornerRadius: accessory ? 0 : HomeGallery.corner, style: .continuous))
-            .containerShape(RoundedRectangle(cornerRadius: HomeGallery.corner - HomeWidgetTokens.gap, style: .continuous))
             .environment(\.colorScheme, look.scheme)
             .environment(\.widgetRenderingMode, look.mode)
             .environment(\.homeSimTint, simTint)
@@ -102,30 +101,11 @@ struct HomeGalleryCell: View {
         }
     }
 
-    @ViewBuilder private var content: some View {
-        switch kind {
-        case .persona: PersonaWidgetView(entry: entry, size: family)
-        case .module(let m): ModuleWidgetView(module: m, entry: entry, size: family)
-        }
-    }
-
-    private func margins(accessory: Bool) -> CGFloat {
-        if accessory { return 0 }
-        if case .persona = kind { return 0 }
-        return HomeGallery.margin
-    }
-
     @ViewBuilder private var background: some View {
         switch look {
-        case .light, .dark:
-            switch kind {
-            case .persona: HomeStage(glow: entry.glow)
-            case .module(let m): HomeStage(glow: entry.context.mood(m).tone?.dot, at: .topTrailing)
-            }
-        case .tinted:
-            Color(hex: 0x2A1E12).opacity(0.92)
-        case .clear, .lock:
-            Color.white.opacity(0.12)
+        case .light, .dark: HomeWidgetTokens.surface
+        case .tinted: Color(hex: 0x2A1E12).opacity(0.92)
+        case .clear, .lock: Color.white.opacity(0.12)
         }
     }
 }
@@ -133,7 +113,7 @@ struct HomeGalleryCell: View {
 /// A titled row of cells for one widget at one size, every look side by side.
 struct HomeGalleryRow: View {
     var title: String
-    var kind: HomeGalleryCell.Kind
+    var kind: HomeKind
     var family: WidgetFamily
     var looks: [HomeGallery.Look]
     var entry: HomeEntry
@@ -147,7 +127,7 @@ struct HomeGalleryRow: View {
                         HomeGalleryCell(kind: kind, family: family, look: look, entry: entry)
                             .padding(HomeGallery.pad)
                             .background(HomeGalleryWallpaper(look: look))
-                            .clipShape(RoundedRectangle(cornerRadius: HomeWidgetTokens.tileRadius, style: .continuous))
+                            .clipShape(RoundedRectangle(cornerRadius: HomeGallery.tileCorner, style: .continuous))
                         Text(verbatim: look.title).font(.caption).foregroundStyle(.black.opacity(0.55))
                     }
                 }

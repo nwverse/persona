@@ -17,6 +17,7 @@ nonisolated struct HomeSnapshot: Codable, Hashable, Sendable {
     var look = Look()
     var agents = Agents()
     var today: Today?
+    var todos: Todos?
     var usage: Usage?
     var machines: [Machine] = []
     var recording: Recording?
@@ -69,8 +70,9 @@ nonisolated struct HomeSnapshot: Codable, Hashable, Sendable {
         var title: String
         var state: AgentState
         var kind: AgentKind = .coding
-        /// The machine's id, for the computer a widget is set to.
+        /// The machine's id, for the computer a widget is set to, and its name as the user calls it.
         var machine = ""
+        var place: String?
         /// Since when it is in this state.
         var since: Double?
         /// What it waits for, in the request's title words (Plan awaiting approval, Has a question…); nil unless needs you.
@@ -100,13 +102,15 @@ nonisolated struct HomeSnapshot: Codable, Hashable, Sendable {
     // MARK: Today
 
     nonisolated struct Today: Codable, Hashable, Sendable {
-        /// The rest of today's calendar events, in order (EventKit with the user's permission, else the hub's meetings).
+        /// The rest of today's calendar events, in order (the phone's calendar when Persona already has full access,
+        /// else the hub's meetings).
         var events: [Event] = []
-        /// To-dos due today and open overdue ones (the To-dos page's Today filter), the most urgent first.
-        var todos: [Todo] = []
-        /// How many the Today filter holds, of which overdue (the list above is capped).
-        var todoCount = 0
-        var overdue = 0
+        /// Where they came from: nil when neither can be read (the widget says how to allow the calendar).
+        var source: EventSource?
+    }
+
+    nonisolated enum EventSource: String, Codable, Hashable, Sendable {
+        case calendar, hub
     }
 
     nonisolated struct Event: Codable, Hashable, Sendable {
@@ -116,12 +120,28 @@ nonisolated struct HomeSnapshot: Codable, Hashable, Sendable {
         var allDay = false
     }
 
+    // MARK: To-dos
+
+    /// The To-dos page's Today filter: due today, and open ones overdue; the most urgent first.
+    nonisolated struct Todos: Codable, Hashable, Sendable {
+        var items: [Todo] = []
+        /// How many the filter holds (the list above is capped), of which overdue.
+        var count = 0
+        var overdue = 0
+    }
+
     nonisolated struct Todo: Codable, Hashable, Sendable, Identifiable {
         var id: String
         var title: String
         var due: Double?
         var overdue = false
-        var high = false
+        /// Ticked on the widget: shown done at once while the app tells the hub (`ticking`), or the hub refused it
+        /// (`failed`: the widget says so and a tap tries again).
+        var tick: Tick?
+    }
+
+    nonisolated enum Tick: String, Codable, Hashable, Sendable {
+        case ticking, failed
     }
 
     // MARK: Usage
@@ -167,6 +187,8 @@ nonisolated struct HomeSnapshot: Codable, Hashable, Sendable {
         var needsYou = 0
         /// Load average ÷ cores, 0…100; nil when not reported.
         var load: Int?
+        /// The mark the user gave it (`Machine.icon`: server, desktop, else a laptop).
+        var icon: String?
     }
 
     // MARK: Recording
@@ -188,6 +210,8 @@ nonisolated struct HomeSnapshot: Codable, Hashable, Sendable {
         var sleepHours: Double?
         var restingHeartRate: Int?
         var activeEnergy: Int?
+        /// Steps a day for the last 7 days, today last.
+        var week: [Int] = []
     }
 
     // MARK: Inbox
