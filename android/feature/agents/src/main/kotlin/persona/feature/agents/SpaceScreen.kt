@@ -15,6 +15,7 @@ import persona.core.designsystem.icons.PhIcons
 import persona.core.domain.sort.*
 import persona.core.domain.answer.firstBySession
 import persona.core.domain.answer.rowLine
+import persona.core.domain.modelShortName
 import java.time.Instant
 
 /**
@@ -130,6 +131,6 @@ private fun SpaceCard(
     AgentSlotCard(session.displayTitle, row.state.designStatus, state, onOpen, Modifier.fillMaxHeight(),
         stateTone = row.rowStatus(muted), tab = session.slotLabel, pane = tab?.paneName(row), agent = session.agentLabel,
         starter = tab?.launcher?.id == row.id, pending = requests, preview = session.rowLine(card, now, muted)?.text(),
-        model = modelShortName(session.model), waiting = row.waitsInBackground, onLongClick = { menu = true })
+        model = modelShortName(session.model).ifEmpty { null }, waiting = row.waitsInBackground, onLongClick = { menu = true })
     if (menu) JActionSheet(sessionMenu(row), { menu = false }, title = session.displayTitle)
 }

@@ -59,7 +59,3 @@ internal fun AgentTab.paneName(row: AgentSession): String {
     val index = same.indexOfFirst { it.id == row.id }
     return if (same.size > 1 && index >= 0) "$label ${index + 1}" else label
 }
-
-/** A model's short name (iOS `Fmt.model`): "deepseek/v4.1-flash" is "v4.1-flash". */
-internal fun modelShortName(model: String?): String? =
-    model?.takeIf(String::isNotEmpty)?.let { m -> m.split('/').lastOrNull(String::isNotEmpty) ?: m }

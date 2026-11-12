@@ -1,13 +1,12 @@
 package persona.feature.agents
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Test
 import persona.core.contracts.Session
 import persona.core.domain.sort.AgentSession
 import persona.core.domain.sort.agentTabs
 
-/** The space page's cards (#4338 A11): iOS `SpaceView`'s order, `Fmt.path`, `TabPanes.paneName` and `Fmt.model`. */
+/** The space page's cards (#4338 A11): iOS `SpaceView`'s order, `Fmt.path` and `TabPanes.paneName`. */
 class SpaceCardsTest {
     private fun agent(id: String, state: String, slot: Int?, place: Int? = null, agent: String = "claude", tabbed: Boolean = true) =
         AgentSession(Session(machineId = "server", sessionId = id, state = state, agent = agent, spaceKind = "herdr", spaceId = "w1",
@@ -64,13 +63,5 @@ class SpaceCardsTest {
         // No starter (no pane at index 0): peers, numbered alike.
         val peers = agentTabs(listOf(agent("q1", "unread", 3, 1), agent("q2", "idle", 3, 2))).values.single()
         assertEquals(listOf("Claude 1", "Claude 2"), peers.members.map(peers::paneName))
-    }
-
-    @Test fun modelsShowTheirShortName() {
-        assertEquals("v4.1-flash", modelShortName("deepseek/v4.1-flash"))
-        assertEquals("claude-opus-4", modelShortName("claude-opus-4"))
-        assertEquals("b", modelShortName("a/b/"))
-        assertNull(modelShortName(""))
-        assertNull(modelShortName(null))
     }
 }
