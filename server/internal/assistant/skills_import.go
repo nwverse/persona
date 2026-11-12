@@ -89,7 +89,10 @@ func (s *Service) importSkill(w http.ResponseWriter, r *http.Request) {
 	params := map[string]any{"dir": target.dir, "scope": target.scope, "op": in.Op, "archive": in.Archive, "reference": in.Reference}
 	if err := s.call(ctx, target.machine, "skills.import", params, &out); err != nil {
 		var coded *rpc.Error
-		if errors.As(err, &coded) && strings.HasPrefix(coded.Code, "skill_") {
+		isRPC := errors.As(err, &coded)
+		if err.Error() == "unknown method skills.import" || (isRPC && (coded.Code == "unknown_method" || coded.Message == "unknown method skills.import")) {
+			apierr.WriteCode(w, http.StatusConflict, "node_outdated", errors.New("node_outdated"))
+		} else if isRPC && strings.HasPrefix(coded.Code, "skill_") {
 			status := http.StatusUnprocessableEntity
 			switch coded.Code {
 			case "skill_conflict", "skill_import_expired", "skill_import_changed", "skill_environment_changed", "skill_undo_changed":

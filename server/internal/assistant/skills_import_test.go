@@ -136,8 +136,13 @@ func TestSkillImportEnvironmentChangeAndOffline(t *testing.T) {
 	}
 	h.err = errors.New("unknown method skills.import")
 	w = importHTTP(s, `{"op":"preview","archive":"UEs="}`, "")
-	if w.Code < 400 {
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "node_outdated") {
 		t.Fatalf("old node: %d %s", w.Code, w.Body)
+	}
+	h.err = &rpc.Error{Code: "unknown_method", Message: "private implementation detail"}
+	w = importHTTP(s, `{"op":"preview","archive":"UEs="}`, "")
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "node_outdated") || strings.Contains(w.Body.String(), "private") {
+		t.Fatalf("coded old node: %d %s", w.Code, w.Body)
 	}
 	for code, status := range map[string]int{"skill_conflict": 409, "skill_zip_path": 422, "skill_import_busy": 429, "skill_import_io": 500} {
 		h.err = &rpc.Error{Code: code, Message: "private filesystem detail"}
