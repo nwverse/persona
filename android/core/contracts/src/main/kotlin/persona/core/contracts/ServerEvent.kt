@@ -3,6 +3,7 @@
 package persona.core.contracts
 
 import persona.core.contracts.stream.NativeStreamSchema
+import persona.core.contracts.generated.ExtensionNotification
 import persona.core.contracts.generated.ExtensionUIStreamServerEnvelope
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
@@ -163,6 +164,8 @@ data class NotifyEvent(
     val id: String? = null,
     /** This device is inside its quiet hours (the prefs' `quiet`): shown, but without a sound. */
     val quiet: Boolean = false,
+    /** An extension's page and declared notification buttons; absent on older hubs and ordinary alerts. */
+    @SerialName("extension_notification") val extensionNotification: ExtensionNotification? = null,
 ) : ServerEvent
 
 /**
@@ -238,6 +241,14 @@ data object ManagersEvent : ServerEvent
 
 data object UnknownEvent : ServerEvent
 
+/** A malformed optional extension payload degrades to the ordinary alert instead of dropping the whole event. */
+private fun decodeNotifyEvent(json: Json, obj: JsonObject): NotifyEvent = try {
+    json.decodeFromJsonElement<NotifyEvent>(obj)
+} catch (failure: Exception) {
+    if ("extension_notification" !in obj) throw failure
+    json.decodeFromJsonElement<NotifyEvent>(JsonObject(obj.filterKeys { it != "extension_notification" }))
+}
+
 object ServerEventSerializer : KSerializer<ServerEvent> {
     override val descriptor = buildClassSerialDescriptor("persona.core.contracts.ServerEvent")
     override fun deserialize(decoder: Decoder): ServerEvent {
@@ -261,7 +272,7 @@ object ServerEventSerializer : KSerializer<ServerEvent> {
             "endpoints" -> input.json.decodeFromJsonElement<EndpointsEvent>(obj)
             "client_hello_ack" -> input.json.decodeFromJsonElement<ClientHelloAck>(obj)
             "pong" -> input.json.decodeFromJsonElement<Pong>(obj)
-            "notify" -> input.json.decodeFromJsonElement<NotifyEvent>(obj)
+            "notify" -> decodeNotifyEvent(input.json, obj)
             "extension_ui", "plugin_ui" -> input.json.decodeFromJsonElement<ExtensionUiEvent>(obj).also {
                 require(it.invalidate || !it.id.isNullOrEmpty()) { "A badge names its UI" }
             }
