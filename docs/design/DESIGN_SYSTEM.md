@@ -1099,11 +1099,25 @@ control when it sits lower in the row.
 
 Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and waiting for a reply.
 
-- **Home**: the bottom of the session page. A request that blocks the Agent stays visible there until it is answered or folded, and says why the Agent waits ("Answer this so Claude can continue"). Several read "1 of 3", one open at a time; any can be folded to answer later.
+- **Home**: the bottom of the session page, a stack of cards above the composer, which stays usable (iOS `PendingCards`;
+  Android `DecisionStack` and `DecisionDock`, #4210 T6). A request that blocks the Agent stays visible there until it is
+  answered or folded, and says why the Agent waits ("Answer this so Claude can continue"). The cards stack as they come
+  while they fit in half the page; past it they scroll on their own under "N pending", permissions first and then the
+  newest, and a new card brings the stack back to its top. "N pending" counts the cards in the stack. With the keyboard
+  up the cards take the conversation's room above the rest of the footer, the composer staying over the keyboard, and
+  "N pending" is left off a lone card. Each card folds on its own: a tap on its header folds it to one line, its title and
+  what it asks, and another opens it; any can be folded to answer later. A message typed while a card waits is sent as
+  any other, also while a permission holds the Agent (iOS sends it the same way). Each style keeps its own card: on
+  Android, Glass a floating card inset like the composer, Brief a rounded card with a light shadow, Board a bordered card
+  under its amber rule.
   A Persona conversation's own requests (its model's tool approvals, `ask_user`) are the same: above its composer, under
   the Needs you / In progress entries, on every client (#4883: on the web and Android they sat only in the closed Needs
   you tray, and an owner waited minutes on an approval no screen in the chat showed). Needs you still counts them, and
-  its row for one closes the tray onto the card instead of drawing it a second time.
+  its row for one closes the tray onto the card instead of drawing it a second time. The oldest question of the
+  conversation's tasks' Agents is answered there too (iOS `TaskQuestions`; Android in the same stack, #4339 C10), under
+  its task's name with "N more", which counts the tasks' other questions; the next comes up when it is answered. The
+  tray keeps a row with Review for every task, and Review on one whose card is not in the stack brings that card in,
+  first, until it is answered or folded.
   A child session's request (web, #5120: `folded_under`) has its parent's page as its home: shown there with the
   parent's own, "From subagent · <title>", counted once under the parent, and every link to it opens the parent.
   A lead's worker's request (web, #5180) has the lead's page as its home too. While the Team panel shows that worker,

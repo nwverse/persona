@@ -52,12 +52,13 @@
     <string name="designsystem_decision_other">需要你</string>
     <string name="designsystem_decision_open_chat">打开对话</string>
     <string name="designsystem_decision_open_full">打开完整页</string>
-    <string name="designsystem_decision_previous">上一项</string>
-    <string name="designsystem_decision_next">下一项</string>
     <string name="designsystem_decision_advice">Persona：%1$s</string>
     <string name="designsystem_decision_recommended">建议</string>
-    <string name="designsystem_decision_position">第 %1$d 件，共 %2$d 件</string>
     <string name="designsystem_decision_option_position">第 %1$d 个，共 %2$d 个</string>
+    <!-- The pending requests above a chat's composer while they scroll (iOS PendingCards). -->
+    <plurals name="designsystem_decision_pending">
+        <item quantity="other">%1$d 个待处理</item>
+    </plurals>
     <string name="designsystem_pending_sending">发送中</string>
     <string name="designsystem_pending_waiting">连上后自动发送</string>
     <string name="designsystem_pending_unconfirmed">结果待确认</string>
