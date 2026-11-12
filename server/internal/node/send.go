@@ -79,6 +79,18 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 		if a, ok := n.agent(id); ok && a.Agent != "" {
 			kind = a.Agent
 		}
+		if opts.ApplySwitch && (kind == "claude" || kind == "codex") {
+			// The user's own message carries out the switch to the other engine they picked (engine_switch.go): the
+			// agent is quit and the other engine started in the same terminal with the message behind a handoff, before
+			// a Codex's app-server would take the message. While the agent is busy the message goes to it as always and
+			// the switch waits; a failed switch is dropped with nothing typed.
+			_ = n.state.loaded(ctx)
+			if ps := n.pendingSwitch(id); ps != nil && ps.Agent != "" {
+				if handled, err := n.applyEngineSwitch(ctx, id, pane, kind, *ps, text, images, opts); handled {
+					return err
+				}
+			}
+		}
 		if kind == "codex" && n.codexJoined(id) {
 			// On its app-server (codex_daemon.go): a turn or a steer, nothing typed — a draft in its box stays as it is.
 			return n.sendCodex(ctx, id, text, images)
@@ -92,7 +104,7 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 			// the message goes on the launcher it runs on and the switch waits; a failed switch is dropped with nothing
 			// typed. A switch kept with the record waits for the hub's copy of it after a node restart.
 			_ = n.state.loaded(ctx)
-			if ps := n.pendingSwitch(id); ps != nil {
+			if ps := n.pendingSwitch(id); ps != nil && ps.Agent == "" { // one to the other engine waits, above
 				switched := false
 				if pane, switched, err = n.applySwitch(ctx, id, pane, *ps); err != nil {
 					return err

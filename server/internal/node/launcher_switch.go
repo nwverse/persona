@@ -127,8 +127,19 @@ func (n *Node) launcherModes(ctx context.Context, id, launcher, from, model, mod
 	// The checks run a login shell, ask the hub for a provider's secrets, read the launcher's models: not while holding
 	// up the session's messages.
 	checked := false
-	if own, _ := n.ownLauncher(id); launcher != own {
-		if _, err := n.planSwitch(ctx, id, ps); err != nil {
+	if own, _ := n.engineOwnLauncher(id, n.liveEngine(id)); launcher != own {
+		// A launcher of the other engine (Claude Code ↔ Codex) is a switch to it (engine_switch.go, #5054).
+		to, err := n.switchEngine(ctx, id, launcher)
+		if err != nil {
+			return true, err
+		}
+		ps.Agent = to
+		if to != "" {
+			_, err = n.planEngineSwitch(ctx, id, ps)
+		} else {
+			_, err = n.planSwitch(ctx, id, ps)
+		}
+		if err != nil {
 			return true, err
 		}
 		checked = true
@@ -141,7 +152,7 @@ func (n *Node) launcherModes(ctx context.Context, id, launcher, from, model, mod
 	// One at a time with the messages: one carrying a switch out writes the record anew, and would drop a pick made
 	// meanwhile; this one waits for it, and is then taken against the launcher the agent runs on by then.
 	unlock := n.typing.lock(id)
-	own, _ := n.ownLauncher(id)
+	own, _ := n.engineOwnLauncher(id, n.liveEngine(id))
 	if from != "" && from != own || launcher != own && !checked {
 		unlock()
 		return true, refusal(proto.CodeSwitchStale, fmt.Sprintf("the session runs on launcher %s now, not %s", own, cmp.Or(from, launcher)), nil)
@@ -158,7 +169,7 @@ func (n *Node) launcherModes(ctx context.Context, id, launcher, from, model, mod
 	ps.At = time.Now().UTC()
 	n.putPendingSwitch(id, &ps)
 	unlock()
-	n.logf("session %s: switch to launcher %s (model %q, effort %q) waits for the next message", id, launcher, ps.Model, effort)
+	n.logf("session %s: switch to launcher %s (engine %q, model %q, effort %q) waits for the next message", id, launcher, ps.Agent, ps.Model, effort)
 	if mode == "" {
 		return true, nil
 	}
@@ -172,6 +183,37 @@ func (n *Node) launcherModes(ctx context.Context, id, launcher, from, model, mod
 		return true, err
 	}
 	return true, nil
+}
+
+// liveEngine is the engine session id's live agent runs ("claude" or "codex"; "" for another agent), "claude" when it
+// is not running: what launcherModes takes its own launcher by.
+func (n *Node) liveEngine(id string) string {
+	if a, live := n.agent(id); live {
+		return agentEngine(a)
+	}
+	return "claude"
+}
+
+// switchEngine is the engine a pick of launcher for session id moves it to when that is the other one (a switch to
+// another engine, engine_switch.go), "" for a switch within its own engine (planSwitch, which refuses a session of
+// any other agent, and one that is not running).
+func (n *Node) switchEngine(ctx context.Context, id, launcher string) (string, error) {
+	a, live := n.agent(id)
+	if !live {
+		return "", nil
+	}
+	from := agentEngine(a)
+	if from == "" {
+		return "", nil
+	}
+	to, err := n.launcherEngine(ctx, launcher)
+	if err != nil {
+		return "", err
+	}
+	if (to == "claude" || to == "codex") && to != from {
+		return to, nil
+	}
+	return "", nil
 }
 
 // switchUnsupported is the refusal of a switch for a session that cannot have one, why in the node's words.
@@ -229,22 +271,34 @@ func (n *Node) planSwitch(ctx context.Context, id string, ps proto.PendingSwitch
 // switchSession checks that session id is one a switch can restart: a Claude Code Agent running in a pane of a
 // terminal host that can say what runs in it and start an agent there. It returns the agent, its host and its pane.
 func (n *Node) switchSession(ctx context.Context, id string) (host.Agent, host.Host, host.PaneRef, error) {
+	return n.switchSessionOf(ctx, id, false)
+}
+
+// switchSessionOf is switchSession; codex: a Codex Agent running in such a pane passes too (a switch to the other
+// engine, engine_switch.go), never a Codex thread an app-server or another program runs.
+func (n *Node) switchSessionOf(ctx context.Context, id string, codex bool) (host.Agent, host.Host, host.PaneRef, error) {
 	var a host.Agent
 	var ref host.PaneRef
 	if !validID(id) {
 		return a, nil, ref, fmt.Errorf("invalid session id %q", id)
 	}
+	unsupported := switchUnsupported
+	if codex {
+		unsupported = engineUnsupported
+	}
 	switch {
 	case n.isAssistantSession(id) || n.runtimeAssistant(id):
-		return a, nil, ref, switchUnsupported("an assistant conversation switches in its own chip")
-	case n.externalCodex(id) || n.codexPath(id) != "" || n.traexPath(id) != "":
-		return a, nil, ref, switchUnsupported("this is a Codex session")
+		return a, nil, ref, unsupported("an assistant conversation switches in its own chip")
+	case !codex && (n.externalCodex(id) || n.codexPath(id) != "" || n.traexPath(id) != ""):
+		return a, nil, ref, unsupported("this is a Codex session")
+	case codex && (n.externalCodex(id) || n.traexPath(id) != ""):
+		return a, nil, ref, unsupported("this Codex session runs outside a terminal Persona drives")
 	}
 	if h, _, known := n.runtimes.belongs(id); h != nil || known {
-		return a, nil, ref, switchUnsupported("a runtime runs this session")
+		return a, nil, ref, unsupported("a runtime runs this session")
 	}
 	if _, ok := n.terminalOnly(id); ok {
-		return a, nil, ref, switchUnsupported("another agent runs in this terminal")
+		return a, nil, ref, unsupported("another agent runs in this terminal")
 	}
 	if _, err := n.paneFor(ctx, id); err != nil {
 		return a, nil, ref, n.noPaneForModes(id)
@@ -253,26 +307,26 @@ func (n *Node) switchSession(ctx context.Context, id string) (host.Agent, host.H
 	if !live {
 		return a, nil, ref, n.noPaneForModes(id) // a claude in a terminal Persona does not drive
 	}
-	if a.Agent != "" && a.Agent != "claude" {
-		return a, nil, ref, switchUnsupported(a.Agent + " runs in this terminal")
+	if a.Agent != "" && a.Agent != "claude" && (!codex || a.Agent != "codex") {
+		return a, nil, ref, unsupported(a.Agent + " runs in this terminal")
 	}
 	kind := host.ParsePane(a.PaneID).Kind
 	if _, runtime := engineRuntimes[kind]; runtime || kind == host.Botmux {
-		return a, nil, ref, switchUnsupported(kind + " runs this agent itself")
+		return a, nil, ref, unsupported(kind + " runs this agent itself")
 	}
 	h, ref, err := n.paneHost(a.PaneID)
 	if err != nil {
-		return a, nil, ref, switchUnsupported(err.Error())
+		return a, nil, ref, unsupported(err.Error())
 	}
 	if _, ok := h.(host.ForegroundNamer); !ok {
-		return a, nil, ref, switchUnsupported(h.Kind() + " cannot say what runs in the agent's terminal")
+		return a, nil, ref, unsupported(h.Kind() + " cannot say what runs in the agent's terminal")
 	}
 	launch, err := n.launcherFor(h.Kind())
 	if err != nil {
-		return a, nil, ref, switchUnsupported(err.Error())
+		return a, nil, ref, unsupported(err.Error())
 	}
 	if lh, ok := launch.(host.Host); !ok || lh.Kind() != h.Kind() {
-		return a, nil, ref, switchUnsupported(h.Kind() + " cannot start an agent in the agent's terminal")
+		return a, nil, ref, unsupported(h.Kind() + " cannot start an agent in the agent's terminal")
 	}
 	return a, h, ref, nil
 }
@@ -810,6 +864,26 @@ func switchUnderWay() error {
 // claude has the conversation open any more (Claude Code writes into its transcript as it exits), and returns those
 // shells and the pane's directory as the host lists it now ("" when it does not say).
 func (n *Node) shellAfterQuit(ctx context.Context, id string, a host.Agent, h host.Host, ref host.PaneRef) ([]string, string, error) {
+	return n.shellAfterQuitFor(ctx, id, "claude", a, h, ref)
+}
+
+// shellAfterQuitFor is shellAfterQuit for an agent of engine: for a Codex, until no Codex CLI has its thread's rollout
+// open any more (codexHolds) instead.
+func (n *Node) shellAfterQuitFor(ctx context.Context, id, engine string, a host.Agent, h host.Host, ref host.PaneRef) ([]string, string, error) {
+	stillOpen := func() error {
+		if n.openElsewhereRefusal(id) != nil {
+			return errors.New("a claude still has the conversation open")
+		}
+		return nil
+	}
+	if engine == "codex" {
+		stillOpen = func() error {
+			if n.codexHolds(n.codexPath(id)) {
+				return errors.New("a Codex still has the thread open")
+			}
+			return nil
+		}
+	}
 	f, ok := h.(host.ForegroundNamer)
 	if !ok {
 		return nil, "", fmt.Errorf("%s cannot say what runs in %s", h.Kind(), a.PaneID)
@@ -821,8 +895,8 @@ func (n *Node) shellAfterQuit(ctx context.Context, id string, a host.Agent, h ho
 		case err != nil:
 		case len(names) == 0 || !allShells(names):
 			err = fmt.Errorf("%q runs in front of %s", names, a.PaneID)
-		case n.openElsewhereRefusal(id) != nil:
-			err = errors.New("a claude still has the conversation open")
+		case stillOpen() != nil:
+			err = stillOpen()
 		default:
 			dir := ""
 			if p, err := n.listedPane(ctx, a.PaneID); err == nil {

@@ -222,6 +222,10 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		// A switch to another launcher still waits for the next message (launcher_switch.go): a Resume on the launcher
 		// the agent ran on keeps it; the switch's own start leaves it for the switch to clear.
 		st.PendingSwitch = prev.PendingSwitch
+		st.EngineHistory = prev.EngineHistory // the conversation's earlier stretches (engine_switch.go)
+	}
+	if legs, ok := engineHistoryOf(ctx); ok { // a switch from the other engine starts this one (engine_switch.go)
+		st.EngineHistory = legs
 	}
 	n.state.put(id, st)
 	n.noteModes(id, mode, effort) // shown before the first prompt writes them down
