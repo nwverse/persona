@@ -29,14 +29,23 @@ final class PendingCardsTests: XCTestCase {
         app.launchPinned()
     }
 
-    private func launchMainQuestion(_ scheme: String? = nil) {
-        let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"]!
+    private func launchMainQuestion(_ scheme: String? = nil, hubKey: String = "PERSONA_MOCK_HUB") {
+        let hub = ProcessInfo.processInfo.environment[hubKey]!
+        _ = try? Data(contentsOf: URL(string: hub + "/mock/reset")!)
         app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", pair, "-app.tab", "assistant", "-tab", "assistant",
                                "-openAssistant", Self.askLong, "-openChatsFresh", "YES"]
         if let scheme { app.launchArguments += ["-ui.scheme", scheme] }
         app.launchPinned()
+    }
+
+    private func resolutionCount(_ id: String, hub: String? = nil) -> Int {
+        let hub = hub ?? ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"]!
+        guard let data = try? Data(contentsOf: URL(string: hub + "/mock/resolved")!),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rows = obj["resolved"] as? [[String: Any]] else { return 0 }
+        return rows.filter { $0["id"] as? String == id }.count
     }
 
     private func shot(_ name: String) {
@@ -153,6 +162,7 @@ final class PendingCardsTests: XCTestCase {
             let first = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "选项 1")).firstMatch
             XCTAssertTrue(first.waitForExistence(timeout: 5), "no first option")
             first.tap() // Multi-select does not advance: Submit is now enabled on this same long question.
+            let before = resolutionCount("ix_ask_long")
             let cards = app.scrollViews["pending-cards"]
             XCTAssertTrue(cards.exists, "the cards' area")
             let action = app.buttons.matching(NSPredicate(format: "label IN %@", ["提交", "Submit"])).firstMatch
@@ -161,16 +171,22 @@ final class PendingCardsTests: XCTestCase {
             XCTAssertTrue(action.isEnabled, "Submit is not enabled after a deliberate pick")
             XCTAssertTrue(action.isHittable && cards.frame.insetBy(dx: -1, dy: -1).contains(action.frame),
                           "Submit needs scrolling first (\(action.frame) in \(cards.frame))")
+            action.tap()
+            let deadline = Date().addingTimeInterval(10)
+            while resolutionCount("ix_ask_long") == before && Date() < deadline { usleep(300_000) }
+            XCTAssertGreaterThan(resolutionCount("ix_ask_long"), before, "Submit did not resolve the ask_user card")
             app.terminate()
         }
     }
 
-    func testDraggingLongQuestionDoesNotPick() {
-        launchMainQuestion()
-        let question = app.staticTexts["这周先处理哪件事？"].firstMatch
-        XCTAssertTrue(question.waitForExistence(timeout: 20), "no long question")
+    func testDraggingLongQuestionDoesNotPick() throws {
+        let hub = try XCTUnwrap(ProcessInfo.processInfo.environment["PERSONA_SWIPE_HUB"])
+        launchMainQuestion(hubKey: "PERSONA_SWIPE_HUB")
+        let question = app.staticTexts["短拖动也不要替我选"].firstMatch
+        XCTAssertTrue(question.waitForExistence(timeout: 20), "no single-select question")
         let first = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "选项 1")).firstMatch
         XCTAssertTrue(first.waitForExistence(timeout: 5), "no first option:\n\(app.debugDescription)")
+        let before = resolutionCount("ix_ask_long", hub: hub)
         let origin = app.coordinate(withNormalizedOffset: .zero)
         let start = origin.withOffset(CGVector(dx: first.frame.midX, dy: first.frame.midY))
         let end = origin.withOffset(CGVector(dx: first.frame.midX, dy: first.frame.midY - 12))
@@ -178,7 +194,35 @@ final class PendingCardsTests: XCTestCase {
         sleep(1)
         XCTAssertTrue(question.exists, "the drag replaced the question")
         XCTAssertFalse(first.isSelected || first.label.contains("已选"), "the short drag picked an option")
-        shot("long-question-after-drag")
+        XCTAssertEqual(resolutionCount("ix_ask_long", hub: hub), before, "the short drag auto-sent the single choice")
+        shot("single-question-after-drag")
+    }
+
+    func testLongReviewActionsAreVisibleWithoutScrolling() throws {
+        let hub = try XCTUnwrap(ProcessInfo.processInfo.environment["PERSONA_REVIEW_HUB"])
+        for scheme in ["light", "dark"] {
+            launchMainQuestion(scheme, hubKey: "PERSONA_REVIEW_HUB")
+            let before = resolutionCount("ix_ask_long", hub: hub)
+            for n in 1...6 {
+                let question = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "第 \(n) 题")).firstMatch
+                XCTAssertTrue(question.waitForExistence(timeout: 10), "question \(n) did not appear")
+                let option = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "第 \(n) 个答案")).firstMatch
+                XCTAssertTrue(option.waitForExistence(timeout: 5), "no answer for question \(n)")
+                option.tap()
+            }
+            let submit = app.buttons["screen-review-submit"]
+            if !submit.waitForExistence(timeout: 2) { app.buttons["提交"].firstMatch.tap() }
+            XCTAssertTrue(submit.waitForExistence(timeout: 5), "no long review:\n\(app.debugDescription)")
+            let cards = app.scrollViews["pending-cards"]
+            shot("long-review-actions-\(scheme)")
+            XCTAssertTrue(submit.isHittable && cards.frame.insetBy(dx: -1, dy: -1).contains(submit.frame),
+                          "review Submit needs scrolling first (\(submit.frame) in \(cards.frame))")
+            submit.tap()
+            let deadline = Date().addingTimeInterval(10)
+            while resolutionCount("ix_ask_long", hub: hub) == before && Date() < deadline { usleep(300_000) }
+            XCTAssertGreaterThan(resolutionCount("ix_ask_long", hub: hub), before, "review Submit did not resolve the card")
+            app.terminate()
+        }
     }
 
     func testThreeCardsScrollUnderTheHeader() {

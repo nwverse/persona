@@ -289,18 +289,16 @@ struct InteractionPanel: View {
 
     /// The form's cap while the keyboard is up (`cardFits`): the area less the card's header and margins; at least a tap
     /// target, so a sliver of a form never shows (a small iPhone with the shell's composer leaves the cards little more).
-    private var fitsCap: CGFloat {
-        guard fits > 0, headerHeight > 0 else { return .infinity }
+    private func cap(for available: CGFloat) -> CGFloat {
+        guard available > 0, headerHeight > 0 else { return .infinity }
         let row = headerAway ? 0 : headerHeight + Theme.Space.m // the row and the gap under it
-        return max(fits - row - Theme.Space.m - Theme.Space.l, Theme.Size.tapTarget) // and the margins
+        return max(available - row - Theme.Space.m - Theme.Space.l, Theme.Size.tapTarget) // and the margins
     }
 
+    private var fitsCap: CGFloat { cap(for: fits) }
+
     /// The same fit without the keyboard: a long question's actions stay inside the cards' actual area, not below it.
-    private var areaCap: CGFloat {
-        guard area > 0, headerHeight > 0 else { return .infinity }
-        let row = headerAway ? 0 : headerHeight + Theme.Space.m
-        return max(area - row - Theme.Space.m - Theme.Space.l, Theme.Size.tapTarget)
-    }
+    private var areaCap: CGFloat { cap(for: area) }
 
     private var formCap: CGFloat { min(room > 0 ? room * 0.55 : .infinity, fitsCap, areaCap) }
 
@@ -446,6 +444,7 @@ struct QuestionForm: View {
     var interaction: Interaction
     @State private var contentHeight: CGFloat = 0
     @State private var footerHeight: CGFloat = 0
+    @State private var dragged = false
     @State private var picks: [String: Set<String>] = [:]
     @State private var other: [String: String] = [:]
     @State private var page = 0
@@ -470,17 +469,24 @@ struct QuestionForm: View {
             }
             .scrollBounceBehavior(.basedOnSize)
             .frame(height: contentCap)
-            if showsFooter {
+            if showsReviewFooter {
+                ScreenReviewFooter(rows: QuestionSteps.rows(questions, answers: shownAnswers), sending: sending ? "submit" : nil,
+                                   back: { withAnimation(Theme.Motion.standard) { reviewing = false } }, submit: { send() }, answer: nil)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0 }
+            } else if showsFooter {
                 footer.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0 }
             }
         }
+        .deliberateTap($dragged)
     }
 
     private var showsFooter: Bool { needsFooter && !(stepped && reviewing) }
+    private var showsReviewFooter: Bool { stepped && reviewing }
 
     private var contentCap: CGFloat? {
         guard formCap > 0, formCap.isFinite else { return nil }
-        let available = max(formCap - (showsFooter ? footerHeight + Theme.Space.m : 0), Theme.Size.tapTarget)
+        let fixed = showsFooter || showsReviewFooter ? footerHeight + Theme.Space.m : 0
+        let available = max(formCap - fixed, Theme.Size.tapTarget)
         return min(contentHeight == 0 ? available : contentHeight, available)
     }
 
@@ -493,7 +499,7 @@ struct QuestionForm: View {
             if stepped, reviewing {
                 ScreenReview(rows: QuestionSteps.rows(questions, answers: shownAnswers), sending: sending ? "submit" : nil,
                              back: { withAnimation(Theme.Motion.standard) { reviewing = false } },
-                             submit: { send() })
+                             submit: { send() }, showsFooter: false)
             } else if questions.indices.contains(page) {
                 let q = questions[page]
                 if stepped {
@@ -538,7 +544,7 @@ struct QuestionForm: View {
         let selected = picks[q.question, default: []].contains(opt.label)
         let (label, recommended) = Self.display(opt.label)
         let assistantPick = assistantPicks(q).contains(opt.label)
-        return Button { pick(q, opt) } label: {
+        return Button { if !dragged { pick(q, opt) } } label: {
             HStack(alignment: .top, spacing: Theme.Space.m) {
                 ZStack {
                     Circle().fill(selected ? Theme.accent : Theme.Fill.chip)
@@ -1546,11 +1552,13 @@ extension Interaction {
 /// How the interaction forms fit BeautifulUI's approval card into the panel: no card of its own (the panel is the
 /// surface), the panel's width, no × (the panel has its menu) and no Start over (the panel goes once answered).
 extension ApprovalCardOptions {
-    static func panel(sending: Bool = false, autoAdvance: Bool = true, maxHeight: CGFloat? = nil) -> ApprovalCardOptions {
+    static func panel(sending: Bool = false, autoAdvance: Bool = true, maxHeight: CGFloat? = nil,
+                      rejectsDraggedPicks: Bool = false) -> ApprovalCardOptions {
         var o = ApprovalCardOptions()
         o.drawsSurface = false
         o.maxWidth = nil
         o.maxHeight = maxHeight
+        o.rejectsDraggedPicks = rejectsDraggedPicks
         o.showsDismiss = false
         o.allowsStartOver = false
         o.autoAdvance = autoAdvance
@@ -1575,6 +1583,7 @@ struct BUIQuestionForm: View {
     @State private var sending = false
     @State private var notesHeight: CGFloat = 0
     @State private var reviewHeight: CGFloat = 0
+    @State private var reviewFooterHeight: CGFloat = 0
 
     private var questions: [Question] { interaction.questions ?? [] }
 
@@ -1596,27 +1605,35 @@ struct BUIQuestionForm: View {
 
     private var reviewCap: CGFloat? {
         guard let cardCap else { return nil }
-        return min(reviewHeight == 0 ? cardCap : reviewHeight, cardCap)
+        let available = max(cardCap - reviewFooterHeight - Theme.Space.m, Theme.Size.tapTarget)
+        return min(reviewHeight == 0 ? available : reviewHeight, available)
     }
 
     @ViewBuilder private var card: some View {
         if QuestionSteps.enabled(questions), let held {
             // The card's own ↑ n / N ↓ shows where it is; a question skipped with ↓ shows here as not answered, with a
             // way back to it.
-            ScrollView {
-                ScreenReview(rows: QuestionSteps.rows(questions, answers: Self.shown(held, questions)), sending: sending ? "submit" : nil,
-                             back: { reopen(at: questions.count - 1) },
-                             submit: { send(held) },
-                             answer: { (row: ScreenReviewRow) in reopen(at: row.index) })
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { reviewHeight = $0 }
+            VStack(alignment: .leading, spacing: Theme.Space.m) {
+                ScrollView {
+                    ScreenReview(rows: QuestionSteps.rows(questions, answers: Self.shown(held, questions)), sending: sending ? "submit" : nil,
+                                 back: { reopen(at: questions.count - 1) },
+                                 submit: { send(held) },
+                                 answer: { (row: ScreenReviewRow) in reopen(at: row.index) }, showsFooter: false)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { reviewHeight = $0 }
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                .frame(height: reviewCap)
+                ScreenReviewFooter(rows: QuestionSteps.rows(questions, answers: Self.shown(held, questions)), sending: sending ? "submit" : nil,
+                                   back: { reopen(at: questions.count - 1) }, submit: { send(held) },
+                                   answer: { (row: ScreenReviewRow) in reopen(at: row.index) })
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { reviewFooterHeight = $0 }
             }
-            .scrollBounceBehavior(.basedOnSize)
-            .frame(height: reviewCap)
         } else {
             let picks = Delegated.recommendedLabels(questions, interaction.delegate?.recommend)
             ApprovalCard(questions: zip(questions, picks).map { Self.card($0, picks: $1) }, startAt: startAt, answers: kept, skipLabel: nil,
                          continueLabel: String(localized: "Next [Interaction Views f82c68]"), sendLabel: String(localized: "Submit"),
-                         customPlaceholder: String(localized: "Other answer…"), sentMessage: String(localized: "Sent"), options: .panel(maxHeight: cardCap)) { answers in
+                         customPlaceholder: String(localized: "Other answer…"), sentMessage: String(localized: "Sent"),
+                         options: .panel(maxHeight: cardCap, rejectsDraggedPicks: true)) { answers in
                 Haptics.tap()
                 if QuestionSteps.enabled(questions) { // the review first
                     withAnimation(Theme.Motion.standard) { held = answers; kept = answers }

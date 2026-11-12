@@ -101,6 +101,8 @@ public struct ApprovalCardOptions: Sendable {
     /// A host's vertical cap. Set, the questions scroll while the footer stays outside that scroll; `nil` keeps the
     /// card's original, wholly laid-out body. The cap includes the footer.
     public var maxHeight: CGFloat?
+    /// Reject option activation after a drag. Off unless the host also guards the option action with this state.
+    public var rejectsDraggedPicks = false
     /// Picking a single-choice answer moves on (and on the last question, sends) after a beat. Off, the
     /// person sends with the button — for answers that are costly to get wrong, such as an approval.
     public var autoAdvance = true
@@ -136,6 +138,7 @@ public struct ApprovalCard<Context: View>: View {
     @State private var forward = true
     @State private var contentHeight: CGFloat = 0
     @State private var footerHeight: CGFloat = 0
+    @State private var dragged = false
     @State private var advanceTask: Task<Void, Never>?
     @FocusState private var customFocused: Bool
     @Environment(\.buiTheme) private var theme
@@ -257,6 +260,7 @@ public struct ApprovalCard<Context: View>: View {
             }
         }
         .buiEntrance(.fadeUp, duration: 0.38)
+        .deliberateTap($dragged, enabled: options.rejectsDraggedPicks)
     }
 
     private var questionArea: some View {
@@ -299,7 +303,7 @@ public struct ApprovalCard<Context: View>: View {
                 ForEach(Array(question.choices.enumerated()), id: \.offset) { option, choice in
                     let on = picked.contains(option)
                     Button {
-                        pick(option, question: question)
+                        if !dragged { pick(option, question: question) }
                     } label: {
                         HStack(alignment: choice.detail == nil ? .center : .top, spacing: 6) {
                             Indicator(kind: question.kind, on: on)
