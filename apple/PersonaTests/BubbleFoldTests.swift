@@ -38,7 +38,7 @@ struct BubbleFoldTests {
         #expect(BubbleFoldRule.lines(long, perLine: perLine) > BubbleFoldRule.regular.limit)
     }
 
-    @Test func foldedOnlyTheStartIsLaidOut() {
+    @Test func foldedOnlyTheStartIsLaidOut() throws {
         // Lines: the start ends before the line past `lines`.
         let many = (1...40).map { "第 \($0) 行" }.joined(separator: "\n")
         let start = try #require(BubbleFoldRule.start(of: many, lines: 16))
