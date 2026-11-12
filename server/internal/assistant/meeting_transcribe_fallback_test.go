@@ -170,3 +170,16 @@ func TestFallbackSocketDown(t *testing.T) {
 	}
 	waitFor(t, "the fallback ended", func() bool { return h.transcription(meetingRec)["fallback"] == nil })
 }
+
+// An upload with empty and blank segments fills the live log with its segments as stored: each once, none empty
+// (the knowledge base never rewrites the handler's upload in place).
+func TestFallbackUploadWithBlankSegments(t *testing.T) {
+	h := newHubFixture(t)
+	h.hubUpload(meetingRec, 1, map[string]any{"segments": phoneSegs(fakeLine{0, 3, "One."}, fakeLine{3, 6, ""}, fakeLine{6, 9, "Two."},
+		fakeLine{9, 10, "   "}, fakeLine{10, 12, "Three."})})
+	waitFor(t, "the fallback", func() bool { return h.transcription(meetingRec)["fallback"] == true })
+	waitFor(t, "the phone's lines", func() bool { return len(h.lines(meetingRec)) >= 3 })
+	if got := lineTexts(h.lines(meetingRec)); !slices.Equal(got, []string{"One.", "Two.", "Three."}) {
+		t.Fatalf("live log %q", got)
+	}
+}

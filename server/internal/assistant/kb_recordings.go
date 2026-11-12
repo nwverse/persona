@@ -79,7 +79,7 @@ func (s *Service) recordingRoutes(engine func(http.ResponseWriter, *http.Request
 			}
 		}
 		if status == kb.RecordingStored && put.Transcription == kb.TranscriptionHub {
-			s.hubUploaded(e, id, u.Segments, u.Complete) // the timeline, the phone's text, the fallback
+			s.hubUploaded(e, id, put.Segments, u.Complete) // the timeline, the phone's text (as stored), the fallback
 		}
 		if put.Room { // a room meeting (meeting_room.go): its room's state, at least none; only an older manager leaves it out
 			room := &kb.RoomView{State: kb.RoomNone}

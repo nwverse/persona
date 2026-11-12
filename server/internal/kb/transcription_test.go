@@ -560,3 +560,28 @@ func TestLiveInHubMode(t *testing.T) {
 		t.Fatalf("deleted: %v", err)
 	}
 }
+
+// PutRecording never changes the caller's upload (its segments' backing array included) and returns the segments as
+// stored: trimmed, the empty and blank ones dropped, in order.
+func TestPutRecordingLeavesTheUploadAlone(t *testing.T) {
+	now := time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone)
+	e, _ := hubEngine(t, nil)
+	u := hubUpload(1, now.Add(-time.Hour), false, nil)
+	u.Segments = []RecordingSegment{{Start: 6, End: 9, Text: "Two."}, {Start: 0, End: 3, Text: " One. "}, {Start: 3, End: 6, Text: ""},
+		{Start: 9, End: 10, Text: "   "}, {Start: 10, End: 12, Text: "Three."}}
+	sent := slices.Clone(u.Segments)
+	put, err := e.PutRecording(recID, u, now)
+	if err != nil || put.Status != RecordingStored {
+		t.Fatalf("put %v %v", put, err)
+	}
+	if !slices.Equal(u.Segments, sent) {
+		t.Fatalf("the caller's segments changed: %+v", u.Segments)
+	}
+	var got []string
+	for _, sg := range put.Segments {
+		got = append(got, sg.Text)
+	}
+	if !slices.Equal(got, []string{"One.", "Two.", "Three."}) {
+		t.Fatalf("stored segments %q", got)
+	}
+}

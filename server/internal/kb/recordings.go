@@ -297,6 +297,9 @@ type RecordingPut struct {
 	// TranscriptionNotMeeting).
 	Transcription        string
 	TranscriptionProblem string
+	// Segments are the upload's segments as stored: trimmed, empty ones dropped, in order (the upload itself is never
+	// changed). Nil when the upload was refused before they were read.
+	Segments []RecordingSegment
 }
 
 var (
@@ -416,7 +419,8 @@ func (u *RecordingUpload) clean() error {
 		u.dayFull = true
 	}
 	u.next = len(u.Segments)
-	segs := u.Segments[:0]
+	// A fresh slice: the caller's upload (its Segments' backing array) is never changed.
+	segs := make([]RecordingSegment, 0, len(u.Segments))
 	total := 0
 	for i, sg := range u.Segments {
 		sg.Text, sg.N, sg.Source = strings.TrimSpace(sg.Text), 0, "" // only the hub sets a source
@@ -437,6 +441,7 @@ func (u *RecordingUpload) clean() error {
 	}
 	sort.SliceStable(segs, func(i, j int) bool { return segs[i].Start < segs[j].Start })
 	u.Segments = segs
+	u.Bookmarks = slices.Clone(u.Bookmarks)
 	sort.SliceStable(u.Bookmarks, func(i, j int) bool { return u.Bookmarks[i].At < u.Bookmarks[j].At })
 	u.Title = oneLine(u.Title)
 	u.Language = strings.TrimSpace(u.Language)
@@ -519,6 +524,7 @@ func (e *Engine) putRecording(rawID string, u RecordingUpload, now time.Time) (p
 	if err := u.clean(); err != nil {
 		return put, false, err
 	}
+	put.Segments = u.Segments
 	put.AttendanceProblem = u.normalizeAttendance()
 	day := u.Kind == RecordingDay
 	if day {
