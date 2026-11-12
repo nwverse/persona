@@ -11,6 +11,7 @@ final class PendingCardsTests: XCTestCase {
     /// The mock's agent with three cards waiting, and one with none.
     private static let photos = "studio/a1f3c2d4-0000-4000-8000-000000000005"
     private static let widget = "macbook/a1f3c2d4-0000-4000-8000-000000000001"
+    private static let askLong = "server/b2e4d6f8-0000-4000-8000-000000000001"
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -25,6 +26,16 @@ final class PendingCardsTests: XCTestCase {
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", pair, "-app.tab", "chats", "-dev.openChat", chat, "-tab", "dev",
                                "-openAgentsFresh", "YES", "-openChatsFresh", "YES"] + extra
+        app.launchPinned()
+    }
+
+    private func launchMainQuestion(_ scheme: String? = nil) {
+        let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"]!
+        app = XCUIApplication()
+        let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
+        app.launchArguments = ["-pairURL", pair, "-app.tab", "assistant", "-tab", "assistant",
+                               "-openAssistant", Self.askLong, "-openChatsFresh", "YES"]
+        if let scheme { app.launchArguments += ["-ui.scheme", scheme] }
         app.launchPinned()
     }
 
@@ -131,6 +142,43 @@ final class PendingCardsTests: XCTestCase {
         }
         XCTAssertTrue(app.keyboards.firstMatch.exists, "the keyboard stays up while the card scrolls")
         shot("question-keyboard-end")
+    }
+
+    /// A long ask_user card in Persona's main conversation (#4839): its action row is usable on arrival, before any
+    /// scrolling, and a drag through the options neither picks one nor advances to the next question.
+    func testLongQuestionActionsAreVisibleWithoutScrolling() {
+        for scheme in ["light", "dark"] {
+            launchMainQuestion(scheme)
+            XCTAssertTrue(app.staticTexts["这周先处理哪件事？"].firstMatch.waitForExistence(timeout: 20), "no long question")
+            let first = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "选项 1")).firstMatch
+            XCTAssertTrue(first.waitForExistence(timeout: 5), "no first option")
+            first.tap() // Multi-select does not advance: Submit is now enabled on this same long question.
+            let cards = app.scrollViews["pending-cards"]
+            XCTAssertTrue(cards.exists, "the cards' area")
+            let action = app.buttons.matching(NSPredicate(format: "label IN %@", ["提交", "Submit"])).firstMatch
+            XCTAssertTrue(action.waitForExistence(timeout: 5), "no Submit:\n\(app.debugDescription)")
+            shot("long-question-actions-\(scheme)")
+            XCTAssertTrue(action.isEnabled, "Submit is not enabled after a deliberate pick")
+            XCTAssertTrue(action.isHittable && cards.frame.insetBy(dx: -1, dy: -1).contains(action.frame),
+                          "Submit needs scrolling first (\(action.frame) in \(cards.frame))")
+            app.terminate()
+        }
+    }
+
+    func testDraggingLongQuestionDoesNotPick() {
+        launchMainQuestion()
+        let question = app.staticTexts["这周先处理哪件事？"].firstMatch
+        XCTAssertTrue(question.waitForExistence(timeout: 20), "no long question")
+        let first = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "选项 1")).firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 5), "no first option:\n\(app.debugDescription)")
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        let start = origin.withOffset(CGVector(dx: first.frame.midX, dy: first.frame.midY))
+        let end = origin.withOffset(CGVector(dx: first.frame.midX, dy: first.frame.midY - 12))
+        start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .fast, thenHoldForDuration: 0.1)
+        sleep(1)
+        XCTAssertTrue(question.exists, "the drag replaced the question")
+        XCTAssertFalse(first.isSelected || first.label.contains("已选"), "the short drag picked an option")
+        shot("long-question-after-drag")
     }
 
     func testThreeCardsScrollUnderTheHeader() {

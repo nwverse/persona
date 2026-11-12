@@ -6695,6 +6695,16 @@ if os.environ.get("MOCK_ASK_LONG") == "1":
                 for n in range(1, 9)]},
             {"question": "整理完发给谁？", "header": "发送", "multi_select": True, "options": [
                 {"label": "组里"}, {"label": "老板"}, {"label": "只给我"}]}]})
+# MOCK_ASK_LONG=actions: one long multi-select question, so Submit is enabled by a deliberate pick without advancing
+# to another, shorter question (#4839). The original two-question fixture above stays unchanged for #3112.
+if os.environ.get("MOCK_ASK_LONG") == "actions":
+    INTERACTIONS.append({
+        "id": "ix_ask_long", "machine_id": "server", "session_id": ASK1, "session_title": "Persona",
+        "kind": "question", "created_at": ago(minutes=1), "expires_at": later(minutes=29), "tool_name": "ask_user",
+        "questions": [
+            {"question": "这周先处理哪件事？", "header": "下一步", "multi_select": True, "options": [
+                {"label": "选项 %d" % n, "description": "第 %d 件事的说明：要多长时间、会碰到谁、做完之后接着做什么" % n}
+                for n in range(1, 9)]}]})
 # A very long `python3 -c …` script for a Feishu permission card (MOCK_ASK_LONG=perm|agent): taller than the dock on
 # every width, so its buttons have to stay reachable.
 def _long_lark_cmd(verb):
@@ -22049,7 +22059,7 @@ MOCK_HELP.append("MOCK_EXTENSION_OPS=1|fail  （配合 MOCK_EXTENSIONS）扩展�
 MOCK_HELP.append("MOCK_MANAGER_NAS=1  （默认的三个管理者）NAS 归离线的「家里」：像 hub 一样显示成离线，error 是 hub 的「助手暂时连不上，稍后再试」；它的一个 agent（备份脚本）状态 unknown")
 MOCK_HELP.append("MOCK_ASSISTANT_BASH=1  主对话自己的第一条 Bash 在等批准（#4883），是它唯一的卡片：对话里输入区上方显示「在等你批准」，不只在收起的「需要你」里")
 MOCK_HELP.append("MOCK_LONG_REPORT=1|<items.json>  An Agent chat (macbook/a1f3c2d4-0000-4000-8000-000000000090) ending in one ~33,000-character report with nine tables and a dozen code blocks after 120 folded tool calls (#4970); a path serves that file's transcript items instead")
-MOCK_HELP.append("MOCK_ASK_LONG=1|perm|agent  卡片比输入区上方的盒子还高（#3112）：1 主对话的 ask_user 提问卡（八个带说明的选项）；perm 主对话的飞书授权卡（超长命令）；agent MacBook 上补测试的 Agent 对话里两张这样的授权卡、没有别的卡（手机和侧边面板把第二张折在「还有 1 件」后面）")
+MOCK_HELP.append("MOCK_ASK_LONG=1|actions|perm|agent  卡片比输入区上方的盒子还高（#3112）：1 主对话的 ask_user 提问卡（八个带说明的选项）；actions 单道八个带说明选项的多选题，Submit 首屏可达（#4839）；perm 主对话的飞书授权卡（超长命令）；agent MacBook 上补测试的 Agent 对话里两张这样的授权卡、没有别的卡（手机和侧边面板把第二张折在「还有 1 件」后面）")
 MOCK_HELP.append("MOCK_MANAGER_NEEDS_YOU=0  名册不带 inbox_needs_you（旧 hub，或还不上报这个数的旧管理者）；默认每个在线的管理者带它收件箱里「需要你处理」的未完成条目数，数变了推 managers")
 MOCK_HELP.append("MOCK_MANAGER_OUTDATED=1  设置 › 管理者：「工作」带 needs_update（它还不读自己的 manager.json，hub 在它在线时这样标）")
 MOCK_HELP.append("MOCK_MANAGERS=1  只有 hub 自己的管理者（没有切换、不分组，电脑、会话、卡片和合并的列表照样带 manager）；默认三个装好的（一个离线）：电脑、收件箱、扩展带 manager，会话和卡片跟它的电脑走；默认管理者换成别的时，模拟助手发的实时消息带它的 manager；助手页按 X-Persona-Manager 切换（工作：还没有主对话、有自己的说明，PUT 改它的；家里：503 assistant_offline；不认识的 404 no_manager）；POST /api/v1/managers/{id}/machines、…/sources 移电脑 / 邮箱，删掉的管理者的电脑回到 hub 自己的")

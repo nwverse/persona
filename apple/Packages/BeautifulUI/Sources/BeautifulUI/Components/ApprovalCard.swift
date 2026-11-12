@@ -98,6 +98,9 @@ public struct ApprovalCardOptions: Sendable {
     public var drawsSurface = true
     /// The original's 320 pt; `nil` fills the host's width.
     public var maxWidth: CGFloat? = 320
+    /// A host's vertical cap. Set, the questions scroll while the footer stays outside that scroll; `nil` keeps the
+    /// card's original, wholly laid-out body. The cap includes the footer.
+    public var maxHeight: CGFloat?
     /// Picking a single-choice answer moves on (and on the last question, sends) after a beat. Off, the
     /// person sends with the button — for answers that are costly to get wrong, such as an approval.
     public var autoAdvance = true
@@ -131,6 +134,8 @@ public struct ApprovalCard<Context: View>: View {
     @State private var sent: Bool
     @State private var open = true
     @State private var forward = true
+    @State private var contentHeight: CGFloat = 0
+    @State private var footerHeight: CGFloat = 0
     @State private var advanceTask: Task<Void, Never>?
     @FocusState private var customFocused: Bool
     @Environment(\.buiTheme) private var theme
@@ -222,20 +227,19 @@ public struct ApprovalCard<Context: View>: View {
 
     private var card: some View {
         VStack(spacing: 0) {
-            ZStack(alignment: .topLeading) {
-                question(questions[index], at: index)
-                    .id(index)
-                    .transition(.asymmetric(
-                        insertion: .move(edge: forward ? .bottom : .top).combined(with: .opacity),
-                        removal: .move(edge: forward ? .top : .bottom).combined(with: .opacity)
-                    ))
+            if let maxHeight = options.maxHeight {
+                ScrollView {
+                    questionArea.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                .frame(height: questionCap(maxHeight))
+            } else {
+                questionArea
             }
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-            .clipped()
-            .padding(options.drawsSurface ? 12 : 0)
             footer
                 .padding(options.drawsSurface ? 0 : -10)
                 .padding(.top, options.drawsSurface ? 0 : 12)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0 }
         }
         .disabled(options.isSending)
         .modifier(CardSurface(active: options.drawsSurface))
@@ -253,6 +257,25 @@ public struct ApprovalCard<Context: View>: View {
             }
         }
         .buiEntrance(.fadeUp, duration: 0.38)
+    }
+
+    private var questionArea: some View {
+        ZStack(alignment: .topLeading) {
+            question(questions[index], at: index)
+                .id(index)
+                .transition(.asymmetric(
+                    insertion: .move(edge: forward ? .bottom : .top).combined(with: .opacity),
+                    removal: .move(edge: forward ? .top : .bottom).combined(with: .opacity)
+                ))
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .clipped()
+        .padding(options.drawsSurface ? 12 : 0)
+    }
+
+    private func questionCap(_ maxHeight: CGFloat) -> CGFloat {
+        let available = max(maxHeight - footerHeight, 0)
+        return min(contentHeight == 0 ? available : contentHeight, available)
     }
 
     private func question(_ question: ApprovalQuestion, at qIndex: Int) -> some View {

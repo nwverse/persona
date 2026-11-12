@@ -645,6 +645,8 @@ Send/terminal-dialog safety (`SendSafetyTests`) uses mock:
 tap dialog option, hub gets `option` not keys and Dialog changed notice; existing computer draft, Clear and send retry carries
 `clear_draft` under a new `client_msg_id`, and Resend after Not Now reaches the computer again under a new one (#6425; `GET /mock/resolved`, `GET /mock/sent`). Screenshot `-openSendMessage <text>` sends after 3 seconds (`-openSendDelay <seconds>` overrides).
 
+Long assistant question cards (#4839): `MOCK_AGENTS=1 MOCK_ASK_LONG=actions PORT=<dedicated port> python3 scripts/mock/mock_hub.py` gives Persona's main conversation one multi-select question with eight described options. `TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<port> xcodebuild test … -only-testing:PersonaUITests/PendingCardsTests` checks that a deliberate pick enables Submit and that Submit is wholly inside the card and hittable without scrolling in light and dark, that a short drag through the options picks nothing, and the existing keyboard / single-card / multi-card behavior. Run once in each interface style (`TEST_RUNNER_PERSONA_UI_STYLE=beautiful` for the second) and repeat on a small iPhone; `PERSONA_SHOTS` keeps the screenshots. The original `MOCK_ASK_LONG=1` two-question fixture remains unchanged for #3112.
+
 Terminal questions of several (`ScreenStepsCardTests`, #2970): `MOCK_SCREEN_STEPS=1 PORT=<dedicated port> python3 scripts/mock/mock_hub.py &`,
 `TEST_RUNNER_PERSONA_STEPS_HUB=http://127.0.0.1:<port> xcodebuild test … -only-testing:PersonaUITests/ScreenStepsCardTests -only-testing:PersonaUITests/ScreenStepsCardBeautifulTests`
 (the second runs the same in BeautifulUI, whatever the run's style). The mock's three-question dialog moves as the terminal does

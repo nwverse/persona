@@ -1500,6 +1500,12 @@ no initial Working row so the message shifted by one row, and pending local remo
   - Inspect keyboard UI at SE size; iOS 27.1 simulator has no SE, use 27.0.
   - Do not `swipeUp` for options in small regions: fast flings overshoot and header-start swipes do not scroll. Hold, slow-drag, pause at end (`press(forDuration:thenDragTo:withVelocity:thenHoldForDuration:)`), starting inside the scrolling area.
 
+## Question actions live outside option scrolling (2026-11-12, #4839)
+
+- Putting the whole question form in the panel's ScrollView also puts Previous / Next / Submit below the visible options. A footer brought closer to the visible area can still be clipped by the spacing between the scrolling body and footer; subtract both the footer and that spacing from the body's cap.
+- Size a single question from the actual pending-card area after its header and margins, not only from the page's 55% or the keyboard-only cap. The choices (or a multi-question review) scroll inside; the outer pending-cards view scrolls only between several cards.
+- `ApprovalCard.maxHeight` is opt-in and includes its fixed footer, so the BeautifulUI panel gets the same behavior without changing the library's other approval and plan callers. The regression drives the real main-chat `ask_user` card in both styles and color schemes, on standard and small phones, after a deliberate pick has enabled Submit. A drag case that already passed before the fix is retained as a guard, not reported as a reproduced defect.
+
 ## A view that places itself over the whole screen gets no keyboard avoidance (2026-11-10, #3004)
 
 - The + panel (`AttachSheet`) measures the screen in a `GeometryReader` (size plus safe-area insets, which with the keyboard
