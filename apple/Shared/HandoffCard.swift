@@ -96,7 +96,7 @@ nonisolated enum HandoffWrapUp {
 
 extension FeedItem {
     /// `inbox_suggestion`: the hand-off card's body; nil for another kind or a body this build can't read.
-    var handoffCard: HandoffCardBody? {
+    nonisolated var handoffCard: HandoffCardBody? {
         guard kind == .inboxSuggestion, let body else { return nil }
         return try? JSON.decoder.decode(HandoffCardBody.self, from: JSONEncoder().encode(body))
     }

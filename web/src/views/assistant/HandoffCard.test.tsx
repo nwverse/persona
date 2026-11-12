@@ -62,7 +62,7 @@ describe("the hand-off card", () => {
     box.items = [open()];
     draw(<HandoffCard item={feed} />);
     expect(host.textContent).toContain("示例客户要报价，已定周五");
-    expect(host.textContent).toContain("以你的身份回复「示例客户」");
+    expect(host.textContent).toContain("以你的名义回复「示例客户」");
     const area = host.querySelector("textarea")!;
     expect(area.value).toBe("周五上午给你");
     const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
@@ -82,7 +82,7 @@ describe("the hand-off card", () => {
     box.items = [open({ done_at: "2026-11-13T10:00:00Z", done_by: "replied", suggestion: undefined, chain: [{ id: "c1", kind: "confirmed", text: "", detail: "周五上午给你" }] })];
     draw(<HandoffCard item={feed} />);
     expect(host.querySelector('[data-testid="handoff-card"]')?.getAttribute("data-state")).toBe("sent");
-    expect(host.textContent).toContain("已以你的身份回复");
+    expect(host.textContent).toContain("已以你的名义回复");
     expect(host.querySelector("textarea")).toBeNull();
     expect(host.querySelector('[data-testid="handoff-card-confirm"]')).toBeNull();
   });

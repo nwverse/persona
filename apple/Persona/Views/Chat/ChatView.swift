@@ -2510,7 +2510,7 @@ struct ChatView: View {
             AssistantActionBar(conversation: conversation, key: key, computer: computerActivity)
             RouteChip(conversation: conversation)
             // Items handed to the main conversation that are still open: "Wrap up" asks it for the final write-back (#5932).
-            if isMain { WrapUpChips(key: key) }
+            if model.assistantMain == key { WrapUpChips(key: key) }
         }
     }
 

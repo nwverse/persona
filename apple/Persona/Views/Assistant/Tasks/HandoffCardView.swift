@@ -107,7 +107,7 @@ struct HandoffCardView: View {
         Button {
             Task { await confirm(it, s) }
         } label: {
-            Text(card.isReply ? String(localized: "Send") : String(localized: "Got It [Hand-Off Card]"))
+            Text(card.isReply ? String(localized: "Send") : String(localized: "Got It"))
                 .lineLimit(1).fixedSize(horizontal: true, vertical: false).frame(maxWidth: .infinity)
         }
         .draftDecisionButton(prominent: true)
@@ -159,10 +159,8 @@ struct HandoffCardView: View {
         fetched = try? await api.inboxItem(itemID)
     }
 
-    private var sourceName: String {
-        if card.source == "mail" { return card.account ?? String(localized: "Mail") }
-        return card.account ?? card.source
-    }
+    /// The account it came in on (Feishu, the mail address), else the source's id.
+    private var sourceName: String { card.account ?? card.source }
 
     private func sent(_ state: HandoffCardState) -> Bool {
         if case .sent = state { return true }
