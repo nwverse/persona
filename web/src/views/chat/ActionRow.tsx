@@ -144,10 +144,13 @@ export function presentAction(use: Item): ActionPresentation {
 
 // ── diffs ──
 
-/** A line diff of an edit's old and new text (lib/compare.ts's Myers diff); too big to diff: all out, all in. */
+/** A line diff of an edit's old and new text (lib/compare.ts's Myers diff); too big to diff: all out, all in. A newline
+ *  at a text's end ends its last line rather than starting another, as git counts (the hub's fold counts the same,
+ *  server/internal/transcript/fold_changes.go). */
 export function lineDiff(oldText: string, newText: string): Op[] {
-  const a = oldText ? oldText.split("\n") : [];
-  const b = newText ? newText.split("\n") : [];
+  const lines = (s: string) => (s ? s.replace(/\n$/, "").split("\n") : []);
+  const a = lines(oldText);
+  const b = lines(newText);
   return diffLines(a, b) ?? [...a.map((text) => ({ kind: "del" as const, text })), ...b.map((text) => ({ kind: "add" as const, text }))];
 }
 

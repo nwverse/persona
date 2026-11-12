@@ -11969,9 +11969,10 @@ if os.environ.get("MOCK_EDIT_DIFF") == "1":
 
 # MOCK_TURN_CHANGES=1 (#5157): the changed-files card at the end of a finished Agent turn. One chat edits five files of
 # this checkout (one of them twice; an edit that failed does not count), a line of narration between the edits so the
-# page does not fold them (fold_work leaves runs under 3 items, docs/protocol/protocol.md "Folded work"); a Codex chat
-# changes two files by their diffs. The main conversation's last exchange writes a file too and shows no card (super
-# rules 0 and 4). With MOCK_REVIEW=1, Review opens the review of the same checkout. Made-up code.
+# page does not fold them (fold_work leaves runs under 3 items, docs/protocol/protocol.md "Folded work") and the card
+# counts the calls themselves; a Codex chat changes two files by their diffs. MOCK_EDIT_DIFF's chat comes folded, and
+# its card comes from the fold's `changes`. The main conversation's last exchange writes a file too and shows no card
+# (super rules 0 and 4). With MOCK_REVIEW=1, Review opens the review of the same checkout. Made-up code.
 TURN_CHANGES = "a1f3c2d4-0000-4000-8000-000000005157"
 TURN_CHANGES_CODEX = "a1f3c2d4-0000-4000-8000-000000005158"
 
@@ -12881,6 +12882,97 @@ def fold_task_snapshots(items):
     return snapshots
 
 
+CLIPPED_NOTE = re.compile("\n…（已截断，共 \\d+ 字节）$")
+
+
+def _text_lines(s):
+    return s[:-1].split("\n") if s.endswith("\n") else s.split("\n") if s else []
+
+
+def _line_changes(old, new):
+    """transcript.lineChanges: lines added and removed by Myers' line diff; everything past its limits."""
+    a, b = _text_lines(old), _text_lines(new)
+    n, m = len(a), len(b)
+    if n + m <= 60000:
+        most = min(n + m, 6000)
+        off, v = most + 1, [0] * (2 * most + 3)
+        for d in range(most + 1):
+            for k in range(-d, d + 1, 2):
+                x = v[off + k + 1] if k == -d or (k != d and v[off + k - 1] < v[off + k + 1]) else v[off + k - 1] + 1
+                y = x - k
+                while x < n and y < m and a[x] == b[y]:
+                    x, y = x + 1, y + 1
+                v[off + k] = x
+                if x >= n and y >= m:
+                    return (m - n + d) // 2, (n - m + d) // 2
+    return m, n
+
+
+def _patch_changes(patch, change):
+    """transcript.patchLines: a Codex file change's unified diff, or the whole file without hunks."""
+    lines = patch.split("\n")
+    if not any(l.startswith("@@") for l in lines):
+        if not patch:
+            return 0, 0
+        count = len((patch[:-1] if patch.endswith("\n") else patch).split("\n"))
+        return (0, count) if change == "delete" else (count, 0)
+    add = rm = 0
+    inside = False
+    for l in lines:
+        if l.startswith("diff --git"):
+            inside = False
+        elif not inside and l.startswith(("index ", "--- ", "+++ ")):
+            continue
+        elif l.startswith("@@"):
+            inside = True
+        elif inside and l.startswith("+"):
+            add += 1
+        elif inside and l.startswith("-"):
+            rm += 1
+    return add, rm
+
+
+def fold_changes(run):
+    """transcript.foldChanges (#5157): the files the run's successful Edit / Write / MultiEdit calls changed, in the
+    order first edited, each with the lines added and removed and whether the input was whole."""
+    ok = {x.get("tool_use_id"): not x.get("is_error") for x in run if x["kind"] == "tool_result"}
+    out, at = [], {}
+
+    def clipped(v):
+        if isinstance(v, str):
+            return bool(CLIPPED_NOTE.search(v))
+        if isinstance(v, list):
+            return any(clipped(e) for e in v)
+        return isinstance(v, dict) and any(clipped(e) for e in v.values())
+    for x in run:
+        name = x.get("tool_name")
+        if x["kind"] != "tool_use" or name not in ("Edit", "Write", "MultiEdit") or not ok.get(x.get("tool_use_id")):
+            continue
+        inp = x.get("tool_input") or {}
+        path = next((inp[k].strip() for k in ("file_path", "notebook_path", "path") if isinstance(inp.get(k), str) and inp[k].strip()), "")
+        if not path:
+            continue
+        add = rm = 0
+        if name == "Edit" and isinstance(inp.get("diff"), str):
+            add, rm = _patch_changes(inp["diff"], inp.get("change") or "")
+        elif name == "Edit" and (isinstance(inp.get("old_string"), str) or isinstance(inp.get("new_string"), str)):
+            add, rm = _line_changes(inp.get("old_string") or "", inp.get("new_string") or "")
+        elif name == "Write" and isinstance(inp.get("content"), str):
+            add, rm = _line_changes("", inp["content"])
+        elif name == "MultiEdit":
+            for e in inp.get("edits") or []:
+                a, r = _line_changes(e.get("old_string") or "", e.get("new_string") or "")
+                add, rm = add + a, rm + r
+        exact = not clipped(inp)
+        if path in at:
+            c = out[at[path]]
+            c["add"], c["del"], c["exact"] = c["add"] + add, c["del"] + rm, c["exact"] and exact
+        else:
+            at[path] = len(out)
+            out.append({"path": path, "add": add, "del": rm, "exact": exact})
+    return out
+
+
 def fold_work(items):
     """transcript.FoldWork: each run of tool calls (with their results) and thoughts becomes one fold item."""
     uses = {x.get("tool_use_id") for x in items if x["kind"] == "tool_use"}
@@ -12917,7 +13009,8 @@ def fold_work(items):
                         "fold": {"items": len(run), "tools": sum(x["kind"] == "tool_use" for x in run),
                                  "thoughts": sum(x["kind"] == "thinking" and bool((x.get("text") or "").strip()) for x in run),
                                  "until": run[-1]["ts"], "through_seq": run[-1]["seq"], "through_id": run[-1]["id"],
-                                 **({"tasks": tasks} if tasks else {}), **({"images": images} if images else {}), **narration}})
+                                 **({"tasks": tasks} if tasks else {}), **({"images": images} if images else {}), **narration,
+                                 "changes": fold_changes(run)}})
         i = j
     return out
 

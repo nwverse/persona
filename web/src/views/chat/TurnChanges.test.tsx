@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 // The changed-files card after cindy's TurnChangesCard (#5157): counted from the exchange's own successful edits, by
-// file; only at the end of a finished Agent exchange (never a Persona conversation's, never while it runs, never in a
-// supervision trace, never with work the hub folded); three files, then Show N more; Review opens the session's review.
+// file, folded work by its fold's changes; only at the end of a finished Agent exchange (never a Persona conversation's,
+// never while it runs, never in a supervision trace, never with a fold an older node made); three files, then Show N
+// more; Review opens the session's review.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -26,6 +27,8 @@ import type { Item } from "../../lib/types";
 import { ChatContext, type ChatContextValue } from "./chat-context";
 import { SegmentView } from "./SegmentView";
 import { turnChanges } from "./TurnChanges";
+import { lineDiff } from "./ActionRow";
+import shared from "../../../../spec/fixtures/fold-changes/cases.json";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -82,9 +85,29 @@ describe("turnChanges: what an exchange's own edits changed", () => {
     expect(turnChanges(steps([ask(), ...call("Read", { file_path: `${CWD}/c.ts` }), done()]), CWD)).toBeNull();
   });
 
-  it("draws no card for work the hub folded and nobody opened: its edits are not on the page", () => {
-    const fold = item({ kind: "fold", fold: { items: 6, tools: 3, thoughts: 0, through_seq: seq + 3 } });
-    expect(turnChanges(steps([ask(), ...edit(`${CWD}/a.ts`, "1", "2"), fold, done()]), CWD)).toBeNull();
+  it("counts folded work by the changes its fold carries, in the order the work came", () => {
+    const fold = item({ kind: "fold", fold: { items: 6, tools: 3, thoughts: 0, through_seq: seq + 3, changes: [
+      { path: `${CWD}/b.ts`, add: 4, del: 1, exact: true },
+      { path: "c.ts", add: 2, del: 0, exact: true },
+    ] } });
+    const c = turnChanges(steps([ask(), ...edit(`${CWD}/a.ts`, "1", "2"), fold, ...edit(`${CWD}/b.ts`, "x", "y"), done()]), CWD)!;
+    expect(c.files.map((f) => [f.shown, f.add, f.del])).toEqual([["a.ts", 1, 1], ["b.ts", 5, 2], ["c.ts", 2, 0]]);
+  });
+
+  it("draws no card for a fold without changes (an older node): its edits are not on the page", () => {
+    for (const changes of [undefined, null]) {
+      const fold = item({ kind: "fold", fold: { items: 6, tools: 3, thoughts: 0, through_seq: seq + 3, changes } });
+      expect(turnChanges(steps([ask(), ...edit(`${CWD}/a.ts`, "1", "2"), fold, done()]), CWD)).toBeNull();
+    }
+    const empty = item({ kind: "fold", fold: { items: 4, tools: 2, thoughts: 0, through_seq: seq + 2, changes: [] } });
+    expect(turnChanges(steps([ask(), empty, ...edit(`${CWD}/a.ts`, "1", "2"), done()]), CWD)!.files).toHaveLength(1);
+    expect(turnChanges(steps([ask(), empty, done()]), CWD)).toBeNull();
+  });
+
+  it("counts a final newline as the end of the last line, as git does", () => {
+    expect(lineDiff("", "a\nb\n").map((l) => l.kind)).toEqual(["add", "add"]);
+    expect(lineDiff("x\n", "x\ny\n").map((l) => `${l.kind}:${l.text}`)).toEqual(["same:x", "add:y"]);
+    expect(lineDiff("\n", "")).toEqual([{ kind: "del", text: "" }]);
   });
 
   it("keeps a file whose edit the hub clipped for good, without counts it cannot know", () => {
@@ -92,6 +115,21 @@ describe("turnChanges: what an exchange's own edits changed", () => {
     const c = turnChanges(steps([ask(), ...call("Write", { file_path: `${CWD}/big.json`, content: clipped }), ...edit(`${CWD}/a.ts`, "1", "2"), done()]), CWD)!;
     expect(c.files.map((f) => [f.shown, f.exact])).toEqual([["big.json", false], ["a.ts", true]]);
     expect(c.exact).toBe(false);
+  });
+});
+
+// The cases the hub reads too (server/internal/transcript/fold_changes.go): the same calls counted on the page and the
+// fold the node makes of them give one card, so a reload does not change it.
+describe("the shared cases (spec/fixtures/fold-changes)", () => {
+  type Case = { name: string; input: { items: Item[] }; expected: { changes: { path: string; add: number; del: number; exact: boolean }[] } };
+  const out = (c: ReturnType<typeof turnChanges>) => c?.files.map((f) => ({ path: f.path, add: f.add, del: f.del, exact: f.exact })) ?? [];
+  it.each((shared.cases as Case[]).map((c) => [c.name, c] as const))("%s: unfolded, and as the hub's fold", (_, c) => {
+    const user = item({ role: "user", kind: "text", text: "go" });
+    const answer = item({ kind: "text", text: "done" });
+    const live = turnChanges(segments([user, ...c.input.items, answer])[0].steps);
+    expect(out(live)).toEqual(c.expected.changes);
+    const fold = item({ kind: "fold", fold: { items: c.input.items.length, tools: 0, thoughts: 0, through_seq: 0, changes: c.expected.changes } });
+    expect(turnChanges(segments([user, fold, answer])[0].steps)).toEqual(live);
   });
 });
 
@@ -143,6 +181,16 @@ describe("the card in the chat", () => {
     expect(card()).toBeNull();
     draw([ask(), ...edit(`${CWD}/a.ts`, "1", "2"), done()], { lineStyle: undefined });
     expect(card()).toBeNull();
+  });
+
+  it("shows after a reload whose page folded the work, from the fold's changes", () => {
+    const fold = item({ kind: "fold", fold: { items: 8, tools: 4, thoughts: 0, through_seq: seq + 4, changes: [
+      { path: `${CWD}/src/a.ts`, add: 3, del: 1, exact: true }, { path: `${CWD}/src/b.ts`, add: 2, del: 0, exact: true },
+    ] } });
+    draw([ask(), fold, done()]);
+    expect(card()!.textContent).toContain("已更改 2 个文件");
+    expect(card()!.textContent).toContain("+5 -1");
+    expect(rows()).toEqual(["src/a.ts", "src/b.ts"]);
   });
 
   it("never shows while the exchange runs, nor in a supervision trace", () => {

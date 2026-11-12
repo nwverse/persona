@@ -2,8 +2,8 @@
 // "Changed files"): a bordered card at the end of the exchange with "Changed 3 files", the lines added and removed,
 // Review, and the files, three of them, then "Show N more files". Counted from the exchange's own successful edits
 // (Edit / Write / MultiEdit; a Codex file change, which the hub maps to an Edit with its diff), the numbers each edit's
-// row shows. Never in a Persona conversation, never while the turn runs. cindy's Undo and Reapply are not here: nothing
-// in Persona applies or reverts a turn's patch.
+// row shows; work the hub folded, by the counts its fold carries. Never in a Persona conversation, never while the turn
+// runs. cindy's Undo and Reapply are not here: nothing in Persona applies or reverts a turn's patch.
 import { memo, useState } from "react";
 import { relativeTo } from "../../lib/comments";
 import { joinPath, toolFile } from "../../lib/files";
@@ -50,27 +50,35 @@ function clipped(v: unknown): boolean {
 const absolute = (p: string) => p.startsWith("/") || p.startsWith("~") || /^[A-Za-z]:[\\/]/.test(p) || p.startsWith("\\\\");
 
 /** What an exchange's own edits changed, by file in the order first edited, or null when there is nothing to show: no
- *  successful edit, or work the hub folded and nobody opened (its edits are not on the page, so any count would be
- *  wrong). `steps` are the exchange's own (`exchangeSteps`), never its subagents'. */
+ *  successful edit. Work the hub folded counts by its fold's `changes`, which the node works out the same way
+ *  (server/internal/transcript/fold_changes.go, spec/fixtures/fold-changes); a fold without them (an older node) leaves
+ *  the edits unknown, and there is no card rather than a wrong count. `steps` are the exchange's own (`exchangeSteps`),
+ *  never its subagents'. */
 export function turnChanges(steps: readonly Step[], cwd?: string): TurnChangeSet | null {
   const files = new Map<string, ChangedFile>();
-  for (const s of steps) {
-    if (s.kind === "fold") return null;
-    if (s.kind !== "tool") continue;
-    const name = s.use.tool_name ?? "";
-    if (!DIFF_TOOLS.has(name) || !s.result || s.result.is_error) continue;
-    const f = toolFile(name, s.use.tool_input);
-    if (!f) continue;
-    const path = cwd && !absolute(f.path) ? joinPath(cwd, f.path) : f.path;
-    const diffs = editDiffs(s.use);
-    const n = diffs ? diffStats(diffs) : { add: 0, del: 0 };
-    const exact = !clipped(s.use.tool_input);
+  const add = (named: string, n: { add: number; del: number }, exact: boolean) => {
+    const path = cwd && !absolute(named) ? joinPath(cwd, named) : named;
     const had = files.get(path);
     if (had) {
       had.add += n.add;
       had.del += n.del;
       had.exact &&= exact;
     } else files.set(path, { path, shown: relativeTo(cwd, path), add: n.add, del: n.del, exact });
+  };
+  for (const s of steps) {
+    if (s.kind === "fold") {
+      const changes = s.item.fold?.changes;
+      if (!Array.isArray(changes)) return null;
+      for (const c of changes) if (c.path) add(c.path, c, c.exact !== false);
+      continue;
+    }
+    if (s.kind !== "tool") continue;
+    const name = s.use.tool_name ?? "";
+    if (!DIFF_TOOLS.has(name) || !s.result || s.result.is_error) continue;
+    const f = toolFile(name, s.use.tool_input);
+    if (!f) continue;
+    const diffs = editDiffs(s.use);
+    add(f.path, diffs ? diffStats(diffs) : { add: 0, del: 0 }, !clipped(s.use.tool_input));
   }
   if (!files.size) return null;
   const list = [...files.values()];
