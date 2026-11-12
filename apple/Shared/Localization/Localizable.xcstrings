@@ -668,6 +668,28 @@
       },
       "extractionState" : "manual"
     },
+    "All set! If you like Persona, a star helps others find it." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "All set! If you like Persona, a star helps others find it."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "準備完了です。Personaが気に入ったら、ぜひスターを。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "设置完成！喜欢 Persona 的话，点个 Star 支持一下吧。"
+          }
+        }
+      }
+    },
     "Allowed automatically in %@" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1516,6 +1538,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "設定を検索"
+          }
+        }
+      }
+    },
+    "Star on GitHub" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Star on GitHub"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GitHubでスター"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "去 GitHub 点 Star"
           }
         }
       }
@@ -55745,6 +55789,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Enjoying Persona? It's open source, and a star on GitHub helps others find it." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enjoying Persona? It's open source, and a star on GitHub helps others find it."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Personaを気に入っていただけましたか？オープンソースなので、GitHubでスターを付けるとほかの人にも見つけてもらえます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "喜欢 Persona 吗？它是开源的，在 GitHub 上点个 Star 能帮更多人发现它。"
+          }
+        }
+      }
     },
     "Enter" : {
       "localizations" : {

@@ -924,7 +924,7 @@ private struct AgentsList: View {
         observedAgentList(
             agentList(base: base, filtered: filtered, unpinned: unpinned, pinnedAgents: pinnedAgents,
                       needsYou: needsYou, unreadShown: unreadShown, active: active, quiet: quiet,
-                      tree: tree, byHost: byHost, hasSearchResults: projection.hasSearchResults),
+                      tree: tree, byHost: byHost, hasSearchResults: projection.hasSearchResults, nobodyWaits: waiting.isEmpty),
             base: base, interactions: interactions, quiet: quiet, matching: matching)
     }
 
@@ -932,7 +932,7 @@ private struct AgentsList: View {
     // the minimum compiler to solve each expression independently.
     private func agentList(base: [Session], filtered: [Session], unpinned: [Session], pinnedAgents: [Session],
                            needsYou: [AgentsNeedsYou.Row], unreadShown: [SessionKey], active: [SpaceGroup], quiet: [SpaceGroup],
-                           tree: [RepoTree.Host], byHost: Bool, hasSearchResults: Bool) -> some View {
+                           tree: [RepoTree.Host], byHost: Bool, hasSearchResults: Bool, nobodyWaits: Bool) -> some View {
         List {
             // On a phone the filter bar is the list's first row: it scrolls with the list, so the search field can
             // fold away and come back on a pull (a bar pinned in the safe area stayed put under a folded search field,
@@ -986,6 +986,11 @@ private struct AgentsList: View {
             }
             if model.hubNotice != nil && query.isEmpty {
                 Section { HubNoticeRow() } // the hub's version: an update out, under way, or too old (docs/operations/hub-update.md)
+            }
+            // A GitHub star once this device started enough Agents (#5761): only while no session needs you (none is
+            // pushed down) and no search is on, and not over the empty state, whose pill asks already.
+            if query.isEmpty, nobodyWaits, hasSearchResults, StarPromptModel.shared.showsCard(demo: model.isDemo) {
+                Section { StarPromptNoticeRow() }
             }
             #endif
             if widthClass != .regular && showsHerdrNotices {
@@ -1097,14 +1102,17 @@ private struct AgentsList: View {
                 .listRowBackground(Color.clear)
                 .listRowSeparator(floating ? .hidden : .automatic)
             } else if !hasSearchResults {
+                // A GitHub star under Start Your First Session (#5761), not under a computer's empty list.
+                let starPill = machineFilter.isEmpty && StarPromptModel.shared.showsPill(demo: model.isDemo)
                 Section {
                     EmptyStateView(symbol: Theme.Icon.agents,
                                    title: machineFilter.isEmpty ? String(localized: "Start Your First Session") : String(localized: "No Sessions on This Machine"),
                                    message: Self.emptyMessage,
                                    action: (String(localized: "New Session [Chats View 58e21b]"), { showNew = true }))
+                    if starPill { StarPromptPill() }
                 }
                 .listRowBackground(Color.clear)
-                .listRowSeparator(floating ? .hidden : .automatic)
+                .listRowSeparator(floating || starPill ? .hidden : .automatic)
             } else if filtered.isEmpty, let st = quick.state {
                 Section {
                     EmptyStateView(symbol: Theme.Icon.success, title: String(localized: "No Sessions: \(st.label)"),

@@ -68,6 +68,7 @@ final class OnboardingChecklistModel {
 struct OnboardingChecklistView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
     /// Opened from Settings (a sheet): Done closes it; after pairing, Later also tells the hub.
     var fromSettings = false
     @State private var route: ReadinessRoute?
@@ -146,6 +147,10 @@ struct OnboardingChecklistView: View {
         if dismissing { Task { await store.dismiss(api: model.api) } }
         withAnimation(Theme.Motion.standard) { model.checklistPending = false }
         if fromSettings { dismiss() }
+        // Get started, the first time on this device: a GitHub star toast, once and never after a star (#5761).
+        if !dismissing, StarPromptModel.shared.onboarded(demo: model.isDemo) {
+            model.toast = StarPromptModel.shared.welcomeToast(open: openURL)
+        }
     }
 
     private func run(_ action: String, row: OnboardingChecklistModel.Row) {

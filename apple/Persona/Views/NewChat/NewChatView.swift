@@ -956,6 +956,7 @@ struct NewChatView: View {
                 UserDefaults.standard.set(launcher, forKey: "launcher.\(machineID)")
                 UserDefaults.standard.set(cwd, forKey: "cwd.\(machineID)")
                 record(setup)
+                StarPromptModel.shared.launched(demo: model.isDemo) // the GitHub star card counts Agents started here (#5761)
                 Haptics.success()
                 model.adopt(s)
                 onStarted(s)
@@ -975,6 +976,7 @@ struct NewChatView: View {
             UserDefaults.standard.set(mode, forKey: "mode.\(machineID)")
             UserDefaults.standard.set(cwd, forKey: "cwd.\(machineID)")
             record(setup)
+            StarPromptModel.shared.launched(demo: model.isDemo) // the GitHub star card counts Agents started here (#5761)
             Haptics.success()
             model.adopt(s)
             // The photos and the uploaded files' paths go with it (#2321).

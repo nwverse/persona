@@ -16,6 +16,10 @@ struct ShellView: View {
     /// Where the system puts its bars down the side (iPhone Duo's outer display, the inner one on its side): the top
     /// bars are the side rail there (`ShellSideRail`); nil on every other iPhone.
     @State private var railEdge: HorizontalEdge?
+    #if DEBUG
+    /// `-showStarPromptToast YES` opens the project from the toast's button as Get started's toast does.
+    @Environment(\.openURL) private var openURL
+    #endif
 
     var body: some View {
         #if DEBUG || PERF_SIGNPOST
@@ -49,6 +53,11 @@ struct ShellView: View {
                     guard f.count == 3, let at = Double(f[0]) else { continue }
                     let style: Toast.Style = f[1] == "error" ? .error : f[1] == "success" ? .success : .info
                     DispatchQueue.main.asyncAfter(deadline: .now() + at) { model.toast = Toast(f[2], style: style) }
+                }
+                // `-showStarPromptToast YES`: the GitHub star toast the checklist's Get started shows (#5761), a second after
+                // launch, whether or not it showed before (screenshots).
+                if UserDefaults.standard.bool(forKey: "showStarPromptToast") {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) { model.toast = StarPromptModel.shared.welcomeToast(open: openURL) }
                 }
                 let at = UserDefaults.standard.double(forKey: "showShellPagerAt")
                 if at > 0 {

@@ -1331,6 +1331,8 @@ state in `AppModel.readiness`, `AssistantReadinessModel`), using the same presen
 - After pairing (`AppModel.checklistPending`, after engine selection), when the hub has `assistant_readiness` and the user has not chosen Later, the page becomes `OnboardingChecklistView`:
   Computer, Claude Code, Model and Try a message, using readiness `state` for checkmarks, crosses, spinners and question marks, with the same actions as main-chat cards (`ReadinessRoute`). Later calls dismiss;
   when all are checked, show Get started. Settings top "N steps left to get started" (`ChecklistSettingsRow`, N counts unfinished computer / claude / model steps) returns to the checklist. Old hubs add no post-pairing checklist.
+- GitHub star (#5761, `docs/design/DESIGN_SYSTEM.md` "GitHub star prompts"): Get started shows the star toast once per device; the empty Agents list has the Star on GitHub pill under Start Your First Session, and the Agents list the milestone card after the hub notice.
+  The rules are `spec/fixtures/star-prompt`'s (`StarPromptModel`, this device's state in UserDefaults `persona.starPrompt`; Agents counted in `NewChatView.start()`), none in Demo Mode, the Mac or Vision; screenshots with `-showStarPromptCard YES` and `-showStarPromptToast YES`.
 
 ## Connect a new device (#3077)
 
