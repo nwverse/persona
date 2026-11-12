@@ -22,7 +22,9 @@ each mail account's latest page, reading at most 4 accounts concurrently and del
 `settle`, event grouping's `group.tool` / `group.fallback` / `group.append`, read hub triage rules, AI twin configuration, and plugin-provided connectors
 (`inbox.config`), and current translation model (`inbox.translate_fingerprint`). On item changes, the manager emits `inbox.changed`; outside the bus read loop, hub
 sends plugins the `inbox.changed` event and Apps `{"type":"inbox"}` (one slow plugin reader does not block others). Hub asks the manager for items needed by plugin detail slot `inbox_item`,
-items when deleting a source's data, and GitHub Settings' muted repositories (`inbox.item`, `inbox.forget`, `inbox.repo_mutes`).
+items when deleting a source's data, and GitHub Settings' muted repositories (`inbox.item`, `inbox.forget`, `inbox.repo_mutes`). The Inbox Sources
+pages (#5278, `docs/extensions/subscriptions.md` "Pages") list and remove a source's mutes (`inbox.mutes`, `inbox.unmute`) and have the triage model try a
+subscription's dry run on request (`inbox.triage_preview`: nothing kept).
 Hub still enforces its own boundary: reply-only devices (Watch) may send only text, not change document state or send `/agent …` (which starts an Agent when sent as the user).
 Hub rejects these before forwarding (403; the manager checks too). Connector settings, including credentials, remain hub APIs; only muted repositories belong to the manager.
 
@@ -308,14 +310,16 @@ All sources work alike. Long-press an Inbox row for Done / Reopen plus available
 Muting handles this item and other covered open items in the same source, reason "Muted: <name>," with toast "Muted ‘…’; future items will not enter the Inbox."
 The handling chain says "Muted, done" for existing items, newly admitted items and grouped events; `done_by=read` stays unchanged for compatibility.
 Muted under More at the Inbox's top right lists all mutes (name, source · repository / chat / sender), with swipe-left or long-press Unmute. Unmuting admits only future items; already handled ones stay handled.
+Settings › Inbox Sources (#5278) shows the same mutes per source on each built-in source's page, with Unmute (`inbox.mutes`, `inbox.unmute`).
 
 - **APIs**: `GET /api/v1/inbox/mutes` (creation order, oldest first); `POST /api/v1/inbox/mutes {item_id, tag}` mutes the item's value for `tag` (read from the item,
   not supplied by the client; nonexistent item 404, missing tag 400), returning `{mute, settled}` with additionally handled items. `DELETE /api/v1/inbox/mutes/{id}` unmutes.
   Item `mutes` lists allowed mute targets, which the menu renders.
 
 - **Manager** (`assistant/inbox_mutes.go`): mutes live in `inbox_mutes` settings (source + tag + value + name). Each collection handles covered open items, so future
-  messages arrive already done. Item mute targets (`mutes`): connector `InboxThing.Tags` (`repo`, `chat`, `sender`); Lark chat (`lark.feed_id`)
-  and latest group speaker (`lark.sender_id`); lowercase mail sender address. Lark Docs and Moments items have none.
+  messages arrive already done. Item mute targets (`mutes`): connector `InboxThing.Tags` (`repo`, `chat`, `sender`; a subscription's rows carry
+  their newest item's `sender`, #5306); Lark chat (`lark.feed_id`) and latest group speaker (`lark.sender_id`); lowercase mail sender address.
+  Lark Docs and Moments items have none.
 - **GitHub muted repositories**: formerly GitHub connector setting `muted_repos`, now source `github`, tag `repo` mutes. On manager connection,
   hub migrates old entries through `inbox.repo_mutes` and clears them from GitHub settings. Settings › Connectors › GitHub (and old Apps) still read / write `muted_repos`;
   hub translates through the manager, so both entry points share the same data.
@@ -370,7 +374,8 @@ with a chronological **handling chain**. Additive only: IDs, sources, existing f
 | `recap` | Manager-written summary: background, progress, blockers; plain text, up to 600 characters |
 | `handling` | Bound handling chat: `{owner: "manager", state, machine_id?, session_id?, since, error?}`; `state` is `looking` (AI reviewing) / `agent` (its sub-chat working) / `waiting` (confirmed action sent, awaiting response) / `done` (turn finished with suggestion or conclusion) / `failed` (failure / timeout, returns to Needs you without suggestion) |
 | `suggestion` | At most one current suggestion (see "Handling chats and suggestions") |
-| `chain` | Chronological handling chain, oldest first, latest 50 entries at most |
+| `chain` | Chronological handling chain, oldest first, latest 50 entries at most. A list asked with `chain=last` (`docs/protocol/protocol.md`, "Inbox delta") gives a done item its newest entry alone |
+| `chain_count` | Only in a list asked with `chain=last`: how many entries a done item's chain has, when it has more than the one listed |
 | `related` | Cross-atomic relationships: `[{id, title, source}]`; tap to jump to that item, each retaining its own state |
 
 **Section calculation** (`status()`): collapsed stays collapsed (noise never upgrades); reply / Agent suggestion → Needs you; handling chat reviewing / sub-chat working → Working (urgent stays Needs you);

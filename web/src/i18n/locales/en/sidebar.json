@@ -19,6 +19,7 @@
   "persona_chats": "Persona chats",
   "new_chat": "New chat",
   "all_chats": "All chats",
+  "recent_chats": "Recent",
   "pages": "Pages",
   "grouping_header": "Group agents by",
   "new_agent": "New agent",
@@ -26,6 +27,8 @@
   "show_all": "Show all",
   "pinned_section": "Pinned",
   "directions": "Pinned",
+  "direction_tasks": "Tasks of {name}",
+  "task_agents": "Agents of {name}",
   "launching": "Starting",
   "launch_untitled": "New agent",
   "launch_failed": "Couldn't start",
@@ -152,5 +155,6 @@
   "switcher_count_one": "{count} thing waiting for you",
   "switcher_count_other": "{count} things waiting for you",
   "leader_working": "{count} working",
-  "leader_needs_you": "{count} need you"
+  "leader_needs_you": "{count} need you",
+  "codex_waiting": "Waiting for its first message"
 }

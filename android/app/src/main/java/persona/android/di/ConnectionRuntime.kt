@@ -189,6 +189,12 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
             } }
             if (flows.isEmpty()) flowOf(emptyList()) else combine(flows) { lists -> lists.flatMap { it } }
         }.stateIn(scope, SharingStarted.Eagerly, emptyList())
+        override val writtenAt = groups.flatMapLatest { list ->
+            val flows = list.mapNotNull { it.data?.messages?.writtenAt }
+            if (flows.isEmpty()) flowOf(emptyMap()) else combine(flows) { maps ->
+                maps.fold(emptyMap<String, Long>()) { acc, one -> acc + one }
+            }
+        }.stateIn(scope, SharingStarted.Eagerly, emptyMap())
         override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?) {
             gate.withLock {
                 val group = groupOf(session.machineId) ?: throw IllegalStateException(AppText.get(R.string.app_error_pair_first))
@@ -200,6 +206,10 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
         }
         override suspend fun discard(clientMessageId: String) = gate.withLock {
             owner(clientMessageId)?.messages?.discard(clientMessageId) ?: false
+        }
+        // By its session: a cancelled message is in no group's outbox any more.
+        override fun restore(message: OutboxMessage) {
+            groupOf(message.session.machineId)?.data?.messages?.restore(message.copy(session = GroupKeys.rawKey(message.session)))
         }
         override suspend fun retry(clientMessageId: String) = gate.withLock {
             owner(clientMessageId)?.messages?.retry(clientMessageId) ?: false

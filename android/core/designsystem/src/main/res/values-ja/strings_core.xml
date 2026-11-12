@@ -99,6 +99,7 @@
     <string name="designsystem_core_agents_no_todo">ToDoなし</string>
     <string name="designsystem_core_agents_manual">手動で開いた</string>
     <string name="designsystem_core_agents_quiet_spaces">アイドル中のスペース</string>
+    <string name="designsystem_core_agents_started_tab">起動元</string>
     <plurals name="designsystem_core_count_needs_you">
         <item quantity="other">%1$d件が要対応</item>
     </plurals>
@@ -318,7 +319,7 @@
     <string name="designsystem_core_headline_screen">ターミナルで対応が必要です</string>
     <string name="designsystem_core_headline_needs_you">要対応</string>
     <string name="designsystem_core_ask_question">質問があります</string>
-    <string name="designsystem_core_ask_permission">許可が必要です</string>
+    <string name="designsystem_core_ask_permission">承認を待っています</string>
     <string name="designsystem_core_ask_plan">プランの承認待ち</string>
     <string name="designsystem_core_ask_screen">ターミナルで対応が必要です</string>
     <string name="designsystem_core_ask_elicitation">MCPリクエスト</string>
@@ -451,6 +452,6 @@
     <string name="designsystem_core_always_scope_commands">この会話内のすべてのコマンド</string>
     <string name="designsystem_core_always_scope_read_directory">この会話中、このディレクトリ内のすべての読み取り</string>
     <string name="designsystem_core_always_scope_edit_directory">この会話中、このディレクトリ内のすべてのファイル編集</string>
-    <string name="designsystem_core_always_scope_tool">この会話内でのこのツールのすべての呼び出し</string>
+    <string name="designsystem_core_always_scope_tool">この会話のすべての「%1$s」呼び出し</string>
     <string name="designsystem_core_always_scope_approved">許可した範囲はこの会話中、引き続き許可されます</string>
 </resources>
