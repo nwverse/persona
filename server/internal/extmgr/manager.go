@@ -128,24 +128,24 @@ type Manager struct {
 	imessageArchive    imessageArchiveFence
 	imessageAIPending  atomic.Bool
 	subs               *subscriptions.Service // source subscriptions (subscriptions.go); nil until Run
-	connectorsOff map[string]bool
-	migrated      sync.Map
-	media         mediaCache
-	recalls       recallLocks
-	extensions    *extensions
-	hostCLIMu     sync.Mutex
-	hostCLIState  *hostCLIState
-	extTokens     extTokens
-	legacyCalls   legacyCalls
-	uiPages       pageSessions
-	uiDelivery    pageDelivery
-	agents        *agents.Service
-	bots          botHub
-	channels      channelsHub
-	chans         struct{ in inbound }
-	inbox         inboxSources
-	larkDefault   larkDefault
-	admin         struct {
+	connectorsOff      map[string]bool
+	migrated           sync.Map
+	media              mediaCache
+	recalls            recallLocks
+	extensions         *extensions
+	hostCLIMu          sync.Mutex
+	hostCLIState       *hostCLIState
+	extTokens          extTokens
+	legacyCalls        legacyCalls
+	uiPages            pageSessions
+	uiDelivery         pageDelivery
+	agents             *agents.Service
+	bots               botHub
+	channels           channelsHub
+	chans              struct{ in inbound }
+	inbox              inboxSources
+	larkDefault        larkDefault
+	admin              struct {
 		extensions extensionGate
 		now        func() time.Time // the admin UI's clock (tests move it)
 	}

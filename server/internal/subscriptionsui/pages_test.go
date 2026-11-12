@@ -56,7 +56,6 @@ func (f *fake) ModelOf(_ context.Context, purpose string) subscriptions.ModelInf
 	return f.model
 }
 
-
 func (f *fake) List(_ context.Context, fl subscriptions.Filter) ([]subscriptions.Subscription, subscriptions.Features, error) {
 	var out []subscriptions.Subscription
 	order := []string{"sub_outlook", "sub_slack", "sub_github", "sub_broker", "sub_notion", "sub_new"}
