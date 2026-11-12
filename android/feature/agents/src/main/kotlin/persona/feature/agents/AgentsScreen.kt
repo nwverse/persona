@@ -566,14 +566,14 @@ internal fun AgentsScreen(
                         val slot = repoSlots[entry.key]
                         // In a repository's card the rows sit under their line at its level, without rules between them (iOS).
                         Box(if (slot != null) Modifier.repoCard(slot.first, slot.last) else Modifier) {
-                        SlotRow(row, names[row.session.machineId], infoWithDelivery, now, page.preferences.compact,
-                            row.id in page.preferences.pins.sessions, page.preferences.mutes.mutes(row),
-                            depth = slot?.level ?: entry.depth, position = if (slot != null) GroupPosition(true, entry.last) else GroupPosition(entry.first, entry.last),
-                            located = entry.located,
-                            onOpen = { openRow(row) }, menuItems = { rowMenu(row, entry.nested) },
-                            onClose = closeSwipe(row, operations.busy) { operationDialog = AgentOperationDialog.Close(row.session) },
-                            launcher = entry.launcher, branch = entry.branch, hideState = entry.inStateSection,
-                            requestCount = cardCounts[row.session.key] ?: 0, card = requestCards[row.session.key])
+                            SlotRow(row, names[row.session.machineId], infoWithDelivery, now, page.preferences.compact,
+                                row.id in page.preferences.pins.sessions, page.preferences.mutes.mutes(row),
+                                depth = slot?.level ?: entry.depth, position = if (slot != null) GroupPosition(true, entry.last) else GroupPosition(entry.first, entry.last),
+                                located = entry.located,
+                                onOpen = { openRow(row) }, menuItems = { rowMenu(row, entry.nested) },
+                                onClose = closeSwipe(row, operations.busy) { operationDialog = AgentOperationDialog.Close(row.session) },
+                                launcher = entry.launcher, branch = entry.branch, hideState = entry.inStateSection,
+                                requestCount = cardCounts[row.session.key] ?: 0, card = requestCards[row.session.key])
                         }
                     }
                     is TreeChildrenEntry -> item(entry.key, contentType = "children") {
