@@ -418,6 +418,8 @@ No new token. The two icons are added to `ui/icons.tsx` in the existing stroke g
 
 In every grouping a list offers, a session that needs the user is visible without opening anything: in a section at the top, or by the state mark on its row, with a folded group counting it on its header. Grouping by location (computer, repository, worktree, tab) never hides it, and nobody has to pick a computer or a repository first to see their own work.
 
+A child session (an Agent another Agent started, folded under a listed parent; web, #5120, after cindy) is never a row or a count of its own: its parent's row carries it, in the parent's folded state (a waiting child makes it need you, a working one makes it work), its second line saying what the child waits for. The child's need is visible on that row, counted once under the parent.
+
 #### The work-item row
 
 The Agents list, the Inbox's Agent section, the Assistant home and history show a session with the same content, in every Agents row style (Avatar, Two Lines, State Cards, Compact List):
@@ -747,6 +749,9 @@ per card; a workflow card's head opens the chat's Background dialog at its run. 
 its own (no panel, no page, no sidebar row). Like every tool call the cards sit inside the work summary, running or
 not (super rule 2; cindy's running cards outside it wait on #5047). Nested subagents are flat cards by start time. A card offers Stop only
 where the node can stop that task. iOS and Android still draw the earlier design (#5045).
+A child session (a Codex subagent, an Agent a Paseo Agent created; #5120) is the same card in its parent's chat, built
+from its own row and placed by when it started, since no call in the parent's transcript names it: what runs it, its
+model and effort, its status and time; opened, its prompt, latest words and last tool. iOS and Android follow in #5140.
 
 A tool row names its tool in words on iOS, the web and Android (#2986; Android `ToolNaming.kt`, #4339): Claude Code's tools have verbs of their own, another
 server's MCP tool reads "<Server> · <Tool>" ("GitHub · Create issue"), and any other name is humanized. Opened, a tool
@@ -769,6 +774,8 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   the Needs you / In progress entries, on every client (#4883: on the web and Android they sat only in the closed Needs
   you tray, and an owner waited minutes on an approval no screen in the chat showed). Needs you still counts them, and
   its row for one closes the tray onto the card instead of drawing it a second time.
+  A child session's request (web, #5120: `folded_under`) has its parent's page as its home: shown there with the
+  parent's own, "From subagent · <title>", counted once under the parent, and every link to it opens the parent.
 - **One count, per session**: the Agents list's Needs you section, its Needs you filter and the tab's badge count the sessions that wait for the user, each once, its requests in its row oldest first, the way `docs/assistant/managers.md` ("Counts") counts an assistant's waiting agents (principle 4). The Inbox's Agent section and the Assistant's composer entries open the same requests; the composer's entries count tasks (`docs/assistant/unified-entry.md`).
 - **Background rounds and supervisors** (#4314, `docs/assistant/assistant.md` "Background rounds"): in the main conversation a round another conversation, a scheduled task or a follow-up started reuses the quiet supervision record, one muted line `@<source> · Background round` that always opens, never a new component; a round that asked or told the user stays shown. While that switch is on, the composer's Needs you groups rows under the conversation supervising them, this one's first, with a plain caption header and no other change: the same rows, order within a group and count.
 - **Room** (web, #4656): an open tray of requests takes the room its cards need, up to most of the visible height (the assistant's Needs you / In progress tray lets the dock grow to 82% of it while open), never a fixed short box. Its header (title, All, Expand, Close) stays and only its list scrolls; a card's answer row stays at the list's bottom edge with a hairline over what scrolls under it. **Expand** in the header fills the chat column for going through many requests, the composer still on screen; the same button, **Restore size**, or closing the tray gives the room back.
