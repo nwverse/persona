@@ -57,7 +57,10 @@ const assistantAllowedTools = "mcp__persona"
 // assistantBuiltinTools keeps the headless assistant's file, shell, web, skill and sub-agent capabilities without
 // the software-development, notebook, worktree, LSP, workflow and Claude-specific scheduling surfaces. Persona MCP
 // tools are not affected by this built-in allow-list; scheduling and user questions use their Persona tools instead.
-const assistantBuiltinTools = "Bash,Read,Write,Edit,Monitor,Skill,Agent,ListAgents,SendMessage,TaskStop,WebFetch,WebSearch"
+// ToolSearch is in the list because --tools filters it too: without it, the tools of every MCP server other than
+// Persona's (deferred since #5838: the user's own servers, claude.ai connectors) are listed but can never be loaded
+// (#5839).
+const assistantBuiltinTools = "Bash,Read,Write,Edit,Monitor,Skill,Agent,ListAgents,SendMessage,TaskStop,WebFetch,WebSearch,ToolSearch"
 
 type assistantProc struct {
 	id       string

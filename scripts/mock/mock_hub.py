@@ -9606,6 +9606,40 @@ def wechat_area(h, method, p, raw):
     return h.send_json(qr) or True
 
 
+# MOCK_LARKCLI=1: the Lark connector that reads Lark as you (larkcli, docs/plans/plan-lark-cli.md), not signed in. lark-cli
+# follows the bot's app; its sign-in is a device-code step whose link carries the code, so the hub adds its QR code
+# (#5818); confirmed after a few polls.
+LARKCLI_MODE = os.environ.get("MOCK_LARKCLI", "")
+LARKCLI = {"signed_in": False, "polls": 0}
+LARKCLI_URL = "https://accounts.example.com/oauth/v1/device/verify?flow_id=mock&user_code=MOCK-1234"
+
+
+def larkcli_connector():
+    c = {"id": "larkcli", "name": "飞书 · 我的消息", "enabled": True, "capabilities": ["login"], "source": "builtin",
+         "status": "ok" if LARKCLI["signed_in"] else "not_signed_in"}
+    return dict(c, account="示例用户") if LARKCLI["signed_in"] else c
+
+
+def larkcli_status():
+    """The bot status's larkcli: following the bot's app once it has one."""
+    app = FEISHU_BOT.get("app_id") if FEISHU_BOT.get("has_secret") else ""
+    return {"profile": "persona-bot" if app else "", "app_id": app or None, "same_app": bool(app),
+            "mode": "bot" if app else "default", "choice": "", "profiles": []}
+
+
+def larkcli_area(h, method, p, raw):
+    """The Lark connector's sign-in; True when it answered."""
+    if not LARKCLI_MODE or method != "POST" or p != "/api/v1/connectors/larkcli/login":
+        return False
+    step = json.loads(raw or b"{}").get("step") or ""
+    LARKCLI["polls"] = LARKCLI["polls"] + 1 if step == "device" else 0
+    if step == "device" and LARKCLI["polls"] >= 6 and not os.environ.get("MOCK_WECHAT_WAIT"):
+        LARKCLI["signed_in"] = True
+        return h.send_json({"done": True, "account": "示例用户"}) or True
+    return h.send_json({"step": "device", "kind": "device_code", "url": LARKCLI_URL, "user_code": "MOCK-1234", "interval": 2,
+                        "qr": {"size": len(WECHAT_QR_ROWS), "rows": WECHAT_QR_ROWS}}) or True
+
+
 TELEGRAM_MODE = os.environ.get("MOCK_TELEGRAM", "")
 TELEGRAM = {"enabled": TELEGRAM_MODE not in ("", "off"), "creds": TELEGRAM_MODE in ("signed_in", "limited"),
             "signed_in": TELEGRAM_MODE in ("signed_in", "limited"), "limited": TELEGRAM_MODE == "limited",
@@ -21134,6 +21168,7 @@ class H(BaseHTTPRequestHandler):
             listed = [GITHUB_CONNECTOR, {k: v for k, v in _imessage_connector().items() if v is not None}] + ([telegram_connector()] if TELEGRAM_MODE else [])
             listed += [PLUGIN_CONNECTOR] if PLUGIN_CONNECTOR else []
             listed += [wechat_connector()] if WECHAT_MODE else []
+            listed += [larkcli_connector()] if LARKCLI_MODE else []
             return self.send_json({"connectors": (LEGACY_CONNECTORS if q.get("all") == ["1"] else []) + listed})
         if p == "/api/v1/imessage":  # Settings › Connectors › Messages; MOCK_IMESSAGE=denied: no Full Disk Access on the Mac
             status = _imessage_status()
@@ -21152,6 +21187,8 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"chat": chat, "messages": msgs})
         if p == "/api/v1/bots/feishu":  # Settings › Connectors › Lark bot
             st = dict(FEISHU_BOT, last_event_at=int(time.time()) - 40 if FEISHU_BOT["connected"] else None)
+            if LARKCLI_MODE:
+                st["larkcli"] = larkcli_status()
             return self.send_json({k: v for k, v in st.items() if v is not None})
         if p == "/api/v1/lark/raw/accounts":
             return self.send_json({"activeId": "1", "accounts": [{"id": "1", "active": True,
@@ -21691,6 +21728,7 @@ class H(BaseHTTPRequestHandler):
         if triage_route(self, self.command, p, self.last_body): return
         if kb_selection_route(self, self.command, p, self.last_body): return
         if wechat_area(self, self.command, p, self.last_body): return
+        if larkcli_area(self, self.command, p, self.last_body): return
         if github_thread_area(self, self.command, p, self.last_body): return
         if github_area(self, self.command, p, self.last_body): return
         if plugin_connector_area(self, self.command, p, self.last_body): return
@@ -23614,6 +23652,19 @@ def channels_route(handler, p, body):
                 c.update(state="connected", account={"name": "微信用户 a1b2c3"})
                 return handler.send_json({"done": True, "account": "微信用户 a1b2c3"}) or True
             return handler.send_json(qr) or True
+        if c["id"] == "feishu" and not FEISHU_BOT.get("has_secret"):
+            # No app yet (MOCK_BOT=off): the hub creates one in a single authorization (#4347, #5818), a QR code of
+            # the accounts site's page; confirmed after a few polls, the bot has its app and its owner.
+            CHANNEL_BIND["polls"] = CHANNEL_BIND["polls"] + 1 if step == "register" else 0
+            if step == "register" and CHANNEL_BIND["polls"] >= 6 and not os.environ.get("MOCK_WECHAT_WAIT"):
+                FEISHU_BOT.update(enabled=True, app_id="cli_example0001", has_secret=True, connected=True, bot_name="Persona",
+                                  owner={"name": "示例用户", "paired_at": int(time.time())}, target="主对话")
+                c.update(state="connected", account={"name": "示例用户"})
+                return handler.send_json({"done": True, "account": "示例用户"}) or True
+            return handler.send_json({"step": "register", "kind": "qr", "url": "https://accounts.example.com/oauth/verify?user_code=MOCK-1234",
+                                      "interval": 2, "qr": {"size": len(WECHAT_QR_ROWS), "rows": WECHAT_QR_ROWS},
+                                      "hint": "用手机飞书扫码并确认，就会创建名为 Persona 的应用，并把你设为机器人的主人。",
+                                      "link": "https://accounts.example.com/oauth/verify?user_code=MOCK-1234", "link_text": "在飞书里打开"}) or True
         if c["id"] == "feishu":
             CHANNEL_BIND["polls"] = CHANNEL_BIND["polls"] + 1 if step == "pair" else 0
             if step == "pair" and CHANNEL_BIND["polls"] >= 6 and not os.environ.get("MOCK_WECHAT_WAIT"):
