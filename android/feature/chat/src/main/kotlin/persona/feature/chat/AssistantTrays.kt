@@ -218,6 +218,8 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
     val shownRequests = own + asking.flatMap { (it as? NeedsYouEntry.Task)?.asks ?: (it as NeedsYouEntry.Agent).asks }
     val approvals = shownRequests.mapNotNull { r -> trayApproval(r, bySession[GroupKeys.rawKey(r.sessionKey)])?.let { r to it } }
     val standalone = persona.core.domain.tasks.dockAgents(host.conversation, main, host.sessions, todos)
+    // Glass folds the shelved tasks into one line under In progress, as iOS (#4339 C18); Brief and Board keep the tray as it was.
+    val shelvedLine = PersonaTheme.style == AppStyle.Glass
     // the tray closes once its last thing is handled; tapped while empty it still opens "All caught up"
     LaunchedEffect(needsCount) { if (needsCount == 0 && state.expanded == AssistantTray.NeedsYou) state.expanded = null }
     BackHandler(state.expanded != null) { state.expanded = null }
@@ -326,6 +328,11 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                                     }
                                 }
                             }
+                            // Open tasks with no progress for 48 hours: one quiet line under the rows, not counted; the board
+                            // lists them (iOS `shelvedLine`, Glass).
+                            if (shelvedLine && entries.shelved.isNotEmpty()) item(key = "shelved") {
+                                TrayShelvedLine(entries.shelved.size) { state.expanded = null; host.sheet.value = TaskSheet.Board }
+                            }
                             if (schedules.isNotEmpty() || backgroundRecords) item { JSectionHeader(stringResource(R.string.chat_tray_quiet)) }
                             items(schedules, key = { "schedule:${it.id}" }) { schedule ->
                                 JRow(schedule.title, subtitle = schedule.lastError?.takeIf(String::isNotBlank)
@@ -342,7 +349,8 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                             if (backgroundRecords && onBackground != null) item {
                                 JRow(stringResource(R.string.chat_tray_background), onClick = onBackground, leadingIcon = PhIcons.Clock)
                             }
-                            if (entries.running.isEmpty() && schedules.isEmpty() && !backgroundRecords) item {
+                            if (entries.running.isEmpty() && schedules.isEmpty() && !backgroundRecords &&
+                                !(shelvedLine && entries.shelved.isNotEmpty())) item {
                                 JEmptyState(stringResource(R.string.chat_tray_no_progress), "", icon = PhIcons.ListChecks)
                             }
                         }
@@ -438,6 +446,20 @@ private fun TrayBackgroundSubtitle(work: BackgroundWork?, fallback: String?) {
                 color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     } else fallback?.let { Text(it, style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+}
+
+/** "Shelved" and how many, quiet, under In progress's rows (iOS `shelvedLine`): a tap opens the board, which lists them. */
+@Composable
+private fun TrayShelvedLine(count: Int, onClick: () -> Unit) {
+    val palette = PersonaTheme.palette
+    JRow(onClick = onClick, modifier = Modifier.testTag("assistant-tray-shelved"), chevron = false, trailing = {
+        Text("$count", style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1)
+    }) {
+        JIcon(persona.core.designsystem.icons.PersonaIcons.disclosure, null, decorative = true, tint = palette.ink3)
+        Spacer(Modifier.width(Tokens.Space.s))
+        Text(stringResource(R.string.chat_tray_shelved), style = PersonaTheme.type.body, color = palette.ink2, maxLines = 1,
+            overflow = TextOverflow.Ellipsis)
+    }
 }
 
 internal fun trayPullRequestNumber(reference: String): String? =
