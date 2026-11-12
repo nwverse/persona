@@ -134,8 +134,14 @@ fun JActionSheet(
             JDivider(Modifier.padding(vertical = Tokens.Space.s))
         }
         Column(Modifier.weight(1f, fill = false).verticalScroll(androidx.compose.foundation.rememberScrollState())) {
-        actions.forEach { action ->
-            if (action.separatorBefore) JDivider(Modifier.padding(vertical = 6.dp))
+        actions.forEachIndexed { index, action ->
+            if (action.separatorBefore || (action.section != null && index > 0)) JDivider(Modifier.padding(vertical = 6.dp))
+            // A group's title, as [JMenu] draws it (the Agents page's Display), over its labels' column.
+            action.section?.let {
+                Text(it, style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(start = Tokens.Space.s + if (iconColumn) Tokens.Size.iconS + Tokens.Space.l else Tokens.Space.flush,
+                        end = Tokens.Space.s, top = MenuTokens.sectionPadding, bottom = MenuTokens.sectionPadding).semantics { heading() })
+            }
             Row(
                 Modifier.fillMaxWidth().heightIn(min = 52.dp).clip(PersonaTheme.shapes.controlShape)
                     .clickable(enabled = action.enabled, role = Role.Button) { onDismiss(); action.onClick() }
