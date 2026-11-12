@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"encoding/binary"
 	"errors"
 	"image/png"
 	"io"
@@ -89,6 +90,52 @@ func ReadIcon(dir string) ([]byte, error) {
 	return data, nil
 }
 
+// boundedZip checks central-directory bounds before archive/zip allocates its file list.
+func boundedZip(file string) bool {
+	f, err := os.Open(file)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil || fi.Size() < 22 || fi.Size() > PackageMost {
+		return false
+	}
+	start := max(int64(0), fi.Size()-65557)
+	tail, err := io.ReadAll(io.NewSectionReader(f, start, fi.Size()-start))
+	if err != nil {
+		return false
+	}
+	at := bytes.LastIndex(tail, []byte{'P', 'K', 5, 6})
+	if at < 0 || len(tail)-at < 22 {
+		return false
+	}
+	end := tail[at:]
+	le := binary.LittleEndian
+	count := int(le.Uint16(end[10:12]))
+	size, offset := int64(le.Uint32(end[12:16])), int64(le.Uint32(end[16:20]))
+	if int(le.Uint16(end[20:22])) != len(end)-22 || le.Uint16(end[4:6]) != 0 || le.Uint16(end[6:8]) != 0 || int(le.Uint16(end[8:10])) != count || count == 0 || count > PackageFiles || size > 8<<20 || offset+size != start+int64(at) {
+		return false
+	}
+	var header [46]byte
+	seen := 0
+	for pos := offset; pos < offset+size; {
+		if seen >= count {
+			return false
+		}
+		if _, err := f.ReadAt(header[:], pos); err != nil || !bytes.Equal(header[:4], []byte{'P', 'K', 1, 2}) {
+			return false
+		}
+		step := int64(46) + int64(le.Uint16(header[28:30])) + int64(le.Uint16(header[30:32])) + int64(le.Uint16(header[32:34]))
+		if pos+step > offset+size {
+			return false
+		}
+		pos += step
+		seen++
+	}
+	return seen == count
+}
+
 // PackageIcon scans a verified archive without extracting or running any code.
 func PackageIcon(file, name, id string) ([]byte, error) {
 	if !ValidID(id) {
@@ -121,6 +168,9 @@ func PackageIcon(file, name, id string) ([]byte, error) {
 	}
 	switch n := strings.ToLower(name); {
 	case strings.HasSuffix(n, ".zip"):
+		if !boundedZip(file) {
+			return nil, ErrIconUnavailable
+		}
 		zr, err := zip.OpenReader(file)
 		if err != nil {
 			return nil, ErrIconUnavailable

@@ -50,6 +50,12 @@ func (h *Manager) extensionLogoRoutes(api *http.ServeMux) {
 			missing(w, r)
 			return
 		}
+		release, err := h.images.slot(r.Context(), "-installed-logos")
+		if err != nil {
+			missing(w, r)
+			return
+		}
+		defer release()
 		data, err := extension.ReadIcon(p.Dir)
 		if cur := h.extensions.reg.GetExact(r.PathValue("id")); err != nil || cur != p {
 			missing(w, r)
@@ -115,7 +121,7 @@ func serveLogo(w http.ResponseWriter, r *http.Request, data []byte) {
 func (h *Manager) catalogLogo(ctx context.Context, rec extension.MarketRecord, id string, pkg extension.MarketPackage) ([]byte, error) {
 	px := &h.images
 	dir := h.imagesDir()
-	file := imageFile(dir, "catalog-logos", id, rec.Spec+"\x00"+pkg.SHA256, 0)
+	file := imageFile(dir, "-catalog-logos", id, rec.Spec+"\x00"+pkg.SHA256, 0)
 	if img, _, ok := cachedImage(file, px.clock()); ok && img.Mime == "image/png" && extension.CheckIcon(img.Data) == nil {
 		return img.Data, nil
 	}
@@ -147,7 +153,7 @@ func (h *Manager) catalogLogo(ctx context.Context, rec extension.MarketRecord, i
 	}()
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 	defer cancel()
-	release, err := px.slot(cctx, "catalog-logos")
+	release, err := px.slot(cctx, "-catalog-logos")
 	if err != nil {
 		f.err = err
 		return nil, err

@@ -161,6 +161,17 @@ func TestBundledIconArchiveChecks(t *testing.T) {
 	if got, err := PackageIcon(file, "package.zip", "example"); err != nil || !bytes.Equal(got, data) {
 		t.Fatal("zip", err)
 	}
+	for _, field := range []int{8, 10} {
+		bad := bytes.Clone(b.Bytes())
+		eocd := bytes.LastIndex(bad, []byte{'P', 'K', 5, 6})
+		binary.LittleEndian.PutUint16(bad[eocd+field:eocd+field+2], 65535)
+		if err := os.WriteFile(file, bad, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := PackageIcon(file, "package.zip", "example"); err == nil {
+			t.Fatal("unbounded ZIP directory accepted")
+		}
+	}
 }
 
 func TestBundledIconSourceAndCatalogProjection(t *testing.T) {

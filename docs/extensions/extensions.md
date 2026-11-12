@@ -1138,8 +1138,10 @@ and at most 2 MiB; 512×512 is recommended. Custom artwork must be identified as
 
 The hub projects `icon_url` to the authenticated relative routes above. Installed/local logos are read from that extension's own regular
 file, with directory/file symlinks refused. Catalog image requests lazily use the existing SHA-256-verified package download/cache,
-then scan the archive without extracting or executing code. The catalog JSON itself downloads no packages. Concurrent image requests
-share one download/scan, with at most four different catalog-logo operations at once and a two-minute request budget. PNG thumbnails
+then scan the archive without extracting or executing code. ZIP previews additionally bound the central directory to 8 MiB and the
+existing package-file count before allocating entries; unsupported ZIP64/self-extracting layouts keep the generic mark. The catalog JSON
+itself downloads no packages. Concurrent image requests share one download/scan, with at most four different catalog-logo operations
+and four local installed-logo reads at once, and a two-minute catalog request budget. PNG thumbnails
 reuse the image proxy's bounded 256 MiB disk cache for up to 24 hours, keyed by catalog source, extension and package digest. Market
 registration, signature/trust and package identity are checked again before sending any cached or newly read bytes.
 
