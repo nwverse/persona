@@ -74,9 +74,8 @@ func (g importGroup) preview() importedProvider {
 	return p
 }
 
-// knownProvider is a stored provider as the merge sees it: name, base URL, opened key and where it came from (and the
-// name it shows, for a pasted configuration's matches).
-type knownProvider struct{ name, baseURL, key, source, displayName string }
+// knownProvider is a stored provider as the merge sees it: name, base URL, opened key and where it came from.
+type knownProvider struct{ name, baseURL, key, source string }
 
 const contextWindow1M = 1000000
 
@@ -336,7 +335,7 @@ func (s *Service) knownProviders(stored []storedLauncher) ([]knownProvider, erro
 			return nil, i18n.Err("assistant-models.err_key_decrypt")
 		}
 		// One stored before saving dropped a trailing /v1 is the same gateway.
-		known = append(known, knownProvider{name: l.Name, baseURL: l.LaunchBaseURL(), key: key, source: l.Source, displayName: l.DisplayName})
+		known = append(known, knownProvider{name: l.Name, baseURL: l.LaunchBaseURL(), key: key, source: l.Source})
 	}
 	return known, nil
 }

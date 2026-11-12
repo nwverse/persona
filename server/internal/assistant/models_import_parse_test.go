@@ -3,9 +3,11 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -188,6 +190,11 @@ func TestParsePasteShell(t *testing.T) {
 			}},
 		},
 		{
+			name: "an alias defined again as something else is no longer a claude alias",
+			text: "alias k='ANTHROPIC_BASE_URL=https://gw.example.com claude'\nalias k='ls -la'\n",
+			want: pasteResult{Format: "shell", Notes: notes(pasteNote{Code: noteNotClaude, Name: "k"}), Drafts: []pasteDraft{}},
+		},
+		{
 			name: "variables without a gateway",
 			text: "export ANTHROPIC_MODEL=opus\n",
 			want: pasteResult{Format: "shell", Notes: notes(pasteNote{Code: noteNoGateway}), Drafts: []pasteDraft{}},
@@ -211,7 +218,7 @@ func TestParsePasteSettings(t *testing.T) {
 		want       pasteResult
 	}{
 		{
-			name: "env, model, apiKeyHelper, headers, values that are no strings",
+			name: "env, model, headers, values that are no strings; with a key in env, apiKeyHelper says nothing",
 			text: `{"env": {"ANTHROPIC_BASE_URL": "https://gw.example.com/", "ANTHROPIC_AUTH_TOKEN": "` + pasteKeyA + `",
 				"ANTHROPIC_CUSTOM_HEADERS": "X-Team: blue\nX-Api-Key: sk-example-hdr\nAuthorization: Basic sk-example-basic",
 				"API_TIMEOUT_MS": 600000, "DISABLE_TELEMETRY": "1", "ENABLE_X": true},
@@ -224,7 +231,13 @@ func TestParsePasteSettings(t *testing.T) {
 				}(),
 				EnvNames:       []string{"DISABLE_TELEMETRY"},
 				SkippedHeaders: []skippedHeader{{Name: "X-Api-Key", Reason: "credential"}, {Name: "Authorization", Reason: "credential"}},
-				Notes:          notes(pasteNote{Code: noteKeyHelper}),
+			}}},
+		},
+		{
+			name: "no key in env: apiKeyHelper says why",
+			text: `{"env": {"ANTHROPIC_BASE_URL": "https://gw.example.com"}, "apiKeyHelper": "~/bin/key.sh"}`,
+			want: pasteResult{Format: "settings", Notes: []pasteNote{}, Drafts: []pasteDraft{{
+				Provider: gateway("https://gw.example.com", "api_key", ""), Notes: notes(pasteNote{Code: noteKeyHelper}),
 			}}},
 		},
 		{
@@ -283,6 +296,27 @@ func TestParsePasteCurl(t *testing.T) {
 			want: pasteResult{Format: "curl", Notes: []pasteNote{}, Drafts: []pasteDraft{{
 				Provider: pastedProvider{Kind: "api", API: "responses", BaseURL: "https://api.example.com/prefix/v1", Auth: "bearer"},
 				Notes:    notes(pasteNote{Code: noteKeyShell}),
+			}}},
+		},
+		{
+			name: "Chat Completions without /v1",
+			text: `curl https://api.example.com/chat/completions -H 'Authorization: Bearer ` + pasteKeyB + `' -d '{"model":"chat-x"}'`,
+			want: pasteResult{Format: "curl", Notes: []pasteNote{}, Drafts: []pasteDraft{{
+				Provider: withModels(pastedProvider{Kind: "api", API: "chat", BaseURL: "https://api.example.com", Auth: "bearer", APIKey: pasteKeyB}, "chat-x"),
+			}}},
+		},
+		{
+			name: "Chat Completions under another version prefix",
+			text: `curl "https://api.example.com/v1beta/openai/chat/completions" -H "Authorization: Bearer ` + pasteKeyB + `"`,
+			want: pasteResult{Format: "curl", Notes: []pasteNote{}, Drafts: []pasteDraft{{
+				Provider: pastedProvider{Kind: "api", API: "chat", BaseURL: "https://api.example.com/v1beta/openai", Auth: "bearer", APIKey: pasteKeyB},
+			}}},
+		},
+		{
+			name: "Responses without /v1",
+			text: `curl https://gw.example.com/openai/responses -H "Authorization: Bearer ` + pasteKeyB + `"`,
+			want: pasteResult{Format: "curl", Notes: []pasteNote{}, Drafts: []pasteDraft{{
+				Provider: pastedProvider{Kind: "api", API: "responses", BaseURL: "https://gw.example.com/openai", Auth: "bearer", APIKey: pasteKeyB},
 			}}},
 		},
 		{
@@ -487,6 +521,56 @@ func TestParsePasteRouteMatchesAndNames(t *testing.T) {
 		if strings.Contains(r.Body.String(), pasteKeyB) || strings.Contains(r.Body.String(), "op://") && !strings.Contains(c.text, "op://") {
 			t.Fatalf("a stored key left the manager: %s", r.Body.String())
 		}
+	}
+}
+
+// A draft meets only the stored providers that call its API at its address (a Codex launcher is no direct Responses
+// API), and only their keys are opened, only for a draft with a key.
+func TestMatchPasteByAPI(t *testing.T) {
+	const base, v1 = "https://gw.example.com", "https://gw.example.com/v1"
+	stored := []storedLauncher{
+		{KeySealed: "claude", ManagedLauncher: proto.ManagedLauncher{Name: "claude_gw", BaseURL: v1}}, // a Messages base: /v1 dropped
+		{KeySealed: "omp", ManagedLauncher: proto.ManagedLauncher{Name: "omp_gw", Agent: "omp", BaseURL: base}},
+		{KeySealed: "msg", ManagedLauncher: proto.ManagedLauncher{Name: "msg_api", Kind: "api", API: "messages", BaseURL: base}},
+		{ManagedLauncher: proto.ManagedLauncher{Name: "keyless", BaseURL: base}},
+		{KeySealed: "codex", ManagedLauncher: proto.ManagedLauncher{Name: "codex_gw", Agent: "codex", API: "responses", BaseURL: v1}},
+		{KeySealed: "resp", ManagedLauncher: proto.ManagedLauncher{Name: "resp_api", Kind: "api", API: "responses", BaseURL: v1}},
+		{KeySealed: "chat", ManagedLauncher: proto.ManagedLauncher{Name: "chat_api", Kind: "api", API: "chat", BaseURL: v1}},
+		{KeySealed: "far", ManagedLauncher: proto.ManagedLauncher{Name: "far", BaseURL: "https://far.example.com"}},
+	}
+	keys := map[string]string{"claude": pasteKeyA, "omp": pasteKeyB, "msg": pasteKeyA, "codex": pasteKeyB, "resp": pasteKeyB,
+		"chat": pasteKeyA, "far": pasteKeyA}
+	var opened []string
+	open := func(sealed string) (string, error) {
+		opened = append(opened, sealed)
+		return keys[sealed], nil
+	}
+	drafts := []pasteDraft{
+		{Provider: pastedProvider{Kind: "launcher", Agent: "claude", API: "messages", BaseURL: base, APIKey: pasteKeyA}},
+		{Provider: pastedProvider{Kind: "api", API: "responses", BaseURL: v1, APIKey: pasteKeyB}},
+		{Provider: pastedProvider{Kind: "api", API: "chat", BaseURL: v1, APIKey: pasteKeyA}},
+		{Provider: pastedProvider{Kind: "api", API: "chat", BaseURL: v1}}, // no key: nothing opened for it
+	}
+	if err := matchPaste(drafts, stored, open); err != nil {
+		t.Fatal(err)
+	}
+	want := [][]pasteMatch{
+		{{Name: "claude_gw", SameKey: true}, {Name: "msg_api", SameKey: true}, {Name: "omp_gw"}, {Name: "keyless"}},
+		{{Name: "resp_api", SameKey: true}},
+		{{Name: "chat_api", SameKey: true}},
+		{{Name: "chat_api"}},
+	}
+	for i, d := range drafts {
+		if !reflect.DeepEqual(d.Matches, want[i]) {
+			t.Errorf("draft %d: %+v, want %+v", i, d.Matches, want[i])
+		}
+	}
+	if want := []string{"claude", "omp", "msg", "resp", "chat"}; !slices.Equal(opened, want) {
+		t.Fatalf("opened %v, want %v", opened, want)
+	}
+	failing := func(string) (string, error) { return "", errors.New("sealed with another key") }
+	if err := matchPaste(drafts[:1], stored, failing); err == nil {
+		t.Fatal("a key that does not open matched")
 	}
 }
 
