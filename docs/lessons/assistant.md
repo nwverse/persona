@@ -1,5 +1,11 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- Count repeated conditional instructions at the runtime-send boundary, not just in a prompt golden (#5665).
+  Two adjacent decision blocks repeated the same handling rules, but the newer one also required recording the choice.
+  Remove the older copy, retain the newer obligations, and check both decision gating and the actual synthetic
+  `DeviceAssistantSend` text. This proves literal deduplication, not a stable-policy refactor or provider-context savings.
+
+
 - Proven `prompt` source can describe either a terminal tool label or a first-message fallback (#5269).
   Ordinary Claude inventory falls back to the first message for a bare tool label but not its spinner-prefixed
   form, so spinner normalization alone still lets a generated name disappear. Accept recognizable bad fallback
@@ -360,3 +366,35 @@ mid-turn got no reply for minutes because the mid-turn note went in only with th
 the only line between tool calls was English to a Chinese owner. The node now always adds the note to a busy Claude
 (`midTurn`), asking for one sentence in the user's language before the next tool call, and the CLAUDE.md asks for the
 user's language in process text too.
+
+## Disable ToolSearch per server, not for the whole assistant process (#5838)
+
+Setting `ENABLE_TOOL_SEARCH=false` for Persona's assistant also forced every claude.ai connector's tools into each request (one connector alone was hundreds of tools and most of the context), causing repeated compaction. `personad mcp` now marks only Persona tools with `_meta: {"anthropic/alwaysLoad": true}` when `PERSONA_ASSISTANT=1`, and the assistant no longer disables ToolSearch globally. Keep other servers on Claude Code's normal deferred loading. A regression test checks both the metadata and the process environment.
+## A leader writes to an owner who has seen nothing else (#5842)
+
+Leaders spend most of their turns with the main chat, other leaders, scheduled runs and supervision messages (on one
+hub, 20 of the 70 messages a leader got in a day were the owner's), and they compact often. Their replies to the owner
+then carried that world along: plan item codes from their own files, shorthand from a compaction summary, "as we
+aligned today" about something settled in another conversation, and "approve it?" for a change the owner had not been
+shown. The owner could not follow and stopped trusting the replies. The CLAUDE.md now opens its interaction section
+with the rule that everything written for the owner (replies, cards, `notify_user`, `leader_progress`) assumes they
+have seen nothing else: plain names instead of codes, one sentence on where an unseen thing came from, and an approval
+only for something they were shown, with a link.
+
+## `--tools` filters ToolSearch too (#5839)
+
+With tool search back on (#5838), the other MCP servers' tools are deferred, and only `ToolSearch` loads them. The
+assistant names its built-ins with `--tools`, and that list filters `ToolSearch` like any other built-in: without it the
+request lists the deferred tools by name but nothing can load them (the transcript's `deferred_tools_delta` says
+`toolSearchAbsent: true`), so the user's own MCP servers and claude.ai connectors were unusable from the assistant.
+Measured on Claude Code 2.1.321 with a 256-tool connector: with `--tools Bash,Read` the connector's tools were
+unreachable; with `ToolSearch` added the model loaded one on request, and the first request stayed ~15K tokens.
+
+## A leader's split must be somewhere the owner can see (#5846)
+
+Owners lost track of their directions because a leader kept its breakdown in its own files and turns: the direction tree
+only listed tasks with an Agent, so the pieces nobody had started yet were invisible, and the owner could only ask the
+leader and read an answer full of its own labels. A leader's `todo_create` now opens a to-do under its direction, and the
+tree shows pieces no Agent has worked on as `planned`. Two traps found on the way: such a piece has an `origin`, so the
+To-dos SOP shelves it after 48 h untouched like any agent-made to-do (it leaves the tree; the leader touching it keeps it),
+and the stuck rule must not count a piece that never started, or every planned piece older than a day reported stuck.

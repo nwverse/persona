@@ -180,6 +180,9 @@ type InboxSource struct {
 	MetaDescription string `json:"meta_description,omitempty"`
 	// Settles: it closes open items its rules now leave out (InboxSettle).
 	Settles bool `json:"settles,omitempty"`
+	// Counts: its things' extra.count says how many messages a move brings (a subscription's row of several items,
+	// #5671); another connector's is ignored there, and each move counts one.
+	Counts bool `json:"counts,omitempty"`
 	// Kinds are its kinds of things as it describes them, for the models.
 	Kinds  map[string]string          `json:"kinds,omitempty"`
 	Things []connectorwire.InboxThing `json:"things"`

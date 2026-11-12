@@ -39,7 +39,8 @@ import kotlinx.coroutines.delay
  * A conversation's pending cards above its composer, which stays usable (iOS `PendingCards`, `DESIGN_SYSTEM.md` section 4.8):
  * each card whole in [DecisionStack] while they fit in [maxHeight], scrolling under "N pending" past it (or with the
  * [keyboard] up), permissions first; each folds on its own from its header ([folds]; [onFold] hears it), and opens to a
- * full page. [labels] go over a card that is not the conversation's own (its task); [first] leads in every order.
+ * full page. [labels] go over a card that is not the conversation's own (its task); [first] leads in every order. A place
+ * that holds one task's question and names its count in the label ("N more") passes `counted = false`.
  */
 @Composable
 internal fun InteractionPanel(
@@ -57,6 +58,9 @@ internal fun InteractionPanel(
     keyboard: Boolean = false,
     labels: Map<String, StackLabel> = emptyMap(),
     first: String? = null,
+    counted: Boolean = true,
+    /** Drawn under a card that is not folded: the rule a question a supervisor passed up suggests (#4929); null: nothing. */
+    suggestion: (@Composable (Interaction) -> Unit)? = null,
 ) {
     // The card open on its full page, by its id: cards come and go around it (answered on another device, expired).
     var full by rememberSaveable { mutableStateOf<String?>(null) }
@@ -94,7 +98,7 @@ internal fun InteractionPanel(
             }, enabled = canClose)
         }
     }
-    DecisionStack(requests.size, maxHeight, modifier, keyboard = keyboard, keys = ids) { scrolling ->
+    DecisionStack(requests.size, maxHeight, modifier, keyboard = keyboard, keys = ids, counted = counted) { scrolling ->
         for (request in PendingStack.order(requests, scrolling, first)) key(request.id) {
             val folded = folds.isFolded(request.id)
             val headline = request.headline.text()
@@ -120,6 +124,7 @@ internal fun InteractionPanel(
                 ) {
                     if (full != request.id) body(request, false)
                 }
+                if (!folded) suggestion?.invoke(request)
             }
         }
     }

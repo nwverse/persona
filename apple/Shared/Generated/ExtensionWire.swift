@@ -938,52 +938,80 @@ nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
 }
 
 /// A skill (docs "Declarative contributions"): a directory of the package with SKILL.md, put in with the assistant's
-/// skills.
+/// skills. With source data (docs "Assistant content from the data directory"): a directory of the extension's data
+/// directory whose subdirectories with a SKILL.md are skills its program writes (Markdown files only, 256 KB and 32
+/// skills per extension).
 nonisolated struct ExtensionSkillItem: Codable, Hashable, Sendable {
     var id: String
-    /// The directory, relative to the package.
+    /// The directory, relative to the package (or to the data directory with source data).
     var dir: String
+    var source: String?
 
-    init(id: String = "", dir: String = "") {
+    init(id: String = "", dir: String = "", source: String? = nil) {
         self.id = id
         self.dir = dir
+        self.source = source
     }
 
     enum CodingKeys: String, CodingKey {
         case id
         case dir
+        case source
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.id = (try? c.decodeIfPresent(String.self, forKey: .id)) ?? ""
         self.dir = (try? c.decodeIfPresent(String.self, forKey: .dir)) ?? ""
+        self.source = try? c.decodeIfPresent(String.self, forKey: .source)
     }
+}
+
+/// Where a skill's or a prompt's files are: package (the default) or data, the extension's data directory, which its
+/// program writes and upgrades keep.
+nonisolated enum ExtensionContentSource {
+    static let package = "package"
+    static let data = "data"
+    static let all = ["package", "data"]
 }
 
 /// Values of PromptKind.
 nonisolated enum ExtensionPromptKind {
     static let instructions = "instructions"
     static let quick = "quick"
-    static let all = ["instructions", "quick"]
+    static let projectContext = "project_context"
+    static let inboxContext = "inbox_context"
+    static let all = ["instructions", "quick", "project_context", "inbox_context"]
 }
 
-/// A prompt: instructions (a .md of the package added to the assistant's CLAUDE.md) or quick (a template the apps
-/// offer in the message box).
+/// A prompt: instructions (a .md of the package, or with source data of the data directory, added to the assistant's
+/// CLAUDE.md), quick (a template the apps offer in the message box), project_context (a directory of the data
+/// directory whose <project slug>.md files go into a new Agent's project background) or inbox_context (a .md of the
+/// data directory added to the Inbox's triage and draft prompts).
 nonisolated struct ExtensionPromptItem: Codable, Hashable, Sendable {
     var id: String
     var kind: String
-    /// instructions: the .md file.
+    var source: String?
+    /// instructions: the .md file (with source data: at most 6 KB, adopted at most once a day); inbox_context: the
+    /// .md file (1 KB used).
     var file: String?
+    /// project_context: the directory of <project slug>.md files (1.5 KB of each used).
+    var dir: String?
+    /// inbox_context: a text file of sentences, one a line, a draft must not repeat word for word (64 KB used); only
+    /// checked, never in a prompt.
+    var neverQuote: String?
     /// quick: what the apps show.
     var title: String?
     /// quick: what goes into the message box.
     var text: String?
 
-    init(id: String = "", kind: String = "", file: String? = nil, title: String? = nil, text: String? = nil) {
+    init(id: String = "", kind: String = "", source: String? = nil, file: String? = nil, dir: String? = nil, neverQuote: String? = nil, title: String? = nil, text: String? = nil) {
         self.id = id
         self.kind = kind
+        self.source = source
         self.file = file
+        self.dir = dir
+        self.neverQuote = neverQuote
         self.title = title
         self.text = text
     }
@@ -991,7 +1019,10 @@ nonisolated struct ExtensionPromptItem: Codable, Hashable, Sendable {
     enum CodingKeys: String, CodingKey {
         case id
         case kind
+        case source
         case file
+        case dir
+        case neverQuote = "never_quote"
         case title
         case text
     }
@@ -1000,7 +1031,10 @@ nonisolated struct ExtensionPromptItem: Codable, Hashable, Sendable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.id = (try? c.decodeIfPresent(String.self, forKey: .id)) ?? ""
         self.kind = (try? c.decodeIfPresent(String.self, forKey: .kind)) ?? ""
+        self.source = try? c.decodeIfPresent(String.self, forKey: .source)
         self.file = try? c.decodeIfPresent(String.self, forKey: .file)
+        self.dir = try? c.decodeIfPresent(String.self, forKey: .dir)
+        self.neverQuote = try? c.decodeIfPresent(String.self, forKey: .neverQuote)
         self.title = try? c.decodeIfPresent(String.self, forKey: .title)
         self.text = try? c.decodeIfPresent(String.self, forKey: .text)
     }

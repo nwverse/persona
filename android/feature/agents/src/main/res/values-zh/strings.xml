@@ -539,6 +539,7 @@
     </plurals>
     <string name="agents_todo_restore">恢复</string>
     <string name="agents_todo_pr_moved">%1$s · %2$s有动静</string>
+    <string name="agents_todo_for_briefing">这项决定随下一次简报一起送达</string>
     <string name="agents_todo_pr">PR</string>
     <string name="agents_todo_state_accepted">已验收</string>
     <plurals name="agents_todos_related">

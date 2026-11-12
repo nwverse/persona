@@ -539,6 +539,7 @@
     </plurals>
     <string name="agents_todo_restore">戻す</string>
     <string name="agents_todo_pr_moved">%1$s · %2$sに更新</string>
+    <string name="agents_todo_for_briefing">この判断は次のブリーフィングと一緒に届きます</string>
     <string name="agents_todo_pr">PR</string>
     <string name="agents_todo_state_accepted">検収済み</string>
     <plurals name="agents_todos_related">
