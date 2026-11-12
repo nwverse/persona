@@ -129,7 +129,7 @@ func TestInboxRowsCarryTheItemsAFallbackTierAndTheRules(t *testing.T) {
 	r := rowOf(t, rows, "sub:"+sub.ID+":t1")
 	want := connector.InboxThing{Thread: "sub:" + sub.ID + ":t1", Kind: "sub_notice", Label: "Notices", Title: "Office hours moved again",
 		Sender: "Office", Preview: "Made-up notice text", At: time.Date(2026, 11, 10, 8, 30, 0, 0, time.UTC), Last: "n2",
-		Extra: &connector.ThingExtra{RuleTier: "fyi"}, Tags: []connector.Tag{{Key: "source", Value: sub.ID, Name: "Notices"},
+		Extra: &connector.ThingExtra{RuleTier: "fyi", Count: 2}, Tags: []connector.Tag{{Key: "source", Value: sub.ID, Name: "Notices"},
 			{Key: connector.TagSender, Value: "office", Name: "Office"}}}
 	ctx := r.Context
 	r.Context = ""

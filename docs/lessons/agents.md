@@ -199,6 +199,7 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
   `agentIdentity` may remain after the Agent exits; decide "is an Agent" from claude / codex processes matching `ORCA_PANE_KEY`. node tests point `ORCA_USER_DATA_PATH`
   to an empty directory; never touch the live Orca (its socket fully controls Orca).
   New Orca terminals (#924): omit `presentation: "background"` in `terminal.create` to avoid an orphan PTY; after creation, check identity and generation via `terminal.list` using the exact handle; ordinary creation explicitly `cd`s to the target directory. Permission to create sessions isn't permission to resume ones still open elsewhere: since #5548 Orca resumes an exited Claude session like herdr, after `openElsewhereRefusal` (a live claude on the session, including a suspended one) and a check that its last pane is closed; `orca_resume` (which also kept `openElsewhereRefusal` from ever running on Orca) now refuses only non-Claude agents. Send and retire share `orcaContinues`: retire must not close what a message cannot bring back. Orca's `terminal create --agent --resume` is a CLI of some builds only and drops the session's launcher.
+  An Orca pane key is not a terminal's identity (#5547): a terminal made in a worktree Orca's window is not showing is not adopted by the UI, and about 2 s after `terminal.create` it turns `orphaned` with `tabId` / `leafId` rewritten to `pty:<worktreeId>@@…`, the same handle and incarnation. Starts from a directory in no worktree went to the first worktree listed, so the node lost the pane it had just typed into: `Run` said "replaced", the readiness wait said "is the machine busy?" for 3 minutes while claude had started in 2 s, and the empty tab was never closed. Fall back to the active worktree, and find a terminal the host made by handle + incarnation under the key creation gave (`orcaHost.made`); the opposite case, a new handle under the same key (#972), stays refused. `orcarttest.Fake.Orphan` reproduces it.
   Claude with background tasks (#5463): Orca's `terminal.agentStatus` says `isRunningAgent: false` while Claude Code has background Bash tasks, though its input box takes text; requiring it refused every send to such a session with nothing logged. The process scan is the foreground gate. A `tmux new-session -d` an agent runs inherits the pane's `ORCA_PANE_KEY`, and each process in it is "in front" of tmux's own pty: a `claude -p` worker with a lower pid took the pane and its manager dropped to interrupted. Without Orca's check, "in front" must mean in front of the pane's own pty: a candidate whose pty owner (first ancestor on another terminal) carries the same pane key is nested (tmux, zellij, script…) and not the pane's. Not by `TMUX=`: Orca's agent teams set it in a real pane. A refusal and a pane changing sessions are logged since.
   A pane variable is not ownership (2026-11-08): a claude whose environment carried `ORCA_PANE_KEY` was skipped as "its engine lists it" even on a node that did not enable Orca, or when the macOS scan missed it, so every running claude in Orca's terminals showed as offline. The outside-claude list now defers to an engine only when an engine in use lists that pane with a claude in it.
 - Launchers (`docs/integrations/launchers.md`, 2026-11-01): discovery once only read `_claude_launchers` helper output; a machine with all aliases in `~/.zshrc` (41 for one user)
@@ -283,6 +284,19 @@ setting sources, carries the login keys (`env`, `apiKeyHelper`, the AWS and `for
 `settings.json` in its own `--settings`. The synthetic reply is an ordinary assistant text item (`isApiErrorMessage`,
 model `<synthetic>`, error `authentication_failed` only in the transcript); read the session row's `turn_error` before
 taking the turn's last words as an answer.
+
+## `--setting-sources project` still reads `~/.claude` as the home's project files (2026-11-12, #5786)
+
+A guest conversation's `--tools ""` and `--strict-mcp-config` take away tools, not context: an extension's guest on the
+CLI read the owner's `~/.claude/CLAUDE.md`, every `~/.claude/rules` file and the auto-memory index (about 39k tokens in
+its first request on one machine), so the person it answered could ask for them. A meeting's room was started with
+`--setting-sources project`, CLAUDE.md excludes for every directory above its own and auto memory off, and even that let
+the rules through (about 27k of those tokens): for a directory below the home, Claude Code reads `~/.claude` as the home
+directory's project `.claude`, rules included. `claudeMdExcludes` takes paths and globs and covers rules files too, so
+every guest now also excludes `<dir>/.claude/rules/**` for each directory above its own, the home's and the profile's;
+the same first request was under 3k tokens. The same goes for `AGENTS.md` and `.claude/AGENTS.md` above it, which Claude
+Code reads in place of CLAUDE.md when the guest's directory has no CLAUDE.md of its own. Check such isolation on the real CLI: pick a marker line from each source and
+count it in the run's transcript, which records the instructions the process loaded.
 
 ## Read colors to determine whether Claude's input box is empty (#1434)
 
@@ -884,7 +898,7 @@ refused as `dialog_open` with nothing on the phone to answer.
   same check that ignored allow honoured deny.
 - `--setting-sources project` does not keep a `--settings` file out: flag settings always load, hooks, plugins and output
   style included. A launcher alias's `--settings` is a user settings file, so a process that must carry none of the user's
-  setup (a meeting's room, `node/assistant_guest.go` `meetingRoomKeys`) copies only what it needs from it (env, login, model).
+  setup (a guest conversation, `node/assistant_guest.go` `guestSettingsKeys`) copies only what it needs from it (env, login, model).
 - A node's session state is stored by the hub's manager (`db.NodeSession`): a field it does not keep is gone after the next node
   restart. Persist what decides how a process runs (a guest's tools and kind), and fail closed when it is missing.
 

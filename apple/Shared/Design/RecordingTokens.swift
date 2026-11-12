@@ -18,6 +18,9 @@ nonisolated extension Theme.Size {
     static let recordingMeterBar: CGFloat = 3
     static let recordingMeterGap: CGFloat = 3
     static let recordingMeterHeight: CGFloat = 44
+    /// The widest a topic's chip on the meeting page gets (#3862 phase 2) at the default text size: a title of up to 80
+    /// characters is cut there, so the row shows the topics around the current one rather than one long title.
+    static let meetingTopicChip: CGFloat = 240
 }
 
 nonisolated extension Theme {

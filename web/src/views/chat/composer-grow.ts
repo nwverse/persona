@@ -1,20 +1,10 @@
 // The shared composer grows to six lines, then scrolls. Phones also offer the existing full-screen editor.
-// Very short visible viewports leave room for the toolbar instead of forcing the entire six-line box on screen.
+// The dock's CSS input cap retains toolbar space in exceptionally short visible viewports.
 
 /** Where the compact composer applies: a phone-width screen, or a touch screen narrower than the sidebar breakpoint
- *  (a phone on its side). Desktop layouts keep the box they have. */
+ *  (a phone on its side). */
 export const COMPACT_COMPOSER = "(max-width: 639px), (hover: none) and (max-width: 1023px)";
-
-/** Reuse the dock's input share so a keyboard does not prematurely cap the draft at three lines. */
-const GROW_SHARE = 0.35;
-const MIN_LINES = 1;
-const MAX_LINES = 6;
-
-/** Six lines when they fit; fewer only when the visible viewport cannot accommodate the box and toolbar. */
-export function growLines(visible: number, lineHeight: number): number {
-  if (!(visible > 0) || !(lineHeight > 0)) return MAX_LINES;
-  return Math.min(MAX_LINES, Math.max(MIN_LINES, Math.floor((visible * GROW_SHARE) / lineHeight)));
-}
+export const COMPOSER_LINES = 6;
 
 /** The draft's wrapped lines, from the text's height (the box's scrollHeight less its vertical padding). */
 export function lineCount(contentHeight: number, lineHeight: number): number {

@@ -17,6 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
@@ -45,6 +46,7 @@ import persona.core.contracts.api.DraftRepository
 import persona.core.contracts.api.DraftKey
 import persona.core.contracts.api.ChatComposerService
 import persona.core.designsystem.row
+import persona.core.domain.ConversationTitle
 import persona.feature.chat.ChatComposer
 import persona.feature.chat.ChatComposerState
 import persona.feature.chat.ChatDraftEditor
@@ -80,6 +82,9 @@ private class AssistantSendState {
     val clientId = mutableStateOf<String?>(null)
     val text = mutableStateOf<String?>(null)
     val launcher = mutableStateOf<String?>(null)
+    /** The model and effort picked with it in the model panel (Glass, #5055); null: the launcher's defaults. */
+    val model = mutableStateOf<String?>(null)
+    val effort = mutableStateOf<String?>(null)
     val started = mutableStateOf<StarterStart?>(null)
     /** A new conversation's first message while it starts, or kept after its start failed (#4339 C18). */
     val first = mutableStateOf<FirstMessage?>(null)
@@ -152,12 +157,17 @@ fun AssistantScreen(
     /** A new conversation on a launcher picked for it alone (the blank page composer's "Launcher" chip); null: no chip. */
     startConversationWith: (suspend (String) -> SessionKey)? =
         (repository as? persona.core.contracts.api.AssistantConversations)?.let { conversations -> { launcher -> conversations.startConversation(launcher) } },
+    /** A new conversation on the launcher, model and effort picked in the model panel (Glass, #5055, `{launcher, model, effort}`). */
+    startConversationPicked: (suspend (persona.core.contracts.ModelPick) -> SessionKey)? =
+        (repository as? persona.core.contracts.api.AssistantConversations)?.let { conversations -> { pick -> conversations.startConversation(pick) } },
     /** The hub's link: while it is not up, the title menu offers Connection details (iOS); null: never. */
     connection: persona.core.contracts.api.ConnectionState? = null,
     /** The sessions New chat's @ lists (every computer's, iOS `StarterComposer`); null: no @ on New chat's page. */
     mentionSessions: StateFlow<List<Session>>? = null,
     /** Reads the assistant's computer's folders for a path typed after @ on New chat's page; null: sessions only. */
     mentionFiles: persona.core.contracts.api.SessionFiles? = assistantSessionFiles(),
+    /** The selected hub group's name while several are paired, which ends the title menu's heading as on iOS; null with one. */
+    hubGroup: String? = null,
 ) = PersonaTheme {
     val receivedSnapshot by repository.assistant.collectAsStateWithLifecycle()
     val conversationsOf = repository as? persona.core.contracts.api.AssistantConversations
@@ -245,6 +255,8 @@ fun AssistantScreen(
     // The launcher the next new conversation starts with, for it alone (iOS StarterComposer); null: the default.
     // Both belong to this hub: another one has other launchers and conversations.
     var starterLauncher by sendState.launcher
+    var starterModel by sendState.model
+    var starterEffort by sendState.effort
     // The sessions picked in New chat's @ list, to go in front of its first message (iOS `StarterDraft.quotes`).
     val starterMentions = rememberStarterMentions(managerChoice.hubId, managerChoice.shown)
     // The conversation that launcher started for a message that then failed to send: its retry goes there.
@@ -555,8 +567,15 @@ fun AssistantScreen(
                 // Started once: a retry after the message failed sends to the same new conversation, while the
                 // launcher is still the one that started it.
                 val target = when {
-                    launcher != null && startWith != null ->
-                        starterTarget(launcher, starterStarted, startWith).also { starterStarted = it }.session
+                    launcher != null && startWith != null -> {
+                        // a model or an effort picked in the panel goes with the start (#5055); a launcher alone as before
+                        val picked = persona.core.contracts.ModelPick(launcher, starterModel, starterEffort)
+                        val start: suspend (String) -> SessionKey = { l ->
+                            if ((picked.model != null || picked.effort != null) && startConversationPicked != null) startConversationPicked(picked.copy(launcher = l))
+                            else startWith(l)
+                        }
+                        starterTarget(launcher, starterStarted, start).also { starterStarted = it }.session
+                    }
                     fresh != null -> fresh.started ?: try {
                         val space = fresh.space
                         if (space != null) requireNotNull(conversationsOf).startConversationIn(space).also {
@@ -588,6 +607,8 @@ fun AssistantScreen(
                 if (persona.core.contracts.api.AssistantManagerChoice.current.value != submittedChoice) return@launch
                 if (launcher != null && target != null) {
                     starterLauncher = null
+                    starterModel = null
+                    starterEffort = null
                     starterStarted = null
                     assistantAttempt { repository.refresh() }
                     openConversation(target)
@@ -790,8 +811,8 @@ fun AssistantScreen(
         val hasComposer = active == null || !hasChat || demo
         val blankPage = active == null && !viewingMainQueue && !healthPage
         val needsOverComposer = PersonaTheme.style == AppStyle.Glass
-        // The @ list takes their room while it is open (iOS `MentionMenuOpen`): with the keyboard up all three did not fit.
-        val shellLines = if (needsOverComposer && blankPage && onOpenNeed != null && !mentionOpen) shellNeedsYou else emptyList()
+        // They step aside while the @ list is open (`NeedsStepAside`); the dock keeps the page's backdrop meanwhile, as iOS's does.
+        val shellLines = if (needsOverComposer && blankPage && onOpenNeed != null) shellNeedsYou else emptyList()
         Box(Modifier.fillMaxSize().then(if (shellLines.isEmpty()) Modifier else Modifier.onSizeChanged { needsRoom.pageSize(it) })) {
         JPage(
             title = LocalPersonaName.current,
@@ -843,7 +864,7 @@ fun AssistantScreen(
                             actionLabel = stringResource(ReadinessActionId.AddComputer.label),
                             onAction = { runReadinessAction(ReadinessActionId.AddComputer) })
                     }
-                    if (shellLines.isNotEmpty()) {
+                    if (shellLines.isNotEmpty()) NeedsStepAside(mentionOpen, Modifier.testTag("shell-needs-aside")) {
                         ShellNeedsYou(shellLines, { needsRoom.height(needsFade) }, requireNotNull(onOpenNeed), onMore = { more ->
                             if (more.opensAgents) navigator.selectTab(AppTab.Agents) else onOpenInbox?.invoke() ?: navigator.navigate(InboxRoute)
                         }, Modifier.padding(horizontal = Tokens.Space.m))
@@ -881,10 +902,23 @@ fun AssistantScreen(
                             onBlocked = { blocking?.primaryAction()?.let { runReadinessAction(it) } },
                             extraContent = starterQuotes.isNotEmpty(), mentions = mentions, onMention = starterMentions::add,
                             onMentionOpen = { mentionOpen = it },
-                            // A new conversation's launcher, for it alone (iOS StarterComposer, web StarterLauncherChip).
+                            // Glass: the model pill and its panel (#5055, the web's new-chat page): the pick is this chat's start.
+                            modelPill = if (PersonaTheme.style == AppStyle.Glass && active == null && !healthPage && pageManagement != null &&
+                                startConversationWith != null && !demo) ({ width ->
+                                persona.feature.chat.PersonaModelPill(null, assistantMachine, pageManagement, width,
+                                    pagePick = starterLauncher?.let { persona.core.contracts.ModelPick(it, starterModel, starterEffort) },
+                                    onPagePick = { pick ->
+                                        // Another setup does not reuse what the last one started.
+                                        if (pick?.launcher != starterLauncher || pick?.model != starterModel) starterStarted = null
+                                        starterLauncher = pick?.launcher; starterModel = pick?.model; starterEffort = pick?.effort
+                                    },
+                                    onNotice = { message -> if (feedback?.notice(message) != true) toast.show(persona.core.designsystem.FeedbackNotice(message)) },
+                                    enabled = !sending)
+                            }) else null,
+                            // A new conversation's launcher, for it alone (iOS StarterComposer, web StarterLauncherChip); Glass's is the pill.
                             accessory = if (active == null && !healthPage && pageManagement != null && startConversationWith != null && !demo) ({
                                 if (mentionsHere) StarterQuoteCards(starterMentions)
-                                StarterLauncherChip(starterLauncher, defaultLauncher, launchers, launchersFailed, enabled = !sending,
+                                if (PersonaTheme.style != AppStyle.Glass) StarterLauncherChip(starterLauncher, defaultLauncher, launchers, launchersFailed, enabled = !sending,
                                     onOpen = { scope.launch { loadStarterLaunchers() } }) { picked ->
                                     // Another launcher (or the default) does not reuse what the last one started.
                                     if (picked != starterLauncher) starterStarted = null
@@ -946,7 +980,7 @@ fun AssistantScreen(
             } else {
                 NewChatPage(enabled = !sending && draftReady && composer.ready, machines = machines,
                     phoneToolsAvailable = phoneToolsAvailable, contentPadding = padding, demo = demo,
-                    setup = blocking != null, mainNote = newChat == null, hubSuggestions = readiness?.suggestions?.takeIf { it.isNotEmpty() },
+                    setup = blocking != null, startsMain = newChat == null, hubSuggestions = readiness?.suggestions?.takeIf { it.isNotEmpty() },
                     onLocalSuggestion = { readinessHelp = ReadinessHelp.ofSuggestion(it) },
                     onSuggestion = {
                         composer.value = androidx.compose.ui.text.input.TextFieldValue(it, androidx.compose.ui.text.TextRange(it.length))
@@ -1016,36 +1050,36 @@ fun AssistantScreen(
         val sections = assistantMenu(offline = connection != null && connection != persona.core.contracts.api.ConnectionState.Online,
             voice = onVoice != null, main = snapshot.mainSession, active = active, compact = onMain && mainActions.compact,
             newMain = onMain && mainActions.newMain, working = interrupt != null && persona.core.domain.lines.isLiveStatus(shown?.status))
-        fun action(item: AssistantMenuItem, separator: Boolean): JAction = when (item) {
-            AssistantMenuItem.ConnectionDetails -> JAction(resources.getString(R.string.assistant_connection_details), separatorBefore = separator,
+        fun rawAction(item: AssistantMenuItem, separator: Boolean): JAction = when (item) {
+            AssistantMenuItem.ConnectionDetails -> JAction(resources.getString(item.label), separatorBefore = separator,
                 onClick = openConnectionDetails)
-            AssistantMenuItem.Knowledge -> JAction(resources.getString(R.string.assistant_info_knowledge), separatorBefore = separator, onClick = {
+            AssistantMenuItem.Knowledge -> JAction(resources.getString(item.label), separatorBefore = separator, onClick = {
                 if (onKnowledge != null) onKnowledge() else info = AssistantInfo.Knowledge
             })
             // iOS's Details opens Persona's profile: here the assistant's own page, its settings.
-            AssistantMenuItem.Details -> JAction(resources.getString(R.string.assistant_details), separatorBefore = separator, onClick = {
+            AssistantMenuItem.Details -> JAction(resources.getString(item.label), separatorBefore = separator, onClick = {
                 if (pageManagement != null) settingsOpen = true else info = AssistantInfo.Settings
             })
-            AssistantMenuItem.Voice -> JAction(resources.getString(R.string.assistant_voice_chat), separatorBefore = separator,
+            AssistantMenuItem.Voice -> JAction(resources.getString(item.label), separatorBefore = separator,
                 onClick = { onVoice?.invoke() })
             // In place of the home page's Home (#4339 C11), as iOS's menu has it: off the main conversation only.
-            AssistantMenuItem.BackToMain -> JAction(resources.getString(R.string.assistant_back_to_main), PhIcons.House,
+            AssistantMenuItem.BackToMain -> JAction(resources.getString(item.label), PhIcons.House,
                 separatorBefore = separator, onClick = { snapshot.mainSession?.let(::openConversation) })
-            AssistantMenuItem.CopyDirectory -> JAction(resources.getString(R.string.assistant_copy_directory), separatorBefore = separator,
+            AssistantMenuItem.CopyDirectory -> JAction(resources.getString(item.label), separatorBefore = separator,
                 onClick = { copy(copyText.cwd, resources.getString(R.string.assistant_directory_copied)) })
-            AssistantMenuItem.CopyInfo -> JAction(resources.getString(R.string.assistant_copy_info), separatorBefore = separator,
+            AssistantMenuItem.CopyInfo -> JAction(resources.getString(item.label), separatorBefore = separator,
                 onClick = { copy(copyText.info(resources), resources.getString(R.string.assistant_info_copied)) })
-            AssistantMenuItem.CopySessionId -> JAction(resources.getString(R.string.assistant_copy_session_id), separatorBefore = separator,
+            AssistantMenuItem.CopySessionId -> JAction(resources.getString(item.label), separatorBefore = separator,
                 onClick = { active?.let(::copyId) })
-            AssistantMenuItem.CopyDiagnostics -> JAction(resources.getString(R.string.assistant_copy_diagnostics), separatorBefore = separator,
+            AssistantMenuItem.CopyDiagnostics -> JAction(resources.getString(item.label), separatorBefore = separator,
                 onClick = { active?.let { key -> copyDiagnostics(shown ?: Session(machineId = key.machineId, sessionId = key.sessionId)) } })
-            AssistantMenuItem.Compact -> JAction(resources.getString(R.string.assistant_compact), separatorBefore = separator,
+            AssistantMenuItem.Compact -> JAction(resources.getString(item.label), separatorBefore = separator,
                 enabled = !compacting && compaction.line != CompactionLine.Running, onClick = ::compactMain)
-            AssistantMenuItem.NewMain -> JAction(resources.getString(R.string.assistant_new_main), separatorBefore = separator,
+            AssistantMenuItem.NewMain -> JAction(resources.getString(item.label), separatorBefore = separator,
                 enabled = !newMainBusy, onClick = { newMainOpen = true })
-            AssistantMenuItem.SessionInfo -> JAction(resources.getString(R.string.assistant_info_session), separatorBefore = separator,
+            AssistantMenuItem.SessionInfo -> JAction(resources.getString(item.label), separatorBefore = separator,
                 onClick = { info = AssistantInfo.Session })
-            AssistantMenuItem.Interrupt -> JAction(resources.getString(R.string.assistant_interrupt), separatorBefore = separator, onClick = {
+            AssistantMenuItem.Interrupt -> JAction(resources.getString(item.label), separatorBefore = separator, onClick = {
                 val key = active
                 if (interrupt != null && key != null) scope.launch {
                     try { interrupt.interrupt(key); say(resources.getString(persona.feature.chat.R.string.chat_composer_interrupt_requested)) }
@@ -1054,7 +1088,12 @@ fun AssistantScreen(
                 }
             })
         }
-        JActionSheet(title = LocalPersonaName.current, onDismiss = { menu = false },
+        // iOS's icon on every item: Glass draws them; Brief and Board keep their words (Back to main chat has had its house all along).
+        val glassIcons = PersonaTheme.style == AppStyle.Glass
+        fun action(item: AssistantMenuItem, separator: Boolean): JAction = rawAction(item, separator)
+            .copy(icon = item.icon.takeIf { glassIcons || item == AssistantMenuItem.BackToMain })
+        // iOS's heading: which conversation and what it runs on ("Main chat · claude · Opus 4.5").
+        JActionSheet(title = copyText.menuTitle(resources, LocalPersonaName.current, hubGroup), onDismiss = { menu = false },
             actions = sections.flatMapIndexed { index, items -> items.mapIndexed { i, item -> action(item, separator = index > 0 && i == 0) } })
     }
     if (newMainOpen) {
@@ -1130,6 +1169,17 @@ private val suggestions = listOf(
 )
 
 /**
+ * The words under the greeting on the blank page (iOS `ShellHome` header): "This is your main chat…" on the page that starts the
+ * main conversation, "Start a new side chat…" on New chat's; with a step to finish first, the step's own line.
+ */
+@androidx.annotation.StringRes
+internal fun homeLead(setup: Boolean, startsMain: Boolean): Int = when {
+    setup -> R.string.assistant_home_setup_lead
+    startsMain -> R.string.assistant_home_lead_main
+    else -> R.string.assistant_home_lead_side
+}
+
+/**
  * The assistant's one blank page (iOS `ShellHome`; #4339 C11: Android has no home page): New chat's, whose first message
  * starts a new conversation, or with no main conversation yet the page whose first message starts that one. A greeting,
  * what needs the user, things to ask and the devices Persona can reach, over the composer.
@@ -1142,8 +1192,8 @@ private fun NewChatPage(
     needsYou: NeedsYou = NeedsYou(), onNeed: ((NeedsYouLine) -> Unit)? = null, onMore: () -> Unit = {},
     /** The main conversation still misses a step (docs/assistant/onboarding.md 4.4): the lead says so. */
     setup: Boolean = false,
-    /** What is sent here goes to the main conversation (the page that starts it, not New chat's): the lead's note says so. */
-    mainNote: Boolean = true,
+    /** The first message here starts the main conversation (the page that starts it, not New chat's): the lead says "This is your main chat" (iOS `assistantMain == nil`), else "Start a new side chat". */
+    startsMain: Boolean = true,
     /** The hub's example questions (readiness `suggestions`), in place of the app's own; null: the app's. */
     hubSuggestions: List<ReadinessSuggestion>? = null,
     onLocalSuggestion: (String) -> Unit = {},
@@ -1172,9 +1222,7 @@ private fun NewChatPage(
         item(span = { GridItemSpan(2) }) {
             Column(Modifier.padding(vertical = 20.dp.dense), verticalArrangement = Arrangement.spacedBy(12.dp.dense)) {
                 Text(stringResource(greeting(LocalTime.now().hour)), style = PersonaTheme.type.largeTitle, color = PersonaTheme.palette.ink)
-                Text(stringResource(if (setup) R.string.assistant_home_setup_lead else R.string.assistant_home_lead),
-                    style = PersonaTheme.type.voice, color = PersonaTheme.palette.ink2)
-                if (!setup && mainNote) Text(stringResource(R.string.assistant_home_note), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3)
+                Text(stringResource(homeLead(setup, startsMain)), style = PersonaTheme.type.voice, color = PersonaTheme.palette.ink2)
             }
         }
         // What waits on the user comes before what Persona could do: the suggestions stay under it.
@@ -1448,16 +1496,19 @@ private fun ConversationRow(
         ?: channel?.let { c -> { JChannelMark(c, size = MarkSize.Inline) } }
     // [named]: a direction's name, shown instead of its leader conversation's title
     val title = named ?: session.conversationTitle(conversationWords())
+    // A hub title's day and kind ("1101 | Fix | ") in the quiet ink, so the topic is what the eye finds (iOS `titleText`); Glass.
+    val dated = if (PersonaTheme.style == AppStyle.Glass) ConversationTitle.parse(title) else null
+    val resources = androidx.compose.ui.platform.LocalResources.current
     val swipe = onArchive?.let { SwipeAction(stringResource(R.string.assistant_archive), PersonaIcons.archive, Status.Working, it) }
     if (LocalHomeDrawer.current) JSwipeActions(modifier, end = swipe) {
-        JSidebarHistoryRow(title, session.conversationStatus(), selected, onOpen, { menu = true },
+        JSidebarHistoryRow(dated?.topic ?: title, session.conversationStatus(), selected, onOpen, { menu = true },
             stringResource(R.string.assistant_conversation_actions), hint = counts,
-            titleAccessory = accessory)
+            titleAccessory = accessory, titleLead = dated?.head)
     } else JSwipeActions(modifier, end = swipe) { JGroupItem(position) {
         // The time goes on the line under the title, with the state: beside the title it left the title two or three
         // characters in the wide window's 300dp list (2026-11-02), and a narrow drawer cut it short too.
-        JRow(title, onClick = onOpen, onLongClick = { menu = true },
-            titleAccessory = accessory,
+        JRow(dated?.topic ?: title, onClick = onOpen, onLongClick = { menu = true },
+            titleAccessory = accessory, titleLead = dated?.head,
             subtitle = session.lastText?.takeIf { it.isNotBlank() },
             leading = { JIcon(if (selected) PhIcons.CheckCircle else PhIcons.ChatCircle, null,
                 selected = selected, tint = if (selected) PersonaTheme.palette.accent else PersonaTheme.palette.ink2) },
@@ -1467,7 +1518,7 @@ private fun ConversationRow(
             horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
             StatusLabel(session.conversationStatus())
             counts?.let { Text(it, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3, maxLines = 1) }
-            conversationTime(session.updated, currentLocale)?.let { time ->
+            historyTime(session.updated, resources)?.let { time ->
                 Text(time, Modifier.weight(1f), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3,
                     maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.End)
             }
@@ -1479,7 +1530,7 @@ private fun ConversationRow(
             onArchive, onRename = onRename, onDiagnostics = onDiagnostics, glass = PersonaTheme.style == AppStyle.Glass),
         // The long press's preview (iOS's context menu): what it last said (the row shows only the title) and when.
         preview = session.lastText?.let { persona.core.domain.plainMarkdown(it) }?.takeIf { it.isNotBlank() },
-        previewCaption = conversationTime(session.updated, currentLocale),
+        previewCaption = historyTime(session.updated, resources),
     )
 }
 

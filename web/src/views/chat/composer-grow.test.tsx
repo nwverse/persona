@@ -4,17 +4,13 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Composer } from "./Composer";
-import { growLines, lineCount, offersExpand } from "./composer-grow";
+import { COMPOSER_LINES, lineCount, offersExpand } from "./composer-grow";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-describe("growLines", () => {
-  it("caps at six lines on phone, keyboard-sized and desktop viewports", () => {
-    for (const h of [500, 760, 844, 900, 3000]) expect(growLines(h, 24)).toBe(6);
-    expect(growLines(360, 24)).toBe(5); // safety only when six lines no longer fit the input's viewport share
-    expect(growLines(100, 24)).toBe(1);
-    expect(growLines(0, 24)).toBe(6);
-    expect(growLines(800, 0)).toBe(6);
+describe("composer line cap", () => {
+  it("uses one six-line token, independent of the visible viewport", () => {
+    expect(COMPOSER_LINES).toBe(6);
   });
   it("counts wrapped lines and offers Expand only past the limit", () => {
     expect(lineCount(72, 24)).toBe(3);
@@ -75,7 +71,7 @@ describe("the phone composer", () => {
     expect(box().style.height).toBe(`${4 * 24}px`);
     expect(expandButton()).toBeNull();
     expect(box().className).not.toContain("pr-8");
-    expect(box().style.maxHeight).toBe(`${6 * 24}px`);
+    expect(box().style.maxHeight).toBe(`min(${6 * 24}px, min(240px, calc(var(--kb-h) * 0.35)))`);
     type(lines(6));
     expect(box().style.height).toBe(`${6 * 24}px`);
     expect(expandButton()).toBeNull();
@@ -120,6 +116,6 @@ describe("the phone composer", () => {
     act(() => root.render(<Composer draftKey="k3" placeholder="" onSend={async () => true} />));
     type(lines(12));
     expect(expandButton()).toBeNull();
-    expect(box().style.maxHeight).toBe(`${6 * 24}px`);
+    expect(box().style.maxHeight).toBe(`min(${6 * 24}px, min(240px, calc(var(--kb-h) * 0.35)))`);
   });
 });

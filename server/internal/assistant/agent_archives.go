@@ -13,6 +13,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -296,6 +297,7 @@ func (svc *Service) listArchivedSessions(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	out := []proto.Session{}
+	ext := r.Header.Get(RoleHeader) == roleExtension // never a health-space conversation (docs/extensions/extensions.md)
 	for _, m := range svc.fleetMachines() {
 		if mid != "" && mid != m.ID {
 			continue
@@ -309,7 +311,7 @@ func (svc *Service) listArchivedSessions(w http.ResponseWriter, r *http.Request)
 			svc.publishList(m.ID)
 		}
 		for _, row := range list {
-			if row.Archived && !row.Assistant {
+			if row.Archived && !row.Assistant && !(ext && (row.Space == SpaceHealth || identity.InHealthSpace(row.Cwd))) {
 				row.Manager = svc.id
 				row.NativeArchive = svc.nativeArchiveView(m.ID, row.SessionID)
 				out = append(out, row)

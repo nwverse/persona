@@ -199,14 +199,14 @@ internal fun ThoughtContent(text: String, id: String, collapsed: Boolean, last: 
 }
 
 internal fun toolCategory(name: String) = when (val base = persona.core.domain.toolBaseName(name)) {
-    "Read", "LS" -> PhIcons.Eye
+    "Read", "LS", "NotebookRead" -> PhIcons.Eye
     "Edit", "MultiEdit", "NotebookEdit" -> PhIcons.PencilSimple
     "Write" -> PhIcons.File
-    "Bash" -> PhIcons.TerminalWindow
+    "Bash", "PowerShell" -> PhIcons.TerminalWindow
     "Grep", "Glob", "ToolSearch" -> PhIcons.MagnifyingGlass
     "WebFetch", "WebSearch" -> PhIcons.GlobeSimple
     "Task", "Agent" -> PhIcons.Robot
-    "TodoWrite", "TaskCreate", "TaskUpdate", "TaskList" -> PhIcons.ListChecks
+    "TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet" -> PhIcons.ListChecks
     "EnterPlanMode", "ExitPlanMode" -> PhIcons.Lightbulb
     // Persona's own tools (iOS ToolPresentation.symbol); PersonaTools knows the rest of the mcp__ ones.
     "conversation_rename" -> PhIcons.PencilSimple

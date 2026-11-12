@@ -12,6 +12,12 @@
   dead host for three minutes, with its diagnostics appearing under a later test. Expected start failures use the
   node's logger, so tests can capture diagnostics without changing production logging.
 
+- An async status fixture must carry the operation job that the real status endpoint reports (#5363). `iphoneMac`
+  returned a job from `iphone.pair` but never from `iphone.status`, so a later refresh could erase the just-started
+  job; `go test -count=1000 -run '^TestIPhoneJobs$' ./internal/extmgr` reproduced it in about a second. Keep the
+  fixture's status/job state consistent with `node/iphoneStatus`, and assert the post-pair status directly rather than
+  adding a wait or changing production synchronization.
+
 - Bulk Postgres fixtures need physical isolation, not just row deletion (#3743). Deleting 500 feed rows left a larger
   unsent B-tree than the sent index; a controlled statistics refresh then changed a later index-choice assertion even
   though no fixture rows remained. Use the existing migrated-database clone for bulk fixtures so table, index and

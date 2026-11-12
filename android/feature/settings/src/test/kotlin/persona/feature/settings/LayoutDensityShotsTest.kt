@@ -65,7 +65,7 @@ class LayoutDensityShotsTest {
                             AppearanceSettings(Modifier.fillMaxWidth().padding(horizontal = pagePadding))
                             // A slice of the inbox, so the shots show a list too, not only this page.
                             Column(Modifier.padding(horizontal = pagePadding, vertical = Tokens.Space.l)) {
-                                MessageItem("Alex Chen", "Design review moved to Wednesday", onClick = {}, time = "10:42",
+                                MessageItem("Design team", "Design review moved to Wednesday", onClick = {}, time = "10:42",
                                     preview = "Can we push the density review to Wed afternoon?", unread = 2, position = GroupPosition.of(0, 3))
                                 MessageItem("Build bot", "android: compact density", onClick = {}, time = "09:15", status = Status.Working,
                                     preview = "Running unit tests", tags = listOf("CI"), position = GroupPosition.of(1, 3))
