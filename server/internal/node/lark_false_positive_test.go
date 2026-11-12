@@ -145,6 +145,7 @@ func TestLarkLoopWritesStayBehindApproval(t *testing.T) {
 		{"variable write method", `for method in POST; do ex "$method" /documents '{}'; done`},
 		{"variable command", `for x in a b; do $CLI GET "/documents/$x"; done`},
 		{"unquoted route becomes delete", `for route in '/health -X DELETE'; do ex GET $route; done`},
+		{"unquoted query becomes delete", `for query in 'q=a -X DELETE'; do ex GET /health --url-query $query; done`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			v := classifyLark(tc.command, olGate(""), t.TempDir(), nil)

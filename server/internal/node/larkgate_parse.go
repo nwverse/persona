@@ -177,7 +177,12 @@ func classifyLarkDepth(cmd string, gates []proto.CommandGate, cwd string, risk l
 					v.other = true
 				}
 			}
-			c, deny, ok := parseGateCall(g, words[1:], vars, cwd, !unquotedCommandParameter(s.Text))
+			if unquotedCommandParameter(s.Text) {
+				v.other, v.unknown = true, true
+				v.unread = append(v.unread, gate)
+				continue
+			}
+			c, deny, ok := parseGateCall(g, words[1:], vars, cwd)
 			if deny != "" {
 				v.deny = deny
 				return v
@@ -386,7 +391,7 @@ func unquotedCommandParameter(cmd string) bool {
 }
 
 // parseGateCall reads `METHOD PATH [BODY] [curl flags]` after a gated command.
-func parseGateCall(g proto.CommandGate, args []string, vars map[string]string, cwd string, allowVariablePath bool) (larkCall, string, bool) {
+func parseGateCall(g proto.CommandGate, args []string, vars map[string]string, cwd string) (larkCall, string, bool) {
 	expand := func(s string) (string, bool) {
 		if !strings.Contains(s, "$") {
 			return s, true
@@ -408,7 +413,7 @@ func parseGateCall(g proto.CommandGate, args []string, vars map[string]string, c
 	}
 	method := strings.ToUpper(args[0])
 	path, resolved := expand(args[1])
-	if strings.Contains(path, "$(") || strings.Contains(path, "`") || !resolved && (method != "GET" || !allowVariablePath) {
+	if strings.Contains(path, "$(") || strings.Contains(path, "`") || !resolved && method != "GET" {
 		return larkCall{}, "", false
 	}
 	c := larkCall{Method: method}
