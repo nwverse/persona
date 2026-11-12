@@ -260,11 +260,16 @@ private struct BriefChatRow: View {
 }
 
 /// A to-do to verify: its title, verdict, what changed and the recommendation, then Open and its button (Accept, Got It or
-/// Take Recommendation), which turns into what happened.
+/// Take Recommendation), which turns into what happened. A decision the owner can put off also has Later and Don't
+/// handle. Where the buttons do not fit in one row, the secondary ones wrap in their own row and the main one has the
+/// line below them to itself (docs/design/task-cards.md §3.4); there is no menu to hide them in.
 struct BriefAcceptRow: View {
     var row: BriefBody.Row
     var group: String
     var open: (() -> Void)? = nil
+    /// The to-do the row is about, where Later and Don't handle belong on it (the tray and the board); nil in a brief card,
+    /// which has no such buttons.
+    var decision: TodoItem? = nil
     private var actions: BriefActions { .shared }
 
     var body: some View {
@@ -277,14 +282,16 @@ struct BriefAcceptRow: View {
                     Text("Recommended: \(option)").font(Theme.Font.caption).foregroundStyle(.secondary)
                 }
                 Text(briefMeta(row)).font(Theme.Font.caption).foregroundStyle(.secondary)
-                HStack(spacing: Theme.Space.s) {
-                    Spacer(minLength: 0)
-                    ViewThatFits(in: .horizontal) {
-                        HStack(spacing: Theme.Space.s) { availableActions }
-                            .fixedSize(horizontal: true, vertical: false)
-                        Menu { availableActions } label: { Text("Actions").lineLimit(1) }
-                            .font(Theme.Font.captionStrong)
-                            .themedButton()
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: Theme.Space.s) {
+                        Spacer(minLength: 0)
+                        secondaryActions
+                        primaryAction
+                    }
+                    .fixedSize(horizontal: true, vertical: false)
+                    VStack(alignment: .leading, spacing: Theme.Space.s) {
+                        FlowLayoutRow(spacing: Theme.Space.s) { secondaryActions }
+                        primaryAction.frame(maxWidth: .infinity)
                     }
                 }
                 .padding(.top, Theme.Space.xs)
@@ -293,7 +300,14 @@ struct BriefAcceptRow: View {
         }
     }
 
-    @ViewBuilder private var availableActions: some View {
+    /// Later and Don't handle are for a decision still waiting on the owner (the web's `TaskDecision`, not a plain verify row).
+    private var deferrable: TodoItem? {
+        guard let decision, row.isDecision || decision.supervision?.state == "needs_user" else { return nil }
+        let outcome = actions.outcome(accepting: row, group: group)
+        return outcome == nil || outcome == .busy ? decision : nil
+    }
+
+    @ViewBuilder private var secondaryActions: some View {
         BriefOpenButton(title: row.title) {
             if let open { open() } else { TasksStore.shared.detailTask = row.id }
         }
@@ -310,6 +324,32 @@ struct BriefAcceptRow: View {
             .accessibilityLabel(String(localized: "Complete directly: \(row.title)"))
             .accessibilityIdentifier("brief.complete.\(row.id)")
         }
+        if let todo = deferrable {
+            let busy = TasksStore.shared.busyDecisions.contains(todo.id)
+            Button {
+                withAnimation(Theme.Motion.state) { TasksStore.shared.laterDecision(todo) }
+            } label: {
+                Text("Later [Task Views 9d2ca2]").lineLimit(1)
+            }
+            .font(Theme.Font.captionStrong)
+            .themedButton()
+            .disabled(busy || TasksStore.decisionKey(todo) == nil)
+            .accessibilityLabel(String(localized: "Later: \(row.title)"))
+            .accessibilityIdentifier("decision.later.\(row.id)")
+            Button {
+                Task { await TasksStore.shared.dismissDecision(todo) }
+            } label: {
+                Text("Do not handle [Task Draft]").lineLimit(1)
+            }
+            .font(Theme.Font.captionStrong)
+            .themedButton()
+            .disabled(busy || todo.decisionReview == nil)
+            .accessibilityLabel(String(localized: "Don't handle: \(row.title)"))
+            .accessibilityIdentifier("decision.dismiss.\(row.id)")
+        }
+    }
+
+    @ViewBuilder private var primaryAction: some View {
         if let take = row.take { button(take) }
     }
 

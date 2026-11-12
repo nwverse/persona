@@ -102,12 +102,12 @@ Web 是本地 vite 页面，视口 430 px 宽（手机宽度，和 iPhone 可比
 - **选 iOS 的 `ViewThatFits`；窄屏下 Web 把按钮换到文字下面（堆叠），而不是收菜单。**
 - 理由：文字被挤成一窄列是明显缺陷，可读性第一。收进菜单会让主操作（Accept / Take recommendation）多一次点击，单手场景下不如把按钮堆到下面、主按钮满宽。iOS 也建议同改：放不下时堆叠，而不是菜单。
 
-### D9 要你拍板：Later / Dismiss
+### D9 要你拍板：Later / 不处理（Don't handle）
 
 - iOS：没有。
 - Web：Later（本会话推迟）+ Dismiss（落库、可撤销），吸底。
-- **选 Web 的 Dismiss（落库、可撤销），Later 保留为「推迟」**；iOS 补。
-- 理由：拍板项不想现在处理时，不能只有「答」一条路，否则它永远占着 Needs you 的计数（见 #3804）。可撤销的 Dismiss 比确认对话框轻。
+- **选 Web 的「不处理」（Don't handle，落库、可撤销），Later 保留为「推迟」**；iOS 补。
+- 理由：拍板项不想现在处理时，不能只有「答」一条路，否则它永远占着 Needs you 的计数（见 #3804）。可撤销的「不处理」比确认对话框轻。
 
 ### D10 颜色：失败和中断的底色
 
@@ -188,7 +188,7 @@ Web 是本地 vite 页面，视口 430 px 宽（手机宽度，和 iPhone 可比
 结论一句（verdict）                    （caption）
 Recommended: …                         （caption secondary）
 Waited 2 h · 来自 Agent「…」
-窄屏：  [ Open ]  [ Later ]  [ Dismiss ]
+窄屏：  [ Open ]  [ Later ]  [ Don't handle ]
         [      Take recommendation (满宽，主按钮)      ]
 宽屏：  文字在左，按钮在右（和现在一致）
 ```
@@ -261,14 +261,28 @@ Web 的 `--orange` 浅色 `#a64c00` 比 iOS 的 `caution` 暗很多，更接近 
   **已定：折叠行 + 原地展开，两端统一。**
 - **P3 Web 是否恢复聊天里的结论卡（D7）。** 推荐：恢复，结构取 iOS，加「Show all」。依据：结论是交付物，状态字不替代它。若当时去掉是有意的（避免和交接卡重复），则改成「交接卡在做完后展开成结论」，同样要把摘要带出来。
   **已定：Web 恢复聊天里的结论卡（done / stopped / failed / interrupted 四态），结构取 iOS，加「Show all」和 Copy / Quote；iOS 也补「Show all」和 Copy / Quote。**
-- **P4 Dismiss / Later 的语义（D9）。** 推荐：Dismiss 落库可撤销，Later 只推迟当前会话；iOS 补。需要确认 iOS 的「Do not handle」（回复草稿用）和这里是不是同一个概念，要不要统一成一个词。
-  **已定：Dismiss 落库可撤销，Later 只推迟当前会话；iOS 补上。「稍后 / 忽略」两端和 iOS 回复草稿的「Do not handle」统一成一个词。**
+- **P4 Don't handle / Later 的语义（D9）。** 推荐：Don't handle 落库可撤销，Later 只推迟当前会话；iOS 补。需要确认 iOS 的「Do not handle」（回复草稿用）和这里是不是同一个概念，要不要统一成一个词。
+  **已定：Don't handle 落库可撤销，Later 只推迟当前会话；iOS 补上。两端和 iOS 回复草稿统一成一对词：「Later / Don't handle」（中文 稍后 / 不处理，日文 あとで / 対応しない），就是 Web 已有的词；iOS 的「Do not handle」改成「Don't handle」。这条是可逆的选择，不是字面的 Dismiss。**
 - **P5 失败底色（D10）。** 推荐：Web 的 `--red-tint` 重新取值。这是改已有界面的样子，按仓库约定属于「按用户明确要求改」，需要你确认才算。
   **已定：Web 的 `--red-tint` 改成 `danger` 12% 混色，和 iOS 一致。**
 - **P6 token 表是否进仓库作为双端约束。** 推荐：先放在文档里，Web 侧加 `scripts` 检查写死的 px 字号只能减少（仿 iOS 的 `TokenRatchetTests`），不立刻改页面。
   **已定：token 表先放文档；Web 加写死 px 字号只减不增的检查（baseline / ratchet）。**
 - **P7 清理死代码。** Web 的 `TaskCard` / `OutcomeReceipt` / `TaskLine` 和 iOS 的 `TaskCard` / `TaskLine` 要不要删，还是 P3 恢复时复用。推荐：P3 定了再决定；定之前不删。
   **已定：P3 落地后，删掉两端确实不再使用的旧卡片组件（如 iOS 未实例化的 `TaskCard`）。**
+
+### 5.1 iOS 落地状态（#5569，PR-B）
+
+| 项 | iOS 状态 |
+| --- | --- |
+| P1 拍板行窄屏堆叠 | 已做：`BriefAcceptRow` 去掉「Actions」菜单，次要按钮一排（放不下就换行），主按钮独占下一行满宽（主按钮在下，跟 §3.4 的图；DESIGN_SYSTEM 3(c) 写的是主按钮在上，这里以设计稿为准） |
+| P2 Needs you 折叠行 + 原地展开 | 已做：计划、回复草稿、有未答 ask 的任务三类行默认折叠，点行或箭头原地展开成完整卡；不自动展开单独的一行；会话自己的提问行仍然是「关托盘去看底部卡」。展开的卡留在视图树里（折成 0 高度），计划卡的勾选和草稿的编辑不丢 |
+| P3 / D7 结论卡 | 已做：Show All / Hide、Copy / Quote（⋯ 菜单）、失败 Retry、中断 Continue（用量限制会自己续的不给 Continue） |
+| P4 一对词 | 已做：Later / Don't handle（稍后 / 不处理，あとで / 対応しない）；拍板行的 Later 只在本次 App 运行内，Don't handle 落库、可撤销（6 秒 Undo） |
+| §3.1 计划卡 | 已做：Start 满宽、放不下时 Edit / Don't Start 换到下一行；brief 折叠显示；托盘里按钮钉在列表下方；「Start these directly from now on」 |
+| §3.2 进度行 / D3 | 已做：状态词右列带色、行尾 ›、第二行（用量限制 = 原因 + 重置时间，橙色时钟）、Starting 空心圈 + caution 点 |
+| D6 交接卡 | 已做：`HandoffCard`，**一个任务一张卡**（Web 是每个 Agent 一张，120 秒内合并）；这是可接受的差别 |
+| P7 清理 | 已做：`TaskCard`、`TaskLine`、`TaskNowLine`、`TaskSentList`、`TaskProgressLine`、`TaskOpenButton` 已删；`SentToAgents.takenIn` 没动（它让 Persona 的交接消息不在聊天里单独画，原因是旧任务卡会画它们；现在没有地方画，这是已有的缺口，留给后续） |
+| 与 Web 的已知差别 | iOS 的 usage limit 状态不加 10 分钟宽限（共用的 `entries` fixture 不认）；宽限只用在第二行的重置时间和结论卡上 |
 
 ## 6. 局限
 
