@@ -9,10 +9,13 @@ import WatchKit
 
 /// Hourhand's phone / watch session management, sharing the segment engine, pausing, bookmarks and resource protection.
 ///
-/// On the watch it also runs all-day recording (`start(day:)`, docs/assistant/day-recap.md): one recording per local
-/// day, cut at midnight without closing the microphone, paused and continued within the day under the same id and the
-/// next seq. Every finished segment is registered in the recording its folder names, in the order the writer finished
-/// it (`applyWriterEvents`), so a midnight never files one day's audio under the other.
+/// On the watch it also runs all-day recording (`start(day:)`, docs/assistant/day-recap.md「The day recording on the
+/// watch」): one recording per local day, fixed to the time zone it began in, cut at that zone's midnight without closing
+/// the microphone, paused and continued within the day under the same id. Each chunk's seq comes from the recording's
+/// counter as its file opens, and everything that is not audio (the microphone opening and closing, marks, erases,
+/// lost chunks, the end of the day) is a numbered control event. Every finished segment is registered in the recording
+/// its folder names, in the order the writer finished it (`applyWriterEvents`), so a midnight never files one day's
+/// audio under the other.
 @Observable
 final class RecordingCapture {
     static let shared = RecordingCapture()
@@ -41,16 +44,22 @@ final class RecordingCapture {
 
     // MARK: All-day hooks
 
-    /// UserDefaults Bool: the user wants all-day recording on. Set when it starts, cleared only by the user's Stop, so a
-    /// launch can tell a day the app lost (`haltedOnLaunch`) from one the user ended.
+    /// UserDefaults Bool: the user wants all-day recording on. Set when it starts, cleared by the user's Stop (and by the
+    /// phone deleting the day being recorded), so a launch can tell a day the app lost (`haltedOnLaunch`) from one the
+    /// user ended.
     nonisolated static let allDayIntentKey = "recording.allDay.on"
     /// All-day recording stopped recording without the user (a call, a failed resume, the microphone changing, the audio
     /// service resetting, low battery or storage, a failed write): the watch tells the user and offers to continue.
     @ObservationIgnored var onDayHalted: ((RecordingDayHalt) -> Void)?
     /// All-day recording records again after a pause or a halt.
     @ObservationIgnored var onDayResumed: (() -> Void)?
-    /// A day recording has something new to send (its id): a chunk, the end of its day, an erase.
+    /// A chunk of a day recording (its id) was saved: audio keeps arriving. Control events and erases reach the transfer
+    /// through `onSaved`, as every change does; this one is only for audio (the watch's dead-man's switch).
     @ObservationIgnored var onDayChunk: ((UUID) -> Void)?
+    /// The phone deleted the day recording all-day recording was on in (its id, docs/assistant/day-recap.md「Deleting」):
+    /// all-day recording stopped and the user's wish to record went with it. The watch says why; a start later that day
+    /// opens a new recording.
+    @ObservationIgnored var onDayDeletedRemotely: ((UUID) -> Void)?
     /// A day recording left open while all-day was on, found at launch: the app ended with it (a crash, the system).
     /// Kept until the watch's all-day controller takes it, after installing `onDayHalted` (`takeHaltedOnLaunch`).
     @ObservationIgnored private(set) var haltedOnLaunch: (id: UUID, reason: RecordingDayHalt)?
@@ -94,15 +103,19 @@ final class RecordingCapture {
     @ObservationIgnored private var dayPlan: DayPlan?
     /// Day recordings named in advance and not made yet (the next day's, made with its first sample).
     @ObservationIgnored private var pendingDays: [UUID: PendingDay] = [:]
-    /// Why audio was missing before the next chunk of each day recording (`RecordingSegment.after`), until a chunk
-    /// recorded after that gap is saved.
-    @ObservationIgnored private var pendingGaps: [UUID: [PendingGap]] = [:]
     /// What the writer reported that could not be saved yet (recording.json failed to write, the next day's entry could
     /// not be made), in order. Tried again before anything newer, and kept across a stop: the writer's log no longer
     /// has it, and its audio is on disk without a record until it is saved.
     @ObservationIgnored private var unregistered: [HeldEvent] = []
+    /// Control events not saved yet (a failed write, or a day named in advance not made yet), in order: each waits for
+    /// the ones before it of the same recording (`record`).
+    @ObservationIgnored private var owedEvents: [OwedEvent] = []
+    /// When each kind of mark was last added: a double tap adds one.
+    @ObservationIgnored private var lastMarks: [String: Date] = [:]
 
     private init() {
+        // Before any seq is taken: a day recording's chunks cut short by the last exit become `lost` events here, and
+        // its counter stays (docs/assistant/day-recap.md「The day recording on the watch」).
         let recovered = RecordingLibrary.shared.recover(source: Self.source)
         // Here rather than as a callback: nothing can have installed `onDayHalted` this early (capture is made on first use).
         haltedOnLaunch = Self.launchHalt(recovered: recovered, entries: RecordingLibrary.shared.entries,
@@ -126,7 +139,7 @@ final class RecordingCapture {
             }
         })
         // The date, the clock or the time zone changed. watchOS has no significant-time-change notification, and a day
-        // notification can come late (on wake), so the day check runs again before every continue too.
+        // notification can come late (on wake), so the day check runs again before the microphone opens too.
         for name in [Notification.Name.NSSystemTimeZoneDidChange, .NSSystemClockDidChange, .NSCalendarDayChanged] {
             observers.append(center.addObserver(forName: name, object: nil, queue: .main) { @Sendable [weak self] _ in
                 MainActor.assumeIsolated { self?.dayClockChanged() }
@@ -227,8 +240,9 @@ final class RecordingCapture {
 
     /// `title` / `meeting`: what the recording is called and, for a meeting recording, its meeting (docs/apple/recording.md).
     /// `playsAloud`: Persona takes part in this meeting and may answer out loud.
-    /// `day`: all-day recording — goes on in today's open day recording (its next seq) or starts one; the consent and
-    /// the notification permission are the caller's to have asked for.
+    /// `day`: all-day recording — goes on in the open day recording whose day is still on, or starts today's (saved
+    /// before the microphone opens); the consent is the phone's and the notification permission the caller's to have
+    /// asked for.
     func start(locale: String = "zh-CN", input: RecordingInput = .phone, title: String = "", meeting: RecordingMeeting? = nil, rolling: Bool = false,
                playsAloud: Bool = false, day: Bool = false) async {
         guard state == .idle else { return }
@@ -251,46 +265,51 @@ final class RecordingCapture {
             try await configureSession(token: token)
             // Cancelled while Bluetooth discovery was running: cancelStarting() already released the session and mic.
             guard generation == token else { return }
-            // Audio an earlier recording finished but could not save: before its recording's next seq is chosen.
-            if !unregistered.isEmpty { applyWriterEvents() }
-            let zone = Self.zone
-            let opened: (entry: RecordingEntry, after: String?)
+            // Audio and events an earlier recording finished but could not save: in order, before anything of this one.
+            if hasUnsaved { applyWriterEvents() }
+            let entry: RecordingEntry
             if day {
-                opened = try openDay(locale: locale, now: .now, zone: zone)
+                entry = try openDay(locale: locale, now: .now)
             } else {
-                let created = try RecordingLibrary.shared.create(source: Self.source, locale: locale, title: title, meeting: meeting,
-                                                                 kind: rolling ? .rolling : .clip)
-                opened = (created, nil)
+                entry = try RecordingLibrary.shared.create(source: Self.source, locale: locale, title: title, meeting: meeting,
+                                                           kind: rolling ? .rolling : .clip)
             }
-            let entry = opened.entry
             recordingID = entry.id
-            let writer = RecordingSegmentWriter(directory: RecordingLibrary.shared.folder(entry.id), firstIndex: day ? nextIndex(of: entry) : 0)
-            writer.segmentLength = day ? Self.dayChunkLength(reachable: linkReachable) : Self.segmentLength
+            let writer = makeWriter(for: entry)
             connect(writer)
             // Before the first buffer, so a start a moment before midnight still cuts on the exact sample.
-            if day { planBoundary(id: entry.id, day: entry.day, locale: entry.locale, writer: writer, zone: zone) }
+            if day { planBoundary(for: entry.id, writer: writer) }
             let opening = Date.now
             try writer.start()
             self.writer = writer
             elapsed = 0; state = .recording
-            if day { beganDay(entry.id, after: opened.after, since: opening) }
+            if day { beganDay(entry.id, at: opening) }
             startTicker()
         } catch {
             guard generation == token else { return }
-            if let id = recordingID {
-                if day {
-                    // The day stays open for the next start. The time until then was not the user's choice: a day made
-                    // by this start (no reason yet) gets "stopped", so its next chunk is not sent as a pause; a day
-                    // already paused or interrupted keeps the reason its gap began with.
-                    RecordingLibrary.shared.change(id) { $0.gapReason = $0.gapReason ?? RecordingDayContract.Reason.stopped }
-                } else {
-                    RecordingLibrary.shared.change(id) { $0.active = false; $0.expectedSegments = 0 }
-                }
+            // A day recording stays open for the next start: its microphone never opened, so nothing of this start is
+            // in its events.
+            if let id = recordingID, !day {
+                RecordingLibrary.shared.change(id) { $0.active = false; $0.expectedSegments = 0 }
             }
             recordingID = nil; state = .idle; self.rolling = false; dayPlan = nil
             releaseAudioSession()
             self.error = String(localized: "Can't open the microphone. Try again later.")
         }
+    }
+
+    /// A writer into `entry`'s folder. A day recording's chunks take their seqs from the library's counter on the writer's
+    /// queue as each file opens (`RecordingLibrary.allocateSeq`): on disk before the file exists, so no seq is handed out
+    /// twice and one an exit cuts short is reported lost at the next launch.
+    private func makeWriter(for entry: RecordingEntry) -> RecordingSegmentWriter {
+        let library = RecordingLibrary.shared
+        let allocate: (@Sendable (URL) -> Int?)? = entry.isDay
+            ? { @Sendable folder in UUID(uuidString: folder.lastPathComponent).map { library.allocateSeq($0) } }
+            : nil
+        let writer = RecordingSegmentWriter(directory: library.folder(entry.id), allocateSeq: allocate)
+        writer.compactsFiles = entry.isDay
+        writer.segmentLength = entry.isDay ? Self.dayChunkLength(reachable: linkReachable) : Self.segmentLength
+        return writer
     }
 
     /// A start that never reached the microphone.
@@ -317,9 +336,8 @@ final class RecordingCapture {
             resumeTask?.cancel(); resumeTask = nil
             writer.pause(); state = .paused
             // What was said until now becomes a chunk, so it reaches the phone during the pause.
-            if allDay { pauseDay(gap: RecordingDayContract.Reason.paused) }
+            if allDay { pauseDay(reason: RecordingDayContract.Reason.paused) }
         } else if state == .paused {
-            if allDay { reconcileDay() }
             resume(writer)
         }
     }
@@ -328,7 +346,6 @@ final class RecordingCapture {
     /// Nothing when the user paused it.
     func resumeAfterInterruption() {
         guard interrupted, state == .paused, let writer else { return }
-        if allDay { reconcileDay() }
         resume(writer)
     }
 
@@ -341,10 +358,15 @@ final class RecordingCapture {
             do {
                 try await self.configureSession(token: token)
                 guard self.generation == token, self.writer === writer, self.state == .paused else { return }
+                // Just before the microphone opens, after whatever the session took: a day over by now gives way to today's.
+                guard !self.allDay || self.dayTakesAudio() else {
+                    self.onDayHalted?(.writeFailed)
+                    return
+                }
                 let opening = Date.now
                 try writer.resume()
                 self.state = .recording; self.interrupted = false; self.error = nil
-                if self.allDay { self.dayResumed(since: opening) }
+                if self.allDay { self.dayResumed(at: opening) }
             } catch {
                 guard self.generation == token else { return }
                 self.error = String(localized: "Can't open the microphone; the recording is still saved")
@@ -362,10 +384,10 @@ final class RecordingCapture {
         applyWriterEvents()
     }
 
-    /// A bookmark. In all-day recording it is on the wall clock (`RecordingDayMark`); otherwise on the timeline.
+    /// A bookmark. In all-day recording it is a `mark` event on the wall clock; otherwise on the timeline.
     func addMark() {
         if allDay {
-            addDayMark(RecordingDayMark.bookmark)
+            addDayMark(RecordingDayEvent.Label.bookmark)
             return
         }
         #if DEBUG
@@ -387,10 +409,10 @@ final class RecordingCapture {
     }
 
     /// All-day recording: a meeting is going on now. The one microphone can't start a meeting recording beside the day's,
-    /// so the day gets a wall-clock mark the recap reads as a meeting. Nothing outside all-day recording.
+    /// so the day gets a wall-clock `mark` event the recap reads as a meeting. Nothing outside all-day recording.
     func markMeeting() {
         guard allDay else { return }
-        addDayMark(RecordingDayMark.meeting)
+        addDayMark(RecordingDayEvent.Label.meeting)
     }
 
     /// Erases the last few minutes. A rolling recording erases them everywhere and drops the segment being written when it
@@ -410,25 +432,33 @@ final class RecordingCapture {
     /// recording stopped by itself and not continued) still ends their wish to record all day, so the watch stops
     /// offering to continue.
     @discardableResult func stop(reason: RecordingStopReason = .user) -> UUID? {
+        finishStop(reason == .user ? .user : .system)
+    }
+
+    /// How a recording ends: by the user, by the system, or because the phone deleted the day recording being recorded.
+    private nonisolated enum Ending: Equatable { case user, system, deleted }
+
+    @discardableResult private func finishStop(_ ending: Ending) -> UUID? {
         if state == .starting { cancelStarting(); return nil }
         #if DEBUG
         if writer == nil, let id = recordingID, sampleElapsed > 0 { return stopSample(id) }
         #endif
         guard let writer, let started = recordingID else {
-            if reason == .user, state == .idle { Self.rememberIntent(false) }
+            if ending != .system, state == .idle { Self.rememberIntent(false) }
             return nil
         }
         onStopping?(started)
+        let microphoneOpen = state == .recording
         generation = UUID()
         resumeTask?.cancel(); resumeTask = nil
         ticker?.cancel(); ticker = nil
         writer.stop()
         // Everything finished that the main thread has not registered yet (a stop on a segment boundary leaves no tail; a
         // midnight may have been crossed), in order and each in its own recording, before the end is written.
-        applyWriterEvents()
+        var changes = applyWriterEvents(notify: false)
         let id = recordingID ?? started
         if allDay {
-            endDaySession(id, reason: reason)
+            changes.insert(endDaySession(id, ending: ending, microphoneOpen: microphoneOpen, audioEnd: writer.audioEnd))
         } else {
             // A segment still waiting for its save is counted: the end never leaves out audio that exists.
             let expected = heldNextIndex(id)
@@ -442,6 +472,7 @@ final class RecordingCapture {
         allDay = false; dayPlan = nil
         forgetDayPlans()
         releaseAudioSession()
+        announce(changes)
         onSaved?(id)
         return id
     }
@@ -475,7 +506,7 @@ final class RecordingCapture {
                 if self.isAppActive { self.elapsed = writer.elapsed }
                 writer.segmentLength = self.chunkLength
                 // A save that failed gets one more try; still failing, it halts as any failed write does (the stop tries again).
-                if !self.unregistered.isEmpty { self.applyWriterEvents() }
+                if self.hasUnsaved { self.applyWriterEvents() }
                 if let failure = writer.failure ?? RecordingLibrary.shared.error ?? self.registrationFailure {
                     self.haltBySystem(.writeFailed, error: failure); return
                 }
@@ -487,9 +518,16 @@ final class RecordingCapture {
         }
     }
 
-    /// Finished audio still without a record after another try.
+    /// Finished audio or control events still not saved after another try.
     private var registrationFailure: String? {
-        unregistered.isEmpty ? nil : String(localized: "The recording info wasn't saved. Keep the app installed and try again.")
+        hasUnsaved ? Self.notSavedMessage : nil
+    }
+
+    private var hasUnsaved: Bool { !unregistered.isEmpty || !owedEvents.isEmpty }
+
+    /// What the user reads when a recording's info, a chunk's record or a control event could not be written.
+    private static var notSavedMessage: String {
+        String(localized: "The recording info wasn't saved. Keep the app installed and try again.")
     }
 
     /// Whether the app is in front. In the background nothing shows `elapsed`, so the watch skips redrawing it there; the
@@ -542,7 +580,7 @@ final class RecordingCapture {
         // A long call: what was said before it is kept even if the app is stopped before the call ends (a segment
         // still open would be deleted by `recover`). The next segment starts when the recording resumes.
         if allDay {
-            pauseDay(gap: RecordingDayContract.Reason.interrupted)
+            pauseDay(reason: RecordingDayContract.Reason.interrupted)
             onDayHalted?(.interrupted)
         } else {
             writer.cut()
@@ -563,7 +601,7 @@ final class RecordingCapture {
         error = String(localized: "The microphone changed, so recording paused")
         writer.pause(); state = .paused; interrupted = true
         if allDay {
-            pauseDay(gap: RecordingDayContract.Reason.interrupted)
+            pauseDay(reason: RecordingDayContract.Reason.interrupted)
             onDayHalted?(.microphoneChanged)
         } else {
             writer.cut()
@@ -591,19 +629,25 @@ final class RecordingCapture {
     }
 
     /// Registers what the writer did since the last call, in order: each segment in the recording its folder names (never
-    /// `recordingID`, which a midnight moves on), each midnight closing one day and opening the next. Every path that
-    /// registers segments comes here: the writer's wake-ups, cuts, pauses, erase, the day check, start and stop. What
-    /// could not be saved is kept with everything after it (`unregistered`) and goes first next time; only what was
-    /// saved is announced.
-    /// - Parameter notify: false while an erase is half done, so nothing is sent before all of it is saved.
-    /// - Returns: the recordings that changed.
+    /// `recordingID`, which a midnight moves on), each midnight closing one day and opening the next; then the control
+    /// events still owed. Every path that registers segments comes here: the writer's wake-ups, cuts, pauses, erases,
+    /// the day check, start and stop. What could not be saved is kept with everything after it (`unregistered`) and goes
+    /// first next time; only what was saved is announced.
+    /// - Parameter notify: false while more is to be saved first (an erase, a stop), so nothing goes out half done.
     @discardableResult
-    private func applyWriterEvents(notify: Bool = true) -> [UUID] {
+    private func applyWriterEvents(notify: Bool = true) -> Changes {
         let fresh = writer.map { source in source.takeEvents().map { HeldEvent(event: $0, source: source) } } ?? []
-        let (changed, kept) = Self.applyInOrder(unregistered + fresh, owners: \.event.owners) { apply($0) }
+        var changes = Changes()
+        let (changed, kept) = Self.applyInOrder(unregistered + fresh, owners: \.event.owners) { held in
+            let saved = apply(held)
+            if let saved, let owner = held.event.segment?.owner, saved.contains(owner) { changes.chunks.insert(owner) }
+            return saved
+        }
         unregistered = kept
-        if notify { announce(changed) }
-        return changed
+        changes.insert(changed)
+        changes.insert(flushEvents())
+        if notify { announce(changes) }
+        return changes
     }
 
     /// One event of the writer's: the recordings it changed, or nil when it could not be saved.
@@ -618,9 +662,9 @@ final class RecordingCapture {
         }
     }
 
-    /// Applies writer events in order. One that can't be saved is kept for the next try, in order, with every later one
-    /// that concerns any of its recordings (`owners`: a midnight concerns both days), so a midnight is never applied
-    /// ahead of a chunk before it, nor a new day's chunk ahead of its midnight. Other recordings go on. Returns the
+    /// Applies items in order. One that can't be saved is kept for the next try, in order, with every later one that
+    /// concerns any of its recordings (`owners`: a midnight concerns both days), so a midnight is never applied ahead of
+    /// a chunk before it, nor a new day's chunk or event ahead of its midnight. Other recordings go on. Returns the
     /// recordings changed and what was kept.
     nonisolated static func applyInOrder<Item>(_ items: [Item], owners: (Item) -> [UUID],
                                                _ apply: (Item) -> [UUID]?) -> (changed: [UUID], kept: [Item]) {
@@ -637,11 +681,10 @@ final class RecordingCapture {
         return (changed, kept)
     }
 
-    /// One finished segment, saved in the recording its folder belongs to. A day chunk carries its level, why audio was
-    /// missing before it, and whether it ends the day.
+    /// One finished segment, saved in the recording its folder belongs to; a day chunk carries its level.
     /// - Returns: the recording changed; empty when there is none to keep it in (deleted meanwhile); nil when the save
-    ///   failed, so it is tried again, with the gap reason it would have carried.
-    private func register(_ segment: RecordingSegmentWriter.Segment, endsDay: Bool = false) -> [UUID]? {
+    ///   failed, so it is tried again.
+    private func register(_ segment: RecordingSegmentWriter.Segment) -> [UUID]? {
         guard let id = segment.owner else { return [] }
         let library = RecordingLibrary.shared
         if library.entry(id) == nil, !library.isDeleted(id), !ensureDayEntry(id), pendingDays[id] != nil {
@@ -653,55 +696,20 @@ final class RecordingCapture {
             return []
         }
         var record = RecordingSegment(index: segment.index, start: segment.start, duration: segment.duration, startedAt: segment.startedAt)
-        var gaps: [PendingGap] = []
-        if entry.isDay {
-            record.level = segment.level
-            (record.after, gaps) = Self.gap(endingAt: segment.endedAt, in: pendingGaps[id] ?? [])
-            if endsDay { record.end = true }
-        }
+        if entry.isDay { record.level = segment.level }
         library.addSegment(id, record)
         // `addSegment` reports nothing: whether the record is there now tells a failed save from a done one.
         guard Self.isSettled(record, in: library.entry(id)) else { return nil }
-        if entry.isDay { pendingGaps[id] = gaps.isEmpty ? nil : gaps }
         return [id]
     }
 
-    /// Whether the library has a finished segment now: its record is there, or it was dropped on purpose (a seq already
-    /// pruned, or a clip's audio in a range the user erased). Anything else is a save that failed.
+    /// Whether the library has a finished segment now: its record is there, or it was dropped on purpose (a seq
+    /// tombstoned: a day chunk acknowledged, erased or reported lost, a pruned rolling one; a clip's audio in a range
+    /// the user erased). Anything else is a save that failed.
     nonisolated static func isSettled(_ record: RecordingSegment, in entry: RecordingEntry?) -> Bool {
         guard let entry else { return false }
         if entry.segments.contains(where: { $0.index == record.index }) || entry.isPruned(record.index) { return true }
         return !entry.isDay && entry.isErased(record)
-    }
-
-    /// Why audio was missing before a day recording's next chunk, from `since`: the moment the microphone opened again
-    /// (or the first sample past a midnight it was off at).
-    nonisolated struct PendingGap: Equatable, Sendable {
-        let reason: String
-        let since: Date
-    }
-
-    /// The gap a chunk ending at `end` follows: the newest that began before it ended. A chunk finished before the
-    /// microphone went off, and saved only after it came back, takes none. Every gap it covers is used up (`rest` is
-    /// what is left).
-    nonisolated static func gap(endingAt end: Date, in gaps: [PendingGap]) -> (reason: String?, rest: [PendingGap]) {
-        let covered = gaps.filter { $0.since < end }
-        return (covered.max { $0.since < $1.since }?.reason, gaps.filter { $0.since >= end })
-    }
-
-    /// Notes why audio is missing before `id`'s next chunk; a midnight applied again notes its gap once.
-    private func noteGap(_ id: UUID, reason: String, since: Date) {
-        var gaps = pendingGaps[id] ?? []
-        gaps.removeAll { $0.since == since }
-        gaps.append(PendingGap(reason: reason, since: since))
-        pendingGaps[id] = gaps
-    }
-
-    /// Whether audio of `id` is still waiting for its save: nothing may end that recording before it is saved, or the
-    /// end marker would take its seq. Capture's own closing of days checks it.
-    /// `WatchDayTransfer.closeExpiredDays` counts these ids as live too, as it does `dayRecordingID`.
-    func holdsAudio(of id: UUID) -> Bool {
-        unregistered.contains { $0.event.owners.contains(id) }
     }
 
     /// The seq after the newest segment of `id` still waiting for its save (0 when none).
@@ -709,165 +717,210 @@ final class RecordingCapture {
         unregistered.compactMap { $0.event.segment }.filter { $0.owner == id }.map { $0.index + 1 }.max() ?? 0
     }
 
-    /// The seq a writer going on in `entry` starts at: past every saved record and every segment still to be saved, so
-    /// it never writes over their audio.
-    private func nextIndex(of entry: RecordingEntry) -> Int {
-        max(entry.nextIndex, heldNextIndex(entry.id))
-    }
-
-    /// After a stop: the day's plans go, except what events still waiting for a save need (a day named in advance, the
-    /// gap before a chunk).
+    /// After a stop: the day's plans go, except what still waits for a save needs (a day named in advance).
     private func forgetDayPlans() {
-        let owners = Set(unregistered.flatMap(\.event.owners))
+        let owners = Set(unregistered.flatMap(\.event.owners) + owedEvents.map(\.recording))
         pendingDays = pendingDays.filter { owners.contains($0.key) }
-        pendingGaps = pendingGaps.filter { owners.contains($0.key) }
     }
 
-    private func announce(_ ids: [UUID]) {
+    private func announce(_ changes: Changes) {
         let library = RecordingLibrary.shared
-        for id in ids {
+        for id in changes.ids {
             onSaved?(id)
-            if library.entry(id)?.isDay == true { onDayChunk?(id) }
+            if changes.chunks.contains(id), library.entry(id)?.isDay == true { onDayChunk?(id) }
         }
+    }
+
+    // MARK: - Control events
+
+    /// Adds a control event to a day recording, after every event still owed to it, so they keep their order
+    /// (docs/assistant/day-recap.md「Control events」); the library numbers it (`n` here is a placeholder). One that can't
+    /// be saved now stays owed and is tried again with the next change. Returns the recordings that got events.
+    @discardableResult private func record(_ id: UUID, _ event: RecordingDayEvent) -> [UUID] {
+        owedEvents.append(OwedEvent(recording: id, event: event))
+        return flushEvents()
+    }
+
+    /// Saves the owed events in order. An event of a recording that is gone (deleted, or finished and removed) is
+    /// dropped: there is nobody left to tell. One of a day named in advance waits until that day is made.
+    private func flushEvents() -> [UUID] {
+        guard !owedEvents.isEmpty else { return [] }
+        let library = RecordingLibrary.shared
+        let (changed, kept) = Self.applyInOrder(owedEvents, owners: { [$0.recording] }) { owed in
+            guard library.entry(owed.recording) != nil else {
+                return pendingDays[owed.recording] == nil || library.isDeleted(owed.recording) ? [] : nil
+            }
+            return library.appendDayEvent(owed.recording) { _ in owed.event } == nil ? nil : [owed.recording]
+        }
+        owedEvents = kept
+        return changed
     }
 
     // MARK: - All-day recording
 
-    /// The day recording a start goes on in: the open one for today (or for a later date, after a flight west) with its
-    /// pause's reason for the next chunk, else a new one. Open days already over here are closed first, each at its own
-    /// midnight.
-    private func openDay(locale: String, now: Date, zone: TimeZone) throws -> (entry: RecordingEntry, after: String?) {
+    /// The day recording a microphone opening at `now` goes on in (docs/assistant/day-recap.md「The day recording on the
+    /// watch」): the open one whose day is still on in its own time zone, else a new one for today in the zone the watch
+    /// is in now, made with its date and counters before the microphone opens. Open days already over, each in its own
+    /// zone, are closed at their midnight first; `left` (the one a switch leaves) is the switch's to close.
+    private func openDay(locale: String, now: Date, excluding left: UUID? = nil) throws -> RecordingEntry {
         let library = RecordingLibrary.shared
-        let today = RecordingDayCalendar.day(of: now, in: zone)
-        closeDays(before: today, now: now, zone: zone)
-        // Never a past day left open because audio of it still waits for its save.
-        if let open = library.openDays(source: Self.source).first(where: { ($0.day ?? "") >= today }) {
-            return (open, open.gapReason ?? RecordingDayContract.Reason.paused)
-        }
-        let entry = try library.create(source: Self.source, locale: locale, kind: .day, createdAt: now, day: today, timeZone: zone.identifier)
-        return (entry, nil)
-    }
-
-    /// Ends the open day recordings of dates before `today` with their end marker, at their own midnight: the phone
-    /// learns the day is complete, and today starts its own recording.
-    private func closeDays(before today: String, now: Date, zone: TimeZone) {
-        let library = RecordingLibrary.shared
-        var closed: [UUID] = []
-        // One with audio still waiting for its save stays open until it is saved (the next start closes it).
-        for entry in library.openDays(source: Self.source) where (entry.day ?? "") < today && !holdsAudio(of: entry.id) {
-            library.closeDay(entry.id, at: Self.dayEnd(of: entry, zone: zone, notAfter: now),
-                             after: entry.gapReason ?? RecordingDayContract.Reason.stopped)
-            closed.append(entry.id)
+        let plan = Self.dayToOpen(library.openDays(source: Self.source).filter { $0.id != left }, now: now)
+        var closed = Changes()
+        for over in plan.closing {
+            if closeDay(over.id, at: over.at) { closed.insert(over.id) }
         }
         announce(closed)
+        if let open = plan.goingOn { return open }
+        let zone = TimeZone.current
+        return try library.create(source: Self.source, locale: locale, kind: .day, createdAt: now,
+                                  day: RecordingDayCalendar.day(of: now, in: zone), timeZone: zone.identifier)
     }
 
-    /// Recording within the day began: all-day is on (also after a relaunch), and the first chunk recorded from `since`
-    /// (when the microphone opened) says why audio was missing before it when the day went on after a gap.
-    private func beganDay(_ id: UUID, after: String?, since: Date) {
+    /// Which of the open day recordings a microphone opening at `now` goes on in, the newest whose day is still on in its
+    /// own zone and has begun, and which it closes: those whose day is over there, each at its own midnight (now, for one
+    /// whose date or zone can't be read). A zone change alone never ends a day: a recording made in Shanghai goes on
+    /// until Shanghai's midnight, wherever the watch is.
+    nonisolated static func dayToOpen(_ open: [RecordingEntry], now: Date) -> (goingOn: RecordingEntry?, closing: [(id: UUID, at: Date)]) {
+        var closing: [(id: UUID, at: Date)] = []
+        var goingOn: RecordingEntry?
+        for entry in open.sorted(by: { $0.createdAt > $1.createdAt }) {
+            let end = dayEnd(of: entry)
+            guard let end, now < end else {
+                closing.append((entry.id, min(end ?? now, now)))
+                continue
+            }
+            if goingOn == nil, entry.createdAt <= now { goingOn = entry }
+        }
+        return (goingOn, closing)
+    }
+
+    /// The microphone opened in a day recording (a start): all-day is on, also after a relaunch, and the phone learns when
+    /// the audio began.
+    private func beganDay(_ id: UUID, at opening: Date) {
         allDay = true
         Self.rememberIntent(true)
-        if let after { noteGap(id, reason: after, since: since) }
-        if RecordingLibrary.shared.entry(id)?.gapReason != nil { RecordingLibrary.shared.change(id) { $0.gapReason = nil } }
+        announce(Changes(record(id, .started(0, at: opening))))
     }
 
-    /// Recording again within the day, from `since`: the next chunk says why audio was missing before it, and the watch
-    /// withdraws its "paused" alert.
-    private func dayResumed(since: Date) {
-        if let id = recordingID, let entry = RecordingLibrary.shared.entry(id) {
-            noteGap(id, reason: entry.gapReason ?? RecordingDayContract.Reason.paused, since: since)
-            if entry.gapReason != nil { RecordingLibrary.shared.change(id) { $0.gapReason = nil } }
-        }
+    /// The microphone opened again within the day (a continue): a `started` event, and the watch withdraws its "paused"
+    /// alert.
+    private func dayResumed(at opening: Date) {
+        if let id = recordingID { announce(Changes(record(id, .started(0, at: opening)))) }
         onDayResumed?()
     }
 
-    /// The microphone went off within the day: what was recorded so far becomes a chunk (an app ended before it comes
-    /// back keeps it, and it reaches the phone meanwhile), and the day records why audio is missing after it.
-    private func pauseDay(gap: String) {
+    /// The microphone closed within the day: what was recorded so far becomes a chunk (an app ended before it opens again
+    /// keeps it, and it reaches the phone meanwhile), and a `paused` event says why, from where the audio ends.
+    private func pauseDay(reason: String) {
         writer?.cut()
-        applyWriterEvents()
-        guard let id = recordingID, RecordingLibrary.shared.entry(id)?.gapReason != gap else { return }
-        RecordingLibrary.shared.change(id) { $0.gapReason = gap }
-    }
-
-    /// The microphone goes off for now and the day stays open, to continue. The user's Stop pauses the rest of today
-    /// (all-day off until started again); the system's keeps all-day on, so the watch offers to continue, and keeps the
-    /// reason of a gap already under way (a pause, a call).
-    private func endDaySession(_ id: UUID, reason: RecordingStopReason) {
-        let library = RecordingLibrary.shared
-        let gap = switch reason {
-        case .user: RecordingDayContract.Reason.paused
-        case .system: library.entry(id)?.gapReason ?? RecordingDayContract.Reason.stopped
+        var changes = applyWriterEvents(notify: false)
+        // After the drain: a midnight the writer crossed just before has moved `recordingID` to the new day.
+        if let id = recordingID {
+            changes.insert(record(id, .paused(0, at: Self.pauseTime(audioEnd: writer?.audioEnd, now: .now), reason: reason)))
         }
-        if library.entry(id)?.gapReason != gap { library.change(id) { $0.gapReason = gap } }
-        if reason == .user { Self.rememberIntent(false) }
+        announce(changes)
     }
 
-    /// Arms the writer for the end of the recording's day here, naming the recording that follows (made when the first
-    /// sample past midnight arrives). `next`: keep a name already given, for a midnight that only moved.
-    private func planBoundary(id: UUID, day: String?, locale: String, writer: RecordingSegmentWriter, zone: TimeZone, next: UUID = UUID()) {
-        guard let day, let boundary = Self.endOfDay(day, in: zone) else { dayPlan = nil; return }
-        writer.setBoundary(at: boundary, nextDirectory: RecordingLibrary.shared.folder(next))
-        dayPlan = DayPlan(current: id, next: next, boundary: boundary, locale: locale)
-        recordZone(zone, for: id)
+    /// When the microphone closed: where the audio before the cut ends, never later than now.
+    nonisolated static func pauseTime(audioEnd: Date?, now: Date) -> Date {
+        min(audioEnd ?? now, now)
     }
 
-    /// Saves the zone a day recording's midnight is now counted in, when that changed (a flight): whoever ends the day
-    /// after the microphone leaves it (the transfer's closing of past days, `dayEnd`) then ends it at the midnight the
-    /// writer was armed with, never at the old zone's while it still holds later audio.
-    private func recordZone(_ zone: TimeZone, for id: UUID) {
-        guard let entry = RecordingLibrary.shared.entry(id), let identifier = Self.zoneToRecord(entry, countedIn: zone) else { return }
-        RecordingLibrary.shared.change(id) { $0.timeZone = identifier }
+    /// The microphone goes off and the day stays open, to continue later today. The chunks the writer could not finish
+    /// are reported lost; a `paused` event follows when the microphone was open (the user's Stop is a pause for the rest
+    /// of today, the system's is `stopped`; a pause or a call already said it). The user's Stop also ends their wish to
+    /// record all day. A recording the phone deleted gets nothing: it is gone.
+    private func endDaySession(_ id: UUID, ending: Ending, microphoneOpen: Bool, audioEnd: Date?) -> [UUID] {
+        if ending != .system { Self.rememberIntent(false) }
+        guard ending != .deleted else { return [] }
+        var changed = reportHoles(id)
+        if microphoneOpen {
+            let reason = ending == .user ? RecordingDayContract.Reason.paused : RecordingDayContract.Reason.stopped
+            changed += record(id, .paused(0, at: Self.pauseTime(audioEnd: audioEnd, now: .now), reason: reason))
+        }
+        return changed
     }
 
-    /// The zone identifier to save with a day recording whose midnight is counted in `zone`; nil when it has it already.
-    nonisolated static func zoneToRecord(_ entry: RecordingEntry, countedIn zone: TimeZone) -> String? {
-        entry.isDay && entry.timeZone != zone.identifier ? zone.identifier : nil
+    /// Arms the writer for the midnight that ends a day recording's day in its own time zone, naming the recording that
+    /// follows (made when the first sample past midnight arrives). `next`: keep a name already given.
+    private func planBoundary(for id: UUID, writer: RecordingSegmentWriter, next: UUID = UUID()) {
+        let library = RecordingLibrary.shared
+        let entry = library.entry(id), pending = pendingDays[id]
+        guard let day = entry?.day ?? pending?.day,
+              let zone = (entry?.timeZone ?? pending?.timeZone).flatMap(RecordingDayWire.zone),
+              let boundary = RecordingDayCalendar.end(of: day, in: zone) else { dayPlan = nil; return }
+        writer.setBoundary(at: boundary, nextDirectory: library.folder(next))
+        dayPlan = DayPlan(current: id, next: next, boundary: boundary,
+                          locale: entry?.locale ?? pending?.locale ?? RecordingDefaults.locale)
     }
 
-    /// A midnight the writer crossed while recording: the old day ends with the chunk that reaches it (or with an end
-    /// marker when no chunk was open), and the next day's recording, named in advance, is made as of its first sample —
-    /// its date from that sample, not from the boundary, in case recording came back days later. Safe to apply again:
-    /// until the old day is saved as ended it returns nil and is tried again, in order. `live`: from the writer
-    /// recording now, which then goes on in the new day.
+    /// A midnight the writer crossed while recording: the old day ends with the chunk that reaches it, after the chunks
+    /// it could not finish are reported lost, with its `closed` event at the midnight. The next day's recording, named in
+    /// advance, is made as of its first sample, in the zone the watch is in now (its own from then on), and gets its
+    /// `started` event there. Safe to apply again: until the old day is saved as closed it returns nil and is tried
+    /// again, in order. `live`: from the writer recording now, which then goes on in the new day.
     private func crossedMidnight(_ rotation: RecordingSegmentWriter.Rotation, live: Bool) -> [UUID]? {
         guard let old = UUID(uuidString: rotation.previous.lastPathComponent),
               let new = UUID(uuidString: rotation.next.lastPathComponent) else { return [] }
         let library = RecordingLibrary.shared
-        let zone = Self.zone
         let previous = library.entry(old)
+        var changed: [UUID] = []
         if let last = rotation.last {
-            guard register(last, endsDay: true) != nil else { return nil }
-            library.change(old) { entry in
-                entry.active = false
-                entry.expectedSegments = last.index + 1
-                entry.dayEndAt = rotation.boundary
-                entry.gapReason = nil
-                if entry.endedAt == nil { entry.endedAt = .now }
-            }
-        } else {
-            library.closeDay(old, at: rotation.boundary, after: previous?.gapReason)
+            guard let saved = register(last) else { return nil }
+            changed += saved
         }
-        if library.entry(old)?.active == true { return nil }
+        if previous != nil {
+            changed += reportHoles(old)
+            guard closeDay(old, at: rotation.boundary) else { return nil }
+            changed.append(old)
+        }
         pendingDays[old] = nil
-        let day = RecordingDayCalendar.day(of: rotation.firstSampleAt, in: zone)
-        let locale = previous?.locale ?? RecordingDefaults.locale
-        pendingDays[new] = PendingDay(day: day, createdAt: rotation.firstSampleAt, timeZone: zone.identifier, locale: locale)
-        // Its first chunk tries again when this fails, and is kept until the entry exists.
-        ensureDayEntry(new)
-        // Audio came back only after a pause past midnight (the day check normally moves the folder before that).
-        if rotation.firstSampleAt.timeIntervalSince(rotation.boundary) > 1 {
-            noteGap(new, reason: previous?.gapReason ?? RecordingDayContract.Reason.paused, since: rotation.firstSampleAt)
+        if library.entry(new) == nil, pendingDays[new] == nil {
+            let zone = TimeZone.current
+            pendingDays[new] = PendingDay(day: RecordingDayCalendar.day(of: rotation.firstSampleAt, in: zone),
+                                          createdAt: rotation.firstSampleAt, timeZone: zone.identifier,
+                                          locale: previous?.locale ?? RecordingDefaults.locale)
         }
+        // Its first chunk tries again when this fails, and is kept until the entry exists; so is the event.
+        ensureDayEntry(new)
+        changed += record(new, .started(0, at: rotation.firstSampleAt))
         if live, let writer {
             recordingID = new
-            planBoundary(id: new, day: day, locale: locale, writer: writer, zone: zone)
+            planBoundary(for: new, writer: writer)
         }
-        return library.entry(new) == nil ? [old] : [old, new]
+        return changed
     }
 
-    /// Makes a day recording named in advance once audio needs it (the first chunk past midnight, a mark just after it);
-    /// tried again with the next chunk when saving it failed.
+    /// Closes a day recording at `at` with its `closed` event (`RecordingLibrary.closeDay`). True once it is closed (also
+    /// when it already was, or is gone); false when that could not be saved.
+    @discardableResult private func closeDay(_ id: UUID, at: Date) -> Bool {
+        let library = RecordingLibrary.shared
+        guard let entry = library.entry(id) else { return true }
+        if entry.closedAt == nil { library.closeDay(id, at: at) }
+        return library.entry(id)?.closedAt != nil
+    }
+
+    /// Reports the seqs of a day recording the writer handed out and that hold no chunk (a file that could not be opened
+    /// or written) as `lost`, so the phone does not wait for them. Only once the writer has left the recording, when
+    /// every other seq handed out there is registered or waiting for its save.
+    private func reportHoles(_ id: UUID) -> [UUID] {
+        let library = RecordingLibrary.shared
+        guard let entry = library.entry(id), entry.isDay else { return [] }
+        let held = Set(unregistered.compactMap(\.event.segment).filter { $0.owner == id }.map(\.index))
+        let holes = Self.holes(in: entry, allocated: library.allocatedSeqs(id), held: held)
+        guard !holes.isEmpty else { return [] }
+        return library.loseDayChunks(id, seqs: holes).isEmpty ? [] : [id]
+    }
+
+    /// The seqs below the counter (`allocated`, or the entry's own when higher) with no record, no tombstone (acknowledged,
+    /// erased or lost already) and no chunk waiting for its save (`held`).
+    nonisolated static func holes(in entry: RecordingEntry, allocated: Int, held: Set<Int>) -> [Int] {
+        let registered = Set(entry.segments.map(\.index))
+        return (0..<max(allocated, entry.nextIndex)).filter { !registered.contains($0) && !held.contains($0) && !entry.isPruned($0) }
+    }
+
+    /// Makes a day recording named in advance once something needs it (the first chunk past midnight, a mark just after
+    /// it); tried again with the next chunk when saving it failed.
     @discardableResult
     private func ensureDayEntry(_ id: UUID) -> Bool {
         let library = RecordingLibrary.shared
@@ -879,177 +932,259 @@ final class RecordingCapture {
             pendingDays[id] = nil
             return true
         } catch {
-            self.error = String(localized: "The recording info wasn't saved. Keep the app installed and try again.")
+            self.error = Self.notSavedMessage
             return false
         }
     }
 
-    /// The date, the clock or the time zone changed: a fresh zone, then the day check. Stopped for today, a day still
-    /// on in the new zone takes that zone too, so it ends at this zone's midnight and a start later today goes on in it.
+    /// The date, the clock or the time zone changed. A day recording keeps the zone it began in, so a new zone only
+    /// counts for the next one; a day over by now while the microphone is off is closed (a running writer cuts at its
+    /// own midnight).
     private func dayClockChanged() {
         NSTimeZone.resetSystemTimeZone()
-        if allDay {
-            reconcileDay()
-            return
-        }
-        let now = Date.now, zone = Self.zone
-        for entry in RecordingLibrary.shared.openDays(source: Self.source) {
-            guard let day = entry.day, let end = Self.endOfDay(day, in: zone), now < end else { continue }
-            recordZone(zone, for: entry.id)
-        }
+        reconcileDay(opening: false)
     }
 
-    /// Keeps the day recording on today's date: before every continue, and when the date, the clock or the time zone
-    /// changes (`dayCheck`). What the writer already did is registered first, so a midnight it crossed is never undone.
-    private func reconcileDay(now: Date = .now) {
+    /// Keeps all-day recording in a day recording whose day is still on in its own zone: before the microphone opens
+    /// again (`opening`), and when the date or the clock changes. What the writer already did is registered first, so a
+    /// midnight it crossed is never undone. A day over while the microphone is off is only closed, at its midnight: the
+    /// next one is opened when the microphone opens, so a pause through the night leaves no empty day behind.
+    private func reconcileDay(opening: Bool, now: Date = .now) {
         guard allDay, let writer else { return }
         applyWriterEvents()
-        guard let id = recordingID, let entry = RecordingLibrary.shared.entry(id), let day = entry.day else { return }
-        let zone = Self.zone
-        switch Self.dayCheck(entryDay: day, now: now, zone: zone, running: writer.isRunning, plannedBoundary: dayPlan?.boundary) {
+        guard let id = recordingID else { return }
+        guard let entry = RecordingLibrary.shared.entry(id), let day = entry.day else {
+            // Gone under a paused writer (closed and finished by the transfer): the microphone goes on in today's.
+            if opening || writer.isRunning { switchDay(from: nil, now: now, writer: writer) }
+            return
+        }
+        let planned = dayPlan.flatMap { $0.current == id ? $0.boundary : nil }
+        switch Self.dayCheck(day: day, zone: entry.dayTimeZone ?? .current, closed: entry.closedAt != nil, now: now,
+                             running: writer.isRunning, plannedBoundary: planned) {
         case .keep(let boundary):
-            // Same midnight, another zone (another name for the same offset): saved all the same.
-            recordZone(zone, for: id)
-            guard dayPlan?.current != id || dayPlan?.boundary != boundary else { return }
-            let next = dayPlan.flatMap { $0.current == id ? $0.next : nil } ?? UUID()
-            planBoundary(id: id, day: day, locale: entry.locale, writer: writer, zone: zone, next: next)
+            guard planned != boundary else { return }
+            planBoundary(for: id, writer: writer, next: dayPlan.flatMap { $0.current == id ? $0.next : nil } ?? UUID())
         case .awaitWriter:
             break
         case .switchNow:
-            switchDay(from: entry, now: now, zone: zone, writer: writer)
-        }
-    }
-
-    /// The day is over here (paused past midnight, a flight east, the clock moved on): the writer moves to today's
-    /// recording now — the open one, else a new one starting now — and the old day ends at its own midnight, or now when
-    /// that is still ahead. A paused day carries its gap's reason over to the next chunk.
-    private func switchDay(from old: RecordingEntry, now: Date, zone: TimeZone, writer: RecordingSegmentWriter) {
-        let library = RecordingLibrary.shared
-        let today = RecordingDayCalendar.day(of: now, in: zone)
-        let gap = writer.isRunning ? nil : old.gapReason ?? RecordingDayContract.Reason.paused
-        let target: RecordingEntry
-        if let open = library.openDays(source: Self.source).first(where: { $0.id != old.id && ($0.day ?? "") >= today }) {
-            target = open
-        } else {
-            do {
-                target = try library.create(source: Self.source, locale: old.locale, kind: .day, createdAt: now, day: today,
-                                            timeZone: zone.identifier)
-            } catch {
-                self.error = String(localized: "The recording info wasn't saved. Keep the app installed and try again.")
-                return
+            if opening || writer.isRunning {
+                switchDay(from: entry, now: now, writer: writer)
+            } else if entry.closedAt == nil, closeDay(id, at: Self.switchedDayEnd(of: entry, now: now, cut: nil)) {
+                announce(Changes([id]))
             }
         }
-        let cut = writer.switchDirectory(to: library.folder(target.id), firstIndex: nextIndex(of: target))
-        // The chunk the switch cut, in the old day, before its end marker takes the next seq. Should its save fail, the
-        // old day stays open until it is saved, and the next start closes it.
-        var changed = applyWriterEvents(notify: false)
-        if !holdsAudio(of: old.id) {
-            library.closeDay(old.id, at: Self.switchedDayEnd(of: old, zone: zone, now: now, cut: cut), after: gap)
-        }
-        if let gap, library.entry(target.id)?.gapReason == nil { library.change(target.id) { $0.gapReason = gap } }
-        recordingID = target.id
-        planBoundary(id: target.id, day: target.day, locale: target.locale, writer: writer, zone: zone)
-        // Everything the drain registered goes out with both days, now that their ends and gaps are saved.
-        for id in [old.id, target.id] where !changed.contains(id) { changed.append(id) }
-        announce(changed)
     }
 
-    /// When a day left by `switchDay` ends: its own midnight, or now when that is still ahead, but never before the end of
-    /// the chunk the switch cut from it (buffers still queued at `now` land in that chunk, so it can end a moment later).
-    private static func switchedDayEnd(of old: RecordingEntry, zone: TimeZone, now: Date, cut: RecordingSegmentWriter.Segment?) -> Date {
-        let end = dayEnd(of: old, zone: zone, notAfter: now)
+    /// Before the microphone opens again: the day check, then whether the writer's folder is a day recording still taking
+    /// audio (a new one may not have been made for today when the old one ended).
+    private func dayTakesAudio(now: Date = .now) -> Bool {
+        reconcileDay(opening: true, now: now)
+        guard let id = recordingID, let entry = RecordingLibrary.shared.entry(id), entry.closedAt == nil,
+              let end = Self.dayEnd(of: entry) else { return false }
+        return now < end
+    }
+
+    /// All-day recording moves to a day recording for today now (the microphone is open, or about to open): the open one
+    /// whose day is still on, else a new one starting now. The day left behind ends at its own midnight, never before the
+    /// end of the chunk the switch cut from it, after the chunks it could not finish are reported lost.
+    private func switchDay(from old: RecordingEntry?, now: Date, writer: RecordingSegmentWriter) {
+        let library = RecordingLibrary.shared
+        let target: RecordingEntry
+        do {
+            target = try openDay(locale: old?.locale ?? RecordingDefaults.locale, now: now, excluding: old?.id)
+        } catch {
+            self.error = Self.notSavedMessage
+            return
+        }
+        let running = writer.isRunning
+        let cut = writer.switchDirectory(to: library.folder(target.id))
+        // The chunk the switch cut is filed in the old day, before its `closed` event.
+        var changes = applyWriterEvents(notify: false)
+        if let old {
+            changes.insert(reportHoles(old.id))
+            if closeDay(old.id, at: Self.switchedDayEnd(of: old, now: now, cut: cut)) { changes.insert(old.id) }
+        }
+        recordingID = target.id
+        planBoundary(for: target.id, writer: writer)
+        if running { changes.insert(record(target.id, .started(0, at: cut?.endedAt ?? now))) }
+        announce(changes)
+    }
+
+    /// When a day left behind ends: its own midnight, or now when that is still ahead or unreadable, but never before the
+    /// end of the chunk a switch cut from it (buffers still queued at `now` land in that chunk, so it can end a moment
+    /// later).
+    private static func switchedDayEnd(of old: RecordingEntry, now: Date, cut: RecordingSegmentWriter.Segment?) -> Date {
+        let end = min(dayEnd(of: old) ?? now, now)
         guard let cut, cut.owner == old.id else { return end }
         return max(end, cut.endedAt)
     }
 
-    /// A bookmark or meeting mark on the wall clock, kept on the day recording until the chunk carrying it is
-    /// acknowledged. A second tap of the same kind within a second adds nothing.
+    /// A bookmark or meeting mark: a `mark` event at now [ext], in the day recording now belongs to. A second tap of the
+    /// same kind within a second adds nothing.
     private func addDayMark(_ label: String) {
         let now = Date.now
-        let library = RecordingLibrary.shared
-        guard let id = dayRecording(at: now), let entry = library.entry(id) else { return }
-        if let last = entry.dayMarks?.last(where: { $0.label == label }), abs(now.timeIntervalSince(last.at)) < 1 { return }
-        library.change(id) { $0.dayMarks = ($0.dayMarks ?? []) + [RecordingDayMark(at: now, label: label)] }
+        if let last = lastMarks[label], abs(now.timeIntervalSince(last)) < 1 { return }
+        guard let id = dayRecording(at: now) else { return }
+        lastMarks[label] = now
+        announce(Changes(record(id, .mark(0, at: now, label: label))))
     }
 
     /// The day recording a moment belongs to: today's after the day check, or, a moment past midnight before the writer
-    /// reached its first sample there, the one named for after it (a mark must ride on a chunk of its own day).
+    /// reached its first sample there, the one named for after it (made now if it isn't yet).
     private func dayRecording(at now: Date) -> UUID? {
-        reconcileDay(now: now)
+        reconcileDay(opening: true, now: now)
         guard let id = recordingID else { return nil }
-        guard writer != nil, let plan = dayPlan, plan.current == id, now >= plan.boundary else { return id }
-        let zone = Self.zone
-        if pendingDays[plan.next] == nil {
+        guard writer?.isRunning == true, let plan = dayPlan, plan.current == id, now >= plan.boundary else { return id }
+        if RecordingLibrary.shared.entry(plan.next) == nil, pendingDays[plan.next] == nil {
+            let zone = TimeZone.current
             pendingDays[plan.next] = PendingDay(day: RecordingDayCalendar.day(of: plan.boundary, in: zone), createdAt: plan.boundary,
                                                 timeZone: zone.identifier, locale: plan.locale)
         }
-        return ensureDayEntry(plan.next) ? plan.next : id
+        // When it can't be made yet, the event waits for it (`flushEvents`).
+        ensureDayEntry(plan.next)
+        return plan.next
     }
 
-    /// Erase in all-day recording. The chunk being written is cut first and registered, so it is erased with the rest
-    /// rather than finishing later inside the range or leaving its seq without a record. Every day recording the window
-    /// touches (both days, just after midnight) then marks its chunks erased, sent or not, and drops its marks there.
-    /// Nothing is sent before all of it is saved: an erased chunk never leaves with its audio.
+    /// "Erase the last 10 minutes" on the watch (docs/assistant/day-recap.md「Erasing」). The chunk being written is cut
+    /// first and registered, so it is erased with the rest rather than finishing later inside the range. Every day
+    /// recording the window touches (both days, just after midnight) then gets an `erase` event and loses the chunks it
+    /// still holds there; nothing is sent before all of it is saved.
     ///
-    /// The audio range ends exactly at the writer's cut (`cutForErase`), never at a later clock reading: the chunk after
-    /// the cut starts there, so it keeps all of its audio however long the saves take and however short it turns out
-    /// (a pause or a stop right after). Marks are on the wall clock and go up to now.
+    /// The range ends exactly at the writer's cut (`cutForErase`), never at a later clock reading: the chunk after the cut
+    /// starts there, so the phone keeps all of its audio however long the saves take.
     private func eraseDayRecent() {
         let now = Date.now
         let cut = writer?.cutForErase()
-        var touched = applyWriterEvents(notify: false)
-        let from = now.addingTimeInterval(-RecordingRolling.eraseMinutes * 60)
-        // No writer (stopped for today): nothing is being recorded, and the next start comes after now.
-        let to = min(cut?.through ?? now, now)
+        var changes = applyWriterEvents(notify: false)
         let library = RecordingLibrary.shared
-        for entry in library.entries where entry.isDay && entry.source == Self.source
-            && entry.createdAt <= now && (entry.dayEndAt ?? .distantFuture) >= from {
-            // Paused for longer than the window: no audio in it, only marks.
-            let erased = to > from && !library.eraseDay(entry.id, from: from, to: to).isEmpty
-            let marked = entry.dayMarks?.contains { $0.at >= from && $0.at <= now } ?? false
-            if marked {
-                library.change(entry.id) { updated in
-                    updated.dayMarks?.removeAll { $0.at >= from && $0.at <= now }
-                    if updated.dayMarks?.isEmpty == true { updated.dayMarks = nil }
+        // No writer (stopped for today): nothing records now, and the next start comes after now.
+        if let window = Self.eraseWindow(now: now, audioEnd: writer == nil ? now : cut?.through) {
+            for entry in Self.daysTouched(by: window, in: library.entries, source: Self.source) {
+                guard Self.erase(window, ofDay: entry.id, in: library) else {
+                    error = Self.notSavedMessage
+                    continue
                 }
+                changes.insert(entry.id)
             }
-            if erased || marked, !touched.contains(entry.id) { touched.append(entry.id) }
         }
-        announce(touched)
+        announce(changes)
     }
+
+    /// The range "Erase the last 10 minutes" erases at `now`: up to where the audio before the cut ends (`audioEnd`),
+    /// never later. nil when nothing was recorded in it (paused for longer than the window).
+    nonisolated static func eraseWindow(now: Date, audioEnd: Date?) -> RecordingErase? {
+        guard let audioEnd else { return nil }
+        let window = RecordingErase(from: now.addingTimeInterval(-RecordingRolling.eraseMinutes * 60), to: min(audioEnd, now))
+        return window.from < window.to ? window : nil
+    }
+
+    /// This device's day recordings whose span reaches into `range`: today's, and the day before when the range crosses
+    /// its midnight.
+    nonisolated static func daysTouched(by range: RecordingErase, in entries: [RecordingEntry], source: RecordingEntry.Source) -> [RecordingEntry] {
+        entries.filter { $0.isDay && $0.source == source && $0.createdAt < range.to && ($0.closedAt ?? .distantFuture) > range.from }
+    }
+
+    /// Erases `range` from a day recording on the watch: the `erase` event first, naming every chunk the erase deletes
+    /// before the phone acknowledged it, then those chunks. In that order an exit in between leaves chunks the phone drops
+    /// on arrival (they fall in the erased range), never deleted chunks it is not told about. False when the event could
+    /// not be saved; nothing is deleted then.
+    @discardableResult
+    static func erase(_ range: RecordingErase, ofDay id: UUID, in library: RecordingLibrary, eventID: UUID = UUID()) -> Bool {
+        guard let entry = library.entry(id), entry.isDay else { return false }
+        let seqs = entry.segments.filter { $0.overlapsDay(range.from, range.to) }.map(\.index)
+        guard library.appendDayEvent(id, { .erase($0, id: eventID, from: range.from, to: range.to, seqs: seqs) }) != nil else { return false }
+        library.eraseDayChunks(id, from: range.from, to: range.to)
+        return true
+    }
+
+    // MARK: - The phone's requests
+
+    /// The phone erased a range of a day recording and asks the watch to erase its copies (docs/assistant/day-recap.md
+    /// 「Erasing」), through `WatchSync.onDayEraseRequest`'s handler. The chunk being written is cut first when the range
+    /// reaches into it, then every chunk held in the range goes, the request's id and seqs saved in the same write; a
+    /// repeated request gets the same answer and erases nothing again. nil when the erase could not be saved, to leave
+    /// it to the phone's resend.
+    @discardableResult func onDayEraseRequest(_ request: RecordingDayEraseRequest) -> RecordingDayErased? {
+        let library = RecordingLibrary.shared
+        let id = request.recording
+        let repeated = library.entry(id)?.dayErases?.contains { $0.id == request.erase.id } == true
+        // The writer tells whether its open chunk is this recording's, not `recordingID`: just after a midnight that
+        // still names the day before, until the rotation is applied here. A cut chunk is registered just below and
+        // erased with the rest.
+        if !repeated { writer?.cutOpenChunk(of: id, startedBefore: request.erase.to) }
+        var changes = applyWriterEvents(notify: false)
+        let answer = Self.carryOut(request, in: library)
+        if answer != nil, !repeated, library.entry(id) != nil { changes.insert(id) }
+        announce(changes)
+        return answer
+    }
+
+    /// The watch's side of a phone erase, once every chunk in the range is registered: the answer recorded for this
+    /// request's id, else the chunks held in the range erased with the answer saved in the same write. A recording the
+    /// watch no longer holds has nothing to erase, now or on a repeat. nil when the save failed.
+    static func carryOut(_ request: RecordingDayEraseRequest, in library: RecordingLibrary, now: Date = .now) -> RecordingDayErased? {
+        let id = request.recording, erase = request.erase
+        guard let entry = library.entry(id), entry.isDay else { return RecordingDayErased(recording: id, erased: erase.id, seqs: []) }
+        if let done = entry.dayErases?.first(where: { $0.id == erase.id }) { return RecordingDayErased(recording: id, done: done) }
+        library.eraseDayChunks(id, from: erase.from, to: erase.to, request: erase.id, now: now)
+        return library.entry(id)?.dayErases?.first { $0.id == erase.id }.map { RecordingDayErased(recording: id, done: $0) }
+    }
+
+    /// The phone deleted a day recording (docs/assistant/day-recap.md「Deleting」), through `WatchSync.onDayDelete`'s
+    /// handler: every chunk of it and its entry go here too, leaving a tombstone. When all-day recording is on in it,
+    /// all-day recording stops first (no event: the recording is gone) and `onDayDeletedRemotely` says so; a start later
+    /// that day opens a new recording. Returns the confirmation once the copy is gone, nil to leave it to the phone's
+    /// resend (the tombstone could not be written).
+    @discardableResult func onDayDelete(_ request: RecordingDayDelete) -> RecordingDayDeleted? {
+        let id = request.recording
+        // A midnight the writer crossed and main has not applied yet may have moved all-day recording on already.
+        if writer != nil { applyWriterEvents() }
+        let recordingIt = allDay && recordingID == id
+        if recordingIt { finishStop(.deleted) }
+        forgetDay(id)
+        let removed = (try? RecordingLibrary.shared.remove(id)) != nil
+        if recordingIt { onDayDeletedRemotely?(id) }
+        guard removed else { return nil }
+        onSaved?(id)
+        return RecordingDayDeleted(recording: id)
+    }
+
+    /// Drops what capture still means to do with a day recording that is going: its owed events, its plan as a day named
+    /// in advance, and that name for the writer's next midnight (the next day gets a fresh one).
+    private func forgetDay(_ id: UUID) {
+        owedEvents.removeAll { $0.recording == id }
+        pendingDays[id] = nil
+        if dayPlan?.next == id, let writer, let current = recordingID { planBoundary(for: current, writer: writer) }
+    }
+
+    // MARK: - Day rules
 
     /// What a day recording does when the date may have changed under it.
     nonisolated enum DayCheck: Equatable, Sendable {
-        /// Still the recording's day here: the writer cuts at this midnight.
+        /// Still the recording's day in its zone: the writer cuts at this midnight.
         case keep(boundary: Date)
         /// Its midnight has passed and the running writer cuts there with its next buffer: leave it, so the cut stays
         /// exact to the sample.
         case awaitWriter
-        /// Its day is over here and nothing will cut it: move to today's recording now.
+        /// Its day is over (or it was closed) and nothing will cut it: move on to today's recording.
         case switchNow
     }
 
-    /// The day check: `entryDay` is the recording's date, `plannedBoundary` the midnight the writer is armed with. A
-    /// zone to the west keeps the recording (its date has not come or is still on), with its midnight there; a zone to
-    /// the east, a clock moved on, or a pause past midnight, switches now.
-    nonisolated static func dayCheck(entryDay: String, now: Date, zone: TimeZone, running: Bool, plannedBoundary: Date?) -> DayCheck {
-        guard let end = endOfDay(entryDay, in: zone) else { return .switchNow }
+    /// The day check: `day` and `zone` are the recording's own, `plannedBoundary` the midnight the writer is armed with.
+    /// Only the recording's zone counts, so flying east or west moves nothing; a clock moved on, or a pause past midnight,
+    /// switches.
+    nonisolated static func dayCheck(day: String, zone: TimeZone, closed: Bool, now: Date, running: Bool, plannedBoundary: Date?) -> DayCheck {
+        guard !closed, let end = RecordingDayCalendar.end(of: day, in: zone) else { return .switchNow }
         if now < end { return .keep(boundary: end) }
         if running, plannedBoundary == end { return .awaitWriter }
         return .switchNow
     }
 
-    /// The midnight that ends a `YYYY-MM-DD` date in a zone (a 23- or 25-hour day across a DST change ends where it does).
-    nonisolated static func endOfDay(_ day: String, in zone: TimeZone) -> Date? {
-        RecordingDayCalendar.start(of: day, in: zone).map { RecordingDayCalendar.nextMidnight(after: $0, in: zone) }
-    }
-
-    /// When a day recording's day ends: its own midnight in the zone it was recorded in, or `now` when that midnight is
-    /// still ahead (the clock or the zone moved on) or its date is unreadable.
-    private static func dayEnd(of entry: RecordingEntry, zone fallback: TimeZone, notAfter now: Date) -> Date {
-        let zone = entry.timeZone.flatMap(TimeZone.init(identifier:)) ?? fallback
-        guard let end = entry.day.flatMap({ endOfDay($0, in: zone) }) else { return now }
-        return min(now, end)
+    /// The midnight that ends a day recording's day in its own time zone (a 23- or 25-hour day across a DST change ends
+    /// where it does); nil when its date or zone can't be read.
+    nonisolated static func dayEnd(of entry: RecordingEntry) -> Date? {
+        guard let day = entry.day, let zone = entry.timeZone.flatMap(RecordingDayWire.zone) else { return nil }
+        return RecordingDayCalendar.end(of: day, in: zone)
     }
 
     /// The day recording to report as halted at launch: the newest of those `recover` left open, when the user wanted
@@ -1060,9 +1195,6 @@ final class RecordingCapture {
         guard let newest = entries.filter({ $0.isDay && open.contains($0.id) }).max(by: { $0.createdAt < $1.createdAt }) else { return nil }
         return (id: newest.id, reason: RecordingDayHalt.crashed)
     }
-
-    /// The zone days are counted in: the system's, following its changes; recordings keep its identifier.
-    private static var zone: TimeZone { .autoupdatingCurrent }
 
     private static func rememberIntent(_ on: Bool) {
         // Changes only on start and Stop; written only when it does (every write redraws the views reading defaults).
@@ -1090,6 +1222,23 @@ final class RecordingCapture {
         weak var source: RecordingSegmentWriter?
     }
 
+    /// A control event not saved yet, for its recording.
+    private nonisolated struct OwedEvent {
+        let recording: UUID
+        let event: RecordingDayEvent
+    }
+
+    /// What a pass saved: the recordings changed, in order, and those of them that got a chunk.
+    private nonisolated struct Changes {
+        var ids: [UUID] = []
+        var chunks: Set<UUID> = []
+
+        init(_ ids: [UUID] = []) { insert(ids) }
+
+        mutating func insert(_ id: UUID) { if !ids.contains(id) { ids.append(id) } }
+        mutating func insert(_ more: [UUID]) { for id in more { insert(id) } }
+    }
+
     #if DEBUG
     /// Screenshots (`-showMeetingSample`, `-showAllDaySample`): `id` shows as being recorded `elapsed` seconds in, paused
     /// or paused by a call, as an all-day recording or not, with no microphone (Stop ends it through `stopSample`).
@@ -1106,13 +1255,12 @@ final class RecordingCapture {
         sampleElapsed = elapsed; self.elapsed = elapsed; sampleLevel = level
     }
 
-    /// Stop for a sample recording: what `stop()` does for a real one after the microphone is closed (the entry ends, or a
-    /// day pauses; the same callbacks run), so the wrap-up steps advance as they would.
+    /// Stop for a sample recording: what `stop()` does for a real one after the microphone is closed (the entry ends; a
+    /// sample day, which has no recording behind it, just stops; the same callbacks run), so the wrap-up steps advance
+    /// as they would.
     private func stopSample(_ id: UUID) -> UUID {
         onStopping?(id)
-        if allDay {
-            RecordingLibrary.shared.change(id) { $0.gapReason = RecordingDayContract.Reason.paused }
-        } else {
+        if !allDay {
             RecordingLibrary.shared.change(id) { entry in
                 entry.active = false
                 entry.expectedSegments = entry.nextIndex
@@ -1181,7 +1329,7 @@ nonisolated enum RecordingDayHalt: String, Sendable {
     case audioReset
     case lowBattery
     case lowStorage
-    /// A chunk or the recording's info could not be written.
+    /// A chunk, a control event or the recording's info could not be written.
     case writeFailed
     /// The app ended while recording (found at the next launch).
     case crashed

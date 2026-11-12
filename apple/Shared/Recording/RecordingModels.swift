@@ -10,19 +10,18 @@ nonisolated struct RecordingSegment: Codable, Hashable, Sendable {
     /// Wall-clock start of the segment (rolling recordings); nil for old clips.
     var startedAt: Date? = nil
     var kept: RecordingKeep? = nil
-    // All-day recordings only (docs/assistant/day-recap.md); nil everywhere else, so old JSON decodes unchanged.
-    /// The chunk's mean RMS level in dBFS over all its samples (`RecordingDayLevel`), for skipping silence.
+    /// All-day recordings only (docs/assistant/day-recap.md「Chunks」): the chunk's mean RMS level in dBFS over all its
+    /// samples (`RecordingDayLevel`), for skipping silence. nil everywhere else, so old JSON decodes unchanged.
     var level: Double? = nil
-    /// Why audio is missing just before this chunk (`RecordingDayContract.Reason`); nil when it follows the previous one.
-    var after: String? = nil
-    /// Erased by the user: the record keeps its seq and times, its audio and text are gone, and it travels as a marker.
-    var erased: Bool? = nil
-    /// The last chunk of the day recording, or the header-only end marker (`RecordingLibrary.closeDay`).
-    var end: Bool? = nil
-    /// The watch could not keep this chunk's audio; it travels as a `lost` marker so the phone stops waiting for it.
-    var lost: Bool? = nil
 
     static func fileName(_ index: Int) -> String { String(format: "seg-%03d.m4a", index) }
+    /// The index a `fileName` names; nil for any other file.
+    static func index(fileName name: String) -> Int? {
+        guard name.hasPrefix("seg-"), name.hasSuffix(".m4a") else { return nil }
+        let digits = name.dropFirst(4).dropLast(4)
+        guard !digits.isEmpty, digits.allSatisfy(\.isASCII), let index = Int(digits), index >= 0 else { return nil }
+        return index
+    }
     var endedAt: Date? { startedAt?.addingTimeInterval(duration) }
     /// Wall-clock time of a point on the recording timeline that falls in this segment.
     func wallTime(_ timeline: Double) -> Date? { startedAt?.addingTimeInterval(timeline - start) }
@@ -31,29 +30,11 @@ nonisolated struct RecordingSegment: Codable, Hashable, Sendable {
         return startedAt <= to && from <= endedAt
     }
 
-    /// A day record that carries no audio over the wire: erased, lost, or the zero-length end marker
-    /// (`RecordingDayHeader.isMarker`).
-    var isDayMarker: Bool { erased == true || lost == true || duration <= 0 }
-
-    /// How far before an erased range's end the chunk the erase cut opened may start. The erase cuts the open chunk and
-    /// then names the range up to "now"; the next chunk starts with the samples still in flight at the cut (one tap
-    /// buffer, a fraction of a second), so it starts a moment before the range's end although it holds what came after.
-    static let dayEraseCutAllowance: Double = 0.5
-    /// How far past the range's end a chunk that ended at the cut may reach: its end is counted in samples from a
-    /// host-clock start, a few milliseconds off the wall clock that names the range.
-    static let dayEraseEndTolerance: Double = 0.1
-
-    /// Whether this day chunk falls in an erased range: it overlaps it (half-open: one that ends right where the range
-    /// starts, or starts right where it ends, doesn't), unless it is the chunk the erase cut opened, which starts within
-    /// `dayEraseCutAllowance` of the range's end and goes on past it. A chunk the cut closed ends at the cut, so it is
-    /// erased however short it is. Header-only records hold no audio and never fall in one. Rolling recordings use
-    /// `overlaps`, inclusive at both ends.
-    func fallsInDayErase(_ range: RecordingErase) -> Bool {
-        guard let startedAt, let endedAt, duration > 0, lost != true else { return false }
-        guard startedAt < range.to, endedAt > range.from else { return false }
-        let openedByTheCut = startedAt >= range.to.addingTimeInterval(-Self.dayEraseCutAllowance)
-            && endedAt > range.to.addingTimeInterval(Self.dayEraseEndTolerance)
-        return !openedByTheCut
+    /// Whether this day chunk holds audio from `from…to`. Half-open, unlike rolling's `overlaps`: a chunk that ends
+    /// right where the range starts, or starts right where it ends (the one an erase's cut opened), holds none of it.
+    func overlapsDay(_ from: Date, _ to: Date) -> Bool {
+        guard let startedAt, let endedAt else { return false }
+        return startedAt < to && from < endedAt
     }
 }
 
@@ -146,30 +127,47 @@ nonisolated struct RecordingEntry: Codable, Identifiable, Hashable, Sendable {
     /// Persona's part in the meeting and the session that attends (#2981); nil for a note, a watch recording, and a
     /// meeting recording Persona was never asked to attend (its upload is then exactly as before).
     var attendance: RecordingAttendance? = nil
-    // All-day recordings only; nil for every other kind.
+    // All-day recordings only (docs/assistant/day-recap.md「The day recording on the watch」); nil for every other kind.
+    // On the watch `createdAt` is the recording's `recording_started_at`, and `segments` are the chunks the phone has
+    // not acknowledged: the record of an acknowledged, erased or lost seq goes, and the seq is tombstoned
+    // (`prunedBelow` / `prunedAbove`), so it is never used again.
     /// The local date the day recording belongs to, `YYYY-MM-DD` in `timeZone` (`RecordingDayCalendar`).
     var day: String? = nil
-    /// The time zone `day` is a date in (an identifier such as `Asia/Shanghai`), so the date reads the same anywhere.
+    /// The recording's IANA time zone, fixed for it: its `day`, its midnight and the hub's hours are in it, whatever
+    /// zone the device moves to.
     var timeZone: String? = nil
-    /// Watch: why the microphone is off while the day stays open (`RecordingDayContract.Reason`); the next chunk carries
-    /// it as `after`. nil while recording.
+    /// Watch: the seq counter (`RecordingLibrary.allocateSeq`), so every seq below it was handed out to a chunk.
+    var nextSeq: Int? = nil
+    /// Watch: the `n` the next control event gets.
+    var nextEvent: Int? = nil
+    /// Watch: control events the phone has not acknowledged yet, in `n` order.
+    var dayEvents: [RecordingDayEvent]? = nil
+    /// Watch: the phone's erase requests already carried out, for answering a repeated one the same way.
+    var dayErases: [RecordingDayEraseDone]? = nil
+    /// Watch: when the day recording ended (its midnight, or when it was closed late); it stays until the phone has
+    /// everything.
+    var closedAt: Date? = nil
+    /// Watch: why the microphone is closed, the reason of the last `paused` event since the last `started` (kept by
+    /// `RecordingLibrary.appendDayEvent`); nil while it records.
     var gapReason: String? = nil
-    /// Watch: bookmarks and meeting marks on the wall clock, kept until the chunk that carries them is acknowledged.
-    var dayMarks: [RecordingDayMark]? = nil
-    /// Watch: the end marker's time (midnight, or when a day left open was closed).
-    var dayEndAt: Date? = nil
 
     /// Monotonic per recording: every save moves `updatedAt` forward, so a later upload always carries a larger one.
     var revision: Int64 { Int64(((updatedAt ?? createdAt).timeIntervalSince1970 * 1000).rounded()) }
 
     var isRolling: Bool { kind == .rolling }
     var isDay: Bool { kind == .day }
-    /// Whether a day chunk falls in one of the ranges the user erased (`RecordingSegment.fallsInDayErase`).
-    func isDayErased(_ segment: RecordingSegment) -> Bool {
-        (erased ?? []).contains { segment.fallsInDayErase($0) }
+    /// The day recording's time zone; nil without a known one.
+    var dayTimeZone: TimeZone? { timeZone.flatMap(TimeZone.init(identifier:)) }
+    /// Watch: a closed day recording the phone has all of: every seq below the counter acknowledged, erased or lost,
+    /// and every event acknowledged. It can go.
+    var isDaySettled: Bool {
+        isDay && closedAt != nil && (dayEvents ?? []).isEmpty && (prunedBelow ?? 0) >= nextIndex
     }
-    /// Index the next segment would get; also the segment count to report when a rolling recording ends.
-    var nextIndex: Int { max((segments.map(\.index).max() ?? -1) + 1, prunedBelow ?? 0, (prunedAbove?.max() ?? -1) + 1) }
+    /// Index the next segment would get; also the segment count to report when a rolling recording ends. For a day
+    /// recording on the watch, the seq counter.
+    var nextIndex: Int {
+        max((segments.map(\.index).max() ?? -1) + 1, prunedBelow ?? 0, (prunedAbove?.max() ?? -1) + 1, nextSeq ?? 0)
+    }
     func isPruned(_ index: Int) -> Bool { index < (prunedBelow ?? 0) || (prunedAbove?.contains(index) ?? false) }
     var prunedCount: Int { (prunedBelow ?? 0) + (prunedAbove?.count ?? 0) }
     func isErased(_ segment: RecordingSegment) -> Bool {
@@ -202,7 +200,7 @@ nonisolated struct RecordingEntry: Codable, Identifiable, Hashable, Sendable {
     /// A day recording's date as the title shows it: written in the recording's own time zone, so a day recorded in
     /// Shanghai reads as that date on a phone set to New York too. nil without a valid `day`.
     private var dayTitleDate: String? {
-        let zone = timeZone.flatMap(TimeZone.init(identifier:)) ?? .autoupdatingCurrent
+        let zone = dayTimeZone ?? .autoupdatingCurrent
         guard let day, let start = RecordingDayCalendar.start(of: day, in: zone) else { return nil }
         return start.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, timeZone: zone))
     }

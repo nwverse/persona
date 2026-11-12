@@ -4,7 +4,7 @@ import Foundation
 
 /// All-day recording's catch-up (docs/assistant/day-recap.md): a `BGProcessingTask` that transcribes, uploads and applies
 /// retention to what the watch sent while the app sat in the background, run by the system while the phone charges and
-/// has a network (the upload needs one, C9). Submitted when the app goes to the background and from the receiver as
+/// has a network (the upload needs one). Submitted when the app goes to the background and from the receiver as
 /// chunks arrive (a day the app is only ever woken by WatchConnectivity never goes through that transition), and again
 /// after a run that left work. Submitting replaces the pending request, so asking often costs nothing.
 enum RecordingDayCatchUp {

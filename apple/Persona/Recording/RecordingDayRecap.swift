@@ -79,8 +79,10 @@ nonisolated struct RecordingDayRecap: Codable, Sendable, Equatable {
     var generatedAt: String?
     var day: String?
     var covers: Span?
-    /// Made from the complete recording (`final`).
+    /// The day's final recap (`final`): made from the complete recording, or 6 hours or more after the day ended.
     var isFinal: Bool?
+    /// Why a final recap is final: `complete` or `cutoff` (`RecordingDayRecap.Reason`); absent on a recap so far.
+    var finalReason: String?
     var summary: String?
     var timeline: [Entry]?
     var actions: [Action]?
@@ -92,9 +94,18 @@ nonisolated struct RecordingDayRecap: Codable, Sendable, Equatable {
 
     var writtenAt: Date? { generatedAt.flatMap(JSON.parseDate).flatMap { $0.isMeaningful ? $0 : nil } }
 
+    /// The values of `final_reason` (docs/assistant/day-recap.md「What the hub stores and returns」).
+    nonisolated enum Reason {
+        /// Made from the complete recording.
+        static let complete = "complete"
+        /// The day was still not complete 6 hours after it ended: made from what had arrived. A later `complete` writes
+        /// another final recap.
+        static let cutoff = "cutoff"
+    }
+
     private nonisolated enum CodingKeys: String, CodingKey {
         case version, revision, day, covers, summary, timeline, actions, gaps, partial, markdown
-        case generatedAt = "generated_at", isFinal = "final"
+        case generatedAt = "generated_at", isFinal = "final", finalReason = "final_reason"
     }
 }
 
@@ -107,6 +118,7 @@ nonisolated extension RecordingDayRecap {
         day = try? c.decodeIfPresent(String.self, forKey: .day)
         covers = try? c.decodeIfPresent(Span.self, forKey: .covers)
         isFinal = try? c.decodeIfPresent(Bool.self, forKey: .isFinal)
+        finalReason = try? c.decodeIfPresent(String.self, forKey: .finalReason)
         summary = try? c.decodeIfPresent(String.self, forKey: .summary)
         timeline = RecapLossy<Entry>.list(c, .timeline)
         actions = RecapLossy<Action>.list(c, .actions)
@@ -196,17 +208,20 @@ private nonisolated struct RecapLossy<Value: Decodable>: Decodable {
 /// detail also carries the whole day's transcript, which the page reads from this phone instead).
 nonisolated struct RecordingDayRecapAnswer: Decodable, Sendable, Equatable {
     var recapState: String?
+    /// The newest recap is the final one (`recap_final`), as the recordings list says it too.
+    var recapFinal: Bool
     /// The recording's `started_at`: the recap's clock.
     var startedAt: Date?
     var recap: RecordingDayRecap?
 
     private nonisolated enum Keys: String, CodingKey {
         case detail, meta, recap
-        case recapState = "recap_state", startedAt = "started_at"
+        case recapState = "recap_state", recapFinal = "recap_final", startedAt = "started_at"
     }
 
-    init(recapState: String? = nil, startedAt: Date? = nil, recap: RecordingDayRecap? = nil) {
+    init(recapState: String? = nil, recapFinal: Bool = false, startedAt: Date? = nil, recap: RecordingDayRecap? = nil) {
         self.recapState = recapState
+        self.recapFinal = recapFinal
         self.startedAt = startedAt
         self.recap = recap
     }
@@ -218,16 +233,25 @@ nonisolated struct RecordingDayRecapAnswer: Decodable, Sendable, Equatable {
         recap = try? detail.decodeIfPresent(RecordingDayRecap.self, forKey: .recap)
         let meta = try? detail.nestedContainer(keyedBy: Keys.self, forKey: .meta)
         recapState = try? meta?.decodeIfPresent(String.self, forKey: .recapState)
+        recapFinal = (try? meta?.decodeIfPresent(Bool.self, forKey: .recapFinal)) ?? false
         startedAt = (try? meta?.decodeIfPresent(String.self, forKey: .startedAt)).flatMap(JSON.parseDate)
     }
+
+    /// Where the part is, said the way the recordings list says it.
+    var seen: RecordingDayRecapSeen { .listed(recapState, final: recapFinal) }
 }
 
-/// `GET /api/v1/recordings`, as far as the day's page reads it: each recording's `recap_state`, and the day fields
-/// reconciliation hands the day's upload (`RecordingDaySync.reconciled`).
+/// `GET /api/v1/recordings`, as far as the day's page reads it: each recording's `recap_state` and `recap_final`, and
+/// the day fields reconciliation hands the day's upload (`RecordingDaySync.reconciled`;
+/// docs/assistant/day-recap.md「Reconciliation」).
 nonisolated struct RecordingDayRecapListing: Decodable, Sendable, Equatable {
     nonisolated struct Row: Decodable, Sendable, Equatable {
         var id: UUID
         var recapState: String?
+        /// Its newest recap is the final one; nil when the row doesn't say.
+        var recapFinal: Bool?
+        /// When its first final recap was written: the phone's 3-day clock for the day's audio.
+        var recapFinalAt: Date?
         var revision: Int64?
         var part: Int?
         var next: Int?
@@ -235,12 +259,15 @@ nonisolated struct RecordingDayRecapListing: Decodable, Sendable, Equatable {
 
         private nonisolated enum CodingKeys: String, CodingKey {
             case id, revision, part, next, base
-            case recapState = "recap_state"
+            case recapState = "recap_state", recapFinal = "recap_final", recapFinalAt = "recap_final_at"
         }
 
-        init(id: UUID, recapState: String? = nil, revision: Int64? = nil, part: Int? = nil, next: Int? = nil, base: Int64? = nil) {
+        init(id: UUID, recapState: String? = nil, recapFinal: Bool? = nil, recapFinalAt: Date? = nil, revision: Int64? = nil,
+             part: Int? = nil, next: Int? = nil, base: Int64? = nil) {
             self.id = id
             self.recapState = recapState
+            self.recapFinal = recapFinal
+            self.recapFinalAt = recapFinalAt
             self.revision = revision
             self.part = part
             self.next = next
@@ -254,11 +281,15 @@ nonisolated struct RecordingDayRecapListing: Decodable, Sendable, Equatable {
             }
             self.id = id
             recapState = try? c.decodeIfPresent(String.self, forKey: .recapState)
+            recapFinal = try? c.decodeIfPresent(Bool.self, forKey: .recapFinal)
+            recapFinalAt = (try? c.decodeIfPresent(String.self, forKey: .recapFinalAt)).flatMap(JSON.parseDate)
             revision = try? c.decodeIfPresent(Int64.self, forKey: .revision)
             part = try? c.decodeIfPresent(Int.self, forKey: .part)
             next = try? c.decodeIfPresent(Int.self, forKey: .next)
             base = try? c.decodeIfPresent(Int64.self, forKey: .base)
         }
+
+        var seen: RecordingDayRecapSeen { .listed(recapState, final: recapFinal ?? false) }
     }
 
     var rows: [Row]
@@ -274,9 +305,8 @@ nonisolated struct RecordingDayRecapListing: Decodable, Sendable, Equatable {
 
     /// Each listed recording's state; a recording not listed is not on the hub.
     func seen(_ ids: [UUID]) -> [UUID: RecordingDayRecapSeen] {
-        let byID = Dictionary(rows.map { ($0.id, $0.recapState) }, uniquingKeysWith: { first, _ in first })
-        return Dictionary(ids.map { id in (id, byID[id].map { RecordingDayRecapSeen.listed($0) } ?? .absent) },
-                          uniquingKeysWith: { first, _ in first })
+        let byID = Dictionary(rows.map { ($0.id, $0.seen) }, uniquingKeysWith: { first, _ in first })
+        return Dictionary(ids.map { id in (id, byID[id] ?? .absent) }, uniquingKeysWith: { first, _ in first })
     }
 
     /// The rows of a day's parts as reconciliation hands them to the day's upload, or nil unless every part is listed:
@@ -286,7 +316,8 @@ nonisolated struct RecordingDayRecapListing: Decodable, Sendable, Equatable {
         let listed = ids.compactMap { byID[$0] }
         guard !listed.isEmpty, listed.count == ids.count else { return nil }
         return listed.map {
-            RecordingDayHubRow(id: $0.id, revision: $0.revision, part: $0.part, next: $0.next, base: $0.base, recapState: $0.recapState)
+            RecordingDayHubRow(id: $0.id, revision: $0.revision, part: $0.part, next: $0.next, base: $0.base, recapState: $0.recapState,
+                               recapFinal: $0.recapFinal, recapFinalAt: $0.recapFinalAt)
         }
     }
 
@@ -297,19 +328,33 @@ nonisolated struct RecordingDayRecapListing: Decodable, Sendable, Equatable {
         for state in ["failed", "pending", "ready"] where states.contains(state) { return state }
         return states.last
     }
+
+    /// Whether the day's recap is final across its parts, as the day's record sums it (`RecordingDayRecord.recapFinal`):
+    /// every part's newest recap is.
+    static func dayFinal(_ rows: [RecordingDayHubRow]) -> Bool {
+        !rows.isEmpty && rows.allSatisfy { $0.recapFinal == true }
+    }
 }
 
-/// Where a hub recording's recap was at the last look: not on the hub, or listed with its `recap_state` (nil: none due).
+/// Where a hub recording's recap was at the last look: not on the hub, or listed with its `recap_state` (nil: none due)
+/// and whether its newest recap is the final one. A recap that becomes final can keep the state `ready`, so the page
+/// reads the detail again when either moves.
 nonisolated enum RecordingDayRecapSeen: Equatable, Sendable {
     case absent
-    case listed(String?)
+    case listed(String?, final: Bool)
+
+    /// Listed with a recap the hub could not write.
+    var failed: Bool {
+        if case .listed("failed"?, _) = self { return true }
+        return false
+    }
 }
 
 // MARK: - What the page shows
 
-/// A day's recaps as its page shows them: every part's recap on the wall clock (each part's times are seconds since
-/// its own `started_at`), the timeline by time of day in the day's zone, the suggested to-dos, and the text Copy and
-/// Share send.
+/// A day's recaps as its page shows them: every part's recap on the wall clock (each part's times are seconds since its
+/// `started_at`, which every part shares with part 1: docs/assistant/day-recap.md「Parts」), the timeline by time of day
+/// in the day's zone, the suggested to-dos, and the text Copy and Share send.
 nonisolated struct RecordingDayRecapContent: Equatable, Sendable {
     /// The clock's parts of the day the timeline is grouped by.
     nonisolated enum Period: Int, CaseIterable, Comparable, Sendable {
@@ -350,7 +395,9 @@ nonisolated struct RecordingDayRecapContent: Equatable, Sendable {
         var id: String
         var what: String
         var who: String?
+        /// The deadline as said ("tomorrow"), and as a date when it is one (`YYYY-MM-DD`).
         var by: String?
+        var dueDate: String?
         var at: Date?
         /// Added to the user's to-dos (on the web, by the minutes' confirmation route).
         var confirmed: Bool
@@ -362,16 +409,27 @@ nonisolated struct RecordingDayRecapContent: Equatable, Sendable {
         var startedAt: Date
     }
 
+    /// Whether the recap is the day's last word: so far (the day is still being recorded or transcribed), or final.
+    nonisolated enum Finality: Equatable, Sendable {
+        /// Newer text may still come, and with it a newer recap.
+        case soFar
+        /// Made from the complete day.
+        case final
+        /// Made 6 hours after the day ended from what had arrived; written again if the rest of the day comes.
+        case cutoff
+    }
+
     var summary: String
     /// When the newest part's recap was written.
     var writtenAt: Date?
-    /// Every part's recap was made from its complete recording.
-    var isFinal: Bool
+    /// Final only once every part's recap is; cut off when one of them was made at the cutoff.
+    var finality: Finality
     var partial: Bool
     var sections: [Section]
     var actions: [Action]
     var markdown: String
 
+    var isFinal: Bool { finality != .soFar }
     var isEmpty: Bool { summary.isEmpty && sections.isEmpty && actions.isEmpty }
 }
 
@@ -402,7 +460,8 @@ nonisolated extension RecordingDayRecapContent {
             for (i, action) in (part.recap.actions ?? []).enumerated() {
                 guard let what = Self.text(action.what) else { continue }
                 actions.append(Action(id: "\(p)-\(action.id ?? String(i))", what: what, who: Self.text(action.who),
-                                      by: Self.text(action.by), at: clock(action.at), confirmed: Self.text(action.todoID) != nil))
+                                      by: Self.text(action.by), dueDate: Self.text(action.dueDate), at: clock(action.at),
+                                      confirmed: Self.text(action.todoID) != nil))
             }
         }
         entries.sort { ($0.from, $0.id) < ($1.from, $1.id) }
@@ -410,7 +469,7 @@ nonisolated extension RecordingDayRecapContent {
         let recaps = parts.map(\.recap)
         self.init(summary: recaps.compactMap { Self.text($0.summary) }.joined(separator: "\n\n"),
                   writtenAt: recaps.compactMap(\.writtenAt).max(),
-                  isFinal: !recaps.isEmpty && recaps.allSatisfy { $0.isFinal == true },
+                  finality: Self.finality(recaps),
                   partial: recaps.contains { $0.partial == true },
                   sections: Period.allCases.compactMap { period in grouped[period].map { Section(period: period, entries: $0) } },
                   actions: actions.sorted { ($0.at ?? .distantFuture, $0.id) < ($1.at ?? .distantFuture, $1.id) },
@@ -419,6 +478,13 @@ nonisolated extension RecordingDayRecapContent {
 
     /// The text Copy and Share send: the hub's Markdown, else the summary.
     var shareText: String { markdown.isEmpty ? summary : markdown }
+
+    /// The day's recaps together: so far while any part's isn't final; cut off when a final one was made at the cutoff
+    /// (part of the day may still come); final otherwise.
+    static func finality(_ recaps: [RecordingDayRecap]) -> Finality {
+        guard !recaps.isEmpty, recaps.allSatisfy({ $0.isFinal == true }) else { return .soFar }
+        return recaps.contains { $0.finalReason == RecordingDayRecap.Reason.cutoff } ? .cutoff : .final
+    }
 
     /// Text with something in it, trimmed; nil otherwise.
     private static func text(_ value: String?) -> String? {
@@ -458,17 +524,17 @@ nonisolated enum RecordingDayRecapState: Equatable, Sendable {
     }
 
     /// The state from what the hub said of each part (`parts` nil: no answer, offline or demo), where the phone's
-    /// upload is (`sync`), and whether any of the day is transcribed. `fallbackStart` is part one's start when the hub's
-    /// meta leaves it out.
+    /// upload is (`sync`), and whether any of the day is transcribed. `fallbackStart` is the day recording's start
+    /// (`recording_started_at`), every part's clock, when the hub's meta leaves it out.
     static func of(parts: [Part?]?, sync: RecordingDaySyncState, transcribed: Bool, fallbackStart: Date?,
                    zone: TimeZone) -> RecordingDayRecapState {
         if sync == .notOffered || sync == .unsupported { return .unsupported }
         let later: RecordingDayRecapState = sync == .expired ? .none : transcribed ? .waitingForSync : .waitingForText
         guard let parts else { return later }
         let held = parts.compactMap { $0 }
-        let recaps = parts.enumerated().compactMap { i, part -> RecordingDayRecapContent.Part? in
-            // Only part one starts when the day's recording did.
-            guard let part, let recap = part.recap, let start = part.startedAt ?? (i == 0 ? fallbackStart : nil) else { return nil }
+        let recaps = parts.compactMap { part -> RecordingDayRecapContent.Part? in
+            // Every part counts from the day recording's start, so a part whose meta leaves it out borrows the day's.
+            guard let part, let recap = part.recap, let start = part.startedAt ?? fallbackStart else { return nil }
             return RecordingDayRecapContent.Part(recap: recap, startedAt: start)
         }
         let states = held.compactMap(\.recapState)
@@ -510,10 +576,11 @@ nonisolated enum RecordingDayTranscript {
         var lines: [Line]
     }
 
-    /// The lines in time order, empty sentences left out; erased chunks hold none.
+    /// The lines in time order, empty sentences left out (an erased sentence keeps its hub position with no text);
+    /// erased and lost chunks hold none.
     static func lines(_ record: RecordingDayRecord) -> [Line] {
         var out: [Line] = []
-        for chunk in record.chunks.values where !chunk.erased {
+        for chunk in record.chunks.values where !chunk.isErasedOrLost {
             for (i, sentence) in (chunk.sentences ?? []).enumerated() {
                 let text = sentence.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !text.isEmpty, sentence.start.isFinite else { continue }
@@ -546,12 +613,12 @@ nonisolated enum RecordingDayTranscript {
 // MARK: - The model
 
 /// A day's recap for its page. Each look reads the light recordings list (`GET /api/v1/recordings`) for where every
-/// part of the day is, and reads a part's detail (its recap) only when the part has a recap due and its state moved
-/// since the last read: the detail also carries the day's whole transcript, and is decoded off the main actor. The page
-/// looks when it opens, when the day's summary moves, and every `pollSeconds` while the recap is on its way. What the
-/// list says of the day's parts goes to the day's upload, which stores it on the day as reconciliation would (`report`):
-/// the page's header, the Today row and Recent Recordings then say what the recap section shows, without waiting for
-/// the next reconciliation (event-driven, and at most every ten minutes).
+/// part of the day is, and reads a part's detail (its recap) only when the part has a recap due and its state (or whether
+/// it is final) moved since the last read: the detail also carries the day's whole transcript, and is decoded off the
+/// main actor. The page looks when it opens, when the day's summary moves, and every `pollSeconds` while the recap is on
+/// its way. What the list says of the day's parts goes to the day's upload, which stores it on the day as reconciliation
+/// would (`report`): the page's header, the Today row and Recent Recordings then say what the recap section shows,
+/// without waiting for the next reconciliation (event-driven, and at most every ten minutes).
 @MainActor @Observable final class RecordingDayRecapModel {
     private(set) var state: RecordingDayRecapState = .none
     private(set) var asking = false
@@ -633,7 +700,7 @@ nonisolated enum RecordingDayTranscript {
         asking = true
         defer { asking = false }
         let ids = Self.hubIDs(day)
-        let failed = ids.filter { last?.seen[$0] == .listed("failed") }
+        let failed = ids.filter { last?.seen[$0]?.failed == true }
         let asked = failed.isEmpty ? ids : failed
         do {
             for id in asked {
@@ -667,20 +734,20 @@ nonisolated enum RecordingDayTranscript {
                 parts.append(last.parts[at])
                 continue
             }
-            guard case .listed(let listedState)? = listed[id] else {
+            guard case .listed(let listedState, let listedFinal)? = listed[id] else {
                 seen[id] = .absent
                 parts.append(nil)
                 continue
             }
             guard let listedState else {
-                seen[id] = .listed(nil)
+                seen[id] = .listed(nil, final: listedFinal)
                 parts.append(.init(recapState: nil))
                 continue
             }
             do {
                 let answer = try await fetch(id, api)
                 // The detail's own state, said with its recap: when the list is ahead of it, the next look reads it again.
-                seen[id] = .listed(answer.recapState)
+                seen[id] = answer.seen
                 parts.append(.init(recapState: answer.recapState, recap: answer.recap, startedAt: answer.startedAt))
             } catch let error as APIError where error.status == 404 {
                 // Listed, but its detail isn't served yet: the list's state for now, and read again at the next look.
@@ -697,11 +764,14 @@ nonisolated enum RecordingDayTranscript {
         return Heard(hubIDs: read.ids, recapState: RecordingDayRecapListing.dayState(held.map(\.recapState)))
     }
 
-    /// Hands the day's upload what the list says of the day's parts when their recap state is news to the day's
-    /// summary: the upload stores it on the day as reconciliation would, and every row of the day follows.
+    /// Hands the day's upload what the list says of the day's parts when their recap's state, or whether it is final, is
+    /// news to the day's summary: the upload stores it on the day as reconciliation would (a final recap also starts the
+    /// audio's 3-day clock), and every row of the day follows.
     private func report(_ listing: RecordingDayRecapListing, for day: RecordingDaySummary) {
-        guard !day.hubIDs.isEmpty, let rows = listing.hubRows(day.hubIDs),
-              RecordingDayRecapListing.dayState(rows.map(\.recapState)) != day.recapState else { return }
+        guard !day.hubIDs.isEmpty, let rows = listing.hubRows(day.hubIDs) else { return }
+        let news = RecordingDayRecapListing.dayState(rows.map(\.recapState)) != day.recapState
+            || RecordingDayRecapListing.dayFinal(rows) != day.recapFinal
+        guard news else { return }
         reconciled(day.id, rows)
     }
 

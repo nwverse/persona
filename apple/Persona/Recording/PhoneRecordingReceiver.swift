@@ -9,8 +9,8 @@ final class PhoneRecordingReceiver {
     func start() {
         guard !started else { return }
         started = true
-        // All-day recording's chunks come through their own hooks (docs/assistant/day-recap.md), in place before the
-        // session activates like `onRecording` below.
+        // All-day recording's chunks, events and answers come through their own hooks, in place before the session
+        // activates like `onRecording` below (docs/assistant/day-recap.md「Watch to phone」).
         RecordingDayReceiver.shared.start()
         _ = RecordingCapture.shared
         WatchSync.shared.onRecording = { transfer in

@@ -109,8 +109,7 @@ private final class GatedEngine: Sendable {
     init(gated: Bool = false) {
         library = RecordingLibrary(root: root)
         let lib = library, clock = clock, engine = engine, gate = gate
-        store = RecordingDayStore(root: root, isDeleted: { lib.isDeletedSnapshot($0) }, zone: { TimeZone(identifier: "Asia/Shanghai")! },
-                                  now: { clock.now }, writeDelay: 3600)
+        store = RecordingDayStore(root: root, isDeleted: { lib.isDeletedSnapshot($0) }, now: { clock.now }, writeDelay: 3600)
         let run: RecordingDayTranscriber.Engine
         if gated {
             run = { urls, _, _, _, downloads in try await gate.run(urls, downloads: downloads) }
@@ -123,18 +122,26 @@ private final class GatedEngine: Sendable {
                                        languageChanged: { languages.ids.append($0) })
     }
 
+    private var events = 0
+
     /// Chunk `seq` as the watch sent it: `offset` seconds after `anchor`, 10 s, at `level` dBFS.
     func chunk(_ seq: Int, at offset: Double, level: Double = -30) throws {
-        let header = RecordingDayHeader(recording: id, day: "2027-01-15", seq: seq, startedAt: anchor.addingTimeInterval(offset),
-                                        duration: 10, level: level, recordingStartedAt: anchor)
+        let header = RecordingDayHeader(recording: id, recordingStartedAt: anchor, tz: "Asia/Shanghai", day: "2027-01-15", seq: seq,
+                                        startedAt: anchor.addingTimeInterval(offset), duration: 10, level: level)
         #expect(try store.store(header: header, audio: Data([UInt8(seq % 256), 1, 2])) == .stored)
     }
 
-    /// The day's end marker: every chunk before it is in.
-    func end(_ seq: Int, at offset: Double) throws {
-        let header = RecordingDayHeader(recording: id, day: "2027-01-15", seq: seq, startedAt: anchor.addingTimeInterval(offset),
-                                        duration: 0, end: true, recordingStartedAt: anchor)
-        _ = try store.store(header: header, audio: nil)
+    /// The watch's next control event (numbered in the order the test sends them).
+    func event(_ make: (Int) -> RecordingDayEvent) throws {
+        let envelope = RecordingDayEventEnvelope(recording: id, recordingStartedAt: anchor, tz: "Asia/Shanghai", day: "2027-01-15",
+                                                 event: make(events))
+        events += 1
+        #expect(try store.store(event: envelope) == .applied)
+    }
+
+    /// The day recording closed at `offset`: no chunk at or after `seqCount` comes.
+    func close(_ seqCount: Int, at offset: Double) throws {
+        try event { .closed($0, at: anchor.addingTimeInterval(offset), seqCount: seqCount) }
     }
 
     func record() async throws -> RecordingDayRecord { try #require(await store.record(id)) }
@@ -145,15 +152,15 @@ private final class GatedEngine: Sendable {
 private func files(_ seqs: [Int]) -> [String] { seqs.map(RecordingSegment.fileName) }
 
 /// All-day recording's transcription lane (docs/assistant/day-recap.md): silence skipped without the engine, contiguous
-/// chunks read as one run (C8), a run's failure counted against its chunks until they are `failed`, and a failure of the
-/// device stopping the lane without counting (C20).
+/// chunks read as one run, a run's failure counted against its chunks until they are `failed`, and a failure of the
+/// device stopping the lane without counting.
 @MainActor struct RecordingDayTranscriberTests {
     @Test func silentChunksAreSkippedWithoutTheEngine() async throws {
         let f = Fixture()
         defer { f.cleanUp() }
         try f.chunk(0, at: 0, level: -62)
         try f.chunk(1, at: 10, level: RecordingDayContract.silenceDBFS - 0.1)
-        try f.end(2, at: 20)
+        try f.close(2, at: 20)
         await f.lane.drain()
         #expect(f.engine.calls.isEmpty)
         for seq in [0, 1] {
@@ -166,16 +173,37 @@ private func files(_ seqs: [Int]) -> [String] { seqs.map(RecordingSegment.fileNa
         let f = Fixture()
         defer { f.cleanUp() }
         for seq in 0..<3 { try f.chunk(seq, at: Double(seq) * 10) }
-        try f.end(3, at: 30)
+        try f.close(3, at: 30)
         await f.lane.drain()
         #expect(f.engine.calls == [files([0, 1, 2])], "one analyzer session for the three files")
         for seq in 0..<3 {
             let chunk = try await f.chunk(seq)
             #expect(chunk.state == .transcribed && chunk.attempts == 0)
             #expect(chunk.sentences == [RecordingSentence(start: 1, end: 2, text: RecordingSegment.fileName(seq))])
-            #expect(chunk.positions == nil, "the upload places them")
+            #expect(chunk.positions == [RecordingDayPosition(part: 1, pos: seq)], "placed in the save, seq order")
         }
+        #expect(try await f.record().parts.map(\.count) == [3], "part 1, made for them, not on the hub yet")
         #expect(f.lane.current == nil)
+        // The text and its positions reach the disk together: the write that says transcribed holds them.
+        #expect(await f.store.flush(f.id))
+        let disk = try JSONDecoder().decode(RecordingDayRecord.self,
+                                            from: Data(contentsOf: f.root.appendingPathComponent(f.id.uuidString).appendingPathComponent("day.json")))
+        #expect(disk.chunks.values.allSatisfy { $0.state == .transcribed && $0.positions?.count == $0.sentences?.count })
+    }
+
+    @Test func aPauseEndsARunAndBreaksOneAcrossIt() async throws {
+        let f = Fixture()
+        defer { f.cleanUp() }
+        // Chunk 1 starts 0.5 s after chunk 0 ended, close enough to join, but the user paused in between.
+        try f.chunk(0, at: 0)
+        try f.event { .paused($0, at: anchor.addingTimeInterval(10), reason: RecordingDayContract.Reason.paused) }
+        try f.event { .started($0, at: anchor.addingTimeInterval(10.5)) }
+        try f.chunk(1, at: 10.5)
+        try f.chunk(2, at: 20.5)
+        // The microphone is closed after chunk 2: its run is over at once, without waiting for a chunk to join.
+        try f.event { .paused($0, at: anchor.addingTimeInterval(30.5), reason: RecordingDayContract.Reason.interrupted) }
+        await f.lane.drain()
+        #expect(f.engine.calls == [files([0]), files([1, 2])])
     }
 
     @Test func runsBreakAtGapsSilenceAndRunSeconds() async throws {
@@ -187,7 +215,7 @@ private func files(_ seqs: [Int]) -> [String] { seqs.map(RecordingSegment.fileNa
         try f.chunk(3, at: 30)
         try f.chunk(4, at: 45)                  // 5 s after chunk 3 ended
         for seq in 5...12 { try f.chunk(seq, at: 55 + Double(seq - 5) * 10) }
-        try f.end(13, at: 135)
+        try f.close(13, at: 135)
         await f.lane.drain()
         #expect(f.engine.calls == [files([0, 1]), files([3]), files([4, 5, 6, 7, 8, 9]), files([10, 11, 12])],
                 "at most runSeconds (60 s) per run")
@@ -228,12 +256,13 @@ private func files(_ seqs: [Int]) -> [String] { seqs.map(RecordingSegment.fileNa
             #expect(chunk.state == .failed && chunk.attempts == RecordingDayContract.maxAttempts && chunk.sentences == nil)
             #expect(chunk.hasAudio, "kept for a retry until the 7-day cap")
         }
-        // Reported as an untranscribed gap, never as silence (C20); a later chunk is still transcribed.
+        // Reported as an untranscribed gap, never as silence; a later chunk is still transcribed.
         let record = try await f.record()
-        #expect(RecordingDayGap.gaps(in: record, since: anchor).contains(RecordingDayGap(from: 0, to: 20, reason: RecordingDayGap.Reason.untranscribed)))
+        #expect(RecordingDayGap.gaps(in: record, since: anchor, now: f.clock.now)
+                    .contains(RecordingDayGap(from: 0, to: 20, reason: RecordingDayGap.Reason.untranscribed)))
         f.engine.fail(with: nil)
         try f.chunk(3, at: 60)
-        try f.end(4, at: 70)
+        try f.close(4, at: 70)
         await f.lane.drain()
         #expect(try await f.chunk(3).state == .transcribed)
         // The tries are on disk, not only in memory.
@@ -248,7 +277,7 @@ private func files(_ seqs: [Int]) -> [String] { seqs.map(RecordingSegment.fileNa
         try f.chunk(0, at: 0)
         try f.chunk(1, at: 30)
         try f.chunk(2, at: 60)
-        try f.end(3, at: 70)
+        try f.close(3, at: 70)
         f.engine.fail(with: RecordingSpeechError.modelUnavailable)
         await f.lane.drain()
         #expect(f.engine.calls.count == 1, "one try shows the model is missing; the day's other runs aren't spent on it")
@@ -270,60 +299,71 @@ private func files(_ seqs: [Int]) -> [String] { seqs.map(RecordingSegment.fileNa
         let f = Fixture()
         defer { f.cleanUp() }
         try f.chunk(0, at: 0)
-        try f.end(1, at: 10)
+        try f.close(1, at: 10)
         await f.store.removeAudio(f.id, seqs: [0])
         await f.lane.drain()
         #expect(f.engine.calls.isEmpty)
         #expect(try await f.chunk(0).state == .failed)
     }
 
-    @Test func anEraseReachesASentenceThatRanIntoIt() async throws {
+    @Test func anEraseReachesASentenceThatRanIntoItsAudio() async throws {
         let f = Fixture()
         defer { f.cleanUp() }
+        // The writer paused 0.6 s between chunks 0 and 1, and their run joined across it.
         try f.chunk(0, at: 0)
-        try f.chunk(1, at: 10)
-        try f.chunk(2, at: 20)
-        try f.end(3, at: 30)
-        // Chunk 0's last sentence went on 0.3 s into chunk 1 (any reach at all counts), and chunk 2's stays inside it.
+        try f.chunk(1, at: 10.6)
+        try f.chunk(2, at: 20.6)
+        try f.close(3, at: 30.6)
+        // Chunk 0's last sentence went on 0.3 s into chunk 1's audio, which on the wall clock is still before chunk 1
+        // began; chunk 2's stays inside it. All of them are on the hub.
         let spanning = [RecordingSentence(start: 1, end: 3, text: "Inside."), RecordingSentence(start: 8, end: 10.3, text: "Into chunk 1.")]
-        await f.store.update(f.id) { record in
+        let id = f.id
+        await f.store.update(id) { record in
             for seq in 0..<3 {
                 let sentences = seq == 0 ? spanning : [RecordingSentence(start: 1, end: 2, text: "Own.")]
                 record.chunks[seq]?.state = .transcribed
                 record.chunks[seq]?.sentences = sentences
                 record.chunks[seq]?.positions = sentences.indices.map { RecordingDayPosition(part: 1, pos: seq * 2 + $0) }
             }
+            record.parts = [RecordingDayPart(hubID: id, part: 1, startedAt: anchor, created: true, base: 1, next: 6, count: 6)]
         }
-        let before = try await f.record()
-        #expect(RecordingDayRuns.bleeding(before).isEmpty)
-        let erased = RecordingDayHeader(recording: f.id, day: "2027-01-15", seq: 1, startedAt: anchor.addingTimeInterval(10), duration: 10,
-                                        erased: true, recordingStartedAt: anchor)
-        #expect(try f.store.store(header: erased, audio: nil) == .updated)
+        #expect(RecordingDayRuns.bleeding(try await f.record()).isEmpty)
+        // The watch erased chunk 1's time: the wall clock alone misses chunk 0's last sentence.
+        try f.event { .erase($0, id: UUID(), from: anchor.addingTimeInterval(10.6), to: anchor.addingTimeInterval(20.6), seqs: []) }
         let after = try await f.record()
+        #expect(after.chunks[0]?.sentences == spanning && after.chunks[1]?.erased == true)
         #expect(RecordingDayRuns.bleeding(after) == [0])
         await f.lane.drain()
         #expect(f.engine.calls == [files([0])], "transcribed again alone, without the erased audio")
         let redone = try await f.chunk(0)
-        #expect(redone.sentences == [RecordingSentence(start: 1, end: 2, text: RecordingSegment.fileName(0))] && redone.positions == nil)
+        // Its old sentences keep their hub positions with no text; the new one gets the next position.
+        #expect(redone.sentences == [RecordingSentence(start: 1, end: 3, text: ""), RecordingSentence(start: 8, end: 10.3, text: ""),
+                                     RecordingSentence(start: 1, end: 2, text: RecordingSegment.fileName(0))])
+        #expect(redone.positions == [0, 1, 6].map { RecordingDayPosition(part: 1, pos: $0) })
+        #expect(try await f.record().parts.first?.needsRepair == true, "the hub's copy is repaired with a PUT")
         #expect(try await f.chunk(2).sentences?.map(\.text) == ["Own."], "the chunk after the erase keeps its text")
+        #expect(RecordingDayRuns.bleeding(try await f.record()).isEmpty, "an empty sentence holds no words: done")
 
-        // Without its audio a chunk can't be read again: it keeps only the sentences inside it.
-        var gone = spanning
-        gone[0].text = "Kept."
-        gone.append(RecordingSentence(start: 9, end: 10, text: "Up to the edge."))
-        let cut = RecordingDayChunk(seq: 0, startedAt: anchor, duration: 10, receivedAt: anchor, state: .transcribed, sentences: gone)
-        #expect(RecordingDayRuns.keptInside(cut).map(\.text) == ["Kept.", "Up to the edge."])
+        // Without its audio a chunk can't be read again: only the sentences inside it keep their text; one that reached
+        // past keeps its position with none, or goes when it had none.
+        let past = [RecordingSentence(start: 1, end: 3, text: "Kept."), RecordingSentence(start: 8, end: 10.3, text: "Past."),
+                    RecordingSentence(start: 9, end: 10, text: "Up to the edge."), RecordingSentence(start: 9, end: 11, text: "Unplaced.")]
+        var gone = RecordingDayChunk(seq: 0, startedAt: anchor, duration: 10, receivedAt: anchor, state: .transcribed, sentences: past,
+                                     positions: [0, 1, 2].map { RecordingDayPosition(part: 2, pos: $0) })
+        #expect(RecordingDayRuns.keepInside(&gone) == [2])
+        #expect(gone.sentences?.map(\.text) == ["Kept.", "", "Up to the edge."])
+        #expect(gone.positions?.count == 3)
     }
 
     @Test func howFarASentenceReachesIsCountedInTheRunsChunksNotTheWallClock() {
         // The run joined chunk 1 across a 0.6 s pause of the writer: a sentence 0.2 s past chunk 0's audio is in chunk 1's,
         // although the wall clock says chunk 1 began only later.
         func chunk(_ seq: Int, at offset: Double, erased: Bool = false, sentences: [RecordingSentence]? = nil) -> RecordingDayChunk {
-            RecordingDayChunk(seq: seq, startedAt: anchor.addingTimeInterval(offset), duration: 10, erased: erased, receivedAt: anchor,
-                              state: sentences == nil ? .waiting : .transcribed, sentences: sentences, hasAudio: !erased)
+            RecordingDayChunk(seq: seq, startedAt: anchor.addingTimeInterval(offset), duration: 10, receivedAt: anchor,
+                              state: sentences == nil ? .waiting : .transcribed, sentences: sentences, hasAudio: !erased, erased: erased)
         }
         func record(_ chunks: [RecordingDayChunk]) -> RecordingDayRecord {
-            RecordingDayRecord(id: UUID(), day: "2027-01-15", timeZone: "Asia/Shanghai",
+            RecordingDayRecord(id: UUID(), day: "2027-01-15", timeZone: "Asia/Shanghai", startedAt: anchor,
                                chunks: Dictionary(uniqueKeysWithValues: chunks.map { ($0.seq, $0) }))
         }
         let into = [RecordingSentence(start: 9, end: 10.2, text: "Across.")]
@@ -332,10 +372,12 @@ private func files(_ seqs: [Int]) -> [String] { seqs.map(RecordingSegment.fileNa
         let far = [RecordingSentence(start: 9, end: 21, text: "Long.")]
         #expect(RecordingDayRuns.bleeding(record([chunk(0, at: 0, sentences: far), chunk(1, at: 10, sentences: []),
                                                   chunk(2, at: 20, erased: true)])) == [0])
-        // Ending where its chunk's audio ends reaches nothing; nor does an erase before it.
+        // Ending where its chunk's audio ends reaches nothing; nor does an erase before it, nor a sentence with no text.
         let edge = [RecordingSentence(start: 9, end: 10, text: "Edge.")]
         #expect(RecordingDayRuns.bleeding(record([chunk(0, at: 0, sentences: edge), chunk(1, at: 10, erased: true)])).isEmpty)
         #expect(RecordingDayRuns.bleeding(record([chunk(0, at: 0, erased: true), chunk(1, at: 10, sentences: into)])).isEmpty)
+        let blank = [RecordingSentence(start: 9, end: 10.2, text: "")]
+        #expect(RecordingDayRuns.bleeding(record([chunk(0, at: 0, sentences: blank), chunk(1, at: 10.6, erased: true)])).isEmpty)
     }
 
     @Test func aSentenceGoesToTheFileItStartsInOnItsChunksClock() {
@@ -390,10 +432,10 @@ private func files(_ seqs: [Int]) -> [String] { seqs.map(RecordingSegment.fileNa
         let f = Fixture(gated: true)
         defer { f.cleanUp() }
         try f.chunk(0, at: 0)
-        try f.end(1, at: 10)
+        try f.close(1, at: 10)
         f.lane.changed(f.id)
         await until { f.gate.calls.count == 1 }
-        // The system gives no background time: the run stops now (C9).
+        // The system gives no background time: the run stops now.
         f.app.inForeground = false
         f.app.givesGrants = false
         f.lane.background()
@@ -419,7 +461,7 @@ private func files(_ seqs: [Int]) -> [String] { seqs.map(RecordingSegment.fileNa
         let f = Fixture(gated: true)
         defer { f.cleanUp() }
         try f.chunk(0, at: 0)
-        try f.end(1, at: 10)
+        try f.close(1, at: 10)
         f.lane.changed(f.id)
         await until { f.gate.calls.count == 1 }
         f.app.inForeground = false
@@ -439,7 +481,7 @@ private func files(_ seqs: [Int]) -> [String] { seqs.map(RecordingSegment.fileNa
         f.app.givesGrants = false
         try f.chunk(0, at: 0)
         try f.chunk(1, at: 30)
-        try f.end(2, at: 40)
+        try f.close(2, at: 40)
         let catchUp = Task { await f.lane.drain() }
         await until { f.gate.calls.count == 1 }
         #expect(f.gate.calls[0].downloads == false, "never a download inside the catch-up")
@@ -459,7 +501,7 @@ private func files(_ seqs: [Int]) -> [String] { seqs.map(RecordingSegment.fileNa
         defer { f.cleanUp() }
         f.app.inForeground = false
         try f.chunk(0, at: 0)
-        try f.end(1, at: 10)
+        try f.close(1, at: 10)
         // A chunk arriving in the background (a WatchConnectivity wake) gets a grant of its own.
         f.lane.changed(f.id)
         await until { f.gate.calls.count == 1 }
@@ -478,7 +520,7 @@ private func files(_ seqs: [Int]) -> [String] { seqs.map(RecordingSegment.fileNa
         f.library.adoptDay(id: f.id, day: "2027-01-15", timeZone: "Asia/Shanghai", createdAt: anchor)
         try f.chunk(0, at: 0)
         try f.chunk(1, at: 10)
-        try f.end(2, at: 20)
+        try f.close(2, at: 20)
         await f.lane.drain()
         #expect(f.engine.calls == [files([0, 1])])
         let kept = try await f.chunk(1).sentences
@@ -489,8 +531,12 @@ private func files(_ seqs: [Int]) -> [String] { seqs.map(RecordingSegment.fileNa
         #expect(f.library.entry(f.id)?.locale == "fr-FR")
         await f.lane.whenIdle()
         #expect(f.engine.calls == [files([0, 1]), files([0])], "the chunk whose audio is here is read again")
-        #expect(try await f.chunk(0).state == .transcribed)
+        let again = try await f.chunk(0)
+        #expect(again.state == .transcribed)
+        #expect(again.sentences?.map(\.text) == ["", RecordingSegment.fileName(0)], "the old text's position kept, empty")
+        #expect(again.positions == [0, 2].map { RecordingDayPosition(part: 1, pos: $0) })
         #expect(try await f.chunk(1).sentences == kept, "the one whose audio is gone keeps its text")
+        #expect(try await f.record().parts.first?.needsRepair == true)
         // The same language again changes nothing.
         f.lane.setLocale(f.id, "fr-FR")
         for _ in 0..<20 { await Task.yield() }

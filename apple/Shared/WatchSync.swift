@@ -73,15 +73,19 @@ nonisolated struct WatchSummary: Codable, Sendable {
 }
 
 /// What the phone's application context says it takes, kept in the watch's defaults for its views: rolling
-/// recording, and all-day recording (docs/assistant/day-recap.md). A value is written only when it changes: the phone
-/// sends its whole context again with every summary, every few seconds, and each write redraws every view that reads
-/// defaults. Only a full context (the session's, at activation and on every change) says what the phone no longer
-/// takes: one without a day key removes it. User info and config replies carry part of it and remove nothing. The
-/// rolling key keeps its old rule (an older phone never sends it; nothing removes it).
+/// recording, and all-day recording (docs/assistant/day-recap.md「Watch and phone capabilities」). A value is written
+/// only when it changes: the phone sends its whole context again with every summary, every few seconds, and each write
+/// redraws every view that reads defaults. Only a full context (the session's, at activation and on every change) says
+/// what the phone no longer takes: one without a day key removes it. User info and config replies carry part of it and
+/// remove nothing. The rolling key keeps its old rule (an older phone never sends it; nothing removes it).
 nonisolated enum WatchPhoneCapabilities {
     static let rollingKey = "recording.phoneRolling"
+    /// Int: absent with a phone that doesn't take day recordings, 0 until the user agrees on the phone, else ≥ 1.
     static let dayKey = "recording.phoneDay"
+    /// Bool: absent until the phone says; false is a hub without `recording_day`.
     static let dayHubKey = "recording.phoneDayHub"
+    /// Int 1…7 (`RecordingDayContract.keepDays`); absent until the phone says (`keepDays` reads 7 then).
+    static let keepDaysKey = "recording.phoneDayKeepDays"
 
     /// Applies one context; returns how many values it wrote or removed (0 when nothing changed).
     @discardableResult static func store(_ ctx: [String: Any], full: Bool, in defaults: UserDefaults = .standard) -> Int {
@@ -90,31 +94,39 @@ nonisolated enum WatchPhoneCapabilities {
             defaults.set(rolling, forKey: rollingKey)
             writes += 1
         }
-        if let version = ctx[RecordingDayContract.phoneKey] as? Int {
-            if defaults.object(forKey: dayKey) as? Int != version { defaults.set(version, forKey: dayKey); writes += 1 }
-        } else if full, defaults.object(forKey: dayKey) != nil {
-            defaults.removeObject(forKey: dayKey)
-            writes += 1
-        }
-        // Absent and false differ: false is a hub without the flag, absent a phone that doesn't say.
-        if let hub = ctx[RecordingDayContract.phoneHubKey] as? Bool {
-            if defaults.object(forKey: dayHubKey) as? Bool != hub { defaults.set(hub, forKey: dayHubKey); writes += 1 }
-        } else if full, defaults.object(forKey: dayHubKey) != nil {
-            defaults.removeObject(forKey: dayHubKey)
-            writes += 1
-        }
+        writes += keep(ctx[RecordingDayContract.phoneKey] as? Int, as: dayKey, full: full, in: defaults)
+        writes += keep(ctx[RecordingDayContract.phoneHubKey] as? Bool, as: dayHubKey, full: full, in: defaults)
+        let keepDays = (ctx[RecordingDayContract.phoneKeepDaysKey] as? Int).map { RecordingDayContract.keepDays(recordingDays: $0) }
+        writes += keep(keepDays, as: keepDaysKey, full: full, in: defaults)
         return writes
+    }
+
+    /// How long the watch keeps a chunk the phone hasn't acknowledged, in days after its `day`.
+    static func keepDays(_ defaults: UserDefaults = .standard) -> Int {
+        (defaults.object(forKey: keepDaysKey) as? Int).map { RecordingDayContract.keepDays(recordingDays: $0) }
+            ?? RecordingDayContract.maxKeepDays
+    }
+
+    /// A day key: written when present and different, removed when a full context lacks it. Absent and false (or 0)
+    /// differ, so the stored object is compared, not its value.
+    private static func keep<Value: Equatable>(_ value: Value?, as key: String, full: Bool, in defaults: UserDefaults) -> Int {
+        if let value {
+            guard defaults.object(forKey: key) as? Value != value else { return 0 }
+            defaults.set(value, forKey: key)
+            return 1
+        }
+        guard full, defaults.object(forKey: key) != nil else { return 0 }
+        defaults.removeObject(forKey: key)
+        return 1
     }
 }
 
-/// The order of the phone's all-day commands ([ext] `sentAtKey`). A command goes as a message, or as user info when the
-/// watch app isn't running or the message fails, so one can arrive late, twice, or after a newer one: a "start" whose
-/// message fails is queued as user info only once its error comes back, which can be after the "stop" that followed it
-/// went out. The phone stamps every command with when it sent it, each later than the one before; the watch acts only
-/// on a command newer than the last one it acted on, and recent.
+/// The order of the phone's all-day commands ([ext] `RecordingDayCommand.sentAt`). A command goes as a message, or as
+/// user info when the watch app isn't running or the message fails, so one can arrive late, twice, or after a newer one:
+/// a "start" whose message fails is queued as user info only once its error comes back, which can be after the "stop"
+/// that followed it went out. The phone stamps every command with when it sent it, each later than the one before; the
+/// watch acts only on a command newer than the last one it acted on, and recent.
 nonisolated enum WatchDayCommandOrder {
-    /// The stamp's key in the command: seconds since 1970.
-    static let sentAtKey = "recordingDayCommandAt"
     /// A command arriving this long after it was sent is dropped: it was queued while the watch app wasn't running, and
     /// the phone's switch stopped waiting for it long ago.
     static let freshness: TimeInterval = 600
@@ -138,10 +150,8 @@ nonisolated enum WatchDayCommandOrder {
         func isNewest(_ stamp: Double) -> Bool { last.withLock { $0 == stamp } }
     }
 
-    /// Watch side: whether to act on a command stamped `sentAt`; one acted on becomes the newest. A command without a
-    /// stamp can't be ordered and is acted on as it comes.
-    static func accept(sentAt: Double?, now: Date = .now, defaults: UserDefaults = .standard) -> Bool {
-        guard let sentAt else { return true }
+    /// Watch side: whether to act on a command stamped `sentAt`; one acted on becomes the newest.
+    static func accept(sentAt: Double, now: Date = .now, defaults: UserDefaults = .standard) -> Bool {
         guard sentAt.isFinite, now.timeIntervalSince1970 - sentAt <= freshness,
               sentAt > defaults.double(forKey: lastKey) else { return false }
         defaults.set(sentAt, forKey: lastKey)
@@ -172,27 +182,46 @@ final class WatchSync: NSObject, WCSessionDelegate {
     var onRecordingReceipt: ((RecordingReceipt) -> Void)?
     var onRecordingEvent: (() -> Void)?
 
-    // All-day recording (docs/assistant/day-recap.md). The first three run synchronously on WatchConnectivity's queue,
-    // so they are not main-actor slots: `RecordingDayReceiver` sets each once, before `activate()`, and never again
-    // (nothing synchronizes them). Their closures are `@Sendable` and reach main-actor state only by hopping there.
-    /// iPhone side: a chunk or marker sent by `sendMessageData` (a frame, `RecordingDayHeader.unframe`). `reply` takes
-    /// the `RecordingDayAck` (JSON) once the chunk is on disk; not calling it leaves the chunk to the watch's resend.
+    // All-day recording (docs/assistant/day-recap.md「Watch to phone」). The phone's first three run synchronously on
+    // WatchConnectivity's queue, so they are not main-actor slots: `RecordingDayReceiver` sets each once, before
+    // `activate()`, and never again (nothing synchronizes them). Their closures are `@Sendable` and reach main-actor
+    // state only by hopping there. Every other hook runs on the main actor, with its payload decoded already.
+    /// iPhone side: a chunk's live envelope (`RecordingDayHeader.unframe`). `reply` takes the `RecordingDayAck` (JSON)
+    /// once the chunk is on disk; not calling it leaves the chunk to the watch's resend.
     nonisolated(unsafe) var onDayChunk: (@Sendable (_ frame: Data, _ reply: @escaping @Sendable (Data) -> Void) -> Void)?
-    /// iPhone side: a chunk sent by `transferFile`. The system deletes `file` when this returns, so it is moved before;
-    /// true when it was taken care of (stored, already held, or for a deleted day), false to leave it to the resend.
+    /// iPhone side: a chunk sent by `transferFile` (`chunkKey` metadata). The system deletes `file` when this returns,
+    /// so it is moved before; true when it was taken care of (stored, already held, or for a deleted day), false to
+    /// leave it to the resend. The receiver acknowledges it with `sendDayAck`.
     nonisolated(unsafe) var onDayFile: (@Sendable (_ header: RecordingDayHeader, _ file: URL) -> Bool)?
-    /// iPhone side: user info (or a message) under `chunkKey` (a marker header) or `lostKey`; true when handled.
-    nonisolated(unsafe) var onDayUserInfo: (@Sendable (_ info: [String: Any]) -> Bool)?
+    /// iPhone side: a control event, by message or user info. Returns the acknowledgement once the event is on disk
+    /// (it may carry more of that recording's chunks and events), nil to leave the event to the watch's resend.
+    /// WatchSync sends it: as the message's reply, else with `sendDayAck`.
+    nonisolated(unsafe) var onDayEvent: (@Sendable (_ envelope: RecordingDayEventEnvelope) -> RecordingDayAck?)?
+    /// iPhone side: the watch carried out an erase request (`sendDayErase`).
+    var onDayErased: ((RecordingDayErased) -> Void)?
+    /// iPhone side: the watch deleted its copy of a day recording (`sendDayDelete`).
+    var onDayDeleted: ((RecordingDayDeleted) -> Void)?
     /// iPhone side: the watch's all-day state (`RecordingDayContract.watchStateKey` in its application context).
     var onDayWatchState: ((RecordingDayWatchState) -> Void)?
     /// Watch side: the phone's switch (`RecordingDayContract.Command`). Only commands newer than the last one it got
     /// reach it (`WatchDayCommandOrder`): never a late, repeated or stale one.
     var onDayCommand: ((String) -> Void)?
-    /// Watch side: acknowledgements of chunks sent by file or user info.
+    /// Watch side: every acknowledgement, whether it came in a message, in user info, or as the reply to an event.
     var onDayAck: ((RecordingDayAck) -> Void)?
+    /// Watch side: the phone asks to erase a range. Returns the answer once the erase is saved (the same one for a
+    /// repeated request), nil to leave the request to the phone's resend; WatchSync sends it, as the message's reply
+    /// or with `sendDayErased`.
+    var onDayEraseRequest: ((RecordingDayEraseRequest) -> RecordingDayErased?)?
+    /// Watch side: the phone deleted a day recording. Returns the confirmation once the watch's copy is gone, nil to
+    /// leave it to the phone's resend; WatchSync sends it like `onDayEraseRequest`'s answer.
+    var onDayDelete: ((RecordingDayDelete) -> RecordingDayDeleted?)?
 
     private var lastSummaryPush = Date.distantPast
     private var pendingSummary: WatchSummary?
+    #if os(iOS) || os(visionOS)
+    /// What the app last gave `pushRecordingDay`, sent again at every activation.
+    private var dayCapabilities: RecordingDayCapabilities?
+    #endif
 
     func activate() {
         guard WCSession.isSupported() else { return }
@@ -289,15 +318,16 @@ final class WatchSync: NSObject, WCSessionDelegate {
     }
 
     #if os(iOS) || os(visionOS)
-    /// iPhone side: tells the watch it takes all-day recordings (`recordingDay`, this build's contract version) and
-    /// whether its hub lists `recording_day` (`recordingDayHub`). Activation sends them too, from the cached hub flag.
-    /// A push that changes nothing is skipped.
-    func pushRecordingDay(hub: Bool) {
-        guard WCSession.isSupported(), WCSession.default.activationState == .activated else { return }
-        let ctx = WCSession.default.applicationContext
-        guard ctx[RecordingDayContract.phoneKey] as? Int != RecordingDayContract.version
-                || ctx[RecordingDayContract.phoneHubKey] as? Bool != hub else { return }
-        update(Self.dayCapabilities(hub: hub))
+    /// iPhone side: what it tells the watch about all-day recording (`RecordingDayCapabilities`): whether the user
+    /// agreed (`recordingDay` 1, else 0), whether its hub lists `recording_day`, and how long the watch keeps
+    /// unacknowledged chunks. Callable before the session activates: the latest values go out at activation. A push that
+    /// changes nothing is skipped.
+    func pushRecordingDay(consent: Bool, hub: Bool, keepDays: Int) {
+        let capabilities = RecordingDayCapabilities(consent: consent, hub: hub, keepDays: keepDays)
+        dayCapabilities = capabilities
+        guard WCSession.isSupported(), WCSession.default.activationState == .activated,
+              !capabilities.isIn(WCSession.default.applicationContext) else { return }
+        update(capabilities.context)
     }
 
     /// iPhone side: the Recordings page's switch (`RecordingDayContract.Command`). The watch gets it at once while its app
@@ -305,27 +335,54 @@ final class WatchSync: NSObject, WCSessionDelegate {
     /// after a newer command went out is not queued. The stamp (`WatchDayCommandOrder`) is what keeps the watch from
     /// acting on an older one that still gets through.
     func sendDayCommand(_ command: String) {
-        guard WCSession.isSupported(), WCSession.default.activationState == .activated, WCSession.default.isWatchAppInstalled else { return }
+        guard Self.phoneCanSend else { return }
         for transfer in WCSession.default.outstandingUserInfoTransfers where transfer.userInfo[RecordingDayContract.commandKey] != nil {
             transfer.cancel()
         }
         let stamp = Self.dayCommandStamps.next()
-        Self.deliver([RecordingDayContract.commandKey: command, WatchDayCommandOrder.sentAtKey: stamp],
+        let payload = RecordingDayCommand(command: command, sentAt: stamp)
+        Self.deliver([RecordingDayContract.commandKey: payload.data],
                      queuesOnFailure: { @Sendable in Self.dayCommandStamps.isNewest(stamp) })
     }
 
     /// Read by the failure path of `deliver`, on WatchConnectivity's queue.
     private nonisolated static let dayCommandStamps = WatchDayCommandOrder.Stamps()
 
-    /// iPhone side: acknowledges chunks that came by file or user info (a message chunk's acknowledgement is its reply).
-    /// Callable from any queue.
+    /// iPhone side: acknowledges chunks and events that came by file or user info (a live chunk's acknowledgement is its
+    /// reply, an event message's too). Callable from any queue.
     nonisolated func sendDayAck(_ ack: RecordingDayAck) {
-        guard WCSession.isSupported(), WCSession.default.activationState == .activated, WCSession.default.isWatchAppInstalled else { return }
+        guard Self.phoneCanSend, !ack.isEmpty else { return }
         Self.deliver([RecordingDayContract.ackKey: ack.data])
     }
 
-    private static func dayCapabilities(hub: Bool) -> [String: Any] {
-        [RecordingDayContract.phoneKey: RecordingDayContract.version, RecordingDayContract.phoneHubKey: hub]
+    /// iPhone side: asks the watch to erase a range of a day recording (docs/assistant/day-recap.md「Erasing」). The
+    /// answer reaches `onDayErased`, in the message's reply or later on its own; until it does the caller sends the
+    /// request again (at launch, when the watch becomes reachable), and a copy still queued is not queued twice.
+    func sendDayErase(_ request: RecordingDayEraseRequest) {
+        guard Self.phoneCanSend else { return }
+        Self.ask([RecordingDayContract.eraseKey: request.data], unlessQueued: { @Sendable info in
+            RecordingDayEraseRequest(data: info[RecordingDayContract.eraseKey] as? Data) == request
+        }, answer: { @Sendable [weak self] reply in
+            guard let erased = RecordingDayErased(data: reply[RecordingDayContract.erasedKey] as? Data) else { return }
+            Task { @MainActor in self?.onDayErased?(erased) }
+        })
+    }
+
+    /// iPhone side: tells the watch a day recording was deleted (docs/assistant/day-recap.md「Deleting」); like
+    /// `sendDayErase`, the confirmation reaches `onDayDeleted` and the caller resends until it does.
+    func sendDayDelete(_ delete: RecordingDayDelete) {
+        guard Self.phoneCanSend else { return }
+        Self.ask([RecordingDayContract.deleteKey: delete.data], unlessQueued: { @Sendable info in
+            RecordingDayDelete(data: info[RecordingDayContract.deleteKey] as? Data) == delete
+        }, answer: { @Sendable [weak self] reply in
+            guard let deleted = RecordingDayDeleted(data: reply[RecordingDayContract.deletedKey] as? Data) else { return }
+            Task { @MainActor in self?.onDayDeleted?(deleted) }
+        })
+    }
+
+    /// The watch app is there to send to.
+    private nonisolated static var phoneCanSend: Bool {
+        WCSession.isSupported() && WCSession.default.activationState == .activated && WCSession.default.isWatchAppInstalled
     }
     #endif
 
@@ -338,11 +395,46 @@ final class WatchSync: NSObject, WCSessionDelegate {
         update([RecordingDayContract.watchStateKey: data])
     }
 
-    /// Watch side: seqs it could not keep (`RecordingDayLost`), queued so the report outlives either app. Callable from
-    /// any queue.
-    nonisolated func sendDayLost(_ lost: RecordingDayLost) {
-        guard WCSession.isSupported(), WCSession.default.activationState == .activated, WCSession.default.isCompanionAppInstalled else { return }
-        WCSession.default.transferUserInfo([RecordingDayContract.lostKey: lost.data])
+    /// Watch side: a control event (docs/assistant/day-recap.md「Control events」). While the phone is reachable it goes
+    /// as a message whose reply is its acknowledgement (handed to `onDayAck`); otherwise, when the message fails, or
+    /// with `queued` (the app is about to be suspended), as user info, which the phone acknowledges on its own. A copy of
+    /// the same event still queued is not queued again, so resends never pile up out of order. False when there is no
+    /// phone app to send to. Callable from any queue.
+    @discardableResult nonisolated func sendDayEvent(_ envelope: RecordingDayEventEnvelope, queued: Bool = false) -> Bool {
+        guard Self.watchCanSend else { return false }
+        let unlessQueued: @Sendable ([String: Any]) -> Bool = { info in
+            RecordingDayEventEnvelope(data: info[RecordingDayContract.eventKey] as? Data).map {
+                $0.recording == envelope.recording && $0.event.n == envelope.event.n
+            } ?? false
+        }
+        let message: [String: Any] = [RecordingDayContract.eventKey: envelope.data]
+        guard !queued else {
+            Self.queue(message, unlessQueued: unlessQueued)
+            return true
+        }
+        Self.ask(message, unlessQueued: unlessQueued, answer: { @Sendable [weak self] reply in
+            guard let ack = RecordingDayAck(data: reply[RecordingDayContract.ackKey] as? Data) else { return }
+            Task { @MainActor in self?.onDayAck?(ack) }
+        })
+        return true
+    }
+
+    /// Watch side: the answer to an erase request that came without a reply handler (user info). Callable from any
+    /// queue.
+    nonisolated func sendDayErased(_ erased: RecordingDayErased) {
+        guard Self.watchCanSend else { return }
+        Self.deliver([RecordingDayContract.erasedKey: erased.data])
+    }
+
+    /// Watch side: the confirmation of a delete that came without a reply handler. Callable from any queue.
+    nonisolated func sendDayDeleted(_ deleted: RecordingDayDeleted) {
+        guard Self.watchCanSend else { return }
+        Self.deliver([RecordingDayContract.deletedKey: deleted.data])
+    }
+
+    /// The phone app is there to send to.
+    private nonisolated static var watchCanSend: Bool {
+        WCSession.isSupported() && WCSession.default.activationState == .activated && WCSession.default.isCompanionAppInstalled
     }
     #endif
 
@@ -362,12 +454,38 @@ final class WatchSync: NSObject, WCSessionDelegate {
         })
     }
 
+    /// Like `deliver`, for a message the other side answers: `answer` gets the reply, on WatchConnectivity's queue (an
+    /// empty one when the other side had no answer yet). Not sent again as user info while a copy (`unlessQueued`) is
+    /// still queued.
+    private nonisolated static func ask(_ message: [String: Any], unlessQueued: @escaping @Sendable ([String: Any]) -> Bool,
+                                        answer: @escaping @Sendable ([String: Any]) -> Void) {
+        let session = WCSession.default
+        guard session.isReachable else {
+            queue(message, unlessQueued: unlessQueued)
+            return
+        }
+        nonisolated(unsafe) let queued = message
+        session.sendMessage(message, replyHandler: { @Sendable reply in answer(reply) }, errorHandler: { @Sendable _ in
+            queue(queued, unlessQueued: unlessQueued)
+        })
+    }
+
+    /// User info, unless a copy of it is still waiting for the system to deliver it.
+    private nonisolated static func queue(_ message: [String: Any], unlessQueued: ([String: Any]) -> Bool) {
+        let session = WCSession.default
+        guard !session.outstandingUserInfoTransfers.contains(where: { unlessQueued($0.userInfo) }) else { return }
+        session.transferUserInfo(message)
+    }
+
     /// The iPhone side sets this once it can hold rolling recordings; an older phone never does, so the watch keeps to plain recordings.
     nonisolated static let phoneRollingKey = WatchPhoneCapabilities.rollingKey
-    /// Watch side: the phone takes all-day recordings (an Int, the contract version; absent with an older phone), and its
-    /// hub lists `recording_day` (a Bool; absent until the phone says).
+    /// Watch side: the phone takes all-day recordings (an Int: absent with an older phone, 0 until the user agrees on
+    /// the phone, else the contract version), its hub lists `recording_day` (a Bool; absent until the phone says), and
+    /// how many days the watch keeps an unacknowledged chunk (an Int 1…7; absent until the phone says, read as 7 by
+    /// `WatchPhoneCapabilities.keepDays`).
     nonisolated static let phoneDayKey = WatchPhoneCapabilities.dayKey
     nonisolated static let phoneDayHubKey = WatchPhoneCapabilities.dayHubKey
+    nonisolated static let phoneDayKeepDaysKey = WatchPhoneCapabilities.keepDaysKey
 
     /// `full`: the whole application context (at activation, or a new one arrived), which also says what the phone no
     /// longer offers; user info and config replies are partial.
@@ -394,28 +512,99 @@ final class WatchSync: NSObject, WCSessionDelegate {
         if let state = RecordingDayWatchState(data: ctx[RecordingDayContract.watchStateKey] as? Data) { onDayWatchState?(state) }
     }
 
-    /// Routes a message's or user info's all-day keys; true when it carried one (it is then nothing else). Payloads are
-    /// decoded here, on WatchConnectivity's queue, so only Sendable values cross to the main actor.
-    private nonisolated func routeDay(_ info: [String: Any]) -> Bool {
-        if info[RecordingDayContract.chunkKey] != nil || info[RecordingDayContract.lostKey] != nil {
-            _ = onDayUserInfo?(info)
-            return true
-        }
-        if info[RecordingDayContract.ackKey] != nil {
-            if let ack = RecordingDayAck(data: info[RecordingDayContract.ackKey] as? Data) {
-                Task { @MainActor in self.onDayAck?(ack) }
-            }
-            return true
-        }
-        guard let command = info[RecordingDayContract.commandKey] as? String else { return false }
-        let sentAt = info[WatchDayCommandOrder.sentAtKey] as? Double
-        // Ordered on the main actor, one command at a time: a late or repeated one is dropped there. A command nobody
-        // takes yet doesn't count as the newest.
-        Task { @MainActor in
-            guard let handle = self.onDayCommand, WatchDayCommandOrder.accept(sentAt: sentAt) else { return }
-            handle(command)
+    /// Routes a message's or user info's all-day keys; true when it carried one (it is then nothing else). `reply` is
+    /// the message's reply handler, called exactly once for a day key; nil for user info and messages sent without one.
+    /// Payloads are decoded here, on WatchConnectivity's queue, so only Sendable values cross to the main actor.
+    private nonisolated func routeDay(_ info: [String: Any], reply: (@Sendable ([String: Any]) -> Void)?) -> Bool {
+        guard let key = RecordingDayContract.messageKeys.first(where: { info[$0] != nil }) else { return false }
+        let data = info[key] as? Data
+        switch key {
+        case RecordingDayContract.eventKey: receiveDayEvent(data, reply: reply)
+        case RecordingDayContract.eraseKey: receiveDayErase(data, reply: reply)
+        case RecordingDayContract.deleteKey: receiveDayDelete(data, reply: reply)
+        case RecordingDayContract.commandKey:
+            receiveDayCommand(RecordingDayCommand(data: data))
+            reply?([:])
+        default:
+            receiveDayAnswer(key, data)
+            reply?([:])
         }
         return true
+    }
+
+    /// iPhone side: an event is acknowledged once the receiver has it on disk, in the reply when there is one.
+    private nonisolated func receiveDayEvent(_ data: Data?, reply: (@Sendable ([String: Any]) -> Void)?) {
+        let ack = RecordingDayEventEnvelope(data: data).flatMap { onDayEvent?($0) }
+        if let reply {
+            reply(ack.map { [RecordingDayContract.ackKey: $0.data] } ?? [:])
+            return
+        }
+        #if os(iOS) || os(visionOS)
+        if let ack { sendDayAck(ack) }
+        #endif
+    }
+
+    /// Watch side: the answer goes back once the erase is saved, the same way the request came.
+    private nonisolated func receiveDayErase(_ data: Data?, reply: (@Sendable ([String: Any]) -> Void)?) {
+        guard let request = RecordingDayEraseRequest(data: data) else {
+            reply?([:])
+            return
+        }
+        Task { @MainActor in
+            let erased = self.onDayEraseRequest?(request)
+            if let reply {
+                reply(erased.map { [RecordingDayContract.erasedKey: $0.data] } ?? [:])
+                return
+            }
+            #if os(watchOS)
+            if let erased { self.sendDayErased(erased) }
+            #endif
+        }
+    }
+
+    /// Watch side: the confirmation goes back once the watch's copy is gone, the same way the delete came.
+    private nonisolated func receiveDayDelete(_ data: Data?, reply: (@Sendable ([String: Any]) -> Void)?) {
+        guard let delete = RecordingDayDelete(data: data) else {
+            reply?([:])
+            return
+        }
+        Task { @MainActor in
+            let deleted = self.onDayDelete?(delete)
+            if let reply {
+                reply(deleted.map { [RecordingDayContract.deletedKey: $0.data] } ?? [:])
+                return
+            }
+            #if os(watchOS)
+            if let deleted { self.sendDayDeleted(deleted) }
+            #endif
+        }
+    }
+
+    /// Watch side: ordered on the main actor, one command at a time, so a late or repeated one is dropped there. A
+    /// command nobody takes yet doesn't count as the newest.
+    private nonisolated func receiveDayCommand(_ command: RecordingDayCommand?) {
+        guard let command else { return }
+        Task { @MainActor in
+            guard let handle = self.onDayCommand, WatchDayCommandOrder.accept(sentAt: command.sentAt) else { return }
+            handle(command.command)
+        }
+    }
+
+    /// Acknowledgements (watch side) and answers to the phone's erase and delete requests (iPhone side) that came on
+    /// their own. A chunk header never comes this way (only as `transferFile` metadata): it is dropped.
+    private nonisolated func receiveDayAnswer(_ key: String, _ data: Data?) {
+        switch key {
+        case RecordingDayContract.ackKey:
+            guard let ack = RecordingDayAck(data: data) else { return }
+            Task { @MainActor in self.onDayAck?(ack) }
+        case RecordingDayContract.erasedKey:
+            guard let erased = RecordingDayErased(data: data) else { return }
+            Task { @MainActor in self.onDayErased?(erased) }
+        case RecordingDayContract.deletedKey:
+            guard let deleted = RecordingDayDeleted(data: data) else { return }
+            Task { @MainActor in self.onDayDeleted?(deleted) }
+        default: break
+        }
     }
 
     nonisolated func session(_ session: WCSession, activationDidCompleteWith state: WCSessionActivationState, error: Error?) {
@@ -423,8 +612,10 @@ final class WatchSync: NSObject, WCSessionDelegate {
         Task { @MainActor in
             self.apply(ctx, full: true)
             #if os(iOS) || os(visionOS)
-            var capabilities = Self.dayCapabilities(hub: RecordingDayDefaults.offered([]))
-            capabilities["recordingRolling"] = true
+            // All-day keys only once the app said what they are (`pushRecordingDay`): until then the context keeps the
+            // last ones sent, never a consent nobody gave.
+            var capabilities: [String: Any] = ["recordingRolling": true]
+            if let day = self.dayCapabilities { capabilities.merge(day.context) { $1 } }
             self.update(capabilities)
             #endif
             self.onActivated?()
@@ -433,8 +624,8 @@ final class WatchSync: NSObject, WCSessionDelegate {
     }
 
     nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
-        // All-day markers, lost reports, acknowledgements and commands first: none of them is a context.
-        if routeDay(userInfo) { return }
+        // All-day events, acknowledgements, requests, answers and commands first: none of them is a context.
+        if routeDay(userInfo, reply: nil) { return }
         let recording = RecordingTransfer(dictionary: userInfo)
         let receipt = RecordingReceipt(dictionary: userInfo)
         nonisolated(unsafe) let copy = userInfo
@@ -446,11 +637,8 @@ final class WatchSync: NSObject, WCSessionDelegate {
     }
 
     nonisolated func session(_ session: WCSession, didReceiveMessage message: [String: Any], replyHandler: @escaping ([String: Any]) -> Void) {
-        if routeDay(message) {
-            replyHandler([:])
-            return
-        }
         nonisolated(unsafe) let reply = replyHandler
+        if routeDay(message, reply: { @Sendable answer in reply(answer) }) { return }
         Task { @MainActor in
             var answer: [String: Any] = [:]
             if let cfg = self.configProvider?(), let data = try? JSONEncoder().encode(cfg) { answer["config"] = data }
@@ -459,12 +647,12 @@ final class WatchSync: NSObject, WCSessionDelegate {
         }
     }
 
-    /// Messages sent without a reply handler: all-day commands and acknowledgements.
+    /// Messages sent without a reply handler: all-day commands, acknowledgements and answers.
     nonisolated func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
-        _ = routeDay(message)
+        _ = routeDay(message, reply: nil)
     }
 
-    /// iPhone side: an all-day chunk on the live path. The receiver stores it, then replies with its acknowledgement;
+    /// iPhone side: an all-day chunk's live envelope. The receiver stores it, then replies with its acknowledgement;
     /// without a receiver the empty reply acknowledges nothing and the watch sends it again.
     nonisolated func session(_ session: WCSession, didReceiveMessageData messageData: Data, replyHandler: @escaping (Data) -> Void) {
         nonisolated(unsafe) let reply = replyHandler
@@ -486,9 +674,10 @@ final class WatchSync: NSObject, WCSessionDelegate {
 
     nonisolated func session(_ session: WCSession, didReceive file: WCSessionFile) {
         #if os(iOS) || os(visionOS)
-        // An all-day chunk: the receiver takes the file before this returns and acknowledges it itself.
-        if let header = RecordingDayHeader(userInfo: file.metadata) {
-            _ = onDayFile?(header, file.fileURL)
+        // An all-day chunk: the receiver takes the file before this returns and acknowledges it itself. One whose header
+        // is not valid is left alone (never acknowledged), not taken for a rolling segment.
+        if file.metadata?[RecordingDayContract.chunkKey] != nil {
+            if let header = RecordingDayHeader(userInfo: file.metadata) { _ = onDayFile?(header, file.fileURL) }
             return
         }
         guard let transfer = RecordingTransfer(dictionary: file.metadata), let segment = transfer.segment else { return }
@@ -520,9 +709,9 @@ final class WatchSync: NSObject, WCSessionDelegate {
     nonisolated func session(_ session: WCSession, didFinish userInfoTransfer: WCSessionUserInfoTransfer, error: Error?) {
         #if os(watchOS)
         let failed = error != nil
-        // A marker that went as user info.
-        if let header = RecordingDayHeader(userInfo: userInfoTransfer.userInfo) {
-            Task { @MainActor in WatchDayTransfer.shared.finished(header, failed: failed) }
+        // An all-day event that went as user info: a failure goes again after its backoff, a delivery waits for the ack.
+        if let envelope = RecordingDayEventEnvelope(data: userInfoTransfer.userInfo[RecordingDayContract.eventKey] as? Data) {
+            Task { @MainActor in WatchDayTransfer.shared.finished(envelope, failed: failed) }
             return
         }
         guard let transfer = RecordingTransfer(dictionary: userInfoTransfer.userInfo) else { return }

@@ -140,10 +140,17 @@ nonisolated enum RecordingDayStatus {
         return .transcribed(seconds: day.recordedSeconds, to: to)
     }
 
-    /// From the first audio to the end of the last, nil before any.
+    /// From when the watch began the day recording to the end of its last audio the phone holds, nil before any audio.
     static func span(_ day: RecordingDaySummary) -> Range<Date>? {
-        guard let first = day.firstAt, let last = day.lastAt else { return nil }
-        return first..<max(first, last)
+        guard let last = day.lastAt else { return nil }
+        return day.firstAt..<max(day.firstAt, last)
+    }
+
+    /// Whether the day's page offers "Erase Last 10 Minutes": only for today's recording while it is open
+    /// (docs/assistant/day-recap.md「Erasing」). A closed day ended at its midnight or was deleted, so its last ten
+    /// minutes are not the ten minutes just said.
+    static func offersErase(_ day: RecordingDaySummary, now: Date) -> Bool {
+        day.closedAt == nil && isToday(day: day.day, timeZone: day.timeZone, now: now)
     }
 
     /// Why there is no text, grouped as the day's page lists them.

@@ -17,6 +17,9 @@ final class RecordingLibrary {
     /// A copy of `deleted` for readers off the main actor (the phone stores all-day chunks on the WatchConnectivity
     /// queue). Updated before a removal deletes any file, so a chunk stored during it is refused or cleaned up.
     @ObservationIgnored private nonisolated let tombstones = OSAllocatedUnfairLock(initialState: Set<UUID>())
+    /// Day recordings' seq counters (`allocateSeq`), here so the watch's writer can take a seq on its own queue and
+    /// `closeDay` on main sees every seq handed out, also one whose chunk is still on its way to `addSegment`.
+    @ObservationIgnored private nonisolated let daySeqs = OSAllocatedUnfairLock(initialState: [UUID: DaySeqCounter]())
     /// Called after a recording is saved (the phone syncs its text to the knowledge base from here).
     @ObservationIgnored var didChange: ((UUID) -> Void)?
 
@@ -41,6 +44,8 @@ final class RecordingLibrary {
                       entry.id.uuidString == dir.lastPathComponent else { return nil }
                 return entry
             }.sorted { $0.createdAt > $1.createdAt }
+            let counters = entries.filter(\.isDay).map { ($0.id, $0.nextIndex) }
+            daySeqs.withLock { $0 = Dictionary(counters, uniquingKeysWith: max).mapValues { DaySeqCounter(next: $0) } }
         } catch { self.error = String(localized: "Can't read the recordings folder") }
     }
 
@@ -49,8 +54,9 @@ final class RecordingLibrary {
     func entry(_ id: UUID) -> RecordingEntry? { entries.first { $0.id == id } }
 
     /// A new recording. `id` / `createdAt` / `day` / `timeZone` are for all-day recordings: the watch names the next
-    /// day's recording before midnight, and its writer may already have put audio in that folder, which stays. An id
-    /// that already has an entry returns that entry unchanged.
+    /// day's recording before midnight, and its writer may already have taken seqs and put audio in that folder, which
+    /// stay. A day recording starts its seq and event counters here, saved before its microphone opens. An id that
+    /// already has an entry returns that entry unchanged.
     @discardableResult func create(source: RecordingEntry.Source, locale: String = "zh-CN", title: String = "",
                                    meeting: RecordingMeeting? = nil, kind: RecordingEntry.Kind = .clip, id: UUID = UUID(),
                                    createdAt: Date = .now, day: String? = nil, timeZone: String? = nil) throws -> RecordingEntry {
@@ -61,6 +67,10 @@ final class RecordingLibrary {
         entry.meeting = meeting
         entry.day = day
         entry.timeZone = timeZone
+        if kind == .day {
+            entry.nextSeq = 0
+            entry.nextEvent = 0
+        }
         try save(entry)
         return entry
     }
@@ -71,6 +81,7 @@ final class RecordingLibrary {
         // Strictly later than the copy it replaces, even within one millisecond or after the clock went back.
         let floor = (self.entry(entry.id)?.updatedAt ?? entry.updatedAt ?? entry.createdAt).addingTimeInterval(0.001)
         entry.updatedAt = max(Date.now, floor)
+        if entry.isDay, entry.nextSeq != nil { entry.nextSeq = syncSeqCounter(entry) }
         try FileManager.default.createDirectory(at: folder(entry.id), withIntermediateDirectories: true)
         try JSONEncoder().encode(entry).write(to: folder(entry.id).appendingPathComponent("recording.json"), options: .atomic)
         entries.removeAll { $0.id == entry.id }
@@ -104,11 +115,9 @@ final class RecordingLibrary {
         guard let current = entry(id) else { return }
         // A segment already registered keeps its audio: the writer re-adds its finished segments when capture stops.
         guard !current.segments.contains(where: { $0.index == segment.index }) else { return }
-        if current.isDay {
-            addDayChunk(id, segment, to: current)
-            return
-        }
-        // Segments that finish after being pruned or erased are dropped.
+        // Segments that finish after being pruned or erased are dropped: for a day recording, a seq the phone
+        // acknowledged or that was erased or reported lost (all tombstoned), which the writer's replay at stop would
+        // otherwise bring back.
         guard !current.isPruned(segment.index), !current.isErased(segment) else {
             try? FileManager.default.removeItem(at: audio(id, segment.index))
             return
@@ -168,21 +177,27 @@ final class RecordingLibrary {
         deleted = next
         if FileManager.default.fileExists(atPath: folder(id).path) { try FileManager.default.removeItem(at: folder(id)) }
         entries.removeAll { $0.id == id }
+        daySeqs.withLock { $0[id] = nil }
     }
 
     /// Rolling recordings drop expired segments and remember which indexes went, so late copies of them never return while a segment that never arrived is not tombstoned.
     func prune(_ id: UUID, indexes: [Int]) {
         guard !indexes.isEmpty, entry(id) != nil else { return }
         let gone = Set(indexes)
-        change(id) { entry in
-            entry.segments.removeAll { gone.contains($0.index) }
-            var floor = entry.prunedBelow ?? 0
-            var above = Set(entry.prunedAbove ?? []).union(gone.filter { $0 >= floor })
-            while above.remove(floor) != nil { floor += 1 }
-            entry.prunedBelow = floor
-            entry.prunedAbove = above.isEmpty ? nil : above.sorted()
-        }
+        change(id) { Self.tombstone(gone, in: &$0) }
         for index in gone { try? FileManager.default.removeItem(at: audio(id, index)) }
+    }
+
+    /// Drops these indexes' records and remembers them in `prunedBelow` / `prunedAbove`, compacted, so they are never
+    /// used or taken back again.
+    private static func tombstone(_ gone: Set<Int>, in entry: inout RecordingEntry) {
+        guard !gone.isEmpty else { return }
+        entry.segments.removeAll { gone.contains($0.index) }
+        var floor = entry.prunedBelow ?? 0
+        var above = Set(entry.prunedAbove ?? []).union(gone.filter { $0 >= floor })
+        while above.remove(floor) != nil { floor += 1 }
+        entry.prunedBelow = floor
+        entry.prunedAbove = above.isEmpty ? nil : above.sorted()
     }
 
     /// Segments kept for bookmarks, heart-rate spikes, or mood. Already-kept ones stay as they are.
@@ -246,123 +261,297 @@ final class RecordingLibrary {
     }
 
     /// Hourhand's cleanup after an abnormal exit: keep only finalized segments, delete half-written ones with no tail.
-    /// An all-day recording stays open (the day goes on with the same id and the next seq when recording starts again);
-    /// the ids of those left open are returned. One that was recording when the app ended reports its gap as `stopped`.
+    /// A day recording keeps its seqs and stays open (the day goes on with the same id when recording starts again);
+    /// the ids of those left open are returned. What the exit cut short becomes control events (`recoverDay`).
     @discardableResult func recover(source: RecordingEntry.Source) -> [UUID] {
         var open: [UUID] = []
-        for var entry in entries where entry.active && entry.source == source {
-            let known = Set(entry.segments.map { RecordingSegment.fileName($0.index) })
-            let files = (try? FileManager.default.contentsOfDirectory(at: folder(entry.id), includingPropertiesForKeys: nil)) ?? []
-            for file in files where file.pathExtension == "m4a" && !known.contains(file.lastPathComponent) {
-                try? FileManager.default.removeItem(at: file)
-            }
+        for entry in entries where entry.source == source && (entry.active || entry.isDay) {
+            let leftovers = leftoverFiles(entry)
             if entry.isDay {
-                open.append(entry.id)
-                // A pause or an interruption before the app ended keeps its own reason.
-                guard entry.gapReason == nil else { continue }
-                entry.gapReason = RecordingDayContract.Reason.stopped
-                do { try save(entry) } catch { self.error = String(localized: "The end of the last recording wasn't saved") }
+                recoverDay(entry, leftovers: leftovers)
+                if entry.active { open.append(entry.id) }
                 continue
             }
-            entry.active = false
-            entry.expectedSegments = entry.nextIndex
-            entry.endedAt = .now
-            do { try save(entry) } catch { self.error = String(localized: "The end of the last recording wasn't saved") }
+            for file in leftovers { try? FileManager.default.removeItem(at: file.url) }
+            var ended = entry
+            ended.active = false
+            ended.expectedSegments = ended.nextIndex
+            ended.endedAt = .now
+            do { try save(ended) } catch { self.error = String(localized: "The end of the last recording wasn't saved") }
         }
         return open
     }
+
+    /// What `recover` cleans up in a recording's folder: audio files without a record (half-written when the app ended,
+    /// or left by a removal it cut short) and the seq counter's marks (`markSeqCounter`).
+    private func leftoverFiles(_ entry: RecordingEntry) -> [LeftoverFile] {
+        let known = Set(entry.segments.map { RecordingSegment.fileName($0.index) })
+        let keys: Set<URLResourceKey> = [.creationDateKey, .contentModificationDateKey]
+        let files = (try? FileManager.default.contentsOfDirectory(at: folder(entry.id), includingPropertiesForKeys: Array(keys))) ?? []
+        return files.compactMap { url in
+            let name = url.lastPathComponent
+            let nextSeq = Self.seqMark(fileName: name)
+            guard nextSeq != nil || (url.pathExtension == "m4a" && !known.contains(name)) else { return nil }
+            let values = try? url.resourceValues(forKeys: keys)
+            return LeftoverFile(url: url, index: nextSeq == nil ? RecordingSegment.index(fileName: name) : nil, nextSeq: nextSeq,
+                                created: values?.creationDate, modified: values?.contentModificationDate)
+        }
+    }
 }
 
-// MARK: - All-day recordings (docs/assistant/day-recap.md)
+/// A file `recover` found in a recording's folder besides its records, with what the file system says of when it was
+/// written.
+private nonisolated struct LeftoverFile {
+    var url: URL
+    /// An audio file's seq.
+    var index: Int?
+    /// A seq counter's mark: the counter it holds.
+    var nextSeq: Int?
+    var created: Date?
+    var modified: Date?
+}
+
+/// A day recording's seq counter (`RecordingLibrary.allocateSeq`).
+private nonisolated struct DaySeqCounter: Sendable {
+    /// The next seq to hand out.
+    var next: Int
+    /// The counter of the mark this process last wrote in the recording's folder, which the next seq replaces.
+    var marked: Int? = nil
+}
+
+// MARK: - All-day recordings on the watch (docs/assistant/day-recap.md「The day recording on the watch」)
 
 extension RecordingLibrary {
-    /// A finished chunk of a day recording. Only a seq the phone acknowledged and the watch already pruned is dropped:
-    /// a chunk that finishes inside a range the user erased (the one being written when they tapped Erase) is
-    /// registered as erased, without its audio, so its seq still reaches the phone as an erased marker and no seq is
-    /// left without a record.
-    private func addDayChunk(_ id: UUID, _ segment: RecordingSegment, to current: RecordingEntry) {
-        guard !current.isPruned(segment.index) else {
-            try? FileManager.default.removeItem(at: audio(id, segment.index))
-            return
+    /// The seq for a day recording's next chunk, from any queue: the writer takes it on its own just before it opens
+    /// the chunk's file. The counter is on disk before the seq is returned (`markSeqCounter`), so a crash at any point
+    /// after, even before the file opens or any save of the entry, leaves `recover` the seqs to report lost, and none is
+    /// handed out twice (docs/assistant/day-recap.md「The day recording on the watch」). After a relaunch `recover` must
+    /// run before the first seq is taken, as capture does when it starts.
+    nonisolated func allocateSeq(_ id: UUID) -> Int {
+        let (seq, replaced) = daySeqs.withLock { counters in
+            var counter = counters[id] ?? DaySeqCounter(next: 0)
+            let taken = (counter.next, counter.marked)
+            counter.next += 1
+            counter.marked = counter.next
+            counters[id] = counter
+            return taken
         }
-        var record = segment
-        let erased = record.erased == true || current.isDayErased(record)
-        if erased { record.erased = true; record.delivered = false; record.sentences = nil }
-        change(id) { entry in
-            guard !entry.segments.contains(where: { $0.index == record.index }) else { return }
-            entry.segments.append(record)
-            entry.segments.sort { $0.index < $1.index }
-        }
-        // After the save: a crash in between leaves an erased record whose leftover audio pruning deletes, never a seq
-        // without a record.
-        if erased { try? FileManager.default.removeItem(at: audio(id, record.index)) }
+        markSeqCounter(id, seq + 1, replacing: replaced)
+        return seq
     }
 
-    /// The user erased `from…to` of a day. Every chunk in it, acknowledged or not, becomes erased: its audio and text
-    /// are deleted, its seq and times stay, and it goes to the phone again as an erased marker. The range is kept, so a
-    /// chunk that finishes in it later is erased too (`addSegment`). Returns the seqs newly erased.
-    @discardableResult func eraseDay(_ id: UUID, from: Date, to: Date) -> [Int] {
-        let range = RecordingErase(from: from, to: to)
-        guard range.valid, let current = entry(id), current.isDay else { return [] }
-        let hit = Set(current.segments.filter { $0.erased != true && $0.fallsInDayErase(range) }.map(\.index))
-        change(id) { entry in
-            if !(entry.erased ?? []).contains(range) { entry.erased = (entry.erased ?? []) + [range] }
-            for position in entry.segments.indices where hit.contains(entry.segments[position].index) {
-                entry.segments[position].erased = true
-                entry.segments[position].delivered = false
-                entry.segments[position].sentences = nil
-            }
+    /// The seqs handed out for a day recording: every seq below it belongs to a chunk, recorded or being recorded.
+    nonisolated func allocatedSeqs(_ id: UUID) -> Int { daySeqs.withLock { $0[id]?.next ?? 0 } }
+
+    /// Puts a day recording's counter on disk as an empty file named after it (`next-seq-12`) in its folder, so
+    /// `recover` reads it off the listing it makes anyway and a launch reads no file for it. The new mark is made before
+    /// the one it replaces goes, so a crash in between leaves the larger counter, and allocations racing each other at
+    /// worst leave an extra, smaller mark: the largest mark is always at least every seq handed out plus one. When even
+    /// an empty file can't be written (a full disk) the seq is still used: the chunk's own file, if the writer can make
+    /// it, is the evidence then. A deleted recording gets none, since its folder must not come back.
+    private nonisolated func markSeqCounter(_ id: UUID, _ next: Int, replacing old: Int?) {
+        guard !isDeletedSnapshot(id) else { return }
+        let mark = folder(id).appendingPathComponent(Self.seqMarkPrefix + String(next))
+        // The folder is missing only before a recording's first seq (the next day's, named before its entry exists).
+        if !FileManager.default.createFile(atPath: mark.path, contents: nil) {
+            try? FileManager.default.createDirectory(at: folder(id), withIntermediateDirectories: true)
+            FileManager.default.createFile(atPath: mark.path, contents: nil)
         }
-        for index in hit { try? FileManager.default.removeItem(at: audio(id, index)) }
-        return hit.sorted()
+        guard let old, old != next else { return }
+        try? FileManager.default.removeItem(at: folder(id).appendingPathComponent(Self.seqMarkPrefix + String(old)))
     }
 
-    /// The phone acknowledged these chunks: they count as delivered and their audio goes, in one save. The records stay
-    /// until `pruneDelivered`, so an erase can still reach them. `removingMarks`: the marks those chunks carried, which
-    /// the phone now holds.
-    func markDelivered(_ id: UUID, seqs: some Sequence<Int>, removingMarks marks: [RecordingDayMark] = []) {
-        let acked = Set(seqs)
-        let gone = Set(marks)
-        guard let current = entry(id), !acked.isEmpty || !gone.isEmpty else { return }
-        let newly = current.segments.filter { acked.contains($0.index) && !$0.delivered }.map(\.index)
-        let dropsMarks = current.dayMarks?.contains { gone.contains($0) } ?? false
-        guard !newly.isEmpty || dropsMarks else { return }
-        change(id) { entry in
-            for position in entry.segments.indices where acked.contains(entry.segments[position].index) {
-                entry.segments[position].delivered = true
-            }
-            entry.dayMarks?.removeAll { gone.contains($0) }
-            if entry.dayMarks?.isEmpty == true { entry.dayMarks = nil }
-        }
-        for index in newly { try? FileManager.default.removeItem(at: audio(id, index)) }
+    /// The name of a seq counter's mark (`markSeqCounter`), followed by the counter.
+    private nonisolated static let seqMarkPrefix = "next-seq-"
+
+    /// The counter a file name holds, nil for a file that isn't a seq counter's mark.
+    private nonisolated static func seqMark(fileName: String) -> Int? {
+        guard fileName.hasPrefix(seqMarkPrefix), let next = Int(fileName.dropFirst(seqMarkPrefix.count)), next > 0 else { return nil }
+        return next
     }
 
-    /// Drops the records the phone has held for a while (delivered, and ended before `cutoff`) with a tombstone, so
-    /// their seqs are never used again and a late copy of one never comes back.
-    func pruneDelivered(_ id: UUID, olderThan cutoff: Date) {
-        guard let current = entry(id), current.isDay else { return }
-        prune(id, indexes: current.segments.filter { $0.delivered && ($0.endedAt ?? .distantPast) < cutoff }.map(\.index))
+    /// A day entry's counter as it is saved: the larger of what it says and what was handed out, which stays the
+    /// counter from then on.
+    private func syncSeqCounter(_ entry: RecordingEntry) -> Int {
+        let floor = entry.nextIndex
+        return daySeqs.withLock { counters in
+            var counter = counters[entry.id] ?? DaySeqCounter(next: 0)
+            counter.next = max(counter.next, floor)
+            counters[entry.id] = counter
+            return counter.next
+        }
     }
 
-    /// Ends a day recording: closed, with a header-only end marker (the next seq, no audio, at `at`) that tells the phone
-    /// the day is over and every seq below it exists. `after`: why there is no audio between the last chunk and `at`.
-    /// A day that already ended (a chunk or marker says `end`, or `dayEndAt` is set) gets no second marker.
-    func closeDay(_ id: UUID, at: Date, after: String?) {
-        guard let current = entry(id), current.isDay else { return }
-        guard current.dayEndAt == nil, !current.segments.contains(where: { $0.end == true }) else {
-            if current.active { change(id) { $0.active = false } }
-            return
+    /// Adds a control event: `make` gets its `n`, and it is saved with the entry in the same write, kept until the phone
+    /// acknowledges it (docs/assistant/day-recap.md「Control events」). `started` and `paused` also keep `gapReason`.
+    /// nil when there is no such day recording or the save failed: then there is no event.
+    @discardableResult func appendDayEvent(_ id: UUID, _ make: (Int) -> RecordingDayEvent) -> RecordingDayEvent? {
+        var made: RecordingDayEvent?
+        guard commitDay(id, { made = Self.append(make, to: &$0) }) else { return nil }
+        return made
+    }
+
+    /// The phone acknowledged these events (by `n`): the watch forgets them. Writes nothing for ones already gone.
+    func ackDayEvents(_ id: UUID, ns: some Sequence<Int>) {
+        let acked = Set(ns)
+        guard !acked.isEmpty, entry(id)?.dayEvents?.contains(where: { acked.contains($0.n) }) == true else { return }
+        commitDay(id) { entry in
+            entry.dayEvents?.removeAll { acked.contains($0.n) }
+            if entry.dayEvents?.isEmpty == true { entry.dayEvents = nil }
         }
-        change(id) { entry in
-            let seq = entry.nextIndex
-            var marker = RecordingSegment(index: seq, start: entry.duration, duration: 0, startedAt: at)
-            marker.end = true
-            marker.after = after
-            entry.segments.append(marker)
+    }
+
+    /// The phone acknowledged these chunks: their audio and records go at once, and their seqs are tombstoned so they
+    /// are never used or taken back again (docs/assistant/day-recap.md「Acknowledgements and retries」). Returns the
+    /// seqs that went; nothing is written for seqs already gone.
+    @discardableResult func ackDayChunks(_ id: UUID, seqs: some Sequence<Int>) -> [Int] {
+        guard let current = entry(id), current.isDay else { return [] }
+        let held = Set(current.segments.map(\.index)).intersection(seqs)
+        guard !held.isEmpty, removeDayChunks(id, held) else { return [] }
+        return held.sorted()
+    }
+
+    /// Erases `from…to` from the chunks the watch still holds (docs/assistant/day-recap.md「Erasing」): every registered
+    /// chunk with audio in the range loses its audio and record, and its seq is tombstoned. Returns their seqs, the
+    /// `seqs` of the `erase` event or of the answer to the phone. The caller cuts the chunk being written first, so all
+    /// of the range is registered. `request`: the phone's erase id, saved with the seqs in the same write as the
+    /// removal; a repeated request returns the saved seqs and erases nothing again.
+    @discardableResult func eraseDayChunks(_ id: UUID, from: Date, to: Date, request: UUID? = nil, now: Date = .now) -> [Int] {
+        guard RecordingErase(from: from, to: to).valid, let current = entry(id), current.isDay else { return [] }
+        if let request, let done = current.dayErases?.first(where: { $0.id == request }) {
+            return RecordingDayRanges.expand(done.seqs)
+        }
+        let hit = Set(current.segments.filter { $0.overlapsDay(from, to) }.map(\.index))
+        guard !hit.isEmpty || request != nil else { return [] }
+        let erased = removeDayChunks(id, hit) { entry in
+            guard let request else { return }
+            let forgotten = now.addingTimeInterval(-RecordingDayContract.eraseMemoryDays * 86_400)
+            entry.dayErases = (entry.dayErases ?? []).filter { $0.at > forgotten }
+                + [RecordingDayEraseDone(id: request, seqs: RecordingDayRanges.ranges(hit), at: now)]
+        }
+        return erased ? hit.sorted() : []
+    }
+
+    /// Gives up on these chunks (an unreadable file, one past `recordingDayKeepDays`): their audio and records go,
+    /// their seqs are tombstoned, and one `lost` event per run of consecutive seqs tells the phone, with the run's times
+    /// when the records have them, in the same write. Seqs already gone, or never handed out, are skipped.
+    @discardableResult func loseDayChunks(_ id: UUID, seqs: some Sequence<Int>) -> [RecordingDayEvent] {
+        guard let current = entry(id), current.isDay else { return [] }
+        let counter = max(current.nextIndex, allocatedSeqs(id))
+        let lost = Set(seqs).filter { (0..<counter).contains($0) && !current.isPruned($0) }
+        guard !lost.isEmpty else { return [] }
+        let records = Dictionary(current.segments.map { ($0.index, $0) }, uniquingKeysWith: { first, _ in first })
+        var events: [RecordingDayEvent] = []
+        let removed = removeDayChunks(id, lost) { entry in
+            events = Self.reportLost(lost, in: &entry) { (records[$0]?.startedAt, records[$0]?.endedAt) }
+        }
+        return removed ? events : []
+    }
+
+    /// Ends a day recording (its midnight, or later when it was left open): not active any more, `closedAt`, and a
+    /// `closed` event whose `seqCount` is every seq handed out, a chunk still on its way to `addSegment` included.
+    /// Chunks keep arriving and going to the phone after it. A day already closed gets no second event. Returns the
+    /// event.
+    @discardableResult func closeDay(_ id: UUID, at: Date) -> RecordingDayEvent? {
+        guard let current = entry(id), current.isDay else { return nil }
+        guard current.closedAt == nil else {
+            if current.active { commitDay(id) { $0.active = false } }
+            return nil
+        }
+        let count = max(current.nextIndex, allocatedSeqs(id))
+        var closed: RecordingDayEvent?
+        let saved = commitDay(id) { entry in
+            entry.nextSeq = max(entry.nextSeq ?? 0, count)
             entry.active = false
-            entry.expectedSegments = seq + 1
-            entry.dayEndAt = at
-            if entry.endedAt == nil { entry.endedAt = .now }
+            entry.closedAt = at
+            closed = Self.append({ .closed($0, at: at, seqCount: count) }, to: &entry)
+        }
+        return saved ? closed : nil
+    }
+
+    /// After the app ended without closing the day recording's chunks: every seq handed out (the counter's mark says how
+    /// many, also those no save counted) that has no record and no tombstone (its chunk was being written, or finished
+    /// but not registered, or its file never opened) becomes a `lost` event, and the counter stays. A seq with a file
+    /// is lost from the file's creation to its last write; one whose file never opened held no audio, so it is lost for
+    /// no time, at the last moment the recording is known to have run (without times the phone would count the whole
+    /// stop as lost). A recording whose microphone was open (no `paused` since its last `started`) also gets the
+    /// `paused` event (`stopped`) the exit never wrote, at that same moment. Only `recover` adds that event, so capture
+    /// must not add another for the same exit.
+    private func recoverDay(_ entry: RecordingEntry, leftovers: [LeftoverFile]) {
+        let registered = Set(entry.segments.map(\.index))
+        let files = Dictionary(leftovers.compactMap { file in file.index.map { ($0, file) } }, uniquingKeysWith: { first, _ in first })
+        let marked = leftovers.compactMap(\.nextSeq).max() ?? 0
+        let counter = max(entry.nextIndex, allocatedSeqs(entry.id), (files.keys.max() ?? -1) + 1, marked)
+        let lost = Set((0..<counter).filter { !registered.contains($0) && !entry.isPruned($0) })
+        let crashed = entry.active && entry.closedAt == nil && entry.gapReason == nil
+        // Every time here is no later than the exit: the last save, the chunks' ends, the last writes to the files and
+        // the last seq taken (its mark's).
+        let lastHeard = ([entry.createdAt, entry.updatedAt].compactMap { $0 } + entry.segments.compactMap(\.endedAt)
+            + leftovers.compactMap(\.modified)).max() ?? entry.createdAt
+        let saved = commitDay(entry.id) { day in
+            day.nextSeq = max(day.nextSeq ?? 0, counter)
+            Self.tombstone(lost, in: &day)
+            Self.reportLost(lost, in: &day) { seq in files[seq].map { ($0.created, $0.modified) } ?? (lastHeard, lastHeard) }
+            if crashed { Self.append({ .paused($0, at: lastHeard, reason: RecordingDayContract.Reason.stopped) }, to: &day) }
+        }
+        // Only once the events and the counter are saved: until then the files are what says these seqs were used.
+        guard saved else { return }
+        for file in leftovers { try? FileManager.default.removeItem(at: file.url) }
+    }
+
+    /// One `lost` event per run of consecutive seqs, from the earliest start known in the run to its latest end.
+    @discardableResult
+    private static func reportLost(_ seqs: Set<Int>, in entry: inout RecordingEntry,
+                                   times: (Int) -> (from: Date?, to: Date?)) -> [RecordingDayEvent] {
+        RecordingDayRanges.runs(seqs).map { run in
+            let known = run.map(times)
+            let (from, to) = (known.compactMap(\.from).min(), known.compactMap(\.to).max())
+            return append({ .lost($0, seqs: run, from: from, to: to) }, to: &entry)
+        }
+    }
+
+    /// Numbers and adds an event to an entry being edited; `started` clears `gapReason`, `paused` sets it.
+    @discardableResult
+    private static func append(_ make: (Int) -> RecordingDayEvent, to entry: inout RecordingEntry) -> RecordingDayEvent {
+        let n = entry.nextEvent ?? (entry.dayEvents?.map(\.n).max() ?? -1) + 1
+        var event = make(n)
+        event.n = n
+        entry.nextEvent = n + 1
+        entry.dayEvents = (entry.dayEvents ?? []) + [event]
+        switch event.type {
+        case .started: entry.gapReason = nil
+        case .paused: entry.gapReason = event.reason ?? RecordingDayContract.Reason.paused
+        default: break
+        }
+        return event
+    }
+
+    /// Drops these chunks' records with a tombstone in one write with `edit`; their audio goes after it, so a crash in
+    /// between leaves only files `recover` deletes, never a record without its audio.
+    @discardableResult
+    private func removeDayChunks(_ id: UUID, _ seqs: Set<Int>, _ edit: (inout RecordingEntry) -> Void = { _ in }) -> Bool {
+        guard commitDay(id, { entry in
+            Self.tombstone(seqs, in: &entry)
+            edit(&entry)
+        }) else { return false }
+        for seq in seqs { try? FileManager.default.removeItem(at: audio(id, seq)) }
+        return true
+    }
+
+    /// One write of a day entry: `edit` changes the current copy, saved only when it changed anything. False when
+    /// there is no such day recording or the save failed.
+    @discardableResult
+    private func commitDay(_ id: UUID, _ edit: (inout RecordingEntry) -> Void) -> Bool {
+        guard let current = entry(id), current.isDay else { return false }
+        var next = current
+        edit(&next)
+        guard next != current else { return true }
+        do {
+            try save(next)
+            return true
+        } catch {
+            self.error = String(localized: "The recording info wasn't saved. Keep the app installed and try again.")
+            return false
         }
     }
 
@@ -377,9 +566,10 @@ extension RecordingLibrary {
     }
 
     /// Phone: the index row of a day recording the watch sends. It has no segments: the chunks and their text live in
-    /// the day store, in the same folder, which `remove` deletes with it. Written only when something changed (a chunk
-    /// arrives every few seconds). `createdAt` only moves earlier: the recording's start, or until that is known the
-    /// earliest chunk. `closed` ends it and never reopens it. nil for a deleted id, which stays deleted.
+    /// the day store, in the same folder, which `remove` deletes with it (and its tombstone, which never expires,
+    /// keeps it deleted). Written only when something changed (a chunk arrives every few seconds). `createdAt` is the
+    /// recording's `recording_started_at` and only moves earlier. `closed` ends it and never reopens it. nil for a
+    /// deleted id, which stays deleted.
     @discardableResult func adoptDay(id: UUID, day: String, timeZone: String, createdAt: Date, closed: Bool = false) -> RecordingEntry? {
         guard !deleted.contains(id) else { return nil }
         let current = entry(id)

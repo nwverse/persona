@@ -75,8 +75,9 @@ struct AllDayComplicationView: View {
 
 extension AllDaySnapshot.Face {
     /// The state's word, short enough for every family. The page's status line ("Paused — tap to continue",
-    /// `AllDaySnapshot.State.word` in the watch app) won't fit a corner's curve or the inline line in every language,
-    /// so the face splits it: this word, and `hint` on the rectangular face's second line and in VoiceOver's hint.
+    /// `AllDaySnapshot.State.word(startable:)` in the watch app) won't fit a corner's curve or the inline line in every
+    /// language, so the face splits it: this word, and `hint` on the rectangular face's second line and in VoiceOver's
+    /// hint.
     var title: String {
         switch self {
         case .off: String(localized: "All-Day Recording")

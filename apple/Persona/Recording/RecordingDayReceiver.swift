@@ -5,11 +5,13 @@ import os
 import UIKit
 #endif
 
-/// The phone's end of all-day recording's "watch to phone" (docs/assistant/day-recap.md). A chunk arrives on
-/// WatchConnectivity's queue, `RecordingDayIntake` stores it there (`RecordingDayStore`) and only then acknowledges it;
-/// this, on the main actor, then lists the day among the recordings (`RecordingLibrary.adoptDay`) and asks for the
-/// background catch-up. Transcription, the upload and the summaries follow the store's `changes`. Day chunks never go
-/// through `onRecording` (so never through `MeetingRecorder.tagWatchRecording`).
+/// The phone's end of all-day recording's "watch to phone" (docs/assistant/day-recap.md「Watch to phone」). Chunks and
+/// control events arrive on WatchConnectivity's queue; `RecordingDayIntake` stores each there (`RecordingDayStore`) and
+/// only then acknowledges it. This, on the main actor, then lists the day among the recordings
+/// (`RecordingLibrary.adoptDay`), asks for the background catch-up, sends the erases and deletes the watch has not
+/// confirmed yet, and has the watch told what the phone takes (`RecordingDayPhoneCapabilities`). Transcription, the
+/// upload and the summaries follow the store's `changes`. Day recordings never go through `onRecording` (so never
+/// through `MeetingRecorder.tagWatchRecording`).
 @MainActor final class RecordingDayReceiver {
     static let shared = RecordingDayReceiver()
 
@@ -23,10 +25,16 @@ import UIKit
 
     /// At most one catch-up request per this long from arriving chunks (C9): a chunk arrives every ten seconds.
     static let catchUpInterval: TimeInterval = 15 * 60
+    /// The erases and deletes still waiting go again at most this often while the watch keeps sending: its app is
+    /// running then, so a request whose answer went missing gets one soon.
+    static let resendInterval: TimeInterval = 60
 
     private let store: RecordingDayStore
     private let library: RecordingLibrary
     private let summaries: RecordingDaySummaries
+    private let capabilities: RecordingDayPhoneCapabilities
+    private let sendErase: (RecordingDayEraseRequest) -> Void
+    private let sendDelete: (RecordingDayDelete) -> Void
     private let now: () -> Date
     private var started = false
     /// The intake WatchConnectivity calls; made by `start()`.
@@ -35,22 +43,35 @@ import UIKit
     private var rows: Set<UUID> = []
     private var adopting: Task<Void, Never>?
     private var lastCatchUp: Date?
+    private var lastResend: Date?
+    private var resending: Task<Void, Never>?
+    private var resendAgain = false
+    private var listening: Task<Void, Never>?
     private var summariesRead = false
     #if os(iOS)
     private var flushTask = UIBackgroundTaskIdentifier.invalid
     #endif
 
+    /// - Parameters:
+    ///   - sendErase, sendDelete: one request to the watch (WatchSync's: a message while its app runs, else queued user
+    ///     info, never queued twice).
     init(store: RecordingDayStore = .shared, library: RecordingLibrary = .shared, summaries: RecordingDaySummaries = .shared,
+         capabilities: RecordingDayPhoneCapabilities = .shared,
+         sendErase: @escaping (RecordingDayEraseRequest) -> Void = { WatchSync.shared.sendDayErase($0) },
+         sendDelete: @escaping (RecordingDayDelete) -> Void = { WatchSync.shared.sendDayDelete($0) },
          now: @escaping () -> Date = { .now }) {
         self.store = store
         self.library = library
         self.summaries = summaries
+        self.capabilities = capabilities
+        self.sendErase = sendErase
+        self.sendDelete = sendDelete
         self.now = now
     }
 
     /// From `PhoneRecordingReceiver.start()`, before `WatchSync.activate()`: the system may launch the app in the
-    /// background just to deliver a chunk, so the hooks are in place before the session can call them. Idempotent; the
-    /// hooks are set once and never again (nothing synchronizes them).
+    /// background just to deliver a chunk or an event, so the hooks are in place before the session can call them.
+    /// Idempotent; the hooks are set once and never again (nothing synchronizes them).
     func start() {
         guard !started else { return }
         started = true
@@ -62,20 +83,33 @@ import UIKit
         self.intake = intake
         sync.onDayChunk = { @Sendable frame, reply in reply(intake.receive(frame: frame)) }
         sync.onDayFile = { @Sendable header, file in intake.receive(file: file, header: header) }
-        sync.onDayUserInfo = { @Sendable info in intake.receive(userInfo: info) }
+        sync.onDayEvent = { @Sendable envelope in intake.receive(event: envelope) }
+        sync.onDayErased = { [weak self] answer in Task { await self?.watchErased(answer) } }
+        sync.onDayDeleted = { [weak self] answer in Task { await self?.watchDeleted(answer) } }
         sync.onDayWatchState = { [summaries] state in summaries.receive(watch: state) }
+        // What the watch gets at the session's activation (WatchSync keeps it until then).
+        capabilities.start()
         // Following changes only: the full read waits for the app to be in front (`readSummaries`).
         summaries.start()
+        followRequests()
         Task { await recover() }
         #if os(iOS)
         followAppState()
         #endif
     }
 
-    /// A chunk, marker or loss report was stored for `id` (any change the receiver made).
+    /// The watch session activated: what waits for the watch goes now (a send before activation goes nowhere).
+    func sessionActivated() {
+        // `AppModel`'s `WatchSync.shared.onActivated` calls this. Requests also go once recovery is done, whenever the
+        // app comes to the front, and when the watch sends.
+        resendRequests()
+    }
+
+    /// A chunk or an event was stored for `id` (any change the receiver made).
     func arrived(_ id: UUID) {
         // The transcriber and the upload follow `RecordingDayStore.shared.changes` on their own.
         requestCatchUpIfDue()
+        resendIfDue()
         rows.insert(id)
         guard adopting == nil else { return }
         adopting = Task {
@@ -89,14 +123,57 @@ import UIKit
         while let adopting { await adopting.value }
     }
 
+    /// Sends every erase and delete the watch has not confirmed yet (`RecordingDayStore.watchRequests`); each answer
+    /// settles its request (`watchErased`, `watchDeleted`). A send while one is under way runs once more after it.
+    func resendRequests() {
+        guard resending == nil else {
+            resendAgain = true
+            return
+        }
+        resending = Task {
+            repeat {
+                resendAgain = false
+                let pending = await store.watchRequests()
+                for erase in pending.erases { sendErase(erase) }
+                for delete in pending.deletes { sendDelete(delete) }
+            } while resendAgain
+            resending = nil
+        }
+    }
+
+    /// Returns once the requests asked for so far are sent (tests).
+    func requestsSent() async {
+        while let resending { await resending.value }
+    }
+
+    /// The watch erased what the phone asked it to.
+    func watchErased(_ answer: RecordingDayErased) async {
+        await store.watchErased(answer)
+    }
+
+    /// The watch deleted its copy of a day the phone deleted.
+    func watchDeleted(_ answer: RecordingDayDeleted) async {
+        await store.watchDeleted(answer)
+    }
+
+    /// A request the UI or the upload just made goes at once.
+    private func followRequests() {
+        guard listening == nil else { return }
+        let changes = store.watchRequestChanges
+        listening = Task { [weak self] in
+            for await _ in changes { self?.resendRequests() }
+        }
+    }
+
     /// A crash can leave days whose chunks were acknowledged before the library's row for them was written (C14):
-    /// the store rebuilds them from their sidecars, and each day without a row gets one.
+    /// the store rebuilds them from their folders, and each day without a row gets one.
     private func recover() async {
         let changed = Set(await store.recoverOnLaunch())
         for id in await store.ids() where changed.contains(id) || library.entry(id) == nil {
             await adoptRow(id)
         }
         readSummaries()
+        resendRequests()
     }
 
     /// Every day's summary, read once per launch. A launch in the background to take a chunk shows nothing, so it
@@ -111,11 +188,12 @@ import UIKit
         summaries.readAll()
     }
 
-    /// The library's small index row for the day (kind `day`, no segments); `adoptDay` writes only when it changes and
-    /// refuses a deleted day.
+    /// The library's small index row for the day (kind `day`, no segments), closed once the watch closed it;
+    /// `adoptDay` writes only when it changes and refuses a deleted day.
     private func adoptRow(_ id: UUID) async {
-        guard let record = await store.record(id), let start = record.hubStartedAt else { return }
-        library.adoptDay(id: id, day: record.day, timeZone: record.timeZone, createdAt: start, closed: record.endedAt != nil)
+        guard let record = await store.record(id) else { return }
+        library.adoptDay(id: id, day: record.day, timeZone: record.timeZone, createdAt: record.startedAt,
+                         closed: record.closedAt != nil)
     }
 
     /// The catch-up is requested from here too: on a day the app is only ever woken by WatchConnectivity it never
@@ -127,10 +205,18 @@ import UIKit
         Self.requestCatchUp()
     }
 
+    private func resendIfDue() {
+        let at = now()
+        if let last = lastResend, at >= last, at.timeIntervalSince(last) < Self.resendInterval { return }
+        lastResend = at
+        resendRequests()
+    }
+
     #if os(iOS)
     /// - Leaving the screen: iOS can suspend the app soon after and end it later without another word, so what changed
     ///   since the last coalesced write (transcripts, the upload's state) is written first, under a short background task.
-    /// - Coming to the front: the summaries a background launch left unread (`readSummaries`).
+    /// - Coming to the front: the summaries a background launch left unread (`readSummaries`), and the requests still
+    ///   waiting for the watch.
     /// - A memory warning: the store lets go of the days it holds decoded (P11).
     private func followAppState() {
         let center = NotificationCenter.default
@@ -138,7 +224,10 @@ import UIKit
             MainActor.assumeIsolated { self.flushInBackground() }
         }
         center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { @Sendable _ in
-            MainActor.assumeIsolated { self.readSummaries() }
+            MainActor.assumeIsolated {
+                self.readSummaries()
+                self.resendRequests()
+            }
         }
         center.addObserver(forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: .main) { @Sendable [store] _ in
             store.trimMemory()
@@ -148,7 +237,8 @@ import UIKit
     private func flushInBackground() {
         guard flushTask == .invalid else { return }
         flushTask = UIApplication.shared.beginBackgroundTask(withName: "recording-day-flush") { @Sendable in
-            // Ended at once when time runs out; the sidecars hold every chunk whatever happens to the write.
+            // Ended at once when time runs out; the sidecars and the event log hold everything acknowledged whatever
+            // happens to the write.
             MainActor.assumeIsolated { self.endFlushTask() }
         }
         Task {
@@ -165,9 +255,11 @@ import UIKit
     #endif
 }
 
-/// What WatchConnectivity's queue runs for an all-day chunk, synchronously: store it, then acknowledge it (C26). It never
-/// touches the main actor; what follows there goes through `arrived`. A chunk that could not be stored is not
-/// acknowledged, so the watch keeps it and sends it again.
+/// What WatchConnectivity's queue runs for an all-day chunk or event, synchronously: store it, then acknowledge it
+/// (docs/assistant/day-recap.md「Acknowledgements and retries」). It never touches the main actor; what follows there
+/// goes through `arrived`. What could not be stored is not acknowledged, so the watch keeps it and sends it again.
+/// Acknowledgements go together where they can: those of chunks that came by file gather for a moment, and ride along
+/// with the next reply to that recording's live chunk or event, or go on their own.
 nonisolated final class RecordingDayIntake: Sendable {
     private let store: RecordingDayStore
     private let sendAck: @Sendable (RecordingDayAck) -> Void
@@ -176,7 +268,7 @@ nonisolated final class RecordingDayIntake: Sendable {
     private let queue = DispatchQueue(label: "persona.recording-day-acks", qos: .utility)
     private let waiting = OSAllocatedUnfairLock(initialState: Waiting())
 
-    /// Acknowledgements of chunks that came by file or user info, per recording, until their batch goes.
+    /// Acknowledgements per recording, until their batch goes.
     private nonisolated struct Waiting {
         var seqs: [UUID: Set<Int>] = [:]
         var scheduled = false
@@ -184,8 +276,8 @@ nonisolated final class RecordingDayIntake: Sendable {
 
     /// - Parameters:
     ///   - sendAck: sends one recording's acknowledgements (a message while reachable, else user info).
-    ///   - arrived: a day changed (stored or updated chunk, loss report); called on this queue.
-    ///   - ackDelay: how long file and user-info acknowledgements gather (a backlog arrives as a burst of files).
+    ///   - arrived: a day changed (a chunk or an event stored); called on WatchConnectivity's queue.
+    ///   - ackDelay: how long file acknowledgements gather (a backlog arrives as a burst of files).
     init(store: RecordingDayStore, sendAck: @escaping @Sendable (RecordingDayAck) -> Void,
          arrived: @escaping @Sendable (UUID) -> Void, ackDelay: TimeInterval = 1) {
         self.store = store
@@ -194,48 +286,32 @@ nonisolated final class RecordingDayIntake: Sendable {
         self.ackDelay = ackDelay
     }
 
-    /// A chunk or marker by `sendMessageData`: the reply is its acknowledgement (JSON `RecordingDayAck`), empty when it
-    /// was not stored. It names this seq only: an acknowledgement the watch gets in reply to a message is for what that
-    /// message carried, never for an older copy of the seq (the audio, say, of a chunk the user has erased since).
+    /// A chunk by `sendMessageData`: the reply is its acknowledgement (JSON `RecordingDayAck`), with the recording's
+    /// file acknowledgements still waiting; empty when it was not stored.
     func receive(frame: Data) -> Data {
-        guard let unframed = RecordingDayHeader.unframe(frame) else { return Data() }
+        guard let unframed = RecordingDayHeader.unframe(frame),
+              let result = try? store.store(header: unframed.header, audio: unframed.audio) else { return Data() }
         let header = unframed.header
-        guard let result = try? store.store(header: header, audio: header.isMarker ? nil : unframed.audio) else { return Data() }
-        report(header.recording, result)
-        return RecordingDayAck(recording: header.recording, seqs: [header.seq]).data
+        if result.changed { arrived(header.recording) }
+        return acknowledgement(header.recording, seqs: [header.seq], events: []).data
     }
 
-    /// A chunk by `transferFile`: moved into the day before this returns. True when taken care of (stored, already held,
-    /// or for a deleted day), false to leave it to the watch's resend.
+    /// A chunk by `transferFile`: moved into the day before this returns. True when taken care of (stored, settled,
+    /// already held, or for a deleted day), false to leave it to the watch's resend.
     func receive(file: URL, header: RecordingDayHeader) -> Bool {
         guard let result = try? store.store(header: header, movingFile: file) else { return false }
-        report(header.recording, result)
-        acknowledge(header.recording, [header.seq])
+        if result.changed { arrived(header.recording) }
+        batch(header.recording, seq: header.seq)
         return true
     }
 
-    /// User info (or a message) carrying a header-only marker (`chunkKey`) or a loss report (`lostKey`); true when one of
-    /// them was taken care of.
-    func receive(userInfo info: [String: Any]) -> Bool {
-        var handled = false
-        // Only markers travel without a file: a header that needs audio can't be stored from here.
-        if let header = RecordingDayHeader(userInfo: info), header.isMarker,
-           let result = try? store.store(header: header, audio: nil) {
-            report(header.recording, result)
-            acknowledge(header.recording, [header.seq])
-            handled = true
-        }
-        if let lost = RecordingDayLost(data: info[RecordingDayContract.lostKey] as? Data) {
-            do {
-                try store.recordLost(lost)
-                arrived(lost.recording)
-                acknowledge(lost.recording, lost.seqs)
-                handled = true
-            } catch {
-                // Not written down: not acknowledged, so the watch reports it again.
-            }
-        }
-        return handled
+    /// A control event, by message or user info: its acknowledgement once it is on disk (with the recording's file
+    /// acknowledgements still waiting), which WatchSync sends as the message's reply or on its own; nil when it was not
+    /// stored.
+    func receive(event envelope: RecordingDayEventEnvelope) -> RecordingDayAck? {
+        guard let result = try? store.store(event: envelope) else { return nil }
+        if result.changed { arrived(envelope.recording) }
+        return acknowledgement(envelope.recording, seqs: [], events: [envelope.event.n])
     }
 
     /// Sends the waiting acknowledgements now, one per recording.
@@ -247,14 +323,16 @@ nonisolated final class RecordingDayIntake: Sendable {
         for (id, seqs) in batch where !seqs.isEmpty { sendAck(RecordingDayAck(recording: id, seqs: seqs)) }
     }
 
-    private func report(_ id: UUID, _ result: RecordingDayStore.StoreResult) {
-        if result == .stored || result == .updated { arrived(id) }
+    /// This acknowledgement with the recording's waiting ones, which then don't go again on their own. Every seq in it is
+    /// on disk or settled, so the watch may delete each, whichever message the acknowledgement answers.
+    private func acknowledgement(_ id: UUID, seqs: [Int], events: [Int]) -> RecordingDayAck {
+        let waiting = self.waiting.withLock { $0.seqs.removeValue(forKey: id) } ?? []
+        return RecordingDayAck(recording: id, seqs: waiting.union(seqs), events: events)
     }
 
-    private func acknowledge(_ id: UUID, _ seqs: [Int]) {
-        guard !seqs.isEmpty else { return }
+    private func batch(_ id: UUID, seq: Int) {
         let first = waiting.withLock { (state: inout Waiting) -> Bool in
-            state.seqs[id, default: []].formUnion(seqs)
+            state.seqs[id, default: []].insert(seq)
             defer { state.scheduled = true }
             return !state.scheduled
         }

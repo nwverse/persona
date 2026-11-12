@@ -41,11 +41,53 @@ private struct WatchBook {
     }
 }
 
-/// All-day recording's alerts, dead-man's switch and complication snapshot (docs/assistant/day-recap.md), decided off
-/// the main actor as the watch's notification delegate needs them.
+/// All-day recording's access, alerts, dead-man's switch and complication snapshot (docs/assistant/day-recap.md),
+/// decided off the main actor as the watch's notification delegate needs them.
 struct AllDayAlertPolicyTests {
     private static let pausing: [RecordingDayHalt] = [.interrupted, .resumeFailed, .microphoneChanged]
     private static let stopping: [RecordingDayHalt] = [.audioReset, .lowBattery, .lowStorage, .writeFailed, .crashed]
+    private static let running: [AllDaySnapshot.State] = [.recording, .paused, .interrupted]
+
+    // MARK: - Access: the consent is the iPhone's
+
+    @Test func aPhoneFromBeforeHidesAllDayRecording() {
+        // No `recordingDay` at all: nothing offers it.
+        #expect(Policy.access(phoneDay: nil, state: .off) == .hidden)
+    }
+
+    @Test func aPhoneWithoutConsentYetPointsThere() {
+        #expect(Policy.access(phoneDay: 0, state: .off) == .needsConsent)
+        // Stopped by itself earlier: still shown (Stop for Today ends the wish), but no tap continues it.
+        #expect(Policy.access(phoneDay: 0, state: .stopped) == .needsConsent)
+        #expect(Policy.access(phoneDay: nil, state: .stopped) == .needsConsent)
+        // A value the watch can't make sense of is no agreement.
+        #expect(Policy.access(phoneDay: -1, state: .off) == .needsConsent)
+    }
+
+    @Test func anAgreedPhoneStartsWithOneTapAtAnyVersion() {
+        for version in [RecordingDayContract.version, RecordingDayContract.version + 1, 7] {
+            #expect(Policy.access(phoneDay: version, state: .off) == .ready)
+            #expect(Policy.access(phoneDay: version, state: .stopped) == .ready)
+        }
+    }
+
+    @Test func aRunningRecordingKeepsItsControlsWhateverThePhoneSaysNow() {
+        // A new consent version takes effect at the next start: the recording running goes on under its agreement.
+        for state in Self.running {
+            for phoneDay in [nil, 0, 1] as [Int?] {
+                #expect(Policy.access(phoneDay: phoneDay, state: state) == .ready)
+            }
+        }
+    }
+
+    @Test func onlyAnAgreementOrThePhonesOwnRequestStartsTheMicrophone() {
+        #expect(Policy.mayStart(.ready, askedByPhone: false))
+        #expect(!Policy.mayStart(.needsConsent, askedByPhone: false))
+        #expect(!Policy.mayStart(.hidden, askedByPhone: false))
+        // The phone asks only after its consent sheet; its context saying so may still be on the way.
+        #expect(Policy.mayStart(.needsConsent, askedByPhone: true))
+        #expect(Policy.mayStart(.hidden, askedByPhone: true))
+    }
 
     // MARK: - Events
 
@@ -81,6 +123,15 @@ struct AllDayAlertPolicyTests {
         }
     }
 
+    @Test func deletedOnThePhoneStopsSaysSoAndShowsOff() {
+        #expect(Policy.decide(.deletedOnPhone, appActive: true)
+                == Policy.Output(haptic: .stop, notify: .deleted, withdraw: true, snapshot: .off, deadMan: .disarm,
+                                 handOff: true))
+        // Wrist down: the notice is what says it.
+        #expect(Policy.decide(.deletedOnPhone, appActive: false)
+                == Policy.Output(notify: .deleted, withdraw: true, snapshot: .off, deadMan: .disarm, handOff: true))
+    }
+
     @Test func noticesKeepOneRequestPerKind() {
         #expect(Policy.Notice.paused(.interrupted).request == AllDayNotice.pausedRequest)
         #expect(Policy.Notice.paused(.resumeFailed).category == AllDayNotice.pausedCategory)
@@ -90,8 +141,11 @@ struct AllDayAlertPolicyTests {
         #expect(Policy.Notice.stopped(.lowBattery).category == AllDayNotice.pausedCategory)
         #expect(Policy.Notice.start.request == AllDayNotice.startRequest)
         #expect(Policy.Notice.start.category == AllDayNotice.startCategory)
-        #expect(AllDayNotice.categories == ["allday.paused", "allday.start"])
-        #expect(AllDayNotice.requests == ["allday.paused", "allday.stopped", "allday.start"])
+        // A deletion is its own: nothing to continue, and the dead-man's request stays the dead-man's.
+        #expect(Policy.Notice.deleted.request == AllDayNotice.deletedRequest)
+        #expect(Policy.Notice.deleted.category == AllDayNotice.deletedCategory)
+        #expect(AllDayNotice.categories == ["allday.paused", "allday.start", "allday.deleted"])
+        #expect(AllDayNotice.requests == ["allday.paused", "allday.stopped", "allday.start", "allday.deleted"])
     }
 
     @Test func onlyANoticesButtonOpensTheMicrophone() {
@@ -99,6 +153,12 @@ struct AllDayAlertPolicyTests {
         #expect(AllDayNotice.link(answering: AllDayNotice.startAction) == .start)
         // A tap on the notice itself only opens the page, where the same button is one tap away.
         #expect(AllDayNotice.link(answering: UNNotificationDefaultActionIdentifier) == .open)
+    }
+
+    @Test func onlyThePhonesStartNoticeSpeaksForThePhone() {
+        #expect(AllDayNotice.askedByPhone(answering: AllDayNotice.startAction))
+        #expect(!AllDayNotice.askedByPhone(answering: AllDayNotice.continueAction))
+        #expect(!AllDayNotice.askedByPhone(answering: UNNotificationDefaultActionIdentifier))
     }
 
     @Test func phoneStartWaitsForTheAppInFront() {
@@ -256,28 +316,63 @@ struct AllDayAlertPolicyTests {
         #expect(!Policy.alertsOnLaunch(gapReason: RecordingDayContract.Reason.interrupted, alreadyAlerted: false))
     }
 
-    @Test func dayIsClosedJustAfterLocalMidnightOnDSTDays() throws {
+    @Test func aDayIsClosedJustAfterItsMidnightOnDSTDays() throws {
         let zone = try #require(TimeZone(identifier: "America/New_York"))
+        let calendar = Self.calendar(zone)
+        // Both 2026 DST days end at the next midnight: 23 hours after the spring one began, 25 after the fall one.
+        for (day, hours) in [("2026-03-08", 23.0), ("2026-11-01", 25.0)] {
+            let start = try #require(RecordingDayCalendar.start(of: day, in: zone))
+            let close = try #require(Policy.closeRefreshDate(openDays: [Policy.OpenDay(day: day, zone: zone)], now: start))
+            #expect(close.timeIntervalSince(start) == hours * 3600 + Policy.closeAfterMidnight)
+            #expect(calendar.component(.hour, from: close) == 0)
+            #expect(RecordingDayCalendar.day(of: close, in: zone) != day)
+        }
+        // 01:30 on 2026-11-01 happens twice; either way the wake is just after that day's own midnight.
+        let first = try #require(calendar.date(from: DateComponents(year: 2026, month: 11, day: 1, hour: 1, minute: 30)))
+        for now in [first, first.addingTimeInterval(3600)] {
+            let close = try #require(Policy.closeRefreshDate(openDays: [Policy.OpenDay(day: "2026-11-01", zone: zone)], now: now))
+            #expect(RecordingDayCalendar.day(of: close.addingTimeInterval(-Policy.closeAfterMidnight - 1), in: zone) == "2026-11-01")
+        }
+    }
+
+    @Test func aDayEndsAtItsOwnZonesMidnightAfterTheWatchMoved() throws {
+        let shanghai = try #require(TimeZone(identifier: "Asia/Shanghai"))
+        let newYork = try #require(TimeZone(identifier: "America/New_York"))
+        // Recorded in Shanghai, the watch now in New York: the day still ends at Shanghai's midnight (11:00 in New
+        // York), never at New York's, 13 hours later.
+        let midnight = try #require(RecordingDayCalendar.end(of: "2026-11-11", in: shanghai))
+        let now = midnight.addingTimeInterval(-3600)
+        let close = Policy.closeRefreshDate(openDays: [Policy.OpenDay(day: "2026-11-11", zone: shanghai)], now: now)
+        #expect(close == midnight.addingTimeInterval(Policy.closeAfterMidnight))
+        #expect(close != RecordingDayCalendar.end(of: "2026-11-11", in: newYork)?.addingTimeInterval(Policy.closeAfterMidnight))
+    }
+
+    @Test func theFirstMidnightAheadWinsAndAPastWakeIsNotAskedAgain() throws {
+        let shanghai = try #require(TimeZone(identifier: "Asia/Shanghai"))
+        let newYork = try #require(TimeZone(identifier: "America/New_York"))
+        let today = Policy.OpenDay(day: "2026-11-11", zone: newYork)
+        let earlier = Policy.OpenDay(day: "2026-11-11", zone: shanghai)
+        let stale = Policy.OpenDay(day: "2026-11-09", zone: newYork)
+        let shanghaiEnd = try #require(RecordingDayCalendar.end(of: "2026-11-11", in: shanghai))
+        let newYorkEnd = try #require(RecordingDayCalendar.end(of: "2026-11-11", in: newYork))
+        let now = shanghaiEnd.addingTimeInterval(-60)
+        // Shanghai's midnight comes 13 hours before New York's: it is the wake asked for.
+        #expect(Policy.closeRefreshDate(openDays: [today, earlier, stale], now: now)
+                == shanghaiEnd.addingTimeInterval(Policy.closeAfterMidnight))
+        // Just past Shanghai's midnight its wake is still ahead; once that wake's time has gone, New York's is next.
+        #expect(Policy.closeRefreshDate(openDays: [today, earlier], now: shanghaiEnd.addingTimeInterval(60))
+                == shanghaiEnd.addingTimeInterval(Policy.closeAfterMidnight))
+        #expect(Policy.closeRefreshDate(openDays: [today, earlier], now: shanghaiEnd.addingTimeInterval(Policy.closeAfterMidnight))
+                == newYorkEnd.addingTimeInterval(Policy.closeAfterMidnight))
+        // Only days whose wake has passed, or none with a real date: no wake of ours.
+        #expect(Policy.closeRefreshDate(openDays: [stale], now: now) == nil)
+        #expect(Policy.closeRefreshDate(openDays: [Policy.OpenDay(day: "2026-02-30", zone: newYork)], now: now) == nil)
+        #expect(Policy.closeRefreshDate(openDays: [], now: now) == nil)
+    }
+
+    private static func calendar(_ zone: TimeZone) -> Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = zone
-        // Before and on both 2026 DST days (23 and 25 hours), and 01:30 on 2026-11-01, which happens twice.
-        let cases: [(DateComponents, DateComponents, String)] = [
-            (DateComponents(year: 2026, month: 3, day: 7, hour: 23), DateComponents(year: 2026, month: 3, day: 8), "2026-03-08"),
-            (DateComponents(year: 2026, month: 3, day: 8, hour: 22), DateComponents(year: 2026, month: 3, day: 9), "2026-03-09"),
-            (DateComponents(year: 2026, month: 10, day: 31, hour: 23, minute: 59), DateComponents(year: 2026, month: 11, day: 1), "2026-11-01"),
-            (DateComponents(year: 2026, month: 11, day: 1, hour: 1, minute: 30), DateComponents(year: 2026, month: 11, day: 2), "2026-11-02"),
-        ]
-        for (at, next, day) in cases {
-            let date = try #require(calendar.date(from: at))
-            let midnight = try #require(calendar.date(from: next))
-            let close = Policy.closeRefreshDate(after: date, in: zone)
-            #expect(close == midnight.addingTimeInterval(Policy.closeAfterMidnight))
-            #expect(RecordingDayCalendar.day(of: close, in: zone) == day)
-        }
-        // Elapsed time follows the day's real length: 22.5 hours from 00:30 on the 23-hour day, 24.5 on the 25-hour one.
-        let spring = try #require(calendar.date(from: DateComponents(year: 2026, month: 3, day: 8, hour: 0, minute: 30)))
-        #expect(Policy.closeRefreshDate(after: spring, in: zone).timeIntervalSince(spring) == 22.5 * 3600 + Policy.closeAfterMidnight)
-        let fall = try #require(calendar.date(from: DateComponents(year: 2026, month: 11, day: 1, hour: 0, minute: 30)))
-        #expect(Policy.closeRefreshDate(after: fall, in: zone).timeIntervalSince(fall) == 24.5 * 3600 + Policy.closeAfterMidnight)
+        return calendar
     }
 }

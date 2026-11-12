@@ -13,13 +13,12 @@ import WidgetKit
 /// The capture (`RecordingCapture`, day mode) records and says what happened through its day hooks; this decides what
 /// that means for the wrist, Notification Center, the face and the phone (`AllDayAlertPolicy`) and carries it out.
 /// Only the app in front can open the microphone, so whatever asks from outside (a link, a notification, the phone)
-/// waits here until the app is in front.
+/// waits here until the app is in front. Whether it may start at all is the iPhone's to say: the user agrees to its
+/// consent sheet there (`recordingDay`, docs/assistant/day-recap.md「Watch and phone capabilities」), and until then the
+/// watch explains and points to the phone (`AllDayAlertPolicy.access`).
 @MainActor @Observable
 final class WatchAllDay {
     static let shared = WatchAllDay()
-    /// The user read the first start's explanation and agreed (App Review 5.1.2(i)). Its own key, not rolling
-    /// recording's: what happens to the recording is new (the text goes to the hub's model for a recap).
-    static let consentKey = "recording.allDayConsent"
     /// The longest a WatchConnectivity wake waits for the phone's delivery to be handled: our own cap, not a promise of
     /// the system's.
     private static let connectivityWait: TimeInterval = 20
@@ -60,8 +59,8 @@ final class WatchAllDay {
     private(set) var feedback: Feedback?
     /// Something outside the page asked for it (a link, a notification): the home list presents it.
     var pageRequested = false
-    /// A start asked for from outside still needs the first start's explanation: the page shows it.
-    var consentPending = false
+    /// The phone deleted the recording this watch was making, and nothing started since: the page says so.
+    private(set) var deletedOnPhone = false
     /// The user wants all-day recording on (`RecordingCapture.allDayIntentKey`, kept by the capture so it outlives the
     /// app): on from a start until Stop for Today. Mirrored here because UserDefaults isn't observed, so the card and
     /// the page redraw when it goes (`refreshWish`).
@@ -73,7 +72,7 @@ final class WatchAllDay {
     /// The state the policy last acted on: a hook and the capture's own change can report the same move.
     @ObservationIgnored private var published: AllDaySnapshot.State = .off
     @ObservationIgnored private var installed = false
-    @ObservationIgnored private var pending: AllDayLink.Action?
+    @ObservationIgnored private var pending: Ask?
     @ObservationIgnored private var startTask: Task<Void, Never>?
     @ObservationIgnored private var feedbackTask: Task<Void, Never>?
     @ObservationIgnored private var deadManArmedAt: Date?
@@ -84,7 +83,15 @@ final class WatchAllDay {
     @ObservationIgnored private var sampleIntent: Bool?
     @ObservationIgnored private var sampleShown = false
     private var sampleWaiting: Int?
+    /// The phone's `recordingDay` a sample shows, over the stored one.
+    private var samplePhoneDay: Int?
     #endif
+
+    /// What something outside the page asked for, and whether it was the phone (which speaks for its consent).
+    private struct Ask {
+        let action: AllDayLink.Action
+        let byPhone: Bool
+    }
 
     private init() {
         wish = UserDefaults.standard.bool(forKey: RecordingCapture.allDayIntentKey)
@@ -107,6 +114,22 @@ final class WatchAllDay {
     /// minutes can still be erased. Reads the library: for the page, not for anything always on screen.
     var dayOpen: Bool { !RecordingLibrary.shared.openDays(source: .watch).isEmpty }
 
+    /// What the watch offers now. `phoneDay`: the stored `recordingDay` (`WatchSync.phoneDayKey`), which the views
+    /// read through `@AppStorage` so they redraw when the phone changes it (UserDefaults isn't observed here).
+    func access(phoneDay: Int?) -> AllDayAlertPolicy.Access {
+        AllDayAlertPolicy.access(phoneDay: shown(phoneDay: phoneDay), state: state)
+    }
+
+    private func shown(phoneDay: Int?) -> Int? {
+        #if DEBUG
+        if let samplePhoneDay { return samplePhoneDay }
+        #endif
+        return phoneDay
+    }
+
+    /// The phone's `recordingDay` as last stored, read when a start is asked for.
+    private static var storedPhoneDay: Int? { UserDefaults.standard.object(forKey: WatchSync.phoneDayKey) as? Int }
+
     /// Chunks the iPhone hasn't acknowledged yet.
     var waiting: Int {
         #if DEBUG
@@ -127,6 +150,7 @@ final class WatchAllDay {
         installed = true
         // Chained onto whatever was there, never replacing it.
         let halted = capture.onDayHalted, resumed = capture.onDayResumed, saved = capture.onDayChunk
+        let deleted = capture.onDayDeletedRemotely
         capture.onDayHalted = { [weak self] reason in
             halted?(reason)
             self?.handle(.halted(reason))
@@ -138,6 +162,10 @@ final class WatchAllDay {
         capture.onDayChunk = { [weak self] id in
             saved?(id)
             self?.chunkSaved()
+        }
+        capture.onDayDeletedRemotely = { [weak self] id in
+            deleted?(id)
+            self?.deletedRemotely()
         }
         WatchSync.shared.onDayCommand = { [weak self] command in self?.phoneCommand(command) }
         WatchAllDayNotices.registerCategories()
@@ -164,18 +192,13 @@ final class WatchAllDay {
 
     // MARK: - What the user does
 
-    /// Starts or continues all-day recording, as a tap on All-Day Recording or Continue does. False when the user hasn't
-    /// agreed to it yet: the caller shows the explanation (`allDayConsent`) instead.
-    @discardableResult func requestStart() -> Bool {
-        guard UserDefaults.standard.bool(forKey: Self.consentKey) else { return false }
+    /// Starts or continues all-day recording, as a tap on All-Day Recording or Continue does. False when it may not
+    /// start yet (the user hasn't agreed on the iPhone): the page says so instead. `byPhone`: the phone asked for this
+    /// start, which stands for its consent (`AllDayAlertPolicy.mayStart`).
+    @discardableResult func requestStart(byPhone: Bool = false) -> Bool {
+        guard AllDayAlertPolicy.mayStart(access(phoneDay: Self.storedPhoneDay), askedByPhone: byPhone) else { return false }
         bringToRecording()
         return true
-    }
-
-    /// The explanation's Start All-Day Recording.
-    func confirmConsent() {
-        UserDefaults.standard.set(true, forKey: Self.consentKey)
-        bringToRecording()
     }
 
     func pause() {
@@ -238,6 +261,8 @@ final class WatchAllDay {
     }
 
     private func bringToRecording() {
+        // A start answers the deletion's line: what is recorded now goes into a new recording.
+        if deletedOnPhone { deletedOnPhone = false }
         switch state {
         case .recording: break
         case .paused: capture.togglePause()
@@ -291,9 +316,9 @@ final class WatchAllDay {
     // MARK: - From outside
 
     /// A link (the complication) or a notification's answer (`WatchAppDelegate`): runs once the app is in front, and
-    /// shows the page.
-    func open(_ action: AllDayLink.Action) {
-        pending = action
+    /// shows the page. `byPhone`: the answer carries out the phone's request (`AllDayNotice.askedByPhone`).
+    func open(_ action: AllDayLink.Action, byPhone: Bool = false) {
+        pending = Ask(action: action, byPhone: byPhone)
         runPending()
     }
 
@@ -308,11 +333,12 @@ final class WatchAllDay {
     }
 
     private func runPending() {
-        guard let action = pending, Self.inFront else { return }
+        guard let ask = pending, Self.inFront else { return }
         pending = nil
         pageRequested = true
-        guard action != .open else { return }
-        if !requestStart() { consentPending = true }
+        guard ask.action != .open else { return }
+        // A start that may not run yet leaves the page to say why (agree on the iPhone first).
+        requestStart(byPhone: ask.byPhone)
     }
 
     /// The phone's All-Day Recording switch (`WatchSync.onDayCommand`, newest commands only).
@@ -320,7 +346,7 @@ final class WatchAllDay {
         switch command {
         case RecordingDayContract.Command.start:
             guard state != .recording else { return }
-            if handle(.phoneAskedToStart).startsNow { open(.start) }
+            if handle(.phoneAskedToStart).startsNow { open(.start, byPhone: true) }
         case RecordingDayContract.Command.stop:
             stopForToday()
         default:
@@ -346,10 +372,10 @@ final class WatchAllDay {
         }
     }
 
-    /// A background refresh (`WatchBackgroundRefresh`; the one after midnight, or the frog's): a day left open while
-    /// nothing recorded gets its end marker, so the phone can finish it and the hub write its final recap without the
-    /// user opening the app. The close hands its marker off to the system at once, which needs an activated session: a
-    /// cold launch has only just asked for one.
+    /// A background refresh (`WatchBackgroundRefresh`; the one after midnight, or the frog's): a day recording left
+    /// open while nothing recorded gets its `closed` event, so the phone can finish it and the hub write its final
+    /// recap without the user opening the app. The close hands its event off to the system at once, which needs an
+    /// activated session: a cold launch has only just asked for one.
     func closeStaleDays() async {
         install()
         // A pause can span several midnights: the next close is asked for whatever happens here.
@@ -360,12 +386,15 @@ final class WatchAllDay {
         WatchDayTransfer.shared.publishState()
     }
 
-    /// While a day is open and nothing records, wake just after midnight to close it; otherwise no wake of ours. watchOS
-    /// decides when exactly, and the request is shared with the frog's.
+    /// While a day recording is open and nothing records, wake just after its midnight (in the recording's own zone)
+    /// to close it; otherwise no wake of ours. watchOS decides when exactly, and the request is shared with the frog's.
     private func scheduleMidnightClose() {
-        let wanted = state != .recording && !RecordingLibrary.shared.openDays(source: .watch).isEmpty
-        let at = wanted ? AllDayAlertPolicy.closeRefreshDate(after: .now, in: .autoupdatingCurrent) : nil
-        WatchBackgroundRefresh.want(.allDay, at: at)
+        let open = state == .recording ? [] : RecordingLibrary.shared.openDays(source: .watch)
+        // Every day entry keeps its zone; the watch's own is only the fallback for one whose zone is unreadable.
+        let days = open.compactMap { entry in
+            entry.day.map { AllDayAlertPolicy.OpenDay(day: $0, zone: entry.dayTimeZone ?? .autoupdatingCurrent) }
+        }
+        WatchBackgroundRefresh.want(.allDay, at: AllDayAlertPolicy.closeRefreshDate(openDays: days, now: .now))
     }
 
     /// Waits until WatchConnectivity has activated (`WatchModel` asks for it at launch), at most until `deadline`.
@@ -383,6 +412,16 @@ final class WatchAllDay {
     private func enterRecording() {
         guard published != .recording else { return }
         handle(published == .off ? .started : .resumed)
+    }
+
+    /// The phone deleted the day recording being made (docs/assistant/day-recap.md「Deleting」); the capture has stopped
+    /// it, deleted its chunks and ended the wish to record with it. All-Day Recording is off now rather than stopped,
+    /// since nothing failed and there is nothing to continue: a start later today opens a new recording. The watch says
+    /// so, since the delete came from elsewhere and the microphone went off without a tap here.
+    private func deletedRemotely() {
+        refreshWish()
+        deletedOnPhone = true
+        handle(.deletedOnPhone)
     }
 
     private func chunkSaved() {
@@ -504,14 +543,16 @@ final class WatchAllDay {
     }
 
     #if DEBUG
-    /// `-showAllDaySample` (`WatchAllDaySamples`): a made-up recording's start, its wish to record, and the chunks it
-    /// shows waiting, with no microphone.
-    func showSample(_ state: AllDaySnapshot.State, since: Date, waiting: Int) {
+    /// `-showAllDaySample` (`WatchAllDaySamples`): a made-up recording's start, its wish to record, the chunks it shows
+    /// waiting and the phone's `recordingDay`, with no microphone; `deleted`: the phone just deleted it.
+    func showSample(_ state: AllDaySnapshot.State, since: Date, waiting: Int, phoneDay: Int, deleted: Bool = false) {
         sampleShown = true
         sampleIntent = state == .stopped
         refreshWish()
         self.since = since
         sampleWaiting = waiting
+        samplePhoneDay = phoneDay
+        deletedOnPhone = deleted
     }
     #endif
 }

@@ -35,6 +35,28 @@ private func files(in folder: URL) -> [String] {
     ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []).filter { $0.hasSuffix(".m4a") }.sorted()
 }
 
+/// Stands in for `RecordingLibrary.allocateSeq`: a counter per folder, starting where `first` says, that records each
+/// call with whether the file of the seq it hands out exists yet.
+private final class SeqCounters: Sendable {
+    private let state: OSAllocatedUnfairLock<(next: [URL: Int], asked: [(folder: URL, seq: Int, fileExisted: Bool)])>
+
+    init(first: [URL: Int] = [:]) { state = OSAllocatedUnfairLock(initialState: (first, [])) }
+
+    var asked: [(folder: URL, seq: Int, fileExisted: Bool)] { state.withLock { $0.asked } }
+
+    var allocate: @Sendable (URL) -> Int? {
+        { [self] folder in
+            state.withLock { counters in
+                let seq = counters.next[folder] ?? 0
+                counters.next[folder] = seq + 1
+                let existed = FileManager.default.fileExists(atPath: folder.appendingPathComponent(RecordingSegment.fileName(seq)).path)
+                counters.asked.append((folder, seq, existed))
+                return seq
+            }
+        }
+    }
+}
+
 /// Stands in for a writer event in `RecordingCapture.applyInOrder`: a name to follow it by, and the recordings it concerns.
 private struct LoggedEvent {
     let name: String
@@ -42,16 +64,18 @@ private struct LoggedEvent {
 }
 
 /// The writer of an all-day recording across midnight, fed without a microphone (`append`): which day every sample
-/// lands in, the level of each chunk, and what it reports to whoever registers the chunks (docs/assistant/day-recap.md).
+/// lands in, the seq each chunk takes, the level of each chunk, and what it reports to whoever registers the chunks
+/// (docs/assistant/day-recap.md).
 struct RecordingDayWriterTests {
     private let root = FileManager.default.temporaryDirectory.appendingPathComponent("day-writer-\(UUID().uuidString)")
 
     /// A writer of 10-second chunks into a new folder, which exists (the library makes it with the recording).
-    private func makeWriter(firstIndex: Int = 0) throws -> (RecordingSegmentWriter, URL) {
+    private func makeWriter(seqs: SeqCounters? = nil) throws -> (RecordingSegmentWriter, URL) {
         let today = folder(in: root)
         try FileManager.default.createDirectory(at: today, withIntermediateDirectories: true)
-        let writer = RecordingSegmentWriter(directory: today, firstIndex: firstIndex)
+        let writer = RecordingSegmentWriter(directory: today, allocateSeq: seqs?.allocate)
         writer.segmentLength = RecordingDayContract.liveChunkSeconds
+        writer.compactsFiles = true   // as the capture sets it for a day recording
         return (writer, today)
     }
 
@@ -221,6 +245,32 @@ struct RecordingDayWriterTests {
         #expect(first.owner == id(of: tomorrow) && first.index == 0 && first.startedAt == anchor.addingTimeInterval(3_600))
     }
 
+    /// Each chunk takes its seq from its own recording's counter, asked once per file and before the file exists, so the
+    /// seq is saved before any of its audio; across a midnight the next day's counter takes over. A day continued after
+    /// a relaunch goes on where its counter is (docs/assistant/day-recap.md「The day recording on the watch」).
+    @Test func eachChunkTakesItsSeqFromItsRecordingsCounterBeforeItsFileOpens() throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let tomorrow = folder(in: root)
+        let today = folder(in: root)
+        try FileManager.default.createDirectory(at: today, withIntermediateDirectories: true)
+        // Seqs 0…4 of today were handed out before (recorded, or reported lost by the launch's recovery).
+        let seqs = SeqCounters(first: [today: 5])
+        let writer = RecordingSegmentWriter(directory: today, allocateSeq: seqs.allocate)
+        writer.segmentLength = RecordingDayContract.liveChunkSeconds
+        writer.setBoundary(at: anchor.addingTimeInterval(25), nextDirectory: tomorrow)
+        writer.append(try audio(0.1, seconds: 30), startedAt: anchor)
+        writer.stop()
+
+        let chunks = writer.finishedSegments
+        #expect(chunks.map(\.index) == [5, 6, 7, 0])
+        #expect(chunks.map(\.owner) == [today, today, today, tomorrow].map(id(of:)))
+        #expect(seqs.asked.map { $0.folder } == [today, today, today, tomorrow], "one seq per file, from the file's folder")
+        #expect(seqs.asked.map { $0.seq } == [5, 6, 7, 0])
+        #expect(seqs.asked.allSatisfy { !$0.fileExisted }, "the seq is taken before its file is created")
+        #expect(files(in: today) == ["seg-005.m4a", "seg-006.m4a", "seg-007.m4a"])
+        #expect(files(in: tomorrow) == ["seg-000.m4a"])
+    }
+
     @Test func levelIsEachChunksMeanPowerInDBFS() throws {
         defer { try? FileManager.default.removeItem(at: root) }
         let (writer, today) = try makeWriter()
@@ -246,13 +296,14 @@ struct RecordingDayWriterTests {
 
     @Test func switchDirectoryCutsMovesOnAndDropsTheOldMidnight() throws {
         defer { try? FileManager.default.removeItem(at: root) }
-        let (writer, today) = try makeWriter()
         let next = folder(in: root), stale = folder(in: root)
+        // Today's recording already had chunks up to 6: the writer goes on at its counter.
+        let seqs = SeqCounters(first: [next: 7])
+        let (writer, today) = try makeWriter(seqs: seqs)
         writer.append(try audio(0.1, seconds: 15), startedAt: anchor)
         writer.setBoundary(at: anchor.addingTimeInterval(100), nextDirectory: stale)
 
-        // Today's recording was already open with chunks up to 6: the writer goes on at its next seq.
-        let cut = try #require(writer.switchDirectory(to: next, firstIndex: 7), "the open chunk is cut first")
+        let cut = try #require(writer.switchDirectory(to: next), "the open chunk is cut first")
         #expect(cut.owner == id(of: today) && cut.index == 1 && cut.duration == 5)
         #expect(FileManager.default.fileExists(atPath: next.path))
         #expect(writer.elapsed == 0, "a new timeline")
@@ -274,6 +325,20 @@ struct RecordingDayWriterTests {
         #expect(files(in: next) == ["seg-007.m4a", "seg-008.m4a", "seg-009.m4a"])
     }
 
+    /// A pause's `paused` event is timed where the audio stopped, not when the pause was handled.
+    @Test func aPauseIsTimedWhereTheAudioEnded() throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (writer, _) = try makeWriter()
+        #expect(writer.audioEnd == nil, "nothing recorded yet")
+        writer.append(try audio(0.1, seconds: 15), startedAt: anchor)
+        #expect(writer.audioEnd == anchor.addingTimeInterval(15))
+        writer.cut()
+        #expect(writer.audioEnd == anchor.addingTimeInterval(15), "the cut keeps where the audio ended")
+        #expect(RecordingCapture.pauseTime(audioEnd: writer.audioEnd, now: anchor.addingTimeInterval(16)) == anchor.addingTimeInterval(15))
+        #expect(RecordingCapture.pauseTime(audioEnd: nil, now: anchor) == anchor)
+        #expect(RecordingCapture.pauseTime(audioEnd: anchor.addingTimeInterval(5), now: anchor) == anchor, "never in the future")
+    }
+
     /// "Erase 10 min" cuts the open chunk and erases up to where its audio ends: the chunk cut falls in the range however
     /// short it is, and the chunk after it starts exactly there, so it keeps all of its audio (C5/C12).
     @Test func anEraseCutEndsWhereTheAudioEndsAndTheNextChunkStartsThere() throws {
@@ -292,12 +357,13 @@ struct RecordingDayWriterTests {
         let next = try #require(writer.stop())
         #expect(next.index == 2 && next.startedAt == through, "starts no earlier than the erased range ends")
 
-        let range = RecordingErase(from: through.addingTimeInterval(-RecordingRolling.eraseMinutes * 60), to: through)
+        let window = try #require(RecordingCapture.eraseWindow(now: through.addingTimeInterval(0.5), audioEnd: through))
+        #expect(window.to == through, "the range ends at the cut, not at the later clock reading")
         let record = { (segment: RecordingSegmentWriter.Segment) in
             RecordingSegment(index: segment.index, start: segment.start, duration: segment.duration, startedAt: segment.startedAt)
         }
-        #expect(record(closed).fallsInDayErase(range))
-        #expect(!record(next).fallsInDayErase(range))
+        #expect(record(closed).overlapsDay(window.from, window.to))
+        #expect(!record(next).overlapsDay(window.from, window.to))
     }
 
     /// The floor an erase leaves only absorbs the host clock's jitter: a clock that really moved back keeps its time.
@@ -310,64 +376,247 @@ struct RecordingDayWriterTests {
         let next = try #require(writer.stop())
         #expect(next.startedAt == through.addingTimeInterval(-3))
     }
+
+    /// A finished chunk carries no padding: 10 seconds of speech-like sound, with its header, fit the live envelope
+    /// (docs/assistant/day-recap.md「Chunks」), and the file still reads back every sample.
+    @Test func aTenSecondChunkFitsTheLiveEnvelope() throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (writer, today) = try makeWriter()
+        writer.append(try speech(seconds: 10), startedAt: anchor)
+        writer.stop()
+        let segment = try #require(writer.finishedSegments.first)
+        let data = try Data(contentsOf: segment.url)
+        #expect(RecordingM4A.compacted(data) == nil, "nothing left to remove")
+        let header = RecordingDayHeader(recording: try #require(id(of: today)), recordingStartedAt: anchor, tz: "Asia/Shanghai",
+                                        day: "2027-01-15", seq: segment.index, startedAt: segment.startedAt,
+                                        duration: segment.duration, level: segment.level)
+        let envelope = RecordingDayOutbox.frameBytes(audio: data.count, header: header)
+        #expect(RecordingDayOutbox.fitsMessage(envelope), "\(envelope) bytes")
+        #expect(envelope <= RecordingDayOutbox.estimatedFrameBytes(seconds: segment.duration), "the estimate is generous")
+        let file = try AVAudioFile(forReading: segment.url)
+        #expect(abs(file.length - 160_000) <= 2_048, "\(file.length) samples")
+    }
+
+    /// Only all-day chunks are rewritten: any other recording's files stay exactly as AVAudioFile wrote them.
+    @Test func otherRecordingsKeepTheirPadding() throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let today = folder(in: root)
+        try FileManager.default.createDirectory(at: today, withIntermediateDirectories: true)
+        let writer = RecordingSegmentWriter(directory: today)
+        writer.segmentLength = RecordingDayContract.liveChunkSeconds
+        writer.append(try speech(seconds: 10), startedAt: anchor)
+        writer.stop()
+        let segment = try #require(writer.finishedSegments.first)
+        #expect(RecordingM4A.compacted(try Data(contentsOf: segment.url)) != nil, "the padding is still there")
+    }
+
+    /// Dropping the padding moves each chunk offset back by what was removed before it, and decodes to the same samples.
+    @Test func droppingThePaddingKeepsEverySample() throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let padded = root.appendingPathComponent("padded.m4a"), compact = root.appendingPathComponent("compact.m4a")
+        let settings: [String: Any] = [AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: rate, AVNumberOfChannelsKey: 1,
+                                       AVEncoderBitRateKey: RecordingAudioSpec.bitRate]
+        do {
+            let file = try AVAudioFile(forWriting: padded, settings: settings, commonFormat: .pcmFormatFloat32, interleaved: false)
+            try file.write(from: try speech(seconds: 10))
+        }
+        let original = try Data(contentsOf: padded)
+        let smaller = try #require(RecordingM4A.compacted(original), "the writer pads its files")
+        #expect(original.count - smaller.count > 10_000, "\(original.count) to \(smaller.count) bytes")
+        try smaller.write(to: compact)
+        #expect(try decoded(compact) == decoded(padded))
+    }
+
+    /// Only a layout it can rewrite is rewritten: no padding, or a chunk offset into the padding, leaves the file alone.
+    @Test func droppingThePaddingNeedsALayoutItKnows() throws {
+        func box(_ type: String, _ body: [UInt8]) -> [UInt8] {
+            let size = UInt32(8 + body.count)
+            return withUnsafeBytes(of: size.bigEndian, Array.init) + Array(type.utf8) + body
+        }
+        func movie(offset: UInt32) -> [UInt8] {
+            let stco = box("stco", [0, 0, 0, 0] + withUnsafeBytes(of: UInt32(1).bigEndian, Array.init)
+                + withUnsafeBytes(of: offset.bigEndian, Array.init))
+            return box("moov", box("trak", box("mdia", box("minf", box("stbl", stco)))))
+        }
+        let ftyp = box("ftyp", Array("M4A ".utf8)), free = box("free", [UInt8](repeating: 0, count: 100))
+        let moov = movie(offset: 0)
+        // The first audio byte, after ftyp, moov, free and mdat's header.
+        let first = UInt32(ftyp.count + moov.count + free.count + 8)
+        let file = ftyp + movie(offset: first) + free + box("mdat", [1, 2, 3])
+        let compacted = try #require(RecordingM4A.compacted(Data(file)))
+        #expect(compacted == Data(ftyp + movie(offset: first - UInt32(free.count)) + box("mdat", [1, 2, 3])))
+        #expect(RecordingM4A.compacted(compacted) == nil, "nothing to remove")
+        let intoPadding = ftyp + movie(offset: UInt32(ftyp.count + moov.count + 4)) + free + box("mdat", [1, 2, 3])
+        #expect(RecordingM4A.compacted(Data(intoPadding)) == nil)
+        #expect(RecordingM4A.compacted(Data(file.dropLast())) == nil, "boxes that don't add up")
+    }
+
+    /// Speech-like sound over a little room noise, seeded: AAC doesn't squeeze it the way it squeezes one value.
+    private func speech(seconds: Double) throws -> AVAudioPCMBuffer {
+        let buffer = try audio(0, seconds: seconds)
+        let data = try #require(buffer.floatChannelData?[0])
+        var state: UInt64 = 1
+        for i in 0..<Int(buffer.frameLength) {
+            state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            let noise = Double(state >> 11) / Double(1 << 53) * 2 - 1
+            let t = Double(i) / rate
+            let voice = sin(2 * .pi * 140 * t) + 0.5 * sin(2 * .pi * 280 * t) + 0.25 * sin(2 * .pi * 420 * t)
+            data[i] = Float(0.003 * noise + 0.06 * (1 - cos(2 * .pi * 4 * t)) * voice)
+        }
+        return buffer
+    }
+
+    private func decoded(_ url: URL) throws -> [Float] {
+        let file = try AVAudioFile(forReading: url)
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)))
+        try file.read(into: buffer)
+        let data = try #require(buffer.floatChannelData?[0])
+        return Array(UnsafeBufferPointer(start: data, count: Int(buffer.frameLength)))
+    }
 }
 
-/// Capture's all-day decisions that need no microphone: the day check, the audio session events, the launch halt.
+/// Capture's all-day decisions that need no microphone: which day a start goes on in, the day check, the erase window,
+/// the seqs to report lost, the audio session events, the order writer events and control events are saved in.
 struct RecordingDayCaptureRulesTests {
     private let newYork = TimeZone(identifier: "America/New_York")!
     private let london = TimeZone(identifier: "Europe/London")!
 
     private func utc(_ text: String) throws -> Date { try Date.ISO8601FormatStyle().parse(text) }
 
+    private func day(_ day: String, in zone: TimeZone, createdAt: Date, source: RecordingEntry.Source = .watch) -> RecordingEntry {
+        var entry = RecordingEntry(id: UUID(), createdAt: createdAt, source: source, kind: .day)
+        entry.day = day
+        entry.timeZone = zone.identifier
+        return entry
+    }
+
     @Test func dayCheckKeepsTheDayUntilItsOwnMidnightAcrossDST() throws {
         // 2026-11-01 has 25 hours in New York, 2026-03-08 has 23.
-        let fallBack = try #require(RecordingCapture.endOfDay("2026-11-01", in: newYork))
-        let fallBackStart = try utc("2026-11-01T04:00:00Z")
-        #expect(fallBack.timeIntervalSince(fallBackStart) == 25 * 3_600)
-        let springForward = try #require(RecordingCapture.endOfDay("2026-03-08", in: newYork))
-        let springStart = try utc("2026-03-08T05:00:00Z")
-        #expect(springForward.timeIntervalSince(springStart) == 23 * 3_600)
+        let fallBack = try #require(RecordingDayCalendar.end(of: "2026-11-01", in: newYork))
+        #expect(fallBack.timeIntervalSince(try utc("2026-11-01T04:00:00Z")) == 25 * 3_600)
+        let springForward = try #require(RecordingDayCalendar.end(of: "2026-03-08", in: newYork))
+        #expect(springForward.timeIntervalSince(try utc("2026-03-08T05:00:00Z")) == 23 * 3_600)
 
-        let noon = try utc("2026-11-01T17:00:00Z")
-        #expect(RecordingCapture.dayCheck(entryDay: "2026-11-01", now: noon, zone: newYork, running: true, plannedBoundary: nil)
-                == .keep(boundary: fallBack))
+        let check = { (now: Date, running: Bool, planned: Date?) in
+            RecordingCapture.dayCheck(day: "2026-11-01", zone: newYork, closed: false, now: now, running: running, plannedBoundary: planned)
+        }
+        #expect(check(try utc("2026-11-01T17:00:00Z"), true, nil) == .keep(boundary: fallBack))
         // An hour before the end of the 25-hour day, which a 24-hour count would already call tomorrow.
-        let late = try utc("2026-11-02T04:00:00Z")
-        #expect(RecordingCapture.dayCheck(entryDay: "2026-11-01", now: late, zone: newYork, running: false, plannedBoundary: fallBack)
-                == .keep(boundary: fallBack))
+        #expect(check(try utc("2026-11-02T04:00:00Z"), false, fallBack) == .keep(boundary: fallBack))
     }
 
     @Test func dayCheckLetsTheWriterCutAtItsOwnMidnight() throws {
-        let midnight = try #require(RecordingCapture.endOfDay("2026-11-01", in: newYork))
+        let midnight = try #require(RecordingDayCalendar.end(of: "2026-11-01", in: newYork))
         let justAfter = midnight.addingTimeInterval(0.2)
-        #expect(RecordingCapture.dayCheck(entryDay: "2026-11-01", now: justAfter, zone: newYork, running: true, plannedBoundary: midnight)
-                == .awaitWriter, "a buffer is due: the cut stays exact to the sample")
-        #expect(RecordingCapture.dayCheck(entryDay: "2026-11-01", now: justAfter, zone: newYork, running: false, plannedBoundary: midnight)
-                == .switchNow, "paused past midnight: nothing else will move it")
-        #expect(RecordingCapture.dayCheck(entryDay: "2026-11-01", now: justAfter, zone: newYork, running: true, plannedBoundary: nil)
-                == .switchNow)
-        #expect(RecordingCapture.dayCheck(entryDay: "2026-11-01", now: midnight.addingTimeInterval(3 * 86_400), zone: newYork,
-                                          running: false, plannedBoundary: midnight) == .switchNow, "paused over several midnights")
-        #expect(RecordingCapture.dayCheck(entryDay: "not a day", now: justAfter, zone: newYork, running: true, plannedBoundary: nil)
-                == .switchNow)
+        let check = { (day: String, now: Date, running: Bool, planned: Date?) in
+            RecordingCapture.dayCheck(day: day, zone: newYork, closed: false, now: now, running: running, plannedBoundary: planned)
+        }
+        #expect(check("2026-11-01", justAfter, true, midnight) == .awaitWriter, "a buffer is due: the cut stays exact to the sample")
+        #expect(check("2026-11-01", justAfter, false, midnight) == .switchNow, "paused past midnight: nothing else will move it")
+        #expect(check("2026-11-01", justAfter, true, nil) == .switchNow)
+        #expect(check("2026-11-01", midnight.addingTimeInterval(3 * 86_400), false, midnight) == .switchNow, "paused over several midnights")
+        #expect(check("not a day", justAfter, true, nil) == .switchNow)
+        #expect(RecordingCapture.dayCheck(day: "2026-11-01", zone: newYork, closed: true, now: justAfter.addingTimeInterval(-3_600),
+                                          running: false, plannedBoundary: midnight) == .switchNow,
+                "a day closed meanwhile (the transfer's midnight close) takes no more audio")
     }
 
-    @Test func dayCheckFollowsTheTimeZone() throws {
-        // 22:00 in New York on March 8 is 02:00 on March 9 in London: flying east ends the day now, although the
-        // writer's New York midnight is still two hours away.
+    /// A day recording's day and midnight are in the zone it began in: flying east or west never ends it early or late
+    /// (docs/assistant/day-recap.md「The day recording on the watch」).
+    @Test func theRecordingsOwnZoneDecidesNotTheWatchs() throws {
+        // Begun in New York on March 8; at 22:00 there it is already 02:00 on March 9 in London, where the watch is now.
+        let newYorkMidnight = try #require(RecordingDayCalendar.end(of: "2026-03-08", in: newYork))
         let evening = try utc("2026-03-09T02:00:00Z")
-        let newYorkMidnight = try #require(RecordingCapture.endOfDay("2026-03-08", in: newYork))
-        #expect(RecordingCapture.dayCheck(entryDay: "2026-03-08", now: evening, zone: london, running: true, plannedBoundary: newYorkMidnight)
-                == .switchNow)
-        // Flying west: March 9 began in London and has not come yet in New York; the recording keeps it, up to its end there.
-        let west = try utc("2026-03-09T03:00:00Z")
-        let newYorkEnd = try utc("2026-03-10T04:00:00Z")
-        #expect(RecordingCapture.dayCheck(entryDay: "2026-03-09", now: west, zone: newYork, running: true, plannedBoundary: nil)
-                == .keep(boundary: newYorkEnd))
+        #expect(RecordingCapture.dayCheck(day: "2026-03-08", zone: newYork, closed: false, now: evening, running: true,
+                                          plannedBoundary: newYorkMidnight) == .keep(boundary: newYorkMidnight))
+        // Begun in London on March 9 and flown to New York, where it is still March 8: it ends at London's midnight.
+        let londonMidnight = try utc("2026-03-10T00:00:00Z")
+        #expect(RecordingCapture.dayCheck(day: "2026-03-09", zone: london, closed: false, now: try utc("2026-03-09T03:00:00Z"),
+                                          running: true, plannedBoundary: nil) == .keep(boundary: londonMidnight))
+        var flown = day("2026-03-09", in: london, createdAt: try utc("2026-03-09T00:30:00Z"))
+        #expect(RecordingCapture.dayEnd(of: flown) == londonMidnight)
+        flown.timeZone = "Not/AZone"
+        #expect(RecordingCapture.dayEnd(of: flown) == nil)
+    }
+
+    /// A start goes on in the newest open day recording whose day is still on in its own zone, and closes the others
+    /// that are over, each at its own midnight.
+    @Test func aStartGoesOnInTheDayStillOnAndClosesThoseOver() throws {
+        let yesterday = day("2026-10-31", in: newYork, createdAt: try utc("2026-10-31T12:00:00Z"))
+        let today = day("2026-11-01", in: newYork, createdAt: try utc("2026-11-01T13:00:00Z"))
+        // An hour before the end of the 25-hour day.
+        let late = try utc("2026-11-02T04:00:00Z")
+        let plan = RecordingCapture.dayToOpen([yesterday, today], now: late)
+        #expect(plan.goingOn?.id == today.id)
+        #expect(plan.closing.map { $0.id } == [yesterday.id])
+        #expect(plan.closing.first?.at == RecordingDayCalendar.end(of: "2026-10-31", in: newYork), "at its own midnight")
+
+        // At today's own midnight it is over too: the start makes a new recording.
+        let midnight = try #require(RecordingDayCalendar.end(of: "2026-11-01", in: newYork))
+        let next = RecordingCapture.dayToOpen([today], now: midnight)
+        #expect(next.goingOn == nil && next.closing.map { $0.at } == [midnight])
+
+        // A day in London still on while the watch's own date there moved on is continued, wherever the watch is.
+        let abroad = day("2026-11-01", in: london, createdAt: try utc("2026-11-01T08:00:00Z"))
+        #expect(RecordingCapture.dayToOpen([abroad], now: try utc("2026-11-01T23:30:00Z")).goingOn?.id == abroad.id)
+
+        // One whose date can't be read is closed now; one begun later than now (the clock moved back) is left alone.
+        var unreadable = day("2026-11-01", in: newYork, createdAt: try utc("2026-11-01T13:00:00Z"))
+        unreadable.day = "someday"
+        let ahead = day("2026-11-03", in: newYork, createdAt: try utc("2026-11-03T13:00:00Z"))
+        let odd = RecordingCapture.dayToOpen([unreadable, ahead], now: late)
+        #expect(odd.goingOn == nil)
+        #expect(odd.closing.map { $0.id } == [unreadable.id] && odd.closing.first?.at == late)
+    }
+
+    @Test func eraseCoversTheLastTenMinutesUpToTheCut() throws {
+        let now = anchor
+        let window = try #require(RecordingCapture.eraseWindow(now: now, audioEnd: now.addingTimeInterval(-2)))
+        #expect(window.from == now.addingTimeInterval(-RecordingRolling.eraseMinutes * 60) && window.to == now.addingTimeInterval(-2))
+        #expect(RecordingCapture.eraseWindow(now: now, audioEnd: now.addingTimeInterval(3))?.to == now, "never past now")
+        #expect(RecordingCapture.eraseWindow(now: now, audioEnd: now.addingTimeInterval(-11 * 60)) == nil,
+                "paused for longer than the window: nothing recorded in it")
+        #expect(RecordingCapture.eraseWindow(now: now, audioEnd: nil) == nil, "a writer that never had audio")
+    }
+
+    /// Just after midnight the window reaches into the day before, which is closed but still on the watch.
+    @Test func anEraseJustAfterMidnightTouchesBothDays() throws {
+        let midnight = try #require(RecordingDayCalendar.end(of: "2026-11-01", in: newYork))
+        var yesterday = day("2026-11-01", in: newYork, createdAt: midnight.addingTimeInterval(-20 * 3_600))
+        yesterday.active = false
+        yesterday.closedAt = midnight
+        let today = day("2026-11-02", in: newYork, createdAt: midnight)
+        let phone = day("2026-11-02", in: newYork, createdAt: midnight, source: .phone)
+        let clip = RecordingEntry(id: UUID(), createdAt: midnight, source: .watch)
+        let entries = [today, yesterday, phone, clip]
+
+        let across = RecordingErase(from: midnight.addingTimeInterval(-300), to: midnight.addingTimeInterval(300))
+        #expect(Set(RecordingCapture.daysTouched(by: across, in: entries, source: .watch).map(\.id)) == [today.id, yesterday.id])
+        let after = RecordingErase(from: midnight.addingTimeInterval(600), to: midnight.addingTimeInterval(1_200))
+        #expect(RecordingCapture.daysTouched(by: after, in: entries, source: .watch).map(\.id) == [today.id])
+        let before = RecordingErase(from: midnight.addingTimeInterval(-1_200), to: midnight.addingTimeInterval(-600))
+        #expect(RecordingCapture.daysTouched(by: before, in: entries, source: .watch).map(\.id) == [yesterday.id])
+    }
+
+    /// Seqs handed out with no chunk (a file that could not be opened or written) are reported lost once the writer has
+    /// left the recording; acknowledged, erased or lost seqs and chunks still waiting for their save are not.
+    @Test func seqsWithoutAChunkAreTheOnesToReportLost() {
+        var entry = RecordingEntry(id: UUID(), createdAt: anchor, source: .watch, kind: .day)
+        entry.prunedBelow = 3
+        entry.prunedAbove = [4]
+        entry.segments = [3, 6].map { RecordingSegment(index: $0, start: 0, duration: 10, startedAt: anchor) }
+        #expect(RecordingCapture.holes(in: entry, allocated: 9, held: [7]) == [5, 8])
+        #expect(RecordingCapture.holes(in: entry, allocated: 0, held: []) == [5], "the entry's own counter when it is higher")
+        entry.segments = []
+        entry.prunedBelow = 3
+        entry.prunedAbove = nil
+        #expect(RecordingCapture.holes(in: entry, allocated: 3, held: []).isEmpty, "every seq accounted for")
     }
 
     /// What the writer logged is applied in order; one that can't be saved holds everything after it that concerns any
     /// of its recordings (a midnight concerns both days), and the rest goes on. The next try starts with what was held.
+    /// Owed control events follow the same rule per recording.
     @Test func writerEventsApplyInOrderAndHoldWhatFollowsAFailedSave() {
         let a = UUID(), b = UUID(), c = UUID()
         let log = [
@@ -393,36 +642,23 @@ struct RecordingDayCaptureRulesTests {
         #expect(retry.changed == [b, c] && retry.kept.isEmpty)
     }
 
-    /// A chunk carries the reason for the audio missing before it only when it ends after the microphone opened again:
-    /// one finished before the pause and saved late takes none.
-    @Test func theGapGoesToTheFirstChunkThatEndsAfterTheMicrophoneOpened() {
-        let paused = RecordingCapture.PendingGap(reason: RecordingDayContract.Reason.paused, since: anchor.addingTimeInterval(100))
-        let early = RecordingCapture.gap(endingAt: anchor.addingTimeInterval(90), in: [paused])
-        #expect(early.reason == nil && early.rest == [paused])
-        let first = RecordingCapture.gap(endingAt: anchor.addingTimeInterval(110), in: [paused])
-        #expect(first.reason == RecordingDayContract.Reason.paused && first.rest.isEmpty)
-        // The microphone came back and a call took it again before any audio: the newest gap is the one before the chunk.
-        let call = RecordingCapture.PendingGap(reason: RecordingDayContract.Reason.interrupted, since: anchor.addingTimeInterval(200))
-        let both = RecordingCapture.gap(endingAt: anchor.addingTimeInterval(250), in: [paused, call])
-        #expect(both.reason == RecordingDayContract.Reason.interrupted && both.rest.isEmpty)
-    }
-
-    /// A day chunk is never dropped (an erased one is kept as an erased marker), so a missing record after `addSegment`
-    /// is a save that failed and is tried again; a clip's audio in an erased range, or a pruned seq, is dropped on purpose.
-    @Test func aDayChunkCountsAsSavedOnlyWhenItsRecordIsThere() {
-        var day = RecordingEntry(id: UUID(), createdAt: anchor, source: .watch, locale: "en-US", kind: .day)
-        day.erased = [RecordingErase(from: anchor, to: anchor.addingTimeInterval(60))]
+    /// A day chunk counts as saved when its record is there, or when its seq is tombstoned (acknowledged, erased or
+    /// reported lost meanwhile); anything else is a save that failed and is tried again. A clip's audio in an erased
+    /// range is dropped on purpose.
+    @Test func aDayChunkCountsAsSavedOnlyWhenItsRecordOrTombstoneIsThere() {
+        let day = RecordingEntry(id: UUID(), createdAt: anchor, source: .watch, locale: "en-US", kind: .day)
         let chunk = RecordingSegment(index: 3, start: 30, duration: 10, startedAt: anchor.addingTimeInterval(30))
         #expect(!RecordingCapture.isSettled(chunk, in: day))
         #expect(!RecordingCapture.isSettled(chunk, in: nil))
         var saved = day
         saved.segments = [chunk]
         #expect(RecordingCapture.isSettled(chunk, in: saved))
-        var pruned = day
-        pruned.prunedBelow = 5
-        #expect(RecordingCapture.isSettled(chunk, in: pruned))
+        var tombstoned = day
+        tombstoned.prunedAbove = [3]
+        #expect(RecordingCapture.isSettled(chunk, in: tombstoned))
         var clip = day
         clip.kind = nil
+        clip.erased = [RecordingErase(from: anchor, to: anchor.addingTimeInterval(60))]
         #expect(RecordingCapture.isSettled(chunk, in: clip))
     }
 
@@ -441,20 +677,50 @@ struct RecordingDayCaptureRulesTests {
     }
 }
 
-/// The launch halt (C35): a day recording left open while the user wanted all-day on is reported once, the newest.
-@MainActor struct RecordingDayLaunchHaltTests {
+/// Capture's work on the library, on a temporary folder: the launch halt (C35), the watch's own erase, and the phone's
+/// erase requests.
+@MainActor struct RecordingDayCaptureLibraryTests {
+    private let zone = "America/New_York"
+
+    private func library() -> RecordingLibrary {
+        RecordingLibrary(root: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+    }
+
+    private func day(_ lib: RecordingLibrary, createdAt: Date = anchor, day: String = "2027-01-15") throws -> UUID {
+        try lib.create(source: .watch, kind: .day, createdAt: createdAt, day: day, timeZone: zone).id
+    }
+
+    /// Chunk `seq`, 10 s from `start` seconds after `anchor`, with its audio on disk.
+    private func chunk(_ lib: RecordingLibrary, _ id: UUID, _ seq: Int, at start: Double) throws {
+        try FileManager.default.createDirectory(at: lib.folder(id), withIntermediateDirectories: true)
+        try Data([UInt8(seq)]).write(to: lib.audio(id, seq))
+        lib.addSegment(id, RecordingSegment(index: seq, start: start, duration: 10, startedAt: anchor.addingTimeInterval(start), level: -30))
+    }
+
+    private func hasAudio(_ lib: RecordingLibrary, _ id: UUID, _ seq: Int) -> Bool {
+        FileManager.default.fileExists(atPath: lib.audio(id, seq).path)
+    }
+
+    /// Registers the chunks a writer finished, as capture does with its events.
+    private func register(_ events: [RecordingSegmentWriter.Event], in lib: RecordingLibrary, _ id: UUID) {
+        for case .segment(let chunk) in events {
+            lib.addSegment(id, RecordingSegment(index: chunk.index, start: chunk.start, duration: chunk.duration,
+                                                startedAt: chunk.startedAt, level: chunk.level))
+        }
+    }
+
     @Test func aDayLeftOpenWithAllDayOnIsReportedAtLaunch() throws {
-        let lib = RecordingLibrary(root: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+        let lib = library()
         defer { try? FileManager.default.removeItem(at: lib.root) }
         let yesterday = try lib.create(source: .watch, kind: .day, createdAt: anchor.addingTimeInterval(-86_400), day: "2027-01-14",
-                                       timeZone: "Asia/Shanghai")
-        let today = try lib.create(source: .watch, kind: .day, createdAt: anchor, day: "2027-01-15", timeZone: "Asia/Shanghai")
+                                       timeZone: zone)
+        let today = try lib.create(source: .watch, kind: .day, createdAt: anchor, day: "2027-01-15", timeZone: zone)
         let rolling = try lib.create(source: .watch, kind: .rolling, createdAt: anchor.addingTimeInterval(60))
 
         let recovered = lib.recover(source: .watch)
         #expect(Set(recovered) == [yesterday.id, today.id], "only day recordings stay open")
         #expect(lib.entry(rolling.id)?.active == false)
-        #expect(lib.entry(today.id)?.gapReason == RecordingDayContract.Reason.stopped)
+        #expect(lib.entry(today.id)?.gapReason == RecordingDayContract.Reason.stopped, "recovery says the microphone stopped")
 
         let halt = try #require(RecordingCapture.launchHalt(recovered: recovered, entries: lib.entries, intent: true))
         #expect(halt.id == today.id && halt.reason == .crashed)
@@ -462,5 +728,97 @@ struct RecordingDayCaptureRulesTests {
                 "all-day off: the user stopped for today")
         #expect(RecordingCapture.launchHalt(recovered: [], entries: lib.entries, intent: true) == nil)
         #expect(RecordingCapture.launchHalt(recovered: [rolling.id], entries: lib.entries, intent: true) == nil)
+    }
+
+    /// The watch's own erase (docs/assistant/day-recap.md「Erasing」): an `erase` event with its id, the range and the
+    /// seqs of the chunks it deleted before the phone had them, saved before those chunks go. A chunk the phone already
+    /// acknowledged is gone already and is not named.
+    @Test func aWatchEraseSavesItsEventThenDeletesTheChunksItNames() throws {
+        let lib = library()
+        defer { try? FileManager.default.removeItem(at: lib.root) }
+        let id = try day(lib)
+        for seq in 0..<4 { try chunk(lib, id, seq, at: Double(seq) * 10) }
+        lib.ackDayChunks(id, seqs: [0])
+        let eventID = UUID()
+        let range = RecordingErase(from: anchor.addingTimeInterval(5), to: anchor.addingTimeInterval(25))
+
+        #expect(RecordingCapture.erase(range, ofDay: id, in: lib, eventID: eventID))
+        let entry = try #require(lib.entry(id))
+        let event = try #require(entry.dayEvents?.last)
+        #expect(event.type == .erase && event.id == eventID && event.from == range.from && event.to == range.to)
+        #expect(event.seqs == [[1, 2]], "the chunks in the range the phone had not acknowledged")
+        #expect(entry.segments.map(\.index) == [3] && hasAudio(lib, id, 3), "the chunk after the range stays")
+        #expect(!hasAudio(lib, id, 1) && !hasAudio(lib, id, 2))
+        #expect(entry.isPruned(1) && entry.isPruned(2), "erased seqs are never used again")
+        #expect(RecordingLibrary(root: lib.root).entry(id)?.dayEvents?.last == event, "on disk")
+
+        // A range with nothing held left still tells the phone, which may hold chunks there.
+        #expect(RecordingCapture.erase(range, ofDay: id, in: lib))
+        #expect(lib.entry(id)?.dayEvents?.last?.seqs == [])
+        #expect(!RecordingCapture.erase(range, ofDay: UUID(), in: lib), "no such day recording: nothing")
+    }
+
+    /// The phone's erase: the chunks held in the range go, and the answer names them; a repeated request (its answer
+    /// was lost) gets the same answer and erases nothing more, and a recording the watch no longer holds is answered
+    /// with no seqs.
+    @Test func aPhoneEraseIsAnsweredOnceAndTheSameWayAgain() throws {
+        let lib = library()
+        defer { try? FileManager.default.removeItem(at: lib.root) }
+        let id = try day(lib)
+        for seq in 0..<3 { try chunk(lib, id, seq, at: Double(seq) * 10) }
+        let request = RecordingDayEraseRequest(recording: id, id: UUID(), from: anchor.addingTimeInterval(5), to: anchor.addingTimeInterval(15))
+        let now = anchor.addingTimeInterval(60)
+
+        let answer = try #require(RecordingCapture.carryOut(request, in: lib, now: now))
+        #expect(answer.recording == id && answer.erased == request.erase.id && answer.erasedSeqs == [0, 1])
+        #expect(lib.entry(id)?.segments.map(\.index) == [2])
+        #expect(lib.entry(id)?.dayEvents?.contains { $0.type == .erase } != true, "the answer, not an event, tells the phone")
+
+        // A chunk registered in the range after the first answer (it was still being saved) stays for the phone to drop.
+        try chunk(lib, id, 3, at: 12)
+        #expect(RecordingCapture.carryOut(request, in: lib, now: now.addingTimeInterval(30)) == answer)
+        #expect(lib.entry(id)?.segments.map(\.index) == [2, 3])
+
+        let elsewhere = RecordingDayEraseRequest(recording: UUID(), id: UUID(), from: anchor, to: anchor.addingTimeInterval(10))
+        #expect(RecordingCapture.carryOut(elsewhere, in: lib) == RecordingDayErased(recording: elsewhere.recording,
+                                                                                   erased: elsewhere.erase.id, seqs: []))
+    }
+
+    /// A phone erase reaching into the chunk being written (a 60 s one, the phone away), which began inside the range:
+    /// that chunk is cut first, so it is registered, erased and named in the answer, and none of the range's audio is
+    /// finished later under a new seq. The open chunk of another recording, or one that begins where the range ends,
+    /// holds none of the range and stays open.
+    @Test func aPhoneEraseCutsTheOpenChunkItReachesIntoAndErasesIt() throws {
+        let lib = library()
+        defer { try? FileManager.default.removeItem(at: lib.root) }
+        let id = try day(lib)
+        try FileManager.default.createDirectory(at: lib.folder(id), withIntermediateDirectories: true)
+        let writer = RecordingSegmentWriter(directory: lib.folder(id), allocateSeq: { @Sendable folder in
+            UUID(uuidString: folder.lastPathComponent).map { lib.allocateSeq($0) }
+        })
+        writer.segmentLength = RecordingDayContract.liveChunkSeconds
+        writer.append(try audio(0.1, seconds: 20), startedAt: anchor)
+        writer.segmentLength = RecordingDayContract.backlogChunkSeconds
+        writer.append(try audio(0.1, seconds: 30), startedAt: anchor.addingTimeInterval(20))
+        register(writer.takeEvents(), in: lib, id)
+        #expect(lib.entry(id)?.segments.map(\.index) == [0, 1], "chunk 2 is open from 20 s, 30 s into its 60")
+
+        let request = RecordingDayEraseRequest(recording: id, id: UUID(), from: anchor.addingTimeInterval(15), to: anchor.addingTimeInterval(40))
+        #expect(writer.cutOpenChunk(of: UUID(), startedBefore: request.erase.to) == nil, "another recording's chunk")
+        #expect(writer.cutOpenChunk(of: id, startedBefore: anchor.addingTimeInterval(20)) == nil,
+                "a range that ends where the chunk begins holds none of it")
+        let cut = try #require(writer.cutOpenChunk(of: id, startedBefore: request.erase.to))
+        #expect(cut.index == 2 && cut.startedAt == anchor.addingTimeInterval(20) && cut.duration == 30)
+        register(writer.takeEvents(), in: lib, id)
+
+        let answer = try #require(RecordingCapture.carryOut(request, in: lib))
+        #expect(answer.erasedSeqs == [1, 2], "the chunk that was open is erased with the rest")
+        #expect(lib.entry(id)?.segments.map(\.index) == [0])
+        #expect(!hasAudio(lib, id, 1) && !hasAudio(lib, id, 2) && hasAudio(lib, id, 0))
+
+        // The audio after the cut opens a new chunk, which begins after the range.
+        writer.append(try audio(0.1, seconds: 5), startedAt: anchor.addingTimeInterval(50))
+        let next = try #require(writer.stop())
+        #expect(next.index == 3 && next.startedAt == anchor.addingTimeInterval(50))
     }
 }

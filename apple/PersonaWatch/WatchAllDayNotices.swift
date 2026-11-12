@@ -2,14 +2,15 @@ import Foundation
 import UserNotifications
 
 /// All-day recording's notifications on the watch (`AllDayNotice`, docs/assistant/day-recap.md): paused and stopped
-/// with Continue, the phone's request to start with Start, and the dead-man's switch. The watch posts them itself: the
-/// phone may be out of reach, and only the watch knows its microphone stopped.
+/// with Continue, the phone's request to start with Start, the phone's delete of the recording being made, and the
+/// dead-man's switch. The watch posts them itself: the phone may be out of reach, and only the watch knows its
+/// microphone stopped.
 @MainActor
 final class WatchAllDayNotices {
     /// Requests handed to the system and not confirmed yet: a WatchConnectivity wake stays until they are out.
     private(set) var inFlight = 0
 
-    /// Our two categories next to whatever else is registered; theirs are left as they are.
+    /// Our categories next to whatever else is registered; theirs are left as they are.
     nonisolated static func registerCategories() {
         UNUserNotificationCenter.current().getNotificationCategories { @Sendable existing in
             let resume = UNNotificationAction(identifier: AllDayNotice.continueAction, title: String(localized: "Continue"),
@@ -19,6 +20,7 @@ final class WatchAllDayNotices {
             let ours: Set<UNNotificationCategory> = [
                 UNNotificationCategory(identifier: AllDayNotice.pausedCategory, actions: [resume], intentIdentifiers: [], options: []),
                 UNNotificationCategory(identifier: AllDayNotice.startCategory, actions: [start], intentIdentifiers: [], options: []),
+                UNNotificationCategory(identifier: AllDayNotice.deletedCategory, actions: [], intentIdentifiers: [], options: []),
             ]
             let others = existing.filter { !AllDayNotice.categories.contains($0.identifier) }
             UNUserNotificationCenter.current().setNotificationCategories(others.union(ours))
@@ -64,8 +66,8 @@ final class WatchAllDayNotices {
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [AllDayNotice.stoppedRequest])
     }
 
-    /// Takes back what was said (it's answered now): the delivered notices, and a pending start or pause notice. The
-    /// dead-man's switch is `disarmDeadMan`'s.
+    /// Takes back what was said (it's answered now): the delivered notices (a deletion's too, once the user starts
+    /// again), and a pending start or pause notice. The dead-man's switch is `disarmDeadMan`'s.
     func withdraw() {
         let center = UNUserNotificationCenter.current()
         center.removeDeliveredNotifications(withIdentifiers: AllDayNotice.requests)
@@ -88,6 +90,8 @@ final class WatchAllDayNotices {
         case .stopped(let why): (String(localized: "Recording Stopped"), body(why))
         case .start: (String(localized: "All-Day Recording"),
                       String(localized: "Your iPhone asked to start it. Tap Start to record on this watch."))
+        case .deleted: (String(localized: "Recording Stopped"),
+                        String(localized: "Today's all-day recording was deleted on your iPhone."))
         }
     }
 

@@ -36,10 +36,11 @@ struct RecordingsSection: View {
             }
         }
         #if os(iOS)
-        // All-day recording: offered with a paired watch and a hub that takes it, and shown once a day exists. Without
-        // either, the page is as it always was.
+        // All-day recording: with a paired watch that has Persona (it offers the mode whatever the hub supports: the
+        // phone keeps the text until the hub takes it, docs/assistant/day-recap.md「Compatibility」), and once a day
+        // exists. Without either, the page is as it always was.
         let dayOffered = RecordingDayDefaults.offered(model.hubFeatures)
-        if today != nil || (dayOffered && WatchSync.shared.watchAppInstalled) {
+        if today != nil || RecordingDayTodaySection.watchOffersIt {
             RecordingDayTodaySection(dayID: today, offered: dayOffered)
         }
         #endif
@@ -77,8 +78,8 @@ struct RecordingsSection: View {
             sync.kick(reconcile: true)
             RecordingRollingKeeper.shared.schedule()
             #if DEBUG && os(iOS)
-            // `-showDaySample today|paused|recap|pending|failed`: made-up days (screenshots, UI tests); without it an
-            // earlier run's go. Once per launch.
+            // `-showDaySample today|paused|recap|pending|failed|consent`: made-up days (screenshots, UI tests); without it
+            // an earlier run's go. Once per launch.
             // The launch starts it too (PersonaApp, beside the meeting samples), so it is usually done by now.
             await RecordingSamples.installDaySampleIfAsked()
             #endif

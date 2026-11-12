@@ -8,7 +8,8 @@ import UIKit
 // `body`: a day changes every ten seconds while it records (C30).
 
 /// A recorded day: when it was recorded and what is missing from it, the hub's recap (summary, the timeline by time of
-/// day, suggested to-dos) with each item's time opening the transcript there, the transcript, and delete.
+/// day, suggested to-dos) with each item's time opening the transcript there, the transcript, erasing the last ten
+/// minutes of today's recording, and delete.
 struct RecordingDayView: View {
     var id: UUID
     @Environment(\.dismiss) private var dismiss
@@ -19,6 +20,9 @@ struct RecordingDayView: View {
     /// The day isn't on this phone (deleted here or by retention).
     @State private var missing = false
     @State private var deleting = false
+    @State private var erasing = false
+    /// An erase asked for and not done yet: the button waits for it.
+    @State private var erasingNow = false
     @State private var failure: String?
     /// The transcript opened at a recap item's time.
     @State private var transcriptAt: RecordingDayTranscriptFocus?
@@ -53,8 +57,13 @@ struct RecordingDayView: View {
             Button("Delete", role: .destructive) { delete() }
         } message: {
             Text(watchRecordsThisDay
-                 ? String(localized: "All-day recording stops on your Apple Watch, and today's audio and text on this iPhone are deleted now. Its text in Knowledge is removed after sync succeeds.")
-                 : String(localized: "The audio on this device will be deleted now. Its text in Knowledge is removed after sync succeeds; if Knowledge is off or read-only, that deletion stays pending."))
+                 ? String(localized: "All-day recording stops on your Apple Watch, and today's audio and text are deleted from it and this iPhone now. Its text in Knowledge is removed after sync succeeds.")
+                 : String(localized: "The day's audio and text are deleted from this iPhone and your Apple Watch now. Its text in Knowledge is removed after sync succeeds."))
+        }
+        .confirmationDialog("Erase the last 10 minutes?", isPresented: $erasing, titleVisibility: .visible) {
+            Button("Erase", role: .destructive) { Task { await eraseRecent() } }
+        } message: {
+            Text("What was said in the last 10 minutes is deleted from this iPhone and your Apple Watch now, and from Knowledge after sync succeeds.")
         }
         .alert("Couldn't Finish", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
             Button("OK [Recordings Section de32e2]") { failure = nil }.lineLimit(1)
@@ -72,6 +81,18 @@ struct RecordingDayView: View {
                     Label("Transcript", systemImage: Theme.Icon.text)
                 }
                 .accessibilityIdentifier("day-transcript")
+                // Today's recording only, while it records: one tap away, as on the watch
+                // (docs/assistant/day-recap.md「Retention and privacy」).
+                if RecordingDayStatus.offersErase(summary, now: .now) {
+                    Button(role: .destructive) { erasing = true } label: {
+                        HStack(spacing: Theme.Space.s) {
+                            Label("Erase Last 10 Minutes", systemImage: Theme.Icon.delete).lineLimit(1)
+                            if erasingNow { ProgressView() }
+                        }
+                    }
+                    .disabled(erasingNow)
+                    .accessibilityIdentifier("day-erase")
+                }
                 Button("Delete Recording", role: .destructive) { deleting = true }
                     .lineLimit(1)
                     .accessibilityIdentifier("day-delete")
@@ -108,23 +129,45 @@ struct RecordingDayView: View {
     }
 
     private func delete() {
-        #if os(iOS)
-        if watchRecordsThisDay { RecordingDaySwitch.shared.set(false) }
-        #endif
+        let recorded = watchRecordsThisDay
         do {
-            // Every part of the day goes from the hub, and its transcription, upload and store let go of it here.
+            // Every part of the day goes from the hub, its transcription, upload and store let go of it here, and the
+            // watch is asked to delete its copy until it confirms (`RecordingDaySync.removedHere`), which also stops it
+            // when it records this day (docs/assistant/day-recap.md「Deleting」).
             try sync.delete(id)
+            #if os(iOS)
+            if recorded { RecordingDaySwitch.shared.deletedRecordedDay() }
+            #endif
             dismiss()
         } catch {
             failure = String(localized: "The recording wasn't deleted. Try again later.")
         }
     }
+
+    /// Erases the last ten minutes on this phone, the hub and the watch, as one erase: from every day recording it
+    /// touches (one that spans midnight reaches both; docs/assistant/day-recap.md「Erasing」). The store keeps the request
+    /// for the watch until the watch confirms it, and the upload repairs the hub.
+    private func eraseRecent() async {
+        guard !erasingNow else { return }
+        erasingNow = true
+        defer { erasingNow = false }
+        let now = Date.now
+        let erased = await summaries.requestErase(from: now.addingTimeInterval(-RecordingRolling.eraseMinutes * 60), to: now)
+        if erased.isEmpty {
+            failure = String(localized: "The last 10 minutes weren't erased. Try again.")
+        } else {
+            Haptics.success()
+            AppModel.shared.toast = Toast(String(localized: "Erased the last 10 minutes"), style: .success)
+        }
+    }
 }
 
-/// What the day page's recap task is keyed on: where the day is with the hub, its parts, and Retry.
+/// What the day page's recap task is keyed on: where the day is with the hub (its recap's state and whether it is the
+/// final one), its parts, and Retry.
 private nonisolated struct RecapKey: Hashable, Sendable {
     var sync: RecordingDaySyncState?
     var recapState: String?
+    var recapFinal: Bool
     var hubIDs: [UUID]
     var complete: Bool
     var round: Int
@@ -132,6 +175,7 @@ private nonisolated struct RecapKey: Hashable, Sendable {
     init(_ summary: RecordingDaySummary?, round: Int) {
         sync = summary?.sync
         recapState = summary?.recapState
+        recapFinal = summary?.recapFinal ?? false
         hubIDs = summary?.hubIDs ?? []
         complete = summary?.complete ?? false
         self.round = round
@@ -261,6 +305,9 @@ private struct RecordingDayRecapSections: View {
                 Text(content.summary).font(Theme.Font.body).textSelection(.enabled)
                     .accessibilityIdentifier("dayrecap-summary")
             }
+            // Whether newer text may still change it, then when it was written.
+            Text(content.finality.text).font(Theme.Font.caption).foregroundStyle(.secondary)
+                .accessibilityIdentifier("dayrecap-finality")
             if let written = content.writtenAt {
                 Text("Written \(written.formatted(.relative(presentation: .named)))").font(Theme.Font.caption).foregroundStyle(.secondary)
             }
@@ -313,7 +360,8 @@ private struct RecordingDayRecapSections: View {
         if !content.actions.isEmpty {
             Section {
                 ForEach(content.actions) { action in
-                    item(action.what, byline: RecordingMinutes.byline(.init(text: action.what, who: action.who, by: action.by)), at: action.at,
+                    item(action.what, byline: RecordingMinutes.byline(.init(text: action.what, who: action.who, by: action.by,
+                                                                            dueDate: action.dueDate)), at: action.at,
                          symbol: action.confirmed ? Theme.Icon.success : Theme.Icon.todo)
                         .accessibilityValue(action.confirmed ? Text("Added to to-dos") : Text(verbatim: ""))
                         .accessibilityIdentifier("dayrecap-action")
@@ -390,6 +438,16 @@ extension RecordingDayRecapContent.Period {
         case .morning: String(localized: "Morning")
         case .afternoon: String(localized: "Afternoon")
         case .evening: String(localized: "Evening")
+        }
+    }
+}
+
+extension RecordingDayRecapContent.Finality {
+    var text: String {
+        switch self {
+        case .soFar: String(localized: "Recap so far")
+        case .final: String(localized: "Final recap")
+        case .cutoff: String(localized: "Final recap of what reached the hub in time")
         }
     }
 }
@@ -505,9 +563,10 @@ struct RecordingDayRow: View {
 // MARK: - Today
 
 /// Knowledge › Recordings' Today (between the capture controls and Recent Recordings): the All-Day Recording switch,
-/// which mirrors the watch (on while it records or waits for Continue) and asks it to start or stop, today's day
-/// recording, and a caution when the hub doesn't write recaps yet. Shown only with a paired watch and a hub that takes
-/// day recordings, or once a day exists: without them the page is as it was.
+/// which mirrors the watch (on while it records or waits for Continue) and asks it to start or stop; until the user agreed
+/// to the consent sheet, a row that opens it (the watch points here: "Agree on your iPhone to start"); today's day
+/// recording; and a caution when the hub doesn't write recaps yet. Shown with a paired watch that has Persona, or once a
+/// day exists.
 struct RecordingDayTodaySection: View {
     /// Today's day recording (`RecordingDayStatus.todayID`).
     var dayID: UUID?
@@ -515,6 +574,20 @@ struct RecordingDayTodaySection: View {
     var offered: Bool
     @State private var summaries = RecordingDaySummaries.shared
     @State private var control = RecordingDaySwitch.shared
+    @State private var consent = RecordingDayConsent.shared
+    @State private var sync = RecordingSync.shared
+    @Environment(\.dynamicTypeSize) private var size
+
+    /// Whether the section shows without a day: the phone always tells a paired watch that it takes all-day recordings
+    /// (docs/assistant/day-recap.md「Watch and phone capabilities」), so the watch offers the mode, and the phone must offer
+    /// the agreement and the switch, whatever the hub supports.
+    static var watchOffersIt: Bool {
+        #if DEBUG
+        // The made-up days stand in for a watch (`-showDaySample`).
+        if RecordingSamples.daySampleMode != nil { return true }
+        #endif
+        return WatchSync.shared.watchAppInstalled
+    }
 
     var body: some View {
         let watch = summaries.watch
@@ -527,6 +600,17 @@ struct RecordingDayTodaySection: View {
                               symbol: Theme.Icon.allDay, accessibilityID: "allday-switch",
                               isOn: Binding(get: { RecordingDayStatus.isOn(watch: watch, pending: pending, now: now) },
                                             set: { control.set($0) }))
+                // On the one row the section always has: a sheet on the section would be one per row.
+                .sheet(item: Binding(get: { control.asking }, set: { if $0 == nil { control.consentAnswered(agreed: false) } })) { _ in
+                    RecordingDayConsentView(transcriptDays: sync.store.days) { control.consentAnswered(agreed: $0) }
+                }
+            if !consent.agreed {
+                Button { control.askConsent() } label: {
+                    Label("Agree to Start on Apple Watch", systemImage: Theme.Icon.privacy)
+                        .lineLimit(size.isAccessibilitySize ? 3 : 1)
+                }
+                .accessibilityIdentifier("allday-consent")
+            }
             if let dayID {
                 NavigationLink { RecordingDayView(id: dayID) } label: { RecordingDayTodayRow(summary: summary) }
                     .accessibilityIdentifier("allday-today")
@@ -569,33 +653,81 @@ private struct RecordingDayTodayRow: View {
 }
 
 /// The phone's side of the switch: the command it sent the watch, shown as on its way until the watch's state answers
-/// it (`RecordingDayStatus.settle`). Shared, so the Recordings page and a deleted day agree, and a page that goes and
-/// comes back still shows a command on its way.
+/// it (`RecordingDayStatus.settle`), and the consent sheet that comes before the first start. Shared, so the Recordings
+/// page and a deleted day agree, and a page that goes and comes back still shows a command on its way.
 @MainActor @Observable final class RecordingDaySwitch {
     static let shared = RecordingDaySwitch()
 
+    /// Why the consent sheet is up: the Agree row, or the switch turned on before the user agreed (the start goes once
+    /// they do).
+    nonisolated enum ConsentAsk: String, Identifiable, Sendable {
+        case agree, start
+        var id: String { rawValue }
+    }
+
     private(set) var pending: RecordingDayStatus.Pending?
+    /// The consent sheet is up, and why; nil while it isn't.
+    private(set) var asking: ConsentAsk?
     /// The time the switch's line is worked out for: moved on when the user flips it, when the Today section appears,
     /// and at each of a command's deadlines while it shows (`follow`), so the line changes then and not only on a redraw.
     private(set) var lookedAt: Date
     @ObservationIgnored private let send: (String) -> Void
+    @ObservationIgnored private let agreed: () -> Bool
+    @ObservationIgnored private let agree: () -> Void
     @ObservationIgnored private let now: () -> Date
     @ObservationIgnored private let sleep: (Date) async throws -> Void
 
-    /// - Parameter sleep: waits until the given time; throws when cancelled.
-    init(send: @escaping (String) -> Void = { WatchSync.shared.sendDayCommand($0) }, now: @escaping () -> Date = { .now },
+    /// - Parameters:
+    ///   - agreed, agree: the consent (`RecordingDayConsent`): whether the user agreed to the sheet's current version,
+    ///     and storing that they did (which tells the watch).
+    ///   - sleep: waits until the given time; throws when cancelled.
+    init(send: @escaping (String) -> Void = { WatchSync.shared.sendDayCommand($0) },
+         agreed: @escaping () -> Bool = { RecordingDayConsent.shared.agreed },
+         agree: @escaping () -> Void = { RecordingDayConsent.shared.agree() },
+         now: @escaping () -> Date = { .now },
          sleep: @escaping (Date) async throws -> Void = { try await Task.sleep(for: .seconds(max(0, $0.timeIntervalSinceNow))) }) {
         self.send = send
+        self.agreed = agreed
+        self.agree = agree
         self.now = now
         self.sleep = sleep
         lookedAt = now()
     }
 
     /// The user flipped the switch: the watch is asked to start (it needs a tap there to open the microphone) or stop.
+    /// Nothing records before the user agreed to the consent sheet (docs/assistant/day-recap.md「Retention and privacy」):
+    /// a start without it opens the sheet instead, and goes once they agree.
     func set(_ on: Bool) {
+        if on, !agreed() {
+            asking = .start
+            return
+        }
         lookedAt = now()
         pending = RecordingDayStatus.Pending(start: on, at: lookedAt)
         send(on ? RecordingDayContract.Command.start : RecordingDayContract.Command.stop)
+    }
+
+    /// The Agree row: the consent sheet, with nothing to start after it (the user starts on the watch, which asked).
+    func askConsent() {
+        asking = .agree
+    }
+
+    /// The sheet's answer: Agree stores the agreement and, when the switch asked, starts; Not Now (or a swipe down)
+    /// leaves everything as it was. An answer without the sheet up does nothing, so the sheet's own dismissal after
+    /// Agree is not a second answer.
+    func consentAnswered(agreed yes: Bool) {
+        guard let asked = asking else { return }
+        asking = nil
+        guard yes else { return }
+        agree()
+        if asked == .start { set(true) }
+    }
+
+    /// The day the watch records was deleted here: the delete stops it there (docs/assistant/day-recap.md「Deleting」),
+    /// so the switch shows a stop on its way, without a command of its own, until the watch says it is off.
+    func deletedRecordedDay() {
+        lookedAt = now()
+        pending = RecordingDayStatus.Pending(start: false, at: lookedAt)
     }
 
     /// Keeps the line current while the Today section shows: now, then at each deadline of the command on its way (no

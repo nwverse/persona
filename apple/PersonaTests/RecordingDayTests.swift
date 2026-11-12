@@ -2,68 +2,115 @@ import Foundation
 import Testing
 @testable import Persona
 
-private let anchor = Date(timeIntervalSince1970: 1_800_000_000) // 2027-01-15T08:00:00Z
+private let anchor = Date(timeIntervalSince1970: 1_800_000_000) // 2027-01-15T08:00:00Z, 16:00 in Shanghai
 private let newYork = TimeZone(identifier: "America/New_York")!
+private let shanghai = "Asia/Shanghai"
 
 private func utc(_ text: String) throws -> Date { try Date.ISO8601FormatStyle().parse(text) }
 
-/// A header with every key set, at whole milliseconds so it survives the wire's ISO 8601 times.
-private func fullHeader(_ id: UUID = UUID()) -> RecordingDayHeader {
-    RecordingDayHeader(recording: id, day: "2027-01-15", seq: 41, startedAt: anchor.addingTimeInterval(0.25), duration: 10,
-                       level: -38.5, erased: false, end: true, after: RecordingDayContract.Reason.interrupted,
-                       marks: [.init(at: -2.5, label: RecordingDayMark.meeting), .init(at: 3, label: RecordingDayMark.bookmark)],
-                       recordingStartedAt: anchor.addingTimeInterval(-3600), lost: false)
+private func object(_ data: Data) throws -> [String: Any] {
+    try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
 }
 
-/// The wire: header, framing, ranges, acknowledgements, the watch's state, the calendar, the level, the cached flags.
-/// Nonisolated on purpose: the phone runs all of it on WatchConnectivity's and its store's queues.
+/// A header with every key set, at whole milliseconds so it survives the wire's RFC 3339 times.
+private func fullHeader(_ id: UUID = UUID(), seq: Int = 41) -> RecordingDayHeader {
+    RecordingDayHeader(recording: id, recordingStartedAt: anchor.addingTimeInterval(-3600), tz: shanghai, day: "2027-01-15",
+                       seq: seq, startedAt: anchor.addingTimeInterval(0.25), duration: 10, level: -38.5)
+}
+
+/// An event's envelope for a recording in Shanghai.
+private func envelope(_ event: RecordingDayEvent, _ id: UUID = UUID()) -> RecordingDayEventEnvelope {
+    RecordingDayEventEnvelope(recording: id, recordingStartedAt: anchor.addingTimeInterval(-3600), tz: shanghai,
+                              day: "2027-01-15", event: event)
+}
+
+/// The wire: keys, header, envelope, events, acknowledgements, erase and delete, capabilities, the watch's state, the
+/// calendar, the level, the cached flags. Nonisolated on purpose: the phone runs all of it on WatchConnectivity's and
+/// its store's queues.
 struct RecordingDayWireTests {
+    // MARK: Keys and limits
+
+    @Test func keysAndLimitsAreTheContracts() {
+        #expect(RecordingDayContract.chunkKey == "personaDayChunk" && RecordingDayContract.eventKey == "personaDayEvent")
+        #expect(RecordingDayContract.ackKey == "personaDayAck")
+        #expect(RecordingDayContract.eraseKey == "personaDayErase" && RecordingDayContract.erasedKey == "personaDayErased")
+        #expect(RecordingDayContract.deleteKey == "personaDayDelete" && RecordingDayContract.deletedKey == "personaDayDeleted")
+        #expect(RecordingDayContract.commandKey == "personaDayCommand")
+        #expect(RecordingDayContract.phoneKey == "recordingDay" && RecordingDayContract.phoneHubKey == "recordingDayHub")
+        #expect(RecordingDayContract.phoneKeepDaysKey == "recordingDayKeepDays" && RecordingDayContract.watchStateKey == "recordingDayWatch")
+        #expect(Set(RecordingDayContract.messageKeys) == [RecordingDayContract.chunkKey, RecordingDayContract.eventKey,
+                                                          RecordingDayContract.ackKey, RecordingDayContract.eraseKey,
+                                                          RecordingDayContract.erasedKey, RecordingDayContract.deleteKey,
+                                                          RecordingDayContract.deletedKey, RecordingDayContract.commandKey])
+        #expect(RecordingDayContract.maxMessageBytes == 48_000)
+        #expect(RecordingDayContract.ackTimeout == 30 && RecordingDayContract.fileAckTimeout == 60)
+        #expect(RecordingDayContract.backoffFirst == 2 && RecordingDayContract.backoffMax == 300)
+        #expect(RecordingDayContract.liveChunkSeconds == 10 && RecordingDayContract.backlogChunkSeconds == 60)
+        #expect(WatchSync.phoneDayKeepDaysKey == "recording.phoneDayKeepDays")
+    }
+
+    @Test func keepDaysFollowTheTranscriptRetention() {
+        #expect(RecordingDayContract.keepDays(recordingDays: nil) == 7, "7 until the phone knows")
+        #expect(RecordingDayContract.keepDays(recordingDays: 14) == 7)
+        #expect(RecordingDayContract.keepDays(recordingDays: 3) == 3)
+        #expect(RecordingDayContract.keepDays(recordingDays: 1) == 1)
+        #expect(RecordingDayContract.keepDays(recordingDays: 0) == 1 && RecordingDayContract.keepDays(recordingDays: -4) == 1)
+    }
+
     // MARK: Header
 
-    @Test func headerUsesTheContractKeys() throws {
+    @Test func headerHasExactlyTheContractKeys() throws {
         let header = fullHeader()
-        let object = try #require(try JSONSerialization.jsonObject(with: header.json) as? [String: Any])
-        #expect(Set(object.keys) == ["v", "recording", "day", "seq", "started_at", "duration", "level", "erased", "end", "after",
-                                     "marks", "recording_started_at"], "lost is written only when set")
-        #expect(object["recording"] as? String == header.recording.uuidString.lowercased())
-        #expect(object["v"] as? Int == RecordingDayContract.version)
-        // ISO 8601 with milliseconds and an offset, as in the contract's example.
-        let started = try #require(object["started_at"] as? String)
-        #expect(started.wholeMatch(of: /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.250(Z|[+-]\d{2}:\d{2})/) != nil, "\(started)")
-        let decoded = try JSONDecoder().decode(RecordingDayHeader.self, from: header.json)
-        #expect(decoded == header)
+        let json = try object(header.json)
+        #expect(Set(json.keys) == ["v", "recording", "recording_started_at", "tz", "day", "seq", "started_at", "duration", "level"])
+        #expect(json["recording"] as? String == header.recording.uuidString.lowercased())
+        #expect(json["v"] as? Int == RecordingDayContract.version && json["tz"] as? String == shanghai)
+        // RFC 3339 with milliseconds, in the recording's own offset.
+        #expect(json["started_at"] as? String == "2027-01-15T16:00:00.250+08:00")
+        #expect(json["recording_started_at"] as? String == "2027-01-15T15:00:00.000+08:00")
+        #expect(try JSONDecoder().decode(RecordingDayHeader.self, from: header.json) == header)
 
-        var lost = header
-        lost.lost = true
-        let lostObject = try #require(try JSONSerialization.jsonObject(with: lost.json) as? [String: Any])
-        #expect(lostObject["lost"] as? Bool == true)
+        // A level never measured is still one of the nine keys, as null, and reads back as unknown.
+        var unmeasured = header
+        unmeasured.level = nil
+        let written = try object(unmeasured.json)
+        #expect(Set(written.keys) == Set(json.keys) && written["level"] is NSNull)
+        #expect(try JSONDecoder().decode(RecordingDayHeader.self, from: unmeasured.json) == unmeasured)
     }
 
     @Test func headerDecodesWhatOthersMayWrite() throws {
         let id = UUID()
-        // Only the contract's required keys, an upper-case id, a time without fractions, an unknown key, bad [ext] keys.
+        // No `v`, an upper-case id, a time without fractions, one in UTC, seconds since 1970, an unknown key, an older
+        // draft's keys, and a level that isn't a number.
         let json = """
-        {"recording": "\(id.uuidString.uppercased())", "day": "2027-01-15", "seq": 0, "started_at": "2027-01-15T16:00:00+08:00",
-         "duration": 60, "future": {"x": 1}, "marks": "not a list", "level": "loud", "recording_started_at": 12}
+        {"recording": "\(id.uuidString.uppercased())", "recording_started_at": 12, "tz": "Asia/Shanghai", "day": "2027-01-15",
+         "seq": 0, "started_at": "2027-01-15T16:00:00+08:00", "duration": 60, "future": {"x": 1},
+         "erased": true, "end": true, "marks": [{"at": 1, "label": ""}], "after": "paused", "lost": true, "level": "loud"}
         """
         let header = try JSONDecoder().decode(RecordingDayHeader.self, from: Data(json.utf8))
-        #expect(header.recording == id && header.seq == 0 && header.duration == 60)
-        #expect(header.startedAt == anchor)
-        #expect(header.v == 1 && !header.erased && !header.end && !header.lost)
-        #expect(header.marks == nil && header.level == nil && header.after == nil)
-        #expect(header.recordingStartedAt == Date(timeIntervalSince1970: 12), "seconds since 1970 are read too")
-        #expect(header.valid)
+        #expect(header.recording == id && header.seq == 0 && header.duration == 60 && header.v == 1)
+        #expect(header.startedAt == anchor && header.recordingStartedAt == Date(timeIntervalSince1970: 12))
+        #expect(header.level == nil && header.valid)
 
-        let utcTime = """
-        {"v": 1, "recording": "\(id)", "day": "2027-01-15", "seq": 3, "started_at": "2027-01-15T08:00:00.500Z", "duration": 10}
+        let inUTC = """
+        {"v": 1, "recording": "\(id)", "recording_started_at": "2027-01-15T07:00:00.000Z", "tz": "Asia/Shanghai",
+         "day": "2027-01-15", "seq": 3, "started_at": "2027-01-15T08:00:00.500Z", "duration": 10}
         """
-        #expect(try JSONDecoder().decode(RecordingDayHeader.self, from: Data(utcTime.utf8)).startedAt == anchor.addingTimeInterval(0.5))
+        #expect(try JSONDecoder().decode(RecordingDayHeader.self, from: Data(inUTC.utf8)).startedAt == anchor.addingTimeInterval(0.5))
+    }
 
-        for broken in [#"{"recording": "x", "day": "2027-01-15", "seq": 0, "started_at": 0, "duration": 1}"#,
-                       #"{"recording": "\#(id)", "day": "2027-01-15", "started_at": 0, "duration": 1}"#,
-                       #"{"recording": "\#(id)", "day": "2027-01-15", "seq": 0, "started_at": "yesterday", "duration": 1}"#] {
-            #expect(throws: (any Error).self) { try JSONDecoder().decode(RecordingDayHeader.self, from: Data(broken.utf8)) }
+    @Test func headersWithoutAContractKeyAreRefused() throws {
+        let full = try object(fullHeader().json)
+        for key in ["recording", "recording_started_at", "tz", "day", "seq", "started_at", "duration"] {
+            var json = full
+            json[key] = nil
+            let data = try JSONSerialization.data(withJSONObject: json)
+            #expect(throws: (any Error).self, "\(key)") { try JSONDecoder().decode(RecordingDayHeader.self, from: data) }
         }
+        var badTime = full
+        badTime["started_at"] = "yesterday"
+        let data = try JSONSerialization.data(withJSONObject: badTime)
+        #expect(throws: (any Error).self) { try JSONDecoder().decode(RecordingDayHeader.self, from: data) }
     }
 
     @Test func invalidHeadersAreRefused() {
@@ -79,51 +126,57 @@ struct RecordingDayWireTests {
             ("unpadded day", { $0.day = "2027-1-15" }),
             ("letters in the day", { $0.day = "2027-01-1a" }),
             ("full-width digits", { $0.day = "\u{FF12}\u{FF10}\u{FF12}\u{FF17}-01-15" }),
-            ("too many marks", { $0.marks = Array(repeating: .init(at: 0, label: ""), count: 101) }),
-            ("non-finite mark", { $0.marks = [.init(at: .nan, label: "")] }),
+            ("no time zone", { $0.tz = "" }),
+            ("an unknown time zone", { $0.tz = "Mars/Olympus_Mons" }),
         ]
         for (name, edit) in broken {
             var header = fullHeader()
             edit(&header)
             #expect(!header.valid, "\(name)")
-            // Never read back as it was: refused, or (a level JSON can't hold) written without it.
+            // Never read back as it was: refused, or (a level JSON can't hold) written as null.
             #expect(RecordingDayHeader(userInfo: header.userInfo) != header, "\(name)")
         }
     }
 
-    @Test func markersCarryNoAudio() {
-        var header = fullHeader()
-        #expect(!header.isMarker)
-        header.erased = true
-        #expect(header.isMarker)
-        header.erased = false; header.lost = true
-        #expect(header.isMarker)
-        header.lost = false; header.duration = 0
-        #expect(header.isMarker)
+    @Test func headerOfAChunkOnTheWatch() {
+        let id = UUID()
+        var entry = RecordingEntry(id: id, createdAt: anchor.addingTimeInterval(-3600), source: .watch, kind: .day)
+        entry.day = "2027-01-15"
+        entry.timeZone = shanghai
+        let chunk = RecordingSegment(index: 41, start: 0, duration: 10, startedAt: anchor.addingTimeInterval(0.25), level: -38.5)
+        #expect(RecordingDayHeader(entry: entry, chunk: chunk) == fullHeader(id))
+
+        var noZone = entry
+        noZone.timeZone = nil
+        var rolling = entry
+        rolling.kind = .rolling
+        #expect(RecordingDayHeader(entry: noZone, chunk: chunk) == nil && RecordingDayHeader(entry: rolling, chunk: chunk) == nil)
+        #expect(RecordingDayHeader(entry: entry, chunk: RecordingSegment(index: 1, start: 0, duration: 10)) == nil,
+                "a chunk without its wall clock")
     }
 
-    // MARK: Framing
+    // MARK: Envelope
 
-    @Test func framesRoundTripAudioAndMarkers() throws {
+    @Test func envelopesRoundTripAndFitTheLiveLimit() throws {
         let header = fullHeader()
         let audio = Data((0..<2000).map { UInt8($0 % 251) })
         let frame = header.frame(audio: audio)
-        #expect(frame.prefix(4) == Data([0, 0, UInt8(header.json.count >> 8), UInt8(header.json.count & 0xFF)]))
+        let length = header.json.count
+        let prefix: [UInt8] = [0, 0, UInt8(length >> 8), UInt8(length & 0xFF)]
+        #expect(frame.prefix(4) == Data(prefix))
         #expect(frame.count == 4 + header.json.count + audio.count)
         let back = try #require(RecordingDayHeader.unframe(frame))
         #expect(back.header == header && back.audio == audio)
 
-        var marker = header
-        marker.erased = true
-        let markerBack = try #require(RecordingDayHeader.unframe(marker.frame(audio: nil)))
-        #expect(markerBack.header == marker && markerBack.audio.isEmpty)
+        // Ten seconds at 32 kbps (about 40 KB) and a header fit under the live limit.
+        #expect(header.frame(audio: Data(count: 40_000)).count < RecordingDayContract.maxMessageBytes)
 
         // A slice of a larger buffer (its indices don't start at 0) reads the same.
         let slice = (Data([9, 9, 9]) + frame).dropFirst(3)
         #expect(RecordingDayHeader.unframe(slice)?.audio == audio)
     }
 
-    @Test func brokenFramesAreRefused() {
+    @Test func brokenEnvelopesAreRefused() {
         let header = fullHeader()
         let frame = header.frame(audio: Data([1, 2, 3]))
         #expect(RecordingDayHeader.unframe(Data()) == nil)
@@ -133,23 +186,159 @@ struct RecordingDayWireTests {
         #expect(RecordingDayHeader.unframe(Data([0xFF, 0xFF, 0xFF, 0xFF]) + header.json) == nil, "absurd length")
         #expect(RecordingDayHeader.unframe(Data([0, 0, 0, 4]) + Data("nope".utf8)) == nil, "not JSON")
         var invalid = header
-        invalid.day = "today"
+        invalid.tz = "Nowhere"
         #expect(RecordingDayHeader.unframe(invalid.frame(audio: Data([1]))) == nil, "an invalid header")
     }
 
-    @Test func userInfoRoundTrips() throws {
+    @Test func transferMetadataRoundTrips() {
         let header = fullHeader()
-        #expect(header.userInfo.keys.sorted() == [RecordingDayContract.chunkKey])
+        #expect(header.userInfo.keys.sorted() == ["personaDayChunk"])
         #expect(RecordingDayHeader(userInfo: header.userInfo) == header)
         #expect(RecordingDayHeader(userInfo: nil) == nil)
         #expect(RecordingDayHeader(userInfo: ["personaRecording": header.json]) == nil)
         #expect(RecordingDayHeader(userInfo: [RecordingDayContract.chunkKey: "text"]) == nil)
     }
 
-    // MARK: Ranges and acknowledgements
+    // MARK: Control events
+
+    @Test func eachEventWritesOnlyItsFieldsInTheRecordingsOffset() throws {
+        let erase = UUID()
+        let cases: [(RecordingDayEvent, Set<String>)] = [
+            (.started(0, at: anchor), ["n", "type", "at"]),
+            (.paused(1, at: anchor, reason: RecordingDayContract.Reason.interrupted), ["n", "type", "at", "reason"]),
+            (.lost(2, seqs: 4...6, from: anchor, to: anchor.addingTimeInterval(30)), ["n", "type", "from_seq", "to_seq", "from", "to"]),
+            (.lost(3, seqs: 7...7), ["n", "type", "from_seq", "to_seq"]),
+            (.erase(4, id: erase, from: anchor.addingTimeInterval(-600), to: anchor, seqs: [9, 8, 12]),
+             ["n", "type", "id", "from", "to", "seqs"]),
+            (.closed(5, at: anchor, seqCount: 13), ["n", "type", "at", "seq_count"]),
+            (.mark(6, at: anchor, label: RecordingDayEvent.Label.meeting), ["n", "type", "at", "label"]),
+        ]
+        for (event, keys) in cases {
+            let sent = envelope(event)
+            let outer = try object(sent.data)
+            #expect(Set(outer.keys) == ["recording", "recording_started_at", "tz", "day", "event"])
+            let inner = try #require(outer["event"] as? [String: Any])
+            #expect(Set(inner.keys) == keys, "\(event.type.rawValue)")
+            #expect(inner["type"] as? String == event.type.rawValue)
+            if inner["at"] != nil { #expect(inner["at"] as? String == "2027-01-15T16:00:00.000+08:00") }
+            #expect(RecordingDayEventEnvelope(data: sent.data) == sent, "\(event.type.rawValue)")
+        }
+        let erased = try object(envelope(cases[4].0).data)["event"] as? [String: Any]
+        #expect(erased?["id"] as? String == erase.uuidString.lowercased())
+        #expect(erased?["seqs"] as? [[Int]] == [[8, 9], [12, 12]])
+    }
+
+    @Test func anEventOnItsOwnIsWrittenInUTC() throws {
+        // The watch's library keeps unacknowledged events without their recording's zone.
+        let event = RecordingDayEvent.paused(3, at: anchor, reason: RecordingDayContract.Reason.stopped)
+        let data = try JSONEncoder().encode(event)
+        #expect(try object(data)["at"] as? String == "2027-01-15T08:00:00.000Z")
+        #expect(try JSONDecoder().decode(RecordingDayEvent.self, from: data) == event)
+    }
+
+    @Test func theContractsExampleEventDecodes() throws {
+        let id = UUID()
+        let json = """
+        {"recording": "\(id)", "recording_started_at": "2026-11-11T08:02:11.000+08:00", "tz": "Asia/Shanghai", "day": "2026-11-11",
+         "event": {"n": 17, "type": "paused", "at": "2026-11-11T12:30:00.000+08:00", "reason": "interrupted"}}
+        """
+        let received = try #require(RecordingDayEventEnvelope(data: Data(json.utf8)))
+        let (started, at) = (try utc("2026-11-11T00:02:11Z"), try utc("2026-11-11T04:30:00Z"))
+        #expect(received.recording == id && received.day == "2026-11-11" && received.tz == shanghai)
+        #expect(received.recordingStartedAt == started)
+        #expect(received.event == .paused(17, at: at, reason: RecordingDayContract.Reason.interrupted))
+    }
+
+    @Test func unknownEventsAreKeptAndBrokenOnesRefused() throws {
+        let id = UUID()
+        func received(_ event: String, tz: String = shanghai) -> RecordingDayEventEnvelope? {
+            RecordingDayEventEnvelope(data: Data("""
+            {"recording": "\(id)", "recording_started_at": "2027-01-15T15:00:00+08:00", "tz": "\(tz)", "day": "2027-01-15", "event": \(event)}
+            """.utf8))
+        }
+        // A newer watch's type, with fields this build doesn't know, decodes and keeps its type.
+        let newer = try #require(received(#"{"n": 3, "type": "battery", "at": "2027-01-15T16:00:00+08:00", "percent": 12}"#))
+        #expect(newer.event.type.rawValue == "battery" && newer.event.at == anchor && newer.event.valid)
+        #expect(try object(newer.data)["event"].flatMap { $0 as? [String: Any] }?["type"] as? String == "battery")
+        // Unreadable optional fields are absent; the event still counts.
+        let sloppy = try #require(received(#"{"n": 4, "type": "erase", "at": "soon", "seqs": "all", "id": "x"}"#))
+        #expect(sloppy.event.at == nil && sloppy.event.seqs == nil && sloppy.event.id == nil)
+        #expect(received(#"{"type": "paused"}"#) == nil, "n is required")
+        #expect(received(#"{"n": 5}"#) == nil, "type is required")
+        #expect(received(#"{"n": -1, "type": "paused"}"#) == nil, "a negative n")
+        #expect(received(#"{"n": 1, "type": "started"}"#, tz: "Mars/Base") == nil, "an unknown zone")
+    }
+
+    @Test func eventHelpersReadTheirSeqs() {
+        let erase = RecordingDayEvent.erase(0, id: UUID(), from: anchor, to: anchor, seqs: [3, 1, 2, 7])
+        #expect(erase.seqs == [[1, 3], [7, 7]] && erase.erasedSeqs == [1, 2, 3, 7])
+        #expect(RecordingDayEvent.lost(1, seqs: 4...6).lostSeqs == 4...6)
+        #expect(RecordingDayEvent(n: 2, type: .lost, fromSeq: 6, toSeq: 4).lostSeqs == nil)
+        #expect(!RecordingDayEvent(n: 3, type: .mark, label: String(repeating: "x", count: 101)).valid)
+        #expect(!RecordingDayEvent(n: 4, type: .lost, fromSeq: -1, toSeq: 2).valid)
+    }
+
+    // MARK: Acknowledgements
+
+    @Test func acknowledgementsHaveTheContractShape() throws {
+        let id = UUID()
+        let ack = RecordingDayAck(recording: id, seqs: [2, 0, 1, 5], events: [4, 3])
+        #expect(ack.acks == [[0, 2], [5, 5]] && ack.events == [[3, 4]])
+        #expect(ack.seqs == [0, 1, 2, 5] && ack.eventNumbers == [3, 4] && !ack.isEmpty)
+        let json = try object(ack.data)
+        #expect(Set(json.keys) == ["recording", "acks", "events"])
+        #expect(json["recording"] as? String == id.uuidString.lowercased())
+        #expect(RecordingDayAck(data: ack.data) == ack)
+        // Either list may be empty, and both are always written.
+        let chunksOnly = RecordingDayAck(recording: id, seqs: [7])
+        #expect(try object(chunksOnly.data)["events"] as? [[Int]] == [])
+        #expect(RecordingDayAck(recording: id, events: [9]).acks.isEmpty)
+        #expect(RecordingDayAck(recording: id).isEmpty)
+        // A phone from before events sends no `events`.
+        #expect(RecordingDayAck(data: Data(#"{"recording": "\#(id)", "acks": [[1, 2]]}"#.utf8))?.seqs == [1, 2])
+        #expect(RecordingDayAck(data: Data("{}".utf8)) == nil && RecordingDayAck(data: nil) == nil)
+    }
+
+    // MARK: Erasing and deleting
+
+    @Test func eraseRequestsAndAnswersHaveTheContractShape() throws {
+        let recording = UUID(), erase = UUID()
+        let request = RecordingDayEraseRequest(recording: recording, id: erase, from: anchor.addingTimeInterval(-600.5), to: anchor)
+        let json = try object(request.data)
+        #expect(Set(json.keys) == ["recording", "erase"])
+        let range = try #require(json["erase"] as? [String: Any])
+        #expect(Set(range.keys) == ["id", "from", "to"] && range["to"] as? String == "2027-01-15T08:00:00.000Z")
+        #expect(RecordingDayEraseRequest(data: request.data) == request)
+        let backwards = RecordingDayEraseRequest(recording: recording, id: erase, from: anchor, to: anchor.addingTimeInterval(-1))
+        #expect(RecordingDayEraseRequest(data: backwards.data) == nil, "from after to")
+
+        let done = RecordingDayEraseDone(id: erase, seqs: [[3, 5]], at: anchor)
+        let answer = RecordingDayErased(recording: recording, done: done)
+        #expect(Set(try object(answer.data).keys) == ["recording", "erased", "seqs"])
+        #expect(RecordingDayErased(data: answer.data) == answer && answer.erasedSeqs == [3, 4, 5])
+        #expect(RecordingDayErased(recording: recording, erased: erase, seqs: [5, 4, 3]) == answer)
+    }
+
+    @Test func deletesAndTheirConfirmationsHaveTheContractShape() throws {
+        let id = UUID()
+        let delete = RecordingDayDelete(recording: id)
+        let json = try object(delete.data)
+        #expect(Set(json.keys) == ["recording", "deleted"] && json["deleted"] as? Bool == true)
+        #expect(RecordingDayDelete(data: delete.data) == delete)
+        #expect(RecordingDayDelete(data: Data(#"{"recording": "\#(id)", "deleted": false}"#.utf8)) == nil)
+
+        let deleted = RecordingDayDeleted(recording: id)
+        let answer = try object(deleted.data)
+        #expect(Set(answer.keys) == ["recording", "deleted_ack"] && answer["deleted_ack"] as? Bool == true)
+        #expect(RecordingDayDeleted(data: deleted.data) == deleted)
+        #expect(RecordingDayDeleted(data: delete.data) == nil, "a delete is not its confirmation")
+    }
+
+    // MARK: Ranges
 
     @Test func rangesMergeAndExpand() {
         #expect(RecordingDayRanges.ranges([5, 1, 2, 3, 8, 7, 8, -1]) == [[1, 3], [5, 5], [7, 8]])
+        #expect(RecordingDayRanges.runs([5, 1, 2, 3]) == [1...3, 5...5])
         #expect(RecordingDayRanges.ranges([Int]()) == [])
         #expect(RecordingDayRanges.expand([[1, 3], [5, 5], [7, 8]]) == [1, 2, 3, 5, 7, 8])
         // One number is a range of one; malformed ranges are skipped; overlaps count once.
@@ -160,19 +349,57 @@ struct RecordingDayWireTests {
         #expect(Set(RecordingDayRanges.expand(RecordingDayRanges.ranges(seqs))) == seqs)
     }
 
-    @Test func ackAndLostHaveTheContractShape() throws {
-        let id = UUID()
-        let ack = RecordingDayAck(recording: id, seqs: [2, 0, 1, 5])
-        #expect(ack.acks == [[0, 2], [5, 5]] && ack.seqs == [0, 1, 2, 5])
-        let object = try #require(try JSONSerialization.jsonObject(with: ack.data) as? [String: Any])
-        #expect(Set(object.keys) == ["recording", "acks"])
-        #expect(RecordingDayAck(data: ack.data) == ack)
-        #expect(RecordingDayAck(data: Data("{}".utf8)) == nil && RecordingDayAck(data: nil) == nil)
+    // MARK: Capabilities
 
-        let lost = RecordingDayLost(recording: id, seqs: [7, 8, 9])
-        let lostObject = try #require(try JSONSerialization.jsonObject(with: lost.data) as? [String: Any])
-        #expect(Set(lostObject.keys) == ["recording", "lost"])
-        #expect(RecordingDayLost(data: lost.data)?.seqs == [7, 8, 9])
+    @Test func capabilitiesSayConsentHubAndKeepDays() {
+        let agreed = RecordingDayCapabilities(consent: true, hub: false, keepDays: 30)
+        #expect(agreed.context[RecordingDayContract.phoneKey] as? Int == RecordingDayContract.version)
+        #expect(agreed.context[RecordingDayContract.phoneHubKey] as? Bool == false)
+        #expect(agreed.context[RecordingDayContract.phoneKeepDaysKey] as? Int == 7, "never past 7 days")
+        let waiting = RecordingDayCapabilities(consent: false, hub: true, keepDays: 3)
+        #expect(waiting.context[RecordingDayContract.phoneKey] as? Int == 0, "0: the phone takes them, the user hasn't agreed")
+        #expect(waiting.context[RecordingDayContract.phoneKeepDaysKey] as? Int == 3)
+
+        var ctx: [String: Any] = ["summary": Data()]
+        #expect(!agreed.isIn(ctx))
+        agreed.context.forEach { ctx[$0.key] = $0.value }
+        #expect(agreed.isIn(ctx) && !waiting.isIn(ctx))
+        #expect(!RecordingDayCapabilities(consent: true, hub: true, keepDays: 7).isIn(ctx), "the hub flag changed")
+    }
+
+    @Test func phoneCapabilitiesChangeOnlyWithFullContexts() throws {
+        let name = "watch-capabilities-\(UUID().uuidString)"
+        let defaults = try #require(CountingDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        #expect(WatchPhoneCapabilities.keepDays(defaults) == 7, "7 until the phone says")
+        let full: [String: Any] = ["recordingRolling": true, RecordingDayContract.phoneKey: 0, RecordingDayContract.phoneHubKey: false,
+                                   RecordingDayContract.phoneKeepDaysKey: 3, "summary": Data()]
+        #expect(WatchPhoneCapabilities.store(full, full: true, in: defaults) == 4)
+        #expect(defaults.object(forKey: WatchPhoneCapabilities.dayKey) as? Int == 0, "0 (agree on the phone) is kept apart from absent")
+        #expect(defaults.object(forKey: WatchPhoneCapabilities.dayHubKey) as? Bool == false, "false is kept apart from absent")
+        #expect(WatchPhoneCapabilities.keepDays(defaults) == 3)
+        // The phone resends its whole context with every summary: nothing is written again.
+        let before = defaults.writes
+        #expect(WatchPhoneCapabilities.store(full, full: true, in: defaults) == 0)
+        #expect(defaults.writes == before)
+        // A pairing push by user info, or a config reply, carries no day keys and removes nothing.
+        #expect(WatchPhoneCapabilities.store(["configs": Data()], full: false, in: defaults) == 0)
+        #expect(defaults.object(forKey: WatchPhoneCapabilities.dayKey) as? Int == 0)
+        // The user agreed, and the hub keeps transcripts longer than a week.
+        var agreed = full
+        agreed[RecordingDayContract.phoneKey] = 1
+        agreed[RecordingDayContract.phoneKeepDaysKey] = 14
+        #expect(WatchPhoneCapabilities.store(agreed, full: true, in: defaults) == 2)
+        #expect(defaults.integer(forKey: WatchPhoneCapabilities.dayKey) == 1 && WatchPhoneCapabilities.keepDays(defaults) == 7)
+        // A phone that no longer takes day recordings (an older build): its full context lacks the keys.
+        #expect(WatchPhoneCapabilities.store(["recordingRolling": true], full: true, in: defaults) == 3)
+        for key in [WatchPhoneCapabilities.dayKey, WatchPhoneCapabilities.dayHubKey, WatchPhoneCapabilities.keepDaysKey] {
+            #expect(defaults.object(forKey: key) == nil, "\(key)")
+        }
+        #expect(WatchPhoneCapabilities.store(["recordingRolling": true], full: true, in: defaults) == 0)
+        #expect(defaults.bool(forKey: WatchPhoneCapabilities.rollingKey), "rolling keeps its value")
+        #expect(WatchSync.phoneDayKey == WatchPhoneCapabilities.dayKey && WatchSync.phoneDayHubKey == WatchPhoneCapabilities.dayHubKey)
+        #expect(WatchSync.phoneDayKeepDaysKey == WatchPhoneCapabilities.keepDaysKey)
     }
 
     // MARK: The watch's state
@@ -194,7 +421,7 @@ struct RecordingDayWireTests {
     // MARK: Calendar
 
     @Test func dayFollowsTheTimeZone() throws {
-        #expect(RecordingDayCalendar.day(of: anchor, in: TimeZone(identifier: "Asia/Shanghai")!) == "2027-01-15")
+        #expect(RecordingDayCalendar.day(of: anchor, in: TimeZone(identifier: shanghai)!) == "2027-01-15")
         // Exactly local midnight belongs to the day it starts.
         #expect(RecordingDayCalendar.day(of: anchor, in: TimeZone(identifier: "America/Los_Angeles")!) == "2027-01-15")
         #expect(RecordingDayCalendar.day(of: anchor, in: TimeZone(identifier: "Pacific/Honolulu")!) == "2027-01-14")
@@ -211,12 +438,14 @@ struct RecordingDayWireTests {
         #expect(march8 == march8UTC && march9 == march9UTC)
         #expect(march9.timeIntervalSince(march8) == 23 * 3600)
         #expect(RecordingDayCalendar.nextMidnight(after: march8Late, in: newYork) == march9)
+        #expect(RecordingDayCalendar.end(of: "2026-03-08", in: newYork) == march9)
 
         let november1 = try #require(RecordingDayCalendar.start(of: "2026-11-01", in: newYork))
         let november2 = try #require(RecordingDayCalendar.start(of: "2026-11-02", in: newYork))
         let (repeatedHour, november3) = (try utc("2026-11-01T06:30:00Z"), try utc("2026-11-03T05:00:00Z"))
         #expect(november2.timeIntervalSince(november1) == 25 * 3600)
         #expect(RecordingDayCalendar.nextMidnight(after: repeatedHour, in: newYork) == november2)
+        #expect(RecordingDayCalendar.end(of: "2026-11-01", in: newYork) == november2)
         // Midnight itself: the next one, a day later.
         #expect(RecordingDayCalendar.nextMidnight(after: november2, in: newYork) == november3)
         #expect(RecordingDayCalendar.nextMidnight(after: november2.addingTimeInterval(-1), in: newYork) == november2)
@@ -238,6 +467,7 @@ struct RecordingDayWireTests {
     @Test func onlyRealDatesHaveAStart() {
         for text in ["2026-02-30", "2026-13-01", "2026-00-10", "26-11-11", "2026/11/11", "2026-11-11 ", ""] {
             #expect(RecordingDayCalendar.start(of: text, in: newYork) == nil, "\(text)")
+            #expect(RecordingDayCalendar.end(of: text, in: newYork) == nil, "\(text)")
         }
         #expect(RecordingDayCalendar.start(of: "2028-02-29", in: newYork) != nil)
         #expect(RecordingDayCalendar.isDay("2026-11-11") && !RecordingDayCalendar.isDay("2026-11-1"))
@@ -259,29 +489,26 @@ struct RecordingDayWireTests {
         }
     }
 
-    // MARK: Erase ranges
+    // MARK: Chunk records
 
-    @Test func dayEraseKeepsTheChunkAfterTheCut() {
-        let range = RecordingErase(from: anchor.addingTimeInterval(5), to: anchor.addingTimeInterval(38.2))
+    @Test func fileNamesGiveTheirIndexBack() {
+        for index in [0, 7, 999, 1234, 86_400] {
+            #expect(RecordingSegment.index(fileName: RecordingSegment.fileName(index)) == index)
+        }
+        for name in ["seg-.m4a", "seg-x1.m4a", "seg-007.json", "recording.json", "seg--1.m4a", "seg-٣.m4a"] {
+            #expect(RecordingSegment.index(fileName: name) == nil, "\(name)")
+        }
+    }
+
+    @Test func dayChunksOverlapARangeHalfOpen() {
         func chunk(_ start: Double, _ duration: Double = 10) -> RecordingSegment {
             RecordingSegment(index: 0, start: 0, duration: duration, startedAt: anchor.addingTimeInterval(start))
         }
-        #expect(chunk(0).fallsInDayErase(range), "a chunk reaching into the start counts")
-        #expect(!chunk(-5).fallsInDayErase(range), "one ending right where the range starts doesn't")
-        #expect(chunk(30, 8).fallsInDayErase(range), "the chunk the erase cut")
-        #expect(chunk(37.5, 0.2).fallsInDayErase(range), "a short chunk inside it")
-        // A chunk opened a moment before the tap and cut at it holds only audio from before the tap, however short.
-        #expect(chunk(38, 0.2).fallsInDayErase(range), "a chunk starting in the last half second, ending at the cut")
-        #expect(chunk(38.1, 0.15).fallsInDayErase(range), "one reaching a few milliseconds past `to` ended at the cut too")
-        #expect(!chunk(38).fallsInDayErase(range), "the chunk the cut opened, a moment before `to`, goes on after it")
-        #expect(chunk(37.6).fallsInDayErase(range), "a chunk going on past `to` that began earlier than any cut's next chunk")
-        #expect(!chunk(38.2).fallsInDayErase(range), "one starting right at `to` doesn't")
-        #expect(!chunk(40).fallsInDayErase(range))
-        var marker = chunk(10, 0)
-        #expect(!marker.fallsInDayErase(range), "a header-only marker holds no audio")
-        marker = chunk(10)
-        marker.lost = true
-        #expect(!marker.fallsInDayErase(range))
+        let (from, to) = (anchor.addingTimeInterval(10), anchor.addingTimeInterval(38))
+        #expect(!chunk(0).overlapsDay(from, to), "it ends where the range starts")
+        #expect(chunk(5).overlapsDay(from, to) && chunk(30, 8).overlapsDay(from, to) && chunk(37.9).overlapsDay(from, to))
+        #expect(!chunk(38).overlapsDay(from, to), "the chunk the erase's cut opened starts where the range ends")
+        #expect(!RecordingSegment(index: 0, start: 0, duration: 10).overlapsDay(from, to), "no wall clock, no overlap")
     }
 
     // MARK: Cached flags
@@ -301,35 +528,6 @@ struct RecordingDayWireTests {
         #expect(defaults.writes == 2)
         #expect(RecordingDayDefaults.offered([], defaults: defaults), "without a hello, the last one")
         #expect(!RecordingDayDefaults.offered(["meeting_attendance"], defaults: defaults), "a hello without the flag wins")
-    }
-
-    @Test func phoneCapabilitiesChangeOnlyWithFullContexts() throws {
-        let name = "watch-capabilities-\(UUID().uuidString)"
-        let defaults = try #require(CountingDefaults(suiteName: name))
-        defer { defaults.removePersistentDomain(forName: name) }
-        let full: [String: Any] = ["recordingRolling": true, RecordingDayContract.phoneKey: 1, RecordingDayContract.phoneHubKey: false,
-                                   "summary": Data()]
-        #expect(WatchPhoneCapabilities.store(full, full: true, in: defaults) == 3)
-        #expect(defaults.integer(forKey: WatchPhoneCapabilities.dayKey) == 1)
-        #expect(defaults.object(forKey: WatchPhoneCapabilities.dayHubKey) as? Bool == false, "false is kept apart from absent")
-        // The phone resends its whole context with every summary: nothing is written again.
-        let before = defaults.writes
-        #expect(WatchPhoneCapabilities.store(full, full: true, in: defaults) == 0)
-        #expect(defaults.writes == before)
-        // A pairing push by user info, or a config reply, carries no day keys and removes nothing.
-        #expect(WatchPhoneCapabilities.store(["configs": Data()], full: false, in: defaults) == 0)
-        #expect(defaults.integer(forKey: WatchPhoneCapabilities.dayKey) == 1)
-        // The hub gained the flag.
-        var hub = full
-        hub[RecordingDayContract.phoneHubKey] = true
-        #expect(WatchPhoneCapabilities.store(hub, full: true, in: defaults) == 1)
-        #expect(defaults.bool(forKey: WatchPhoneCapabilities.dayHubKey))
-        // A phone that no longer takes day recordings (an older build): its full context lacks the keys.
-        #expect(WatchPhoneCapabilities.store(["recordingRolling": true], full: true, in: defaults) == 2)
-        #expect(defaults.object(forKey: WatchPhoneCapabilities.dayKey) == nil && defaults.object(forKey: WatchPhoneCapabilities.dayHubKey) == nil)
-        #expect(WatchPhoneCapabilities.store(["recordingRolling": true], full: true, in: defaults) == 0)
-        #expect(defaults.bool(forKey: WatchPhoneCapabilities.rollingKey), "rolling keeps its value")
-        #expect(WatchSync.phoneDayKey == WatchPhoneCapabilities.dayKey && WatchSync.phoneDayHubKey == WatchPhoneCapabilities.dayHubKey)
     }
 
     // MARK: Command order
@@ -367,8 +565,25 @@ struct RecordingDayWireTests {
         #expect(defaults.object(forKey: WatchDayCommandOrder.lastKey) == nil)
         #expect(WatchDayCommandOrder.accept(sentAt: sent, now: anchor.addingTimeInterval(WatchDayCommandOrder.freshness), defaults: defaults))
         #expect(!WatchDayCommandOrder.accept(sentAt: .nan, now: anchor, defaults: defaults))
-        #expect(WatchDayCommandOrder.accept(sentAt: nil, now: anchor, defaults: defaults), "an unstamped command can't be ordered")
         #expect(defaults.double(forKey: WatchDayCommandOrder.lastKey) == sent)
+    }
+
+    @Test func commandsAreJSONCarryingTheirStamp() throws {
+        let stamps = WatchDayCommandOrder.Stamps()
+        let command = RecordingDayCommand(command: RecordingDayContract.Command.start, sentAt: stamps.next(now: anchor))
+        let json = try object(command.data)
+        #expect(Set(json.keys) == ["command", "sent_at"] && json["command"] as? String == "start")
+        #expect(RecordingDayCommand(data: command.data) == command)
+        // Two commands of the same instant keep their order through the wire.
+        let sent = [stamps.next(now: anchor), stamps.next(now: anchor)]
+        let read = sent.compactMap { RecordingDayCommand(data: RecordingDayCommand(command: "stop", sentAt: $0).data)?.sentAt }
+        #expect(read == sent && read[0] < read[1])
+        // A newer phone's command is passed on; a broken one is refused.
+        #expect(RecordingDayCommand(data: Data(#"{"command": "pause", "sent_at": 12, "future": 1}"#.utf8))?.command == "pause")
+        for broken in [#"{"command": "start"}"#, #"{"command": "", "sent_at": 12}"#, #"{"sent_at": 12}"#, #""start""#, "{"] {
+            #expect(RecordingDayCommand(data: Data(broken.utf8)) == nil, "\(broken)")
+        }
+        #expect(RecordingDayCommand(data: nil) == nil)
     }
 }
 
@@ -398,14 +613,15 @@ private final class CountingDefaults: UserDefaults, @unchecked Sendable {
 
     /// An open day recording on the watch that began at `anchor`.
     private func day(_ lib: RecordingLibrary, id: UUID = UUID(), createdAt: Date = anchor, day: String = "2027-01-15") throws -> UUID {
-        try lib.create(source: .watch, kind: .day, id: id, createdAt: createdAt, day: day, timeZone: "Asia/Shanghai").id
+        try lib.create(source: .watch, kind: .day, id: id, createdAt: createdAt, day: day, timeZone: shanghai).id
     }
 
     /// Chunk `seq`, `duration` seconds from `start` seconds after `anchor`, with its audio on disk.
     @discardableResult
     private func chunk(_ lib: RecordingLibrary, _ id: UUID, _ seq: Int, at start: Double, duration: Double = 10,
                        register: Bool = true) throws -> RecordingSegment {
-        try Data([UInt8(seq)]).write(to: lib.audio(id, seq))
+        try FileManager.default.createDirectory(at: lib.folder(id), withIntermediateDirectories: true)
+        try Data([UInt8(seq % 256)]).write(to: lib.audio(id, seq))
         let segment = RecordingSegment(index: seq, start: start, duration: duration, startedAt: anchor.addingTimeInterval(start), level: -30)
         if register { lib.addSegment(id, segment) }
         return segment
@@ -415,17 +631,18 @@ private final class CountingDefaults: UserDefaults, @unchecked Sendable {
         FileManager.default.fileExists(atPath: lib.audio(id, seq).path)
     }
 
-    @Test func createKeepsTheKindTheDayAndAudioAlreadyThere() throws {
+    @Test func createStartsTheCountersAndKeepsAudioAlreadyThere() throws {
         let lib = library()
         defer { try? FileManager.default.removeItem(at: lib.root) }
         // The writer of the next day's recording can put audio in its folder before the entry exists.
         let next = UUID()
-        try FileManager.default.createDirectory(at: lib.folder(next), withIntermediateDirectories: true)
-        try Data([1]).write(to: lib.audio(next, 0))
+        try chunk(lib, next, 0, at: 0, register: false)
         let id = try day(lib, id: next)
         let entry = try #require(lib.entry(id))
-        #expect(entry.kind == .day && entry.isDay && entry.day == "2027-01-15" && entry.timeZone == "Asia/Shanghai")
+        #expect(entry.kind == .day && entry.isDay && entry.day == "2027-01-15" && entry.timeZone == shanghai)
+        #expect(entry.dayTimeZone == TimeZone(identifier: shanghai))
         #expect(entry.createdAt == anchor && entry.active && entry.source == .watch)
+        #expect(entry.nextSeq == 0 && entry.nextEvent == 0 && entry.closedAt == nil && entry.dayEvents == nil)
         #expect(hasAudio(lib, id, 0))
         #expect(RecordingLibrary(root: lib.root).entry(id)?.kind == .day, "the kind is saved")
         // Asking again for the same id changes nothing.
@@ -433,181 +650,248 @@ private final class CountingDefaults: UserDefaults, @unchecked Sendable {
         #expect(again.title.isEmpty && again.createdAt == anchor)
         let clip = try lib.create(source: .watch)
         let rolling = try lib.create(source: .watch, kind: .rolling)
-        #expect(clip.kind == nil, "a clip stays nil, as before kinds")
-        #expect(rolling.kind == .rolling)
+        #expect(clip.kind == nil && clip.nextSeq == nil, "a clip stays as before kinds")
+        #expect(rolling.kind == .rolling && rolling.nextEvent == nil)
     }
 
-    @Test func eraseWhileAChunkIsOpenLeavesNoSeqWithoutARecord() throws {
+    @Test func seqsAreHandedOutOnceFromAnyQueue() async throws {
+        let lib = library()
+        defer { try? FileManager.default.removeItem(at: lib.root) }
+        let id = try day(lib)
+        // The writer takes seqs on its own queue.
+        let seqs = await withTaskGroup(of: Int.self) { group in
+            for _ in 0..<50 { group.addTask { lib.allocateSeq(id) } }
+            var taken: [Int] = []
+            for await seq in group { taken.append(seq) }
+            return taken
+        }
+        #expect(seqs.sorted() == Array(0..<50) && lib.allocatedSeqs(id) == 50)
+        // Every save keeps the counter, so a relaunch goes on from it.
+        lib.appendDayEvent(id) { .mark($0, at: anchor, label: RecordingDayEvent.Label.bookmark) }
+        #expect(lib.entry(id)?.nextSeq == 50 && lib.entry(id)?.nextIndex == 50)
+        #expect(RecordingLibrary(root: lib.root).allocateSeq(id) == 50)
+
+        // The next day's recording, named before midnight: its seqs start at 0, and its entry made later keeps them.
+        let tomorrow = UUID()
+        #expect(lib.allocateSeq(tomorrow) == 0 && lib.allocateSeq(tomorrow) == 1)
+        _ = try day(lib, id: tomorrow, createdAt: anchor.addingTimeInterval(8 * 3600), day: "2027-01-16")
+        #expect(lib.entry(tomorrow)?.nextSeq == 2 && lib.allocateSeq(tomorrow) == 2)
+    }
+
+    @Test func aSeqTakenRightBeforeACrashIsNeverTakenAgain() throws {
+        let lib = library()
+        defer { try? FileManager.default.removeItem(at: lib.root) }
+        let id = try day(lib)
+        lib.appendDayEvent(id) { .started($0, at: anchor) }
+        // The writer took seqs 0 and 1, and the app ended before either file opened or any save counted them.
+        #expect(lib.allocateSeq(id) == 0 && lib.allocateSeq(id) == 1)
+        #expect(RecordingLibrary(root: lib.root).entry(id)?.nextSeq == 0, "no save counted them")
+
+        let restored = RecordingLibrary(root: lib.root)
+        restored.recover(source: .watch)
+        let entry = try #require(restored.entry(id))
+        let lost = try #require(entry.dayEvents?.first { $0.type == .lost })
+        #expect(lost.lostSeqs == 0...1 && lost.from != nil && lost.from == lost.to, "no audio of them existed: lost for no time")
+        #expect(entry.nextSeq == 2 && entry.dayEvents?.last?.type == .paused)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: lib.folder(id).path) == ["recording.json"],
+                "the record holds the counter now")
+        // Reported once, and the counter goes on past them.
+        let again = RecordingLibrary(root: lib.root)
+        again.recover(source: .watch)
+        #expect(again.entry(id)?.dayEvents?.map(\.n) == entry.dayEvents?.map(\.n))
+        #expect(again.allocateSeq(id) == 2)
+    }
+
+    @Test func eventsAreNumberedSavedAndKeptUntilAcknowledged() throws {
+        let lib = library()
+        defer { try? FileManager.default.removeItem(at: lib.root) }
+        let id = try day(lib)
+        let started = try #require(lib.appendDayEvent(id) { .started($0, at: anchor) })
+        #expect(started.n == 0 && lib.entry(id)?.gapReason == nil)
+        let mark = lib.appendDayEvent(id) { .mark($0, at: anchor.addingTimeInterval(5), label: RecordingDayEvent.Label.meeting) }
+        // `n` is the library's, whatever the maker put there.
+        let paused = lib.appendDayEvent(id) { _ in .paused(99, at: anchor.addingTimeInterval(9), reason: RecordingDayContract.Reason.interrupted) }
+        #expect(mark?.n == 1 && paused?.n == 2)
+        #expect(lib.entry(id)?.gapReason == RecordingDayContract.Reason.interrupted, "a pause keeps its reason")
+
+        let reloaded = RecordingLibrary(root: lib.root)
+        #expect(reloaded.entry(id)?.dayEvents == [started, mark, paused].compactMap { $0 } && reloaded.entry(id)?.nextEvent == 3)
+
+        lib.ackDayEvents(id, ns: [0, 2])
+        #expect(lib.entry(id)?.dayEvents?.map(\.n) == [1])
+        let saved = lib.entry(id)?.updatedAt
+        lib.ackDayEvents(id, ns: [0, 2, 40])
+        #expect(lib.entry(id)?.updatedAt == saved, "an acknowledgement repeated writes nothing")
+        lib.ackDayEvents(id, ns: [1])
+        #expect(lib.entry(id)?.dayEvents == nil)
+        #expect(lib.appendDayEvent(id) { .started($0, at: anchor.addingTimeInterval(60)) }?.n == 3, "numbers are never used again")
+        #expect(lib.entry(id)?.gapReason == nil, "the microphone opened again")
+
+        let rolling = try lib.create(source: .watch, kind: .rolling)
+        #expect(lib.appendDayEvent(rolling.id) { .started($0, at: anchor) } == nil && lib.appendDayEvent(UUID()) { .started($0, at: anchor) } == nil)
+    }
+
+    @Test func acknowledgedChunksGoAtOnceAndNeverComeBack() throws {
         let lib = library()
         defer { try? FileManager.default.removeItem(at: lib.root) }
         let id = try day(lib)
         for seq in 0..<3 { try chunk(lib, id, seq, at: Double(seq) * 10) }
-        lib.markDelivered(id, seqs: [0])
-        // Chunk 3 is being written (30…38 s); Erase cuts it at 38 s and names the range up to 0.2 s later.
-        let open = try chunk(lib, id, 3, at: 30, duration: 8, register: false)
-        #expect(lib.eraseDay(id, from: anchor.addingTimeInterval(5), to: anchor.addingTimeInterval(38.2)) == [0, 1, 2])
-        lib.addSegment(id, open)
-        try chunk(lib, id, 4, at: 38)
+        #expect(lib.ackDayChunks(id, seqs: [0, 1, 7]) == [0, 1])
+        var entry = try #require(lib.entry(id))
+        #expect(entry.segments.map(\.index) == [2] && entry.prunedBelow == 2 && entry.nextIndex == 3)
+        #expect(!hasAudio(lib, id, 0) && !hasAudio(lib, id, 1) && hasAudio(lib, id, 2))
+        // The writer's replay of its finished chunks at stop never brings one back.
+        try chunk(lib, id, 0, at: 0)
+        #expect(lib.entry(id)?.segments.map(\.index) == [2] && !hasAudio(lib, id, 0))
+        // The same acknowledgement again (a resent file's) writes nothing.
+        let saved = lib.entry(id)?.updatedAt
+        #expect(lib.ackDayChunks(id, seqs: [0, 1]).isEmpty && lib.entry(id)?.updatedAt == saved)
+        #expect(lib.ackDayChunks(id, seqs: [2]) == [2])
+        entry = try #require(lib.entry(id))
+        #expect(entry.segments.isEmpty && entry.prunedBelow == 3 && entry.prunedAbove == nil)
+        #expect(lib.allocateSeq(id) == 3, "an acknowledged seq is never used again")
+    }
 
+    @Test func eraseDeletesTheHeldChunksInTheRange() throws {
+        let lib = library()
+        defer { try? FileManager.default.removeItem(at: lib.root) }
+        let id = try day(lib)
+        for seq in 0..<3 { try chunk(lib, id, seq, at: Double(seq) * 10) }
+        try chunk(lib, id, 3, at: 30, duration: 8) // the chunk the erase's cut closed at 38 s
+        lib.ackDayChunks(id, seqs: [0])
+        // The phone holds chunk 0 already; the range starts where chunk 0 ends.
+        #expect(lib.eraseDayChunks(id, from: anchor.addingTimeInterval(10), to: anchor.addingTimeInterval(38)) == [1, 2, 3])
+        try chunk(lib, id, 4, at: 38) // the chunk the cut opened
         let entry = try #require(lib.entry(id))
-        #expect(entry.segments.map(\.index) == [0, 1, 2, 3, 4], "every seq has a record")
-        #expect(entry.nextIndex == 5)
-        for seq in 0...3 {
-            let record = try #require(entry.segments.first { $0.index == seq })
-            #expect(record.erased == true && !record.delivered, "seq \(seq) goes again, as an erased marker")
-            #expect(record.startedAt != nil && record.duration > 0, "seq \(seq) keeps its times")
-            #expect(!hasAudio(lib, id, seq), "seq \(seq) has no audio")
-        }
-        #expect(entry.segments.last?.erased == nil && hasAudio(lib, id, 4), "the chunk after the cut keeps its audio")
-        #expect(entry.erased?.count == 1)
-        #expect(lib.eraseDay(id, from: anchor.addingTimeInterval(5), to: anchor.addingTimeInterval(38.2)) == [], "nothing new")
-    }
-
-    @Test func aChunkOpenedJustBeforeTheTapIsErasedToo() throws {
-        let lib = library()
-        defer { try? FileManager.default.removeItem(at: lib.root) }
-        let id = try day(lib)
-        try chunk(lib, id, 0, at: 0)
-        // Chunk 1 opened at 10 s; Erase cuts it at 10.2 s and names the range up to 10.25 s.
-        let cut = try chunk(lib, id, 1, at: 10, duration: 0.2)
-        #expect(lib.eraseDay(id, from: anchor.addingTimeInterval(-590), to: anchor.addingTimeInterval(10.25)) == [0, 1])
-        try chunk(lib, id, 2, at: 10.15)
-        // The same cut with its chunk still on the way: it is registered after the erase, and erased then.
-        let late = try day(lib, id: UUID())
-        try chunk(lib, late, 0, at: 0)
-        #expect(lib.eraseDay(late, from: anchor.addingTimeInterval(-590), to: anchor.addingTimeInterval(10.25)) == [0])
-        try Data([1]).write(to: lib.audio(late, 1))
-        lib.addSegment(late, cut)
-        try chunk(lib, late, 2, at: 10.15)
-
-        for recording in [id, late] {
-            let entry = try #require(lib.entry(recording))
-            #expect(entry.segments.map(\.index) == [0, 1, 2])
-            #expect(entry.segments.prefix(2).allSatisfy { $0.erased == true }, "nothing from before the tap is left")
-            #expect(!hasAudio(lib, recording, 1))
-            #expect(entry.segments[2].erased == nil && hasAudio(lib, recording, 2), "the chunk the cut opened keeps its audio")
-        }
-    }
-
-    @Test func eraseLeavesMarkersAndOtherKindsAlone() throws {
-        let lib = library()
-        defer { try? FileManager.default.removeItem(at: lib.root) }
-        let id = try day(lib)
-        try chunk(lib, id, 0, at: 0)
-        lib.change(id) { $0.segments[0].lost = true }
-        lib.closeDay(id, at: anchor.addingTimeInterval(20), after: RecordingDayContract.Reason.paused)
-        #expect(lib.eraseDay(id, from: anchor, to: anchor.addingTimeInterval(60)) == [])
-        #expect(lib.entry(id)?.segments.allSatisfy { $0.erased == nil } == true)
+        #expect(entry.segments.map(\.index) == [4] && hasAudio(lib, id, 4), "the chunk after the cut keeps its audio")
+        for seq in 1...3 { #expect(!hasAudio(lib, id, seq), "seq \(seq) has no audio") }
+        #expect(entry.prunedBelow == 4 && entry.nextIndex == 5, "erased seqs are tombstoned")
+        try chunk(lib, id, 2, at: 20)
+        #expect(lib.entry(id)?.segments.map(\.index) == [4], "an erased chunk never comes back")
+        #expect(lib.eraseDayChunks(id, from: anchor.addingTimeInterval(10), to: anchor.addingTimeInterval(38)).isEmpty, "nothing new")
+        #expect(lib.entry(id)?.dayErases == nil, "the watch's own erase is an event, not a remembered request")
 
         let rolling = try lib.create(source: .watch, kind: .rolling)
         lib.addSegment(rolling.id, RecordingSegment(index: 0, start: 0, duration: 10, startedAt: anchor))
-        #expect(lib.eraseDay(rolling.id, from: anchor, to: anchor.addingTimeInterval(60)) == [])
-        #expect(lib.entry(rolling.id)?.erased == nil, "rolling recordings erase with `erase`")
+        #expect(lib.eraseDayChunks(rolling.id, from: anchor, to: anchor.addingTimeInterval(60)).isEmpty)
+        #expect(lib.entry(rolling.id)?.segments.count == 1, "rolling recordings erase with `erase`")
     }
 
-    @Test func acknowledgedChunksLoseTheirAudioAndMarks() throws {
+    @Test func aRepeatedPhoneEraseGetsTheSameAnswer() throws {
         let lib = library()
         defer { try? FileManager.default.removeItem(at: lib.root) }
         let id = try day(lib)
         try chunk(lib, id, 0, at: 0)
         try chunk(lib, id, 1, at: 10)
-        let bookmark = RecordingDayMark(at: anchor.addingTimeInterval(4), label: RecordingDayMark.bookmark)
-        let meeting = RecordingDayMark(at: anchor.addingTimeInterval(14), label: RecordingDayMark.meeting)
-        lib.change(id) { $0.dayMarks = [bookmark, meeting] }
-
-        lib.markDelivered(id, seqs: [0], removingMarks: [bookmark])
-        var entry = try #require(lib.entry(id))
-        #expect(entry.segments.map(\.delivered) == [true, false], "the record stays")
-        #expect(!hasAudio(lib, id, 0) && hasAudio(lib, id, 1))
-        #expect(entry.dayMarks == [meeting])
-        // The same acknowledgement again (a resent file's) writes nothing.
-        let saved = entry.updatedAt
-        lib.markDelivered(id, seqs: [0])
-        #expect(lib.entry(id)?.updatedAt == saved)
-
-        lib.markDelivered(id, seqs: Set([1, 7]), removingMarks: [meeting])
-        entry = try #require(lib.entry(id))
-        #expect(entry.segments.allSatisfy(\.delivered) && entry.dayMarks == nil && !hasAudio(lib, id, 1))
+        let request = UUID()
+        let now = anchor.addingTimeInterval(60)
+        #expect(lib.eraseDayChunks(id, from: anchor, to: anchor.addingTimeInterval(15), request: request, now: now) == [0, 1])
+        let done = RecordingDayEraseDone(id: request, seqs: [[0, 1]], at: now)
+        #expect(RecordingLibrary(root: lib.root).entry(id)?.dayErases == [done], "saved with the erase")
+        // The answer was lost and the phone asks again: the same seqs, and nothing erased a second time.
+        try chunk(lib, id, 2, at: 12)
+        #expect(lib.eraseDayChunks(id, from: anchor, to: anchor.addingTimeInterval(15), request: request, now: now) == [0, 1])
+        #expect(lib.entry(id)?.segments.map(\.index) == [2])
+        // A request when the phone already has every chunk in the range is remembered too, with no seqs.
+        let later = UUID()
+        lib.ackDayChunks(id, seqs: [2])
+        #expect(lib.eraseDayChunks(id, from: anchor, to: anchor.addingTimeInterval(15), request: later, now: now).isEmpty)
+        #expect(lib.entry(id)?.dayErases?.last == RecordingDayEraseDone(id: later, seqs: [], at: now))
+        // A week later the old requests are forgotten when a new one is remembered.
+        let weekLater = now.addingTimeInterval(RecordingDayContract.eraseMemoryDays * 86_400 + 1)
+        lib.eraseDayChunks(id, from: anchor, to: anchor.addingTimeInterval(15), request: UUID(), now: weekLater)
+        #expect(lib.entry(id)?.dayErases?.map(\.at) == [weekLater])
     }
 
-    @Test func deliveredRecordsArePrunedWithATombstone() throws {
+    @Test func closingADayCountsEverySeqHandedOut() throws {
         let lib = library()
         defer { try? FileManager.default.removeItem(at: lib.root) }
         let id = try day(lib)
-        for seq in 0..<3 { try chunk(lib, id, seq, at: Double(seq) * 10) }
-        lib.markDelivered(id, seqs: [0, 1])
-        // Chunk 0 ended at 10 s, chunk 1 at 20 s.
-        lib.pruneDelivered(id, olderThan: anchor.addingTimeInterval(15))
+        for seq in 0..<2 { try chunk(lib, id, lib.allocateSeq(id), at: Double(seq) * 10) }
+        // Seq 2 was cut at midnight and is still on its way from the writer.
+        #expect(lib.allocateSeq(id) == 2)
+        let midnight = try #require(RecordingDayCalendar.end(of: "2027-01-15", in: TimeZone(identifier: shanghai)!))
+        let closed = try #require(lib.closeDay(id, at: midnight))
+        #expect(closed == .closed(0, at: midnight, seqCount: 3))
         var entry = try #require(lib.entry(id))
-        #expect(entry.segments.map(\.index) == [1, 2] && entry.prunedBelow == 1 && entry.nextIndex == 3)
-        // A late copy of a pruned chunk (the writer's replay at stop) never comes back.
-        try chunk(lib, id, 0, at: 0)
-        #expect(lib.entry(id)?.segments.map(\.index) == [1, 2])
-        #expect(!hasAudio(lib, id, 0))
-        // An unacknowledged chunk stays however old it is.
-        lib.pruneDelivered(id, olderThan: anchor.addingTimeInterval(3600))
+        #expect(!entry.active && entry.closedAt == midnight && entry.nextSeq == 3 && entry.dayEvents == [closed])
+        #expect(lib.closeDay(id, at: midnight.addingTimeInterval(60)) == nil && lib.entry(id)?.dayEvents?.count == 1, "closed once")
+        #expect(lib.openDays(source: .watch).isEmpty)
+        // Its last chunk still arrives and goes to the phone.
+        try chunk(lib, id, 2, at: 20)
+        #expect(lib.entry(id)?.segments.map(\.index) == [0, 1, 2])
+        #expect(lib.entry(id)?.isDaySettled == false)
+        lib.ackDayChunks(id, seqs: [0, 1, 2])
+        #expect(lib.entry(id)?.isDaySettled == false, "until the closed event is acknowledged too")
+        lib.ackDayEvents(id, ns: [0])
         entry = try #require(lib.entry(id))
-        #expect(entry.segments.map(\.index) == [2] && entry.nextIndex == 3 && hasAudio(lib, id, 2))
+        #expect(entry.isDaySettled, "the phone has all of it: it can go")
     }
 
-    @Test func closingADayAddsOneEndMarker() throws {
+    @Test func lostChunksAreReportedOncePerRun() throws {
         let lib = library()
         defer { try? FileManager.default.removeItem(at: lib.root) }
         let id = try day(lib)
-        try chunk(lib, id, 0, at: 0)
-        try chunk(lib, id, 1, at: 10)
-        let end = anchor.addingTimeInterval(16 * 3600)
-        lib.closeDay(id, at: end, after: RecordingDayContract.Reason.paused)
+        for seq in 0..<5 { try chunk(lib, id, seq, at: Double(seq) * 10) }
+        let events = lib.loseDayChunks(id, seqs: [1, 2, 4, 9])
+        #expect(events == [.lost(0, seqs: 1...2, from: anchor.addingTimeInterval(10), to: anchor.addingTimeInterval(30)),
+                           .lost(1, seqs: 4...4, from: anchor.addingTimeInterval(40), to: anchor.addingTimeInterval(50))],
+                "seq 9 was never handed out")
         let entry = try #require(lib.entry(id))
-        let marker = try #require(entry.segments.last)
-        #expect(marker.index == 2 && marker.duration == 0 && marker.end == true && marker.isDayMarker)
-        #expect(marker.startedAt == end && marker.after == RecordingDayContract.Reason.paused)
-        #expect(!entry.active && entry.expectedSegments == 3 && entry.dayEndAt == end)
-        lib.closeDay(id, at: end.addingTimeInterval(60), after: nil)
-        #expect(lib.entry(id)?.segments.count == 3, "one end marker only")
-
-        // A day whose last chunk already says `end` (cut at midnight while recording) gets no marker.
-        let other = try day(lib, createdAt: anchor.addingTimeInterval(1))
-        try chunk(lib, other, 0, at: 0)
-        lib.change(other) { $0.segments[0].end = true }
-        lib.closeDay(other, at: end, after: nil)
-        #expect(lib.entry(other)?.segments.count == 1 && lib.entry(other)?.active == false)
+        #expect(entry.segments.map(\.index) == [0, 3] && entry.dayEvents == events)
+        #expect(!hasAudio(lib, id, 1) && !hasAudio(lib, id, 4) && hasAudio(lib, id, 3))
+        #expect(lib.loseDayChunks(id, seqs: [1, 2, 4]).isEmpty, "reported once")
     }
 
-    @Test func openDaysAreFoundNewestFirst() throws {
+    @Test func recoverReportsWhatTheExitCutShort() throws {
         let lib = library()
         defer { try? FileManager.default.removeItem(at: lib.root) }
-        let older = try day(lib, createdAt: anchor)
-        let newer = try day(lib, createdAt: anchor.addingTimeInterval(600))
-        let closed = try day(lib, createdAt: anchor.addingTimeInterval(1200))
-        lib.closeDay(closed, at: anchor.addingTimeInterval(1300), after: nil)
-        let yesterday = try day(lib, createdAt: anchor.addingTimeInterval(-86_400), day: "2027-01-14")
-        try lib.create(source: .phone, kind: .day, createdAt: anchor.addingTimeInterval(1800), day: "2027-01-15")
-        try lib.create(source: .watch, kind: .rolling)
-        #expect(lib.openDay(source: .watch, day: "2027-01-15")?.id == newer)
-        #expect(lib.openDay(source: .watch, day: "2027-01-16") == nil)
-        #expect(lib.openDays(source: .watch).map(\.id) == [newer, older, yesterday])
-    }
-
-    @Test func recoverKeepsDaysOpenAndNamesTheGap() throws {
-        let lib = library()
-        defer { try? FileManager.default.removeItem(at: lib.root) }
+        // Recording: chunk 0 is registered; chunk 1 was being written; seq 2 was taken and a save counted it, but its
+        // file never opened.
         let recording = try day(lib)
-        try chunk(lib, recording, 0, at: 0)
-        try chunk(lib, recording, 1, at: 10, register: false) // half written when the app ended
+        lib.appendDayEvent(recording) { .started($0, at: anchor) }
+        try chunk(lib, recording, lib.allocateSeq(recording), at: 0)
+        try chunk(lib, recording, lib.allocateSeq(recording), at: 10, register: false)
+        _ = lib.allocateSeq(recording)
+        lib.appendDayEvent(recording) { .mark($0, at: anchor.addingTimeInterval(12), label: RecordingDayEvent.Label.bookmark) }
+        // Paused before the exit, with nothing cut short.
         let paused = try day(lib, createdAt: anchor.addingTimeInterval(1))
-        lib.change(paused) { $0.gapReason = RecordingDayContract.Reason.paused }
+        lib.appendDayEvent(paused) { .paused($0, at: anchor.addingTimeInterval(2), reason: RecordingDayContract.Reason.paused) }
+        // Closed at midnight while its last chunk was on its way.
+        let closed = try day(lib, createdAt: anchor.addingTimeInterval(2), day: "2027-01-14")
+        try chunk(lib, closed, lib.allocateSeq(closed), at: 0, register: false)
+        lib.closeDay(closed, at: anchor)
         let clip = try lib.create(source: .watch)
+        // The last save is the latest moment the app is known to have run (the library stamps it with the real clock).
+        let lastSave = try #require(lib.entry(recording)?.updatedAt)
 
         let restored = RecordingLibrary(root: lib.root)
-        #expect(Set(restored.recover(source: .watch)) == [recording, paused])
+        #expect(Set(restored.recover(source: .watch)) == [recording, paused], "open days stay open")
         let entry = try #require(restored.entry(recording))
-        #expect(entry.active && entry.gapReason == RecordingDayContract.Reason.stopped && entry.expectedSegments == nil)
-        #expect(hasAudio(lib, recording, 0) && !hasAudio(lib, recording, 1))
-        #expect(entry.nextIndex == 1, "the unregistered seq is free again: the phone never saw it")
-        #expect(restored.entry(paused)?.gapReason == RecordingDayContract.Reason.paused, "a pause keeps its reason")
+        let added = try #require(entry.dayEvents?.suffix(2))
+        let lost = try #require(added.first)
+        let lastHeard = max(anchor.addingTimeInterval(10), lastSave)
+        #expect(lost.type == .lost && lost.n == 2 && lost.lostSeqs == 1...2)
+        #expect(lost.from != nil && lost.from! <= lastHeard, "from chunk 1's file")
+        #expect(lost.to == lastHeard, "seq 2's file never opened: no audio of it was lost after the last known")
+        #expect(added.last == .paused(3, at: lastHeard, reason: RecordingDayContract.Reason.stopped),
+                "the microphone stopped with the app, after the last audio known")
+        #expect(entry.active && entry.gapReason == RecordingDayContract.Reason.stopped && entry.nextSeq == 3)
+        #expect(entry.segments.map(\.index) == [0] && hasAudio(lib, recording, 0) && !hasAudio(lib, recording, 1))
+
+        #expect(restored.entry(paused)?.dayEvents?.count == 1 && restored.entry(paused)?.gapReason == RecordingDayContract.Reason.paused)
+        let closedEvents = try #require(restored.entry(closed)?.dayEvents)
+        #expect(closedEvents.map(\.type) == [.closed, .lost] && closedEvents.last?.lostSeqs == 0...0)
+        #expect(!hasAudio(lib, closed, 0))
         #expect(restored.entry(clip.id)?.active == false, "other recordings end as before")
-        #expect(restored.recover(source: .phone).isEmpty)
+
+        // Nothing is reported twice.
+        let again = RecordingLibrary(root: lib.root)
+        again.recover(source: .watch)
+        #expect(again.entry(recording)?.dayEvents?.map(\.n) == entry.dayEvents?.map(\.n))
+        #expect(again.entry(closed)?.dayEvents?.map(\.n) == closedEvents.map(\.n))
+        #expect(again.recover(source: .phone).isEmpty)
+        #expect(again.allocateSeq(recording) == 3, "the counter stays")
     }
 
     @Test func aDeletedRecordingStaysDeleted() async throws {
@@ -627,6 +911,9 @@ private final class CountingDefaults: UserDefaults, @unchecked Sendable {
         #expect(restored.entry(id) == nil && restored.entry(kept) != nil)
         #expect(!FileManager.default.fileExists(atPath: lib.folder(id).path), "its folder is gone")
         #expect(restored.isDeletedSnapshot(id) && restored.isDeleted(id))
+        #expect(restored.appendDayEvent(id) { .started($0, at: anchor) } == nil)
+        _ = restored.allocateSeq(id)
+        #expect(!FileManager.default.fileExists(atPath: lib.folder(id).path), "a seq taken for it writes nothing")
     }
 
     /// Asks from a thread that isn't the main one, as the phone's chunk store does.
@@ -643,35 +930,46 @@ private final class CountingDefaults: UserDefaults, @unchecked Sendable {
         let lib = library()
         defer { try? FileManager.default.removeItem(at: lib.root) }
         let id = UUID()
-        let first = try #require(lib.adoptDay(id: id, day: "2027-01-15", timeZone: "Asia/Shanghai", createdAt: anchor.addingTimeInterval(60)))
+        let first = try #require(lib.adoptDay(id: id, day: "2027-01-15", timeZone: shanghai, createdAt: anchor.addingTimeInterval(60)))
         #expect(first.isDay && first.source == .watch && first.active && first.segments.isEmpty)
-        #expect(first.day == "2027-01-15" && first.timeZone == "Asia/Shanghai" && first.createdAt == anchor.addingTimeInterval(60))
+        #expect(first.day == "2027-01-15" && first.timeZone == shanghai && first.createdAt == anchor.addingTimeInterval(60))
+        #expect(first.nextSeq == nil && first.dayEvents == nil, "the phone's row has none of the watch's bookkeeping")
         let saved = first.updatedAt
         // The next chunk of the same day: nothing to write.
-        #expect(lib.adoptDay(id: id, day: "2027-01-15", timeZone: "Asia/Shanghai", createdAt: anchor.addingTimeInterval(60))?.updatedAt == saved)
-        // The recording's real start (from a later header) is earlier; a later time never moves it back.
-        lib.adoptDay(id: id, day: "2027-01-15", timeZone: "Asia/Shanghai", createdAt: anchor)
-        lib.adoptDay(id: id, day: "2027-01-15", timeZone: "Asia/Shanghai", createdAt: anchor.addingTimeInterval(120))
+        #expect(lib.adoptDay(id: id, day: "2027-01-15", timeZone: shanghai, createdAt: anchor.addingTimeInterval(60))?.updatedAt == saved)
+        // An earlier start never moves later.
+        lib.adoptDay(id: id, day: "2027-01-15", timeZone: shanghai, createdAt: anchor)
+        lib.adoptDay(id: id, day: "2027-01-15", timeZone: shanghai, createdAt: anchor.addingTimeInterval(120))
         #expect(lib.entry(id)?.createdAt == anchor)
-        lib.adoptDay(id: id, day: "2027-01-15", timeZone: "Asia/Shanghai", createdAt: anchor, closed: true)
-        lib.adoptDay(id: id, day: "2027-01-15", timeZone: "Asia/Shanghai", createdAt: anchor)
+        lib.adoptDay(id: id, day: "2027-01-15", timeZone: shanghai, createdAt: anchor, closed: true)
+        lib.adoptDay(id: id, day: "2027-01-15", timeZone: shanghai, createdAt: anchor)
         #expect(lib.entry(id)?.active == false, "an ended day is never reopened")
         #expect(RecordingLibrary(root: lib.root).entry(id)?.createdAt == anchor)
 
         try lib.remove(id)
-        #expect(lib.adoptDay(id: id, day: "2027-01-15", timeZone: "Asia/Shanghai", createdAt: anchor) == nil)
+        #expect(lib.adoptDay(id: id, day: "2027-01-15", timeZone: shanghai, createdAt: anchor) == nil)
         #expect(lib.entry(id) == nil && !FileManager.default.fileExists(atPath: lib.folder(id).path))
     }
 
-    @Test func entriesFromBeforeDaysDecode() throws {
+    @Test func entriesFromBeforeDaysAndFromTheOlderDraftDecode() throws {
         var entry = RecordingEntry(id: UUID(), createdAt: anchor, source: .watch, kind: .rolling)
         entry.segments = [RecordingSegment(index: 0, start: 0, duration: 30, startedAt: anchor)]
-        var json = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(entry)) as? [String: Any])
-        for key in ["day", "timeZone", "gapReason", "dayMarks", "dayEndAt"] { #expect(json[key] == nil, "\(key) is not written when unset") }
+        var json = try object(JSONEncoder().encode(entry))
+        for key in ["day", "timeZone", "gapReason", "nextSeq", "nextEvent", "dayEvents", "dayErases", "closedAt"] {
+            #expect(json[key] == nil, "\(key) is not written when unset")
+        }
         json["segments"] = [["index": 0, "start": 0, "duration": 30, "delivered": false]]
         let old = try JSONDecoder().decode(RecordingEntry.self, from: JSONSerialization.data(withJSONObject: json))
-        #expect(old.day == nil && old.dayMarks == nil && old.segments.first?.level == nil && old.segments.first?.erased == nil)
+        #expect(old.day == nil && old.dayEvents == nil && old.segments.first?.level == nil)
         #expect(!old.isDay && old.isRolling)
+
+        // A watch entry written by the earlier draft: its markers and marks are ignored.
+        json["kind"] = "day"
+        json["dayMarks"] = [["at": 0, "label": ""]]
+        json["dayEndAt"] = 0
+        json["segments"] = [["index": 0, "start": 0, "duration": 0, "delivered": false, "end": true, "erased": true, "after": "paused"]]
+        let draft = try JSONDecoder().decode(RecordingEntry.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(draft.isDay && draft.segments.count == 1 && draft.closedAt == nil)
     }
 
     @Test func aDayIsTitledByItsDateInItsOwnTimeZone() throws {

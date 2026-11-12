@@ -16,9 +16,8 @@ struct WatchRecordingView: View {
     @AppStorage("recording.rollingConsent") private var rollingConsent = false
     @AppStorage(WatchSync.phoneRollingKey) private var phoneRolling = false
     @State private var allDay = WatchAllDay.shared
-    @State private var confirmingAllDay = false
-    /// The phone takes all-day recordings (its contract version; 0 for a phone from before).
-    @AppStorage(WatchSync.phoneDayKey) private var phoneDay = 0
+    /// The phone's `recordingDay`: absent from a phone that doesn't take day recordings, 0 until its user agrees.
+    @AppStorage(WatchSync.phoneDayKey) private var phoneDay: Int?
 
     /// The recorder's language for the app's UI language (also all-day recording's).
     static var defaultLocale: String {
@@ -80,7 +79,6 @@ struct WatchRecordingView: View {
         } message: {
             Text("Keeps the last 6 hours on this watch and your iPhone. Audio stays on your devices. Ask others before recording them.")
         }
-        .allDayConsent(isPresented: $confirmingAllDay)
     }
 
     /// Every recording but all-day's: the clock, the start buttons, and the controls of the one running.
@@ -120,15 +118,7 @@ struct WatchRecordingView: View {
                 }
                 .buttonStyle(.bordered)
             }
-            if phoneDay > 0 || allDay.state != .off {
-                // Stopped by itself earlier: say so above the button that continues it.
-                if allDay.state == .stopped { WatchAllDayStatus(state: .stopped, since: nil) }
-                Button { if !allDay.requestStart() { confirmingAllDay = true } } label: {
-                    Label("All-Day Recording", systemImage: Theme.Icon.allDay).lineLimit(1)
-                }
-                .buttonStyle(.bordered)
-                .accessibilityIdentifier("watch-recording-allday")
-            }
+            allDayEntry
         } else if capture.state == .starting {
             ProgressView(String(localized: "Waiting for microphone access")).font(Theme.Font.secondary)
             Button("Cancel") { capture.cancelStarting() }.lineLimit(1)
@@ -150,6 +140,29 @@ struct WatchRecordingView: View {
                 Label("Stop & Save", systemImage: Theme.Icon.interrupt).lineLimit(1)
             }.tint(Theme.danger)
         }
+    }
+
+    /// All-Day Recording once the phone takes it: one tap starts it, or, until the user agreed on the iPhone, opens
+    /// its page, which says so.
+    @ViewBuilder private var allDayEntry: some View {
+        let access = allDay.access(phoneDay: phoneDay)
+        if access != .hidden {
+            // Stopped by itself earlier: say so above the button that continues it.
+            if allDay.state == .stopped { WatchAllDayStatus(state: .stopped, since: nil, startable: access == .ready) }
+            Group {
+                if access == .ready {
+                    Button { allDay.requestStart() } label: { allDayLabel }
+                } else {
+                    NavigationLink { WatchAllDayView() } label: { allDayLabel }
+                }
+            }
+            .buttonStyle(.bordered)
+            .accessibilityIdentifier("watch-recording-allday")
+        }
+    }
+
+    private var allDayLabel: some View {
+        Label("All-Day Recording", systemImage: Theme.Icon.allDay).lineLimit(1)
     }
 
     private var recordingStatus: String {

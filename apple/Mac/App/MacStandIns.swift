@@ -47,13 +47,18 @@ final class WatchSync: NSObject {
 
     func push(summary: @autoclosure () -> WatchSummary) {}
 
-    // All-day recording's phone side (Shared/WatchSync.swift): no watch sends chunks to a Mac, so nothing is ever called.
+    // All-day recording's phone side (Shared/WatchSync.swift): no watch sends chunks or events to a Mac, so no hook is
+    // ever called and nothing is sent.
     nonisolated(unsafe) var onDayChunk: (@Sendable (_ frame: Data, _ reply: @escaping @Sendable (Data) -> Void) -> Void)?
     nonisolated(unsafe) var onDayFile: (@Sendable (_ header: RecordingDayHeader, _ file: URL) -> Bool)?
-    nonisolated(unsafe) var onDayUserInfo: (@Sendable (_ info: [String: Any]) -> Bool)?
+    nonisolated(unsafe) var onDayEvent: (@Sendable (_ envelope: RecordingDayEventEnvelope) -> RecordingDayAck?)?
+    var onDayErased: ((RecordingDayErased) -> Void)?
+    var onDayDeleted: ((RecordingDayDeleted) -> Void)?
     var onDayWatchState: ((RecordingDayWatchState) -> Void)?
 
-    func pushRecordingDay(hub: Bool) {}
+    func pushRecordingDay(consent: Bool, hub: Bool, keepDays: Int) {}
     func sendDayCommand(_ command: String) {}
     nonisolated func sendDayAck(_ ack: RecordingDayAck) {}
+    func sendDayErase(_ request: RecordingDayEraseRequest) {}
+    func sendDayDelete(_ delete: RecordingDayDelete) {}
 }

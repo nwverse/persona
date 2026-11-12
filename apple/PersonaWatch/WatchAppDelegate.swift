@@ -29,10 +29,11 @@ final class WatchAppDelegate: NSObject, WKApplicationDelegate, UNUserNotificatio
             return
         }
         let link = AllDayNotice.link(answering: response.actionIdentifier)
+        let byPhone = AllDayNotice.askedByPhone(answering: response.actionIdentifier)
         nonisolated(unsafe) let done = completionHandler
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
-                WatchAllDay.shared.open(link)
+                WatchAllDay.shared.open(link, byPhone: byPhone)
                 done()
             }
         }

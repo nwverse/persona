@@ -1,26 +1,34 @@
 import Foundation
 import Observation
+import os
 
-// All-day recording's "phone to hub" (docs/assistant/day-recap.md): each day the watch records becomes one hub recording
-// of kind `day` (more parts when a day outgrows one), created with a `PUT`, grown by appends by position, and replaced
-// by a `PUT` only to repair it. Everything here is decided from the day's `RecordingDayRecord` (its parts' counters, the
-// sentences' positions) and written back to it before the request that depends on it, so a crash, a lost answer or a
-// retry never sends a sentence under two positions (C17). Only on a hub that lists `recording_day`.
+// All-day recording's "phone to hub" (docs/assistant/day-recap.md「Phone to hub」): each day the watch records becomes
+// one hub recording of kind `day` (more parts when a day outgrows one), created with a `PUT`, grown by appends by
+// position, and replaced by a `PUT` only to repair it. Everything here is decided from the day's `RecordingDayRecord`
+// (its parts' counters, the sentences' positions) and written back to it before the request that depends on it, so a
+// crash, a lost answer or a retry never sends a sentence under two positions. Positions themselves are given in
+// the transcriber's save (`RecordingDayUpload.place`), in the same write that marks a chunk transcribed. Only on a hub
+// that lists `recording_day`.
 
 // MARK: - Wire
 
-/// What reconciliation (`GET /api/v1/recordings`) lists for one hub recording of a day.
+/// What reconciliation (`GET /api/v1/recordings`) lists for one hub recording of a day (docs/assistant/day-recap.md
+/// 「Reconciliation」). A field it didn't carry is nil and changes nothing here.
 nonisolated struct RecordingDayHubRow: Sendable, Equatable {
     var id: UUID
     var revision: Int64? = nil
     var part: Int? = nil
-    /// The hub's count of the recording's positions, and the revision of its last `PUT`.
+    /// The hub's count of the recording's positions, and the revision of its last `PUT`. A day row without `base` comes
+    /// from an older manager: nothing is sent to it.
     var next: Int? = nil
     var base: Int64? = nil
     var recapState: String? = nil
+    /// Its newest recap is final, and when its first final recap was written (the phone's audio is kept 3 days after).
+    var recapFinal: Bool? = nil
+    var recapFinalAt: Date? = nil
 }
 
-/// A sentence as the hub stores it: wall-clock seconds since the part's `started_at`, pauses included.
+/// A sentence as the hub stores it: wall-clock seconds since the day's `started_at`, pauses included.
 nonisolated struct RecordingDaySegment: Codable, Sendable, Equatable {
     var start: Double
     var end: Double
@@ -48,6 +56,7 @@ nonisolated struct RecordingDayMeta: Sendable, Equatable {
 nonisolated struct RecordingDayPutBody: Encodable, Sendable {
     var revision: Int64
     var day: String
+    var tz: String
     var part: Int
     var startedAt: Date
     var language: String
@@ -55,18 +64,20 @@ nonisolated struct RecordingDayPutBody: Encodable, Sendable {
     var segments: [RecordingDaySegment]
 
     private nonisolated enum CodingKeys: String, CodingKey {
-        case revision, kind, day, part, duration, language, device, title, bookmarks, coverage, segments, complete
+        case revision, kind, day, tz, part, duration, language, device, title, bookmarks, coverage, segments, complete
         case startedAt = "started_at", endedAt = "ended_at"
     }
 
     func encode(to encoder: Encoder) throws {
+        let zone = RecordingDayWire.zone(tz) ?? .gmt
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(revision, forKey: .revision)
         try c.encode("day", forKey: .kind)
         try c.encode(day, forKey: .day)
+        try c.encode(tz, forKey: .tz)
         try c.encode(part, forKey: .part)
-        try c.encode(RecordingDayUpload.timestamp(startedAt), forKey: .startedAt)
-        try c.encodeIfPresent(meta.endedAt.map(RecordingDayUpload.timestamp), forKey: .endedAt)
+        try c.encode(RecordingDayWire.timestamp(startedAt, in: zone), forKey: .startedAt)
+        try c.encodeIfPresent(meta.endedAt.map { RecordingDayWire.timestamp($0, in: zone) }, forKey: .endedAt)
         try c.encode(meta.duration, forKey: .duration)
         try c.encode(language, forKey: .language)
         try c.encode("watch", forKey: .device)
@@ -79,11 +90,13 @@ nonisolated struct RecordingDayPutBody: Encodable, Sendable {
 }
 
 /// `POST /api/v1/recordings/{id}/segments`: positions `from…` on the base of the last `PUT`, with the other fields whole.
+/// The title is left out: absent means unchanged, and the hub names the day.
 nonisolated struct RecordingDayAppendBody: Encodable, Sendable {
     var base: Int64
     var revision: Int64
     var from: Int
     var segments: [RecordingDaySegment]
+    var tz: String
     var meta: RecordingDayMeta
 
     private nonisolated enum CodingKeys: String, CodingKey {
@@ -92,27 +105,30 @@ nonisolated struct RecordingDayAppendBody: Encodable, Sendable {
     }
 
     func encode(to encoder: Encoder) throws {
+        let zone = RecordingDayWire.zone(tz) ?? .gmt
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(base, forKey: .base)
         try c.encode(revision, forKey: .revision)
         try c.encode(from, forKey: .from)
         try c.encode(segments, forKey: .segments)
         try c.encode(meta.duration, forKey: .duration)
-        try c.encodeIfPresent(meta.endedAt.map(RecordingDayUpload.timestamp), forKey: .endedAt)
+        try c.encodeIfPresent(meta.endedAt.map { RecordingDayWire.timestamp($0, in: zone) }, forKey: .endedAt)
         try c.encode(meta.bookmarks, forKey: .bookmarks)
         try c.encode(meta.coverage, forKey: .coverage)
         try c.encode(meta.complete, forKey: .complete)
     }
 }
 
-/// The `200` of a `PUT` (`stored`, `stale`, `expired`) and of an append (`stored`, `expired`, with the hub's count).
+/// The `200` of a `PUT` (`stored`, `stale`, `expired`, with the base it set and the hub's count) and of an append
+/// (`stored`, `expired`, with the hub's count). `revision` is the hub's stored revision after the request.
 nonisolated struct RecordingDayAnswer: Decodable, Sendable {
     var revision: Int64?
+    var base: Int64?
     var next: Int?
     var status: String?
 }
 
-/// How the upload answers a refused or failed request, by HTTP status and the contract's code (C22).
+/// How the upload answers a refused or failed request, by HTTP status and the contract's code.
 nonisolated enum RecordingDayReaction: Equatable, Sendable {
     /// `409 base_changed`: a `PUT` the phone may or may not have sent replaced the text (`base`, the hub's `next`).
     case baseChanged(base: Int64?, next: Int?)
@@ -120,8 +136,10 @@ nonisolated enum RecordingDayReaction: Equatable, Sendable {
     case segmentsGap(next: Int?)
     /// `404 recording_not_found`: create it (again).
     case notFound
-    /// `400`, or a `404` without that code (the route is missing): an older manager. Nothing goes until its next hello.
+    /// A `404` without that code: the route is missing, an older manager. Nothing goes until its next hello.
     case unsupported
+    /// `400`: the hub refused this request. That part stops, its problem shown, and is never sent again unchanged.
+    case rejected(String)
     /// `413 too_large`: the body was over 1 MiB; fewer segments per append.
     case tooLarge
     /// `413 day_full`: the part is full at the hub's `next`; the day continues in a next part.
@@ -130,7 +148,7 @@ nonisolated enum RecordingDayReaction: Equatable, Sendable {
     case conflict(String)
     /// `403`: read-only or not allowed; paused until the app comes to the front, a hello, or a retry.
     case forbidden
-    /// `410`: this part was deleted on the hub.
+    /// `410`: this part was deleted on the hub, so the whole day goes.
     case deleted
     case cancelled
     /// `503`, no network, a timeout, anything else: again later, with a backoff.
@@ -153,7 +171,8 @@ nonisolated extension RecordingDayReaction {
         case (409, "segments_gap"): self = .segmentsGap(next: Self.int(api, "next"))
         case (409, _): self = .conflict(code.isEmpty ? "conflict" : code)
         case (404, "recording_not_found"): self = .notFound
-        case (404, _), (400, _): self = .unsupported
+        case (404, _): self = .unsupported
+        case (400, _): self = .rejected(code.isEmpty ? "rejected" : code)
         case (413, "day_full"): self = .dayFull(next: Self.int(api, "next"))
         case (413, _): self = .tooLarge
         case (403, _): self = .forbidden
@@ -182,13 +201,18 @@ nonisolated enum RecordingDayUpload {
         var index: Int
     }
 
+    /// A part's last stored append: when, and how many positions it had then. Text that was waiting already goes on at
+    /// once (a backlog in batches); text placed since waits out the throttle.
+    nonisolated struct LastAppend: Sendable, Equatable {
+        var at: Date
+        var count: Int
+    }
+
     /// The next thing a part needs.
     nonisolated enum Step: Sendable, Equatable {
         /// A create or repair `PUT` (one decided on and not stored yet goes again, with its revision).
         case put
-        /// Positions the hub never had were dropped (an erase before they went): close the hole locally.
-        case compact
-        /// Give the transcribed sentences without a position the next ones in this part.
+        /// Text without a position (from a build before positions were given in the transcriber's save): place it.
         case assign
         /// Send positions `from..<to` (also a retry of ones assigned before).
         case append(from: Int, to: Int)
@@ -201,23 +225,24 @@ nonisolated enum RecordingDayUpload {
 
     /// An append's body stays under the contract's 1 MiB with room for its coverage and bookmarks.
     static let maxAppendBytes = 900_000
+    /// A sentence longer than this (UTF-8) is split before it gets a position (docs/assistant/day-recap.md「Appending」).
+    static let maxSentenceBytes = 64 * 1024
+    /// What one hub recording of a day takes (docs/assistant/day-recap.md「Parts」): past it the day goes on in a next part.
+    static let maxPartSegments = 20_000, maxPartTextBytes = 4 * 1024 * 1024
+    /// The contract's part numbers.
+    static let maxParts = 99
     /// JSON around one segment's text (`{"start":…,"end":…,"text":""}`), counted generously.
     private static let segmentOverhead = 80
 
-    /// The revision for a new request: the phone's clock in milliseconds, above every revision this part sent and every
-    /// one the hub was seen to hold (C17).
+    /// The revision for a new request: the phone's clock in milliseconds, above every revision this part sent, its base,
+    /// and every one the hub was seen to hold.
     static func revision(_ part: RecordingDayPart, now: Date, floor: Int64 = 0) -> Int64 {
-        max(millis(now), part.maxSentRevision + 1, (part.base ?? 0) + 1, floor + 1)
+        max(millis(now), part.maxSentRevision + 1, (part.base ?? 0) + 1, max(floor, part.hubRevision ?? 0) + 1)
     }
 
     static func millis(_ date: Date) -> Int64 {
         let ms = (date.timeIntervalSince1970 * 1000).rounded()
         return ms.isFinite ? Int64(ms) : 0
-    }
-
-    /// RFC 3339 with milliseconds: the offsets are measured from this exact moment.
-    static func timestamp(_ date: Date) -> String {
-        date.formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true))
     }
 
     /// The sentences placed in `part`, by position, and whether no position is held twice.
@@ -233,30 +258,31 @@ nonisolated enum RecordingDayUpload {
         return (placed, clean)
     }
 
-    /// The step `record.parts[index]` needs next. `isLast`: the part new sentences go to. `lastAppend`: when this part's
-    /// last request was stored; `sentMeta`: what it said. `force`: no throttle (the catch-up, a day that ended).
-    static func step(_ record: RecordingDayRecord, partIndex index: Int, isLast: Bool, now: Date, lastAppend: Date?,
-                     sentMeta: RecordingDayMeta?, force: Bool) -> Step {
+    /// The step `record.parts[index]` needs next. `isLast`: the part new text goes to. `lastAppend`: this part's last
+    /// stored append; `sentMeta`: what its last stored request said. `force`: no throttle (the catch-up, a day or part
+    /// that ended). `limit`: segments per append (fewer after `413 too_large`).
+    static func step(_ record: RecordingDayRecord, partIndex index: Int, isLast: Bool, now: Date, lastAppend: LastAppend?,
+                     sentMeta: RecordingDayMeta?, force: Bool, limit: Int = RecordingDayContract.maxAppendSegments) -> Step {
         let part = record.parts[index]
-        guard part.pendingPut == nil, part.created else { return .put }
+        guard part.created, part.pendingPut == nil, !part.needsRepair else { return .put }
         let layout = layout(record, part: part.part)
-        guard layout.clean, !layout.placed.keys.contains(where: { $0 < 0 || $0 >= part.count }) else { return .put }
-        let missing = (0..<part.count).filter { layout.placed[$0] == nil }
-        if let first = missing.first {
-            // The hub has the dropped text when it's below its count: only a full replacement takes it out.
-            return first >= part.next ? .compact : .put
-        }
+        // Each position below the count held exactly once, none past it: anything else only a full replacement mends
+        // (a position is never given again except by a `PUT`).
+        guard layout.clean, layout.placed.count == part.count,
+              layout.placed.keys.allSatisfy({ (0..<part.count).contains($0) }) else { return .put }
+        let throttled = !force && part.endedAt == nil && record.closedAt == nil
+            && lastAppend.map { now.timeIntervalSince($0.at) < RecordingDayContract.appendInterval } == true
+        let due = lastAppend?.at.addingTimeInterval(RecordingDayContract.appendInterval) ?? now
         if part.next < part.count {
-            return .append(from: part.next, to: batchEnd(record, placed: layout.placed, from: part.next, count: part.count,
-                                                         limit: RecordingDayContract.maxAppendSegments))
+            let to = batchEnd(record, placed: layout.placed, from: part.next, count: part.count, limit: limit)
+            // Text placed since the last append waits out the throttle, so a recording day is appended to at most every
+            // `appendInterval`; text that was waiting already (a backlog going in batches) goes on at once.
+            let placedSince = lastAppend.map { part.next >= $0.count } ?? true
+            return throttled && placedSince ? .wait(due) : .append(from: part.next, to: to)
         }
-        let throttled = !force && part.endedAt == nil && record.endedAt == nil
-            && lastAppend.map { now.timeIntervalSince($0) < RecordingDayContract.appendInterval } == true
-        let due = lastAppend?.addingTimeInterval(RecordingDayContract.appendInterval) ?? now
-        if isLast, record.chunks.values.contains(where: \.hasUnplacedText) { return throttled ? .wait(due) : .assign }
+        if isLast, record.chunks.values.contains(where: \.hasUnplacedText) { return .assign }
         if part.complete { return .done }
-        let current = meta(record, partIndex: index, isLast: isLast, sent: part.next, now: now)
-        guard current != sentMeta else { return .done }
+        guard meta(record, partIndex: index, sent: part.next, now: now) != sentMeta else { return .done }
         return throttled ? .wait(due) : .meta
     }
 
@@ -274,58 +300,100 @@ nonisolated enum RecordingDayUpload {
     }
 
     /// The segments at positions `from..<to` of `part`, in position order; nil when one is missing.
-    static func segments(_ record: RecordingDayRecord, part: RecordingDayPart, placed: [Int: Ref], from: Int, to: Int) -> [RecordingDaySegment]? {
+    static func segments(_ record: RecordingDayRecord, placed: [Int: Ref], from: Int, to: Int) -> [RecordingDaySegment]? {
         var out: [RecordingDaySegment] = []
         out.reserveCapacity(max(0, to - from))
         for pos in from..<max(from, to) {
             guard let ref = placed[pos], let chunk = record.chunks[ref.seq], let sentences = chunk.sentences,
                   sentences.indices.contains(ref.index) else { return nil }
-            out.append(segment(sentences[ref.index], of: chunk, since: part.startedAt))
+            out.append(segment(sentences[ref.index], of: chunk, since: record.startedAt))
         }
         return out
     }
 
-    /// A chunk-relative sentence on the part's clock: wall-clock seconds since its start, pauses included (the contract:
-    /// "started_at + start is the moment it was said"). A time no JSON can carry is sent as the chunk's start. Never
-    /// below 0: after `413 day_full` a late backlog sentence said before the newest part began still goes to that part
-    /// (the full one can't take it), and the contract has no negative times, so it is placed at the part's start.
+    /// A chunk-relative sentence on the day's clock: wall-clock seconds since `started_at`, pauses included (the
+    /// contract: "started_at + start is the moment it was said"). Every part keeps part 1's `started_at` and a chunk
+    /// never starts before it, so a time is never negative; `max(0, …)` only guards a time no JSON can carry.
     static func segment(_ sentence: RecordingSentence, of chunk: RecordingDayChunk, since base: Date) -> RecordingDaySegment {
         let offset = chunk.startedAt.timeIntervalSince(base)
         let start = max(0, finite(offset + sentence.start, or: offset))
         return RecordingDaySegment(start: start, end: max(start, finite(offset + sentence.end, or: start)), text: sentence.text)
     }
 
-    /// Gives every transcribed sentence without a position the next positions of `record.parts[index]`, chunks in seq
-    /// order and sentences in their order.
+    /// Gives every sentence without a position the next positions of the part that takes the day's new text (part 1,
+    /// made here when there is none yet), long ones split first: called by the transcriber inside the update that saves
+    /// the text, so the text and its positions reach the disk in one write (docs/assistant/day-recap.md「Appending」).
+    static func place(_ record: inout RecordingDayRecord) {
+        guard record.chunks.values.contains(where: \.hasUnplacedText) else { return }
+        if record.parts.isEmpty { record.parts = [RecordingDayPart(hubID: record.id, part: 1, startedAt: record.startedAt)] }
+        guard let index = takingIndex(record) else { return }
+        assign(&record, partIndex: index)
+    }
+
+    /// The part new text goes to: the highest one the hub hasn't deleted.
+    static func takingIndex(_ record: RecordingDayRecord) -> Int? {
+        record.parts.indices.filter { !record.parts[$0].deleted }.max { record.parts[$0].part < record.parts[$1].part }
+    }
+
+    /// Gives every sentence without a position the next positions of `record.parts[index]`, chunks in seq order and
+    /// sentences in their order; a sentence over `maxSentenceBytes` is split first (it has no position yet, so nothing
+    /// on the hub moves).
     static func assign(_ record: inout RecordingDayRecord, partIndex index: Int) {
         let part = record.parts[index].part
         var count = record.parts[index].count
         for seq in record.chunks.keys.sorted() {
-            guard var chunk = record.chunks[seq], chunk.hasUnplacedText else { continue }
+            guard var chunk = record.chunks[seq], chunk.hasUnplacedText, var sentences = chunk.sentences else { continue }
             var positions = chunk.positions ?? []
-            while positions.count < (chunk.sentences?.count ?? 0) {
+            let placed = positions.count
+            sentences = Array(sentences[..<placed]) + sentences[placed...].flatMap { split($0) }
+            while positions.count < sentences.count {
                 positions.append(RecordingDayPosition(part: part, pos: count))
                 count += 1
             }
+            chunk.sentences = sentences
             chunk.positions = positions
             record.chunks[seq] = chunk
         }
         record.parts[index].count = count
     }
 
-    /// Numbers `part`'s sentences `0..<n` in their current order (a repair `PUT` carries them so), and returns n.
-    /// Positions past a chunk's sentences (left by a build that crashed mid-write) are dropped.
+    /// A sentence over `maxBytes` of UTF-8 as pieces under it, cut at the last space before the limit when there is one
+    /// (else at a character boundary), each piece with its share of the sentence's time by length.
+    static func split(_ sentence: RecordingSentence, maxBytes: Int = maxSentenceBytes) -> [RecordingSentence] {
+        let total = sentence.text.utf8.count
+        guard total > maxBytes, maxBytes > 0 else { return [sentence] }
+        var pieces: [Substring] = []
+        var rest = sentence.text[...]
+        while rest.utf8.count > maxBytes {
+            var cut = rest.startIndex
+            var bytes = 0
+            for index in rest.indices {
+                let size = rest[index].utf8.count
+                guard bytes + size <= maxBytes else { break }
+                bytes += size
+                cut = rest.index(after: index)
+            }
+            if let space = rest[..<cut].lastIndex(where: \.isWhitespace), space > rest.startIndex { cut = rest.index(after: space) }
+            // A single character wider than the limit (it can't be: a character is a few bytes) still moves on.
+            if cut == rest.startIndex { cut = rest.index(after: cut) }
+            pieces.append(rest[..<cut])
+            rest = rest[cut...]
+        }
+        pieces.append(rest)
+        let span = finite(sentence.end - sentence.start, or: 0)
+        var done = 0
+        return pieces.map { piece in
+            let start = sentence.start + span * Double(done) / Double(total)
+            done += piece.utf8.count
+            let end = sentence.start + span * Double(done) / Double(total)
+            return RecordingSentence(start: start, end: end, text: String(piece))
+        }
+    }
+
+    /// Numbers `part`'s sentences `0..<n` in their current order (a `PUT` carries them so), and returns n. Holes
+    /// close and positions past a chunk's sentences (left by a build that crashed mid-write) go; on a clean layout
+    /// nothing changes. Only a `PUT` may do this: the hub's copy is replaced by the same request.
     @discardableResult static func renumber(_ record: inout RecordingDayRecord, part: Int) -> Int {
-        renumber(&record, part: part, from: 0)
-    }
-
-    /// Closes the holes among `part`'s positions at or above `next`, which the hub never had: they move down in order.
-    /// Returns the new count.
-    @discardableResult static func compact(_ record: inout RecordingDayRecord, part: Int, next: Int) -> Int {
-        renumber(&record, part: part, from: next)
-    }
-
-    private static func renumber(_ record: inout RecordingDayRecord, part: Int, from floor: Int) -> Int {
         var refs: [(pos: Int, seq: Int, index: Int)] = []
         for (seq, chunk) in record.chunks {
             guard var positions = chunk.positions else { continue }
@@ -334,64 +402,115 @@ nonisolated enum RecordingDayUpload {
                 positions.removeLast(positions.count - kept)
                 record.chunks[seq]?.positions = positions.isEmpty ? nil : positions
             }
-            for (index, position) in positions.enumerated() where position.part == part && position.pos >= floor {
+            for (index, position) in positions.enumerated() where position.part == part { refs.append((position.pos, seq, index)) }
+        }
+        refs.sort { ($0.pos, $0.seq, $0.index) < ($1.pos, $1.seq, $1.index) }
+        for (offset, ref) in refs.enumerated() { record.chunks[ref.seq]?.positions?[ref.index].pos = offset }
+        return refs.count
+    }
+
+    /// `413 day_full` on an append: the positions of `part` from `held` on never reached the hub, so they move to the
+    /// part `target`, after its count, in their order. A chunk's positions stay paired with its sentences in place.
+    static func move(_ record: inout RecordingDayRecord, part: Int, from held: Int, to target: Int) {
+        guard let t = record.parts.firstIndex(where: { $0.part == target }) else { return }
+        var refs: [(pos: Int, seq: Int, index: Int)] = []
+        for (seq, chunk) in record.chunks {
+            for (index, position) in (chunk.positions ?? []).enumerated() where position.part == part && position.pos >= held {
                 refs.append((position.pos, seq, index))
             }
         }
         refs.sort { ($0.pos, $0.seq, $0.index) < ($1.pos, $1.seq, $1.index) }
-        for (offset, ref) in refs.enumerated() { record.chunks[ref.seq]?.positions?[ref.index].pos = floor + offset }
-        return floor + refs.count
+        var count = record.parts[t].count
+        for ref in refs {
+            record.chunks[ref.seq]?.positions?[ref.index] = RecordingDayPosition(part: target, pos: count)
+            count += 1
+        }
+        record.parts[t].count = count
     }
 
-    /// Hands every position of `part` at or above `held` back (none of them reached the hub: `413 day_full`), so they go
-    /// to the next part. Positions in a chunk are in its sentences' order, so each chunk keeps a prefix.
-    static func unplace(_ record: inout RecordingDayRecord, part: Int, from held: Int) {
+    /// The part to move into on an append's `413 day_full`: the part after `number` that takes new text, made with a new
+    /// id when `number` was the last (on the day's clock, `started_at` part 1's). nil past the contract's 99 parts.
+    static func nextPart(_ record: inout RecordingDayRecord, after number: Int, newID: UUID) -> Int? {
+        if let taking = takingIndex(record), record.parts[taking].part > number { return record.parts[taking].part }
+        let next = (record.parts.map(\.part).max() ?? number) + 1
+        guard next <= maxParts else { return nil }
+        record.parts.append(RecordingDayPart(hubID: newID, part: next, startedAt: record.startedAt))
+        return next
+    }
+
+    /// A repair `PUT` of part `number` answered `413 day_full` (docs/assistant/day-recap.md「Parts」): that part and the
+    /// ones after it are packed again in position order, the refused part with fewer sentences than it was refused with
+    /// and the others with what the hub's limits allow, reusing their ids in order and new ones only after the last.
+    /// Every part whose sentences changed gets a `PUT` (`needsRepair`); every part but the last is closed. The plan is
+    /// the record itself, written before any of those `PUT`s, so a crash carries it on. False when it can't be done (a
+    /// refused part of one sentence, or past 99 parts): nothing changed then.
+    static func repartition(_ record: inout RecordingDayRecord, from number: Int, refused: Int, now: Date,
+                            newID: () -> UUID) -> Bool {
+        let numbers = record.parts.filter { $0.part >= number && !$0.expired && !$0.deleted }.map(\.part).sorted()
+        guard numbers.first == number else { return false }
+        let affected = Set(numbers)
+        var refs: [(part: Int, pos: Int, seq: Int, index: Int, bytes: Int)] = []
         for (seq, chunk) in record.chunks {
-            guard let positions = chunk.positions,
-                  let cut = positions.firstIndex(where: { $0.part == part && $0.pos >= held }) else { continue }
-            let kept = Array(positions.prefix(cut))
-            record.chunks[seq]?.positions = kept.isEmpty ? nil : kept
-        }
-    }
-
-    /// The wall-clock start of the earliest transcribed sentence without a position: where a next part begins.
-    static func earliestUnplaced(_ record: RecordingDayRecord) -> Date? {
-        var earliest: Date?
-        for chunk in record.chunks.values where chunk.hasUnplacedText {
             let sentences = chunk.sentences ?? []
-            for sentence in sentences[(chunk.positions?.count ?? 0)...] {
-                let at = chunk.startedAt.addingTimeInterval(finite(sentence.start, or: 0))
-                earliest = min(earliest ?? at, at)
+            for (index, position) in (chunk.positions ?? []).enumerated() where index < sentences.count && affected.contains(position.part) {
+                let bytes = sentences[index].text.trimmingCharacters(in: .whitespacesAndNewlines).utf8.count
+                refs.append((position.part, position.pos, seq, index, bytes))
             }
         }
-        return earliest
+        refs.sort { ($0.part, $0.pos, $0.seq, $0.index) < ($1.part, $1.pos, $1.seq, $1.index) }
+        let firstCap = refused - max(1, refused / 10)
+        guard firstCap > 0 else { return false }
+        var groups: [[Ref]] = []
+        var rest = refs[...]
+        var cap = firstCap
+        while !rest.isEmpty {
+            var taken = 0, bytes = 0
+            for ref in rest {
+                guard taken < cap, bytes + ref.bytes <= maxPartTextBytes else { break }
+                taken += 1
+                bytes += ref.bytes
+            }
+            guard taken > 0 else { return false }
+            groups.append(rest.prefix(taken).map { Ref(seq: $0.seq, index: $0.index) })
+            rest = rest.dropFirst(taken)
+            cap = maxPartSegments
+        }
+        while groups.count < numbers.count { groups.append([]) }
+        let highest = record.parts.map(\.part).max() ?? number
+        let extra = groups.count - numbers.count
+        guard highest + extra <= maxParts else { return false }
+        let targets = numbers + (0..<extra).map { highest + 1 + $0 }
+        var before: [Int: [Ref]] = [:]
+        for ref in refs { before[ref.part, default: []].append(Ref(seq: ref.seq, index: ref.index)) }
+        for (g, group) in groups.enumerated() {
+            let target = targets[g]
+            for (pos, ref) in group.enumerated() { record.chunks[ref.seq]?.positions?[ref.index] = RecordingDayPosition(part: target, pos: pos) }
+            if !record.parts.contains(where: { $0.part == target }) {
+                record.parts.append(RecordingDayPart(hubID: newID(), part: target, startedAt: record.startedAt))
+            }
+            guard let i = record.parts.firstIndex(where: { $0.part == target }) else { continue }
+            if before[target, default: []] != group || !record.parts[i].created { record.parts[i].needsRepair = true }
+            record.parts[i].count = group.count
+            record.parts[i].next = min(record.parts[i].next, group.count)
+            if g < groups.count - 1 { record.parts[i].endedAt = record.parts[i].endedAt ?? now }
+        }
+        return true
     }
 
-    /// What a request for `record.parts[index]` says beside its segments, the hub holding positions below `sent` after it.
-    static func meta(_ record: RecordingDayRecord, partIndex index: Int, isLast: Bool, sent: Int, now: Date) -> RecordingDayMeta {
+    /// What a request for `record.parts[index]` says beside its segments, the hub holding its positions below `sent`
+    /// after it. Every part carries the day's duration and bookmarks: parts are storage, not stretches of the day.
+    static func meta(_ record: RecordingDayRecord, partIndex index: Int, sent: Int, now: Date) -> RecordingDayMeta {
         let part = record.parts[index]
-        let first = record.parts.map(\.part).min() == part.part
         let coverage = RecordingDayCoverage.compute(record: record, part: part, sentToPositionBelow: sent, now: now)
-        let complete = RecordingDayCoverage.isComplete(record: record, part: part, sentToPositionBelow: sent, coverage: coverage,
-                                                       isLast: isLast)
-        // A part's time: from its start (the first part takes anything earlier too) to the next part's start.
-        func inPart(_ at: Date) -> Bool {
-            (first || at >= part.startedAt) && (part.endedAt.map { at < $0 } ?? true)
-        }
+        let complete = RecordingDayCoverage.isComplete(record: record, part: part, sentToPositionBelow: sent, coverage: coverage)
         let duration = record.chunks.values.reduce(0.0) { sum, chunk in
-            chunk.duration > 0 && !chunk.erased && !chunk.lost && inPart(chunk.startedAt) ? sum + chunk.duration : sum
+            chunk.duration > 0 && !chunk.isErasedOrLost ? sum + chunk.duration : sum
         }
-        var bookmarks: [RecordingDayBookmark] = []
-        for chunk in record.chunks.values {
-            for mark in chunk.marks ?? [] {
-                let at = chunk.startedAt.addingTimeInterval(finite(mark.at, or: 0))
-                guard inPart(at) else { continue }
-                bookmarks.append(RecordingDayBookmark(at: max(0, at.timeIntervalSince(part.startedAt)), label: mark.label))
-            }
-        }
-        bookmarks.sort { ($0.at, $0.label) < ($1.at, $1.label) }
-        return RecordingDayMeta(endedAt: part.endedAt ?? (isLast ? record.endedAt : nil), duration: duration,
-                                bookmarks: bookmarks, coverage: coverage, complete: complete)
+        let bookmarks = record.marks.map { mark in
+            RecordingDayBookmark(at: max(0, finite(mark.at.timeIntervalSince(record.startedAt), or: 0)), label: mark.label)
+        }.sorted { ($0.at, $0.label) < ($1.at, $1.label) }
+        return RecordingDayMeta(endedAt: part.endedAt ?? record.closedAt, duration: duration, bookmarks: bookmarks,
+                                coverage: coverage, complete: complete)
     }
 
     private static func finite(_ value: Double, or fallback: Double) -> Double { value.isFinite ? value : fallback }
@@ -399,8 +518,8 @@ nonisolated enum RecordingDayUpload {
 
 // MARK: - The upload
 
-/// Uploads every day the phone holds to the hub (docs/assistant/day-recap.md "Phone to hub"), one request at a time.
-/// Follows the day store's changes (a chunk stored, text transcribed, an erase): appends go at most every
+/// Uploads every day the phone holds to the hub (docs/assistant/day-recap.md「Phone to hub」), one request at a time.
+/// Follows the day store's changes (a chunk stored, text transcribed, an event, an erase): appends go at most every
 /// `appendInterval` while the day records, at once once it ended. The hub's word on a day comes from `RecordingSync`'s
 /// reconciliation (`reconciled`), the flag from each `hello` (`helloReceived`).
 @MainActor @Observable final class RecordingDaySync {
@@ -431,6 +550,7 @@ nonisolated enum RecordingDayUpload {
     @ObservationIgnored private let appState: RecordingDayAppState
     @ObservationIgnored private let noteParts: (UUID, [UUID]) -> Void
     @ObservationIgnored private let removed: (UUID) -> Void
+    @ObservationIgnored private let removeEverywhere: (UUID) -> Void
     @ObservationIgnored private let recapFinal: () -> Void
     @ObservationIgnored private let debounce: Duration
 
@@ -442,7 +562,7 @@ nonisolated enum RecordingDayUpload {
     @ObservationIgnored private var dirty: Set<UUID> = []
     /// Days to visit again then.
     @ObservationIgnored private var waits: [UUID: Date] = [:]
-    /// Days whose last visit failed, and when they may go again (C22: 5 s doubling to 10 min). A change to such a day
+    /// Days whose last visit failed, and when they may go again (5 s doubling to 10 min). A change to such a day
     /// waits for it too: the upload's own bookkeeping changes the day with every request, and a failing hub or network is
     /// not asked again at once.
     @ObservationIgnored private var retry: [UUID: Backoff] = [:]
@@ -450,29 +570,26 @@ nonisolated enum RecordingDayUpload {
     @ObservationIgnored private var settled: Set<UUID> = []
     /// Days with a hub recording this process saw created (reconciliation's absence check applies to them).
     @ObservationIgnored private var knownCreated: Set<UUID> = []
-    /// Days refused as unsupported since the last hello (a relaunch or hello lets each try once more, C22).
+    /// Days an older manager refused since the last hello, and days with a part the hub refused (`400`) since then: a
+    /// relaunch or a hello lets each try once more, never a change of the day alone.
     @ObservationIgnored private var unsupportedSeen: Set<UUID> = []
+    @ObservationIgnored private var rejectedSeen: Set<UUID> = []
     /// `403`: nothing goes until the app is in front again, a hello, or a retry.
     @ObservationIgnored private(set) var paused = false
     /// What the last hello said about the flag; nil before the launch's first.
     @ObservationIgnored private var wasOffered: Bool?
-    /// Per hub recording: when its last request was stored, what it said, the batch size after `413 too_large`, the
-    /// highest revision the hub was seen to hold, and when its detail may be read again for a final recap (none: now).
-    @ObservationIgnored private var lastAppend: [UUID: Date] = [:]
+    /// Per hub recording: its last stored append, when its last request was stored, what that said, the batch size
+    /// after `413 too_large`, and the highest revision the hub was seen to hold.
+    @ObservationIgnored private var lastAppend: [UUID: RecordingDayUpload.LastAppend] = [:]
     @ObservationIgnored private var lastStored: [UUID: Date] = [:]
     @ObservationIgnored private var sentMeta: [UUID: RecordingDayMeta] = [:]
     @ObservationIgnored private var batch: [UUID: Int] = [:]
     @ObservationIgnored private var hubRevision: [UUID: Int64] = [:]
-    @ObservationIgnored private var recapProbeAt: [UUID: Date] = [:]
-    /// Per day, when the soonest of its parts waiting for a final recap may be read again: reconciliation visits the day
-    /// then even when its rows say nothing new.
-    @ObservationIgnored private var finalDue: [UUID: Date] = [:]
     /// Reconciliation's word, applied at the day's next visit (one request at a time).
     @ObservationIgnored private var pendingRows: [UUID: (rows: [RecordingDayHubRow], at: Date)] = [:]
-    @ObservationIgnored private var pendingDeletes: [UUID: Set<UUID>] = [:]
     @ObservationIgnored private var noted: [UUID: [UUID]] = [:]
-    /// Per day, its created parts as the last visit left them (base, count, recap state), to tell whether
-    /// reconciliation says anything new without reading the day.
+    /// Per day, its created parts as the last visit left them, to tell whether reconciliation says anything new without
+    /// reading the day.
     @ObservationIgnored private var believed: [UUID: [RecordingDayHubRow]] = [:]
     @ObservationIgnored private var grant: RecordingDayGrant?
     /// The catch-up runs (`drain`): no throttle, its task is the upload's time, and it alone starts the worker meanwhile.
@@ -488,17 +605,17 @@ nonisolated enum RecordingDayUpload {
     /// Reconciliation's list may predate a request stored this long before it reached the upload (the list's own
     /// request): such a part's base and count are the phone's newer word, and it may not be listed yet.
     private static let listSlack: TimeInterval = 60
-    /// `stale` answers to a `PUT` in one visit before waiting for reconciliation to tell the hub's revision.
-    private static let maxStale = 3
-    /// How long after a detail that said its recap isn't the final one yet it is read again (C21). Reconciliation lists
-    /// the part `ready` the whole time, so a final recap written between two of its lists is seen only this way.
-    static let recapProbeInterval: TimeInterval = 3600
+    /// `stale` answers to a `PUT` in one visit before backing off, and `PUT`s of one part in one visit (a create, a
+    /// repair, one more after the hub's answer disagreed): past them a hub that keeps disagreeing waits for the backoff.
+    private static let maxStale = 3, maxPuts = 4
 
     /// - Parameters:
     ///   - features: the hub's features from its last `hello` (empty: not known, the cached flag decides).
     ///   - days: the hub's `recording_days` (`RecordingSync`): an older day is not uploaded.
     ///   - noteParts: a day's hub ids past its first part, for deletes (`RecordingSync.noteDayParts`).
-    ///   - removed: a day was removed here because the hub deleted it (cancels its transcription).
+    ///   - removed: a day was removed here (cancels its transcription).
+    ///   - removeEverywhere: the hub deleted a part of a day (`410`): the whole day goes, here, on the hub and on the
+    ///     watch (`RecordingSync.delete`, which comes back through `removedHere`).
     ///   - recapFinal: a day's final recap time became known (the keeper's 3-day clock).
     init(store: RecordingDayStore = .shared, library: RecordingLibrary = .shared,
          api: @escaping () -> APIClient? = { AppModel.shared.api },
@@ -508,11 +625,12 @@ nonisolated enum RecordingDayUpload {
          appState: RecordingDayAppState = RecordingDaySystemState.shared,
          noteParts: @escaping (UUID, [UUID]) -> Void = { RecordingSync.shared.noteDayParts($0, $1) },
          removed: @escaping (UUID) -> Void = { RecordingDayTranscriber.shared.cancel($0) },
+         removeEverywhere: @escaping (UUID) -> Void = { try? RecordingSync.shared.delete($0) },
          recapFinal: @escaping () -> Void = { RecordingDayKeeper.shared.schedule() },
          debounce: Duration = .seconds(1)) {
         self.store = store; self.library = library; self.api = api; self.features = features; self.now = now
         self.days = days; self.appState = appState; self.noteParts = noteParts; self.removed = removed
-        self.recapFinal = recapFinal; self.debounce = debounce
+        self.removeEverywhere = removeEverywhere; self.recapFinal = recapFinal; self.debounce = debounce
     }
 
     // MARK: Triggers
@@ -527,7 +645,7 @@ nonisolated enum RecordingDayUpload {
         }
     }
 
-    /// A day changed (a chunk, its text, an erase, its library row): visited soon.
+    /// A day changed (a chunk, its text, an event, an erase, its library row): visited soon.
     func changed(_ id: UUID) {
         settled.remove(id)
         dirty.insert(id)
@@ -543,7 +661,7 @@ nonisolated enum RecordingDayUpload {
         kick()
     }
 
-    /// The app went to the background (C9): a pass in progress goes on only inside a grant; none given stops it now (its
+    /// The app went to the background: a pass in progress goes on only inside a grant; none given stops it now (its
     /// request is cancelled, and the day goes again when the upload may work again).
     func background() {
         guard let worker, !draining else { return }
@@ -553,12 +671,13 @@ nonisolated enum RecordingDayUpload {
         }
     }
 
-    /// The hub's `hello` (hub group only): the pause ends, a day an older manager refused is tried once more, a failed
-    /// one goes now, and when the flag is new (or this is the launch's first hello) every day is visited: one may have
-    /// waited days for it. A reconnect to the same hub visits nothing else.
+    /// The hub's `hello` (hub group only): the pause ends, a day an older manager refused and a part the hub refused are
+    /// tried once more, a failed one goes now, and when the flag is new (or this is the launch's first hello) every day
+    /// is visited: one may have waited days for it. A reconnect to the same hub visits nothing else.
     func helloReceived(offered: Bool) {
-        let refused = unsupportedSeen
+        let refused = unsupportedSeen.union(rejectedSeen)
         unsupportedSeen = []
+        rejectedSeen = []
         paused = false
         defer { wasOffered = offered }
         guard offered else { return }
@@ -571,16 +690,14 @@ nonisolated enum RecordingDayUpload {
         kick()
     }
 
-    /// Reconciliation's rows of day recordings, by the local day each belongs to (`RecordingSync.reconcile`). Every
-    /// local day is named, with no rows when the hub listed none of its parts: a part this phone created that the hub
-    /// doesn't list any more (a new hub) is created again. A day whose recap may have become the final one since its
-    /// detail was last read is visited too, whatever its rows say (C21).
+    /// Reconciliation's rows of day recordings, by the local day each belongs to (`RecordingSync.reconcile`, and the
+    /// day's page as it polls the list). A local day may be named with no rows when the hub listed none of its parts: a
+    /// part this phone created that the hub doesn't list any more (a new hub) is created again.
     func reconciled(_ rows: [UUID: [RecordingDayHubRow]]) {
         let at = now()
         for (day, list) in rows where !list.isEmpty || knownCreated.contains(day) {
-            let probe = finalDue[day].map { $0 <= at } ?? false
             // The hub says what the phone already holds (the usual case, every ten minutes): no day to read.
-            guard probe || !agrees(day, list) else { continue }
+            guard !agrees(day, list) else { continue }
             pendingRows[day] = (list, at)
             dirty.insert(day)
         }
@@ -594,28 +711,26 @@ nonisolated enum RecordingDayUpload {
         return parts.allSatisfy { part in
             guard let row = byID[part.id] else { return false }
             return row.base == part.base && row.next == part.next && row.recapState == part.recapState
+                && (row.recapFinal ?? part.recapFinal) == part.recapFinal && (row.recapFinalAt ?? part.recapFinalAt) == part.recapFinalAt
         }
     }
 
-    /// The hub deleted these hub recordings of a day (reconciliation's `deleted`): those parts stop; the day goes here
-    /// too once every part of it is gone.
-    func hubDeleted(day: UUID, hubIDs: [UUID]) {
-        pendingDeletes[day, default: []].formUnion(hubIDs)
-        dirty.insert(day)
-        kick()
-    }
-
-    /// The day was deleted here (`RecordingSync.delete`) or purged (`RecordingDayKeeper`): forget it.
+    /// The day was deleted here (`RecordingSync.delete`: by the user, or because the hub deleted a part of it) or purged
+    /// (`RecordingDayKeeper`): forgotten by the upload, its transcription stopped, the store's copy let go of, and the
+    /// watch asked to delete its copy until it confirms (docs/assistant/day-recap.md「Deleting」; the store keeps that
+    /// request outside the day's folder, so it outlives the delete).
     func removedHere(_ id: UUID) {
         forget(id)
         removed(id)
         store.didRemove(id)
+        let store = store
+        Task { await store.requestWatchDelete(id) }
     }
 
     /// The day's language changed (`RecordingDayTranscriber.setLocale`, after its chunks were reset). Only a `PUT` carries
     /// a language, so every part the hub has, or is being given, gets a repair decided now and on disk before this
     /// returns (a relaunch still sends it), whether or not any of its text changed: audio retention deleted may have left
-    /// every sentence as it was, and a silent day has none (C17). Its revision is above a `PUT` in flight, so that one's
+    /// every sentence as it was, and a silent day has none. Its revision is above a `PUT` in flight, so that one's
     /// answer doesn't clear it.
     func languageChanged(_ id: UUID) async {
         let at = now()
@@ -692,7 +807,7 @@ nonisolated enum RecordingDayUpload {
     private var mayWork: Bool { draining || appState.inForeground || grant != nil }
 
     /// Visits the days that may go, until none is left. Ends at once when its time does: the app left the front without a
-    /// grant, the grant or the catch-up ran out (C9). The cleanup starts nothing; what is left waits for its timer or the
+    /// grant, the grant or the catch-up ran out. The cleanup starts nothing; what is left waits for its timer or the
     /// next change, foreground, hello or catch-up.
     private func runPasses(debounce: Duration?) async {
         var interrupted = false
@@ -765,7 +880,7 @@ nonisolated enum RecordingDayUpload {
         dirty.formUnion(retry.keys)
     }
 
-    /// Dirty days that may go now, in id order: a day waiting out its backoff doesn't, whatever changed (C22).
+    /// Dirty days that may go now, in id order: a day waiting out its backoff doesn't, whatever changed.
     private func dueDays() -> [UUID] {
         let at = now()
         return dirty.filter { retry[$0].map { $0.at <= at } ?? true }.sorted { $0.uuidString < $1.uuidString }
@@ -802,39 +917,31 @@ nonisolated enum RecordingDayUpload {
 
     private func forget(_ id: UUID) {
         dirty.remove(id); waits[id] = nil; retry[id] = nil; settled.remove(id); knownCreated.remove(id)
-        unsupportedSeen.remove(id); pendingRows[id] = nil; pendingDeletes[id] = nil; noted[id] = nil; believed[id] = nil
-        finalDue[id] = nil
+        unsupportedSeen.remove(id); rejectedSeen.remove(id); pendingRows[id] = nil; noted[id] = nil; believed[id] = nil
     }
 
     // MARK: One day
 
     private func visit(_ id: UUID, force: Bool) async -> Outcome {
-        if let gone = pendingDeletes.removeValue(forKey: id), await applyDeletes(gone, to: id) { return .done }
         if let rows = pendingRows.removeValue(forKey: id) { await apply(rows.rows, listedAt: rows.at, to: id) }
         guard !paused, let api = api(), !api.config.isDemo else { return .blocked }
         guard RecordingDayDefaults.offered(features()) else { return .blocked }
-        guard var record = await store.record(id) else { return .done }
+        guard let record = await store.record(id) else { return .done }
         guard record.problem == nil else { return .blocked }
         if record.unsupportedUntilHello {
             guard !unsupportedSeen.contains(id) else { return .blocked }
             // Refused before this hello (or this launch): one more try.
             await store.update(id) { $0.unsupportedUntilHello = false }
         }
-        guard let start = record.hubStartedAt else { return .done }
         // Past the hub's window nothing is uploaded (it would answer `expired`); the keeper purges it.
-        guard start >= now().addingTimeInterval(-Double(days()) * 86_400) else { return .done }
-        if record.parts.isEmpty {
-            let first = RecordingDayPart(hubID: id, part: 1, startedAt: start)
-            await store.update(id) { if $0.parts.isEmpty { $0.parts = [first] } }
-            guard let created = await store.record(id) else { return .done }
-            record = created
-        }
-        notePartsIfNeeded(id, record)
-        await readRecaps(id, record, api: api)
+        guard record.startedAt >= now().addingTimeInterval(-Double(days()) * RecordingDayRecord.secondsPerDay) else { return .done }
+        await prepare(id, retryRejected: !rejectedSeen.contains(id))
+        guard let prepared = await store.record(id) else { return .done }
+        notePartsIfNeeded(id, prepared)
         var soonest: Date?
-        var number = record.parts.map(\.part).min() ?? 1
+        var number = prepared.parts.map(\.part).min() ?? 1
         while let part = await store.record(id)?.parts.first(where: { $0.part == number }) {
-            if !part.expired, !part.deleted {
+            if !part.expired, !part.deleted, part.problem == nil {
                 switch await visit(id, part: number, api: api, force: force) {
                 case .done: break
                 case .later(let at): soonest = min(soonest ?? at, at)
@@ -846,50 +953,61 @@ nonisolated enum RecordingDayUpload {
         guard let latest = await store.record(id) else { return .done }
         if latest.parts.contains(where: \.created) { knownCreated.insert(id) }
         believed[id] = latest.parts.filter { $0.created && !$0.expired && !$0.deleted }.map {
-            RecordingDayHubRow(id: $0.hubID, part: $0.part, next: $0.next, base: $0.base, recapState: $0.recapState)
+            RecordingDayHubRow(id: $0.hubID, part: $0.part, next: $0.next, base: $0.base, recapState: $0.recapState,
+                               recapFinal: $0.recapFinal, recapFinalAt: $0.recapFinalAt)
         }
-        finalDue[id] = latest.parts.filter { awaitsFinalRecap($0, of: latest) }.map { recapProbeAt[$0.hubID] ?? .distantPast }.min()
         if let expiry = RecordingDayCoverage.nextGapExpiry(record: latest, now: now()) { soonest = min(soonest ?? expiry, expiry) }
         return soonest.map(Outcome.later) ?? .done
     }
 
+    /// Before a day's parts go, in one change: its first part when it has none (a create `PUT` with no segments), every
+    /// part on the day's clock (part 1's `started_at`; should the watch ever name an earlier start, each part is
+    /// replaced with its times on the new clock), and a part the hub refused (`400`) let try again with a full
+    /// replacement once per hello or launch, or when an erase changed its text since.
+    private func prepare(_ id: UUID, retryRejected: Bool) async {
+        await store.update(id) { record in
+            if record.parts.isEmpty { record.parts = [RecordingDayPart(hubID: id, part: 1, startedAt: record.startedAt)] }
+            for i in record.parts.indices {
+                if record.parts[i].startedAt != record.startedAt {
+                    record.parts[i].startedAt = record.startedAt
+                    if record.parts[i].created { record.parts[i].needsRepair = true }
+                }
+                if record.parts[i].problem != nil, retryRejected || record.parts[i].needsRepair {
+                    record.parts[i].problem = nil
+                    record.parts[i].needsRepair = true
+                }
+            }
+        }
+    }
+
     /// One part's steps until it has nothing more to send now.
     private func visit(_ id: UUID, part number: Int, api: APIClient, force: Bool) async -> Outcome {
-        var stale = 0
+        var stale = 0, puts = 0
         for _ in 0..<Self.maxSteps {
             guard !Task.isCancelled, mayWork else { return .cancelled }
             guard let record = await store.record(id), let index = record.parts.firstIndex(where: { $0.part == number }) else { return .done }
             let part = record.parts[index]
-            guard !part.expired, !part.deleted, record.problem == nil, !record.unsupportedUntilHello else { return .done }
-            let isLast = record.parts.filter { !$0.expired && !$0.deleted }.map(\.part).max() == number
-            let ended = force || record.endedAt != nil
+            guard !part.expired, !part.deleted, part.problem == nil, record.problem == nil, !record.unsupportedUntilHello else { return .done }
+            let isLast = RecordingDayUpload.takingIndex(record) == index
+            let limit = batch[part.hubID] ?? RecordingDayContract.maxAppendSegments
             let step = RecordingDayUpload.step(record, partIndex: index, isLast: isLast, now: now(), lastAppend: lastAppend[part.hubID],
-                                               sentMeta: sentMeta[part.hubID], force: ended)
+                                               sentMeta: sentMeta[part.hubID], force: force || record.closedAt != nil, limit: limit)
             let flow: Flow
             switch step {
             case .done: return .done
             case .wait(let at): return .later(at)
-            case .compact:
-                await store.update(id) { record in
-                    guard let i = record.parts.firstIndex(where: { $0.part == number }) else { return }
-                    let next = record.parts[i].next
-                    let count = RecordingDayUpload.compact(&record, part: number, next: next)
-                    record.parts[i].count = count
-                }
-                continue
             case .assign:
-                // On disk with the request that sends them first (every request flushes the day before it goes), so a
-                // retry sends each sentence at the same position (C17).
                 await store.update(id) { record in
-                    guard let i = record.parts.firstIndex(where: { $0.part == number }), record.parts[i].pendingPut == nil else { return }
+                    guard let i = RecordingDayUpload.takingIndex(record), record.parts[i].part == number else { return }
                     RecordingDayUpload.assign(&record, partIndex: i)
                 }
                 continue
             case .put:
+                puts += 1
+                guard puts <= Self.maxPuts else { return .failed }
                 flow = await put(id, part: number, api: api, stale: &stale)
             case .append(let from, let to):
-                flow = await append(id, part: number, from: from, to: min(to, from + (batch[part.hubID] ?? RecordingDayContract.maxAppendSegments)),
-                                    api: api)
+                flow = await append(id, part: number, from: from, to: to, api: api)
             case .meta:
                 flow = await append(id, part: number, from: part.next, to: part.next, api: api)
             }
@@ -909,44 +1027,46 @@ nonisolated enum RecordingDayUpload {
 
     // MARK: Requests
 
-    /// A create or repair `PUT`: its revision and numbering are decided and on disk before it goes (C17); one decided
-    /// before (a crash, a lost answer) goes again with its revision.
+    /// A create or repair `PUT`: its revision and numbering are decided and on disk before it goes; one decided
+    /// before (a crash, a lost answer) goes again with its revision. Deciding it takes in every repair asked for so far
+    /// (`needsRepair`); an erase after that asks again. A part the hub never stored a `PUT` of is created empty
+    /// (docs/assistant/day-recap.md「The recording」) and its text follows by appends; a repair carries every position.
     private func put(_ id: UUID, part number: Int, api: APIClient, stale: inout Int) async -> Flow {
-        guard let before = await store.record(id), let current = before.parts.first(where: { $0.part == number }) else { return .stop(.done) }
-        let fresh = RecordingDayUpload.revision(current, now: now(), floor: hubRevision[current.hubID] ?? 0)
+        let at = now()
+        let floors = hubRevision
         await store.update(id) { record in
             guard let i = record.parts.firstIndex(where: { $0.part == number }) else { return }
             if record.parts[i].pendingPut == nil {
-                let revision = max(fresh, record.parts[i].maxSentRevision + 1)
+                let revision = RecordingDayUpload.revision(record.parts[i], now: at, floor: floors[record.parts[i].hubID] ?? 0)
                 record.parts[i].pendingPut = revision
-                record.parts[i].maxSentRevision = revision
+                record.parts[i].maxSentRevision = max(record.parts[i].maxSentRevision, revision)
             }
-            let count = RecordingDayUpload.renumber(&record, part: number)
-            record.parts[i].count = count
+            record.parts[i].needsRepair = false
+            record.parts[i].count = RecordingDayUpload.renumber(&record, part: number)
         }
         guard await store.flush(id), let record = await store.record(id),
               let index = record.parts.firstIndex(where: { $0.part == number }), let revision = record.parts[index].pendingPut else {
             return .stop(.failed)
         }
         let part = record.parts[index]
-        let isLast = record.parts.filter { !$0.expired && !$0.deleted }.map(\.part).max() == number
+        let carried = part.base == nil ? 0 : part.count
         let layout = RecordingDayUpload.layout(record, part: number)
-        guard let segments = RecordingDayUpload.segments(record, part: part, placed: layout.placed, from: 0, to: part.count) else {
+        guard let segments = RecordingDayUpload.segments(record, placed: layout.placed, from: 0, to: carried) else {
             return .stop(.failed)
         }
-        let meta = RecordingDayUpload.meta(record, partIndex: index, isLast: isLast, sent: part.count, now: now())
+        let meta = RecordingDayUpload.meta(record, partIndex: index, sent: carried, now: now())
         let language = library.entry(id)?.locale ?? RecordingDefaults.locale
-        let body = RecordingDayPutBody(revision: revision, day: record.day, part: number, startedAt: part.startedAt,
-                                       language: language, meta: meta, segments: segments)
+        let body = RecordingDayPutBody(revision: revision, day: record.day, tz: record.timeZone, part: number,
+                                       startedAt: record.startedAt, language: language, meta: meta, segments: segments)
         let data: Data
         do {
             data = try await send(id, api, "PUT", Self.path(part.hubID), body)
         } catch {
-            return await react(RecordingDayReaction(error), id: id, part: number, appending: false)
+            return await react(RecordingDayReaction(error), id: id, part: number, appending: false, refused: segments.count)
         }
         // A 200 is the hub's word whatever its body; one it can't read counts as stored.
         let answer = try? JSON.decoder.decode(RecordingDayAnswer.self, from: data)
-        if let revision = answer?.revision { hubRevision[part.hubID] = max(hubRevision[part.hubID] ?? 0, revision) }
+        noteHub(answer?.revision, part.hubID)
         switch answer?.status {
         case "expired":
             await store.update(id) { record in
@@ -956,11 +1076,10 @@ nonisolated enum RecordingDayUpload {
             }
             return .again
         case "stale":
-            // The hub holds a newer revision than this one: a higher one, and the same replacement again.
+            // Not success for a day recording: the hub holds a newer revision. The same replacement again, above it.
             stale += 1
             guard stale < Self.maxStale else { return .stop(.failed) }
             let floor = max(answer?.revision ?? 0, revision, hubRevision[part.hubID] ?? 0)
-            hubRevision[part.hubID] = floor
             await store.update(id) { record in
                 guard let i = record.parts.firstIndex(where: { $0.part == number }), record.parts[i].pendingPut == revision else { return }
                 let bumped = max(floor, record.parts[i].maxSentRevision) + 1
@@ -973,8 +1092,10 @@ nonisolated enum RecordingDayUpload {
             await store.update(id) { record in
                 guard let i = record.parts.firstIndex(where: { $0.part == number }), record.parts[i].pendingPut == revision else { return }
                 record.parts[i].created = true
-                record.parts[i].base = revision
-                record.parts[i].next = sent
+                record.parts[i].base = answer?.base ?? revision
+                // The hub's count after a full replacement is what it carried; a different word goes again from there.
+                record.parts[i].next = min(max(0, answer?.next ?? sent), sent)
+                record.parts[i].hubRevision = max(record.parts[i].hubRevision ?? 0, answer?.revision ?? revision)
                 record.parts[i].pendingPut = nil
                 record.parts[i].complete = meta.complete
             }
@@ -989,29 +1110,28 @@ nonisolated enum RecordingDayUpload {
         guard let record = await store.record(id), let index = record.parts.firstIndex(where: { $0.part == number }),
               let base = record.parts[index].base else { return .stop(.done) }
         let part = record.parts[index]
-        let isLast = record.parts.filter { !$0.expired && !$0.deleted }.map(\.part).max() == number
         let layout = RecordingDayUpload.layout(record, part: number)
-        guard let segments = RecordingDayUpload.segments(record, part: part, placed: layout.placed, from: from, to: to) else {
+        guard let segments = RecordingDayUpload.segments(record, placed: layout.placed, from: from, to: to) else {
             return .stop(.failed)
         }
         let revision = RecordingDayUpload.revision(part, now: now(), floor: hubRevision[part.hubID] ?? 0)
-        // On disk before it goes, with any positions just assigned: after a crash and a clock set back, the next revision
-        // is still above every one the hub may have seen (C17).
+        // On disk before it goes: after a crash and a clock set back, the next revision is still above every one the
+        // hub may have seen.
         await store.update(id) { record in
             guard let i = record.parts.firstIndex(where: { $0.part == number }) else { return }
             record.parts[i].maxSentRevision = max(record.parts[i].maxSentRevision, revision)
         }
         guard await store.flush(id) else { return .stop(.failed) }
-        let meta = RecordingDayUpload.meta(record, partIndex: index, isLast: isLast, sent: to, now: now())
-        let body = RecordingDayAppendBody(base: base, revision: revision, from: from, segments: segments, meta: meta)
+        let meta = RecordingDayUpload.meta(record, partIndex: index, sent: to, now: now())
+        let body = RecordingDayAppendBody(base: base, revision: revision, from: from, segments: segments, tz: record.timeZone, meta: meta)
         let data: Data
         do {
             data = try await send(id, api, "POST", Self.path(part.hubID) + "/segments", body)
         } catch {
-            return await react(RecordingDayReaction(error), id: id, part: number, appending: true)
+            return await react(RecordingDayReaction(error), id: id, part: number, appending: true, refused: segments.count)
         }
         let answer = try? JSON.decoder.decode(RecordingDayAnswer.self, from: data)
-        if let revision = answer?.revision { hubRevision[part.hubID] = max(hubRevision[part.hubID] ?? 0, revision) }
+        noteHub(answer?.revision, part.hubID)
         if answer?.status == "expired" {
             // The day is past the hub's window, or was trimmed there: nothing of it is written any more.
             await store.update(id) { record in
@@ -1023,23 +1143,25 @@ nonisolated enum RecordingDayUpload {
         let hubNext = answer?.next ?? to
         await store.update(id) { record in
             guard let i = record.parts.firstIndex(where: { $0.part == number }), record.parts[i].base == base else { return }
-            if hubNext > record.parts[i].count {
-                // The hub holds positions this phone never gave: only a replacement puts both in step again.
-                record.parts[i].created = false
-            } else {
-                // Below what was sent only if the hub lost some: they go again from there.
-                record.parts[i].next = hubNext
-                if meta.complete, hubNext >= to { record.parts[i].complete = true }
+            record.parts[i].hubRevision = max(record.parts[i].hubRevision ?? 0, answer?.revision ?? revision)
+            guard hubNext == to else {
+                // The hub holds positions this phone never sent, or fewer than it just stored: the logs disagree, and
+                // only a replacement puts them in step again (docs/assistant/day-recap.md「Appending」).
+                record.parts[i].needsRepair = true
+                return
             }
+            record.parts[i].next = hubNext
+            if meta.complete { record.parts[i].complete = true }
         }
-        if hubNext >= to { sentMeta[part.hubID] = meta }
-        lastAppend[part.hubID] = now()
+        if hubNext == to { sentMeta[part.hubID] = meta }
+        lastAppend[part.hubID] = RecordingDayUpload.LastAppend(at: now(), count: part.count)
         lastStored[part.hubID] = now()
         return .again
     }
 
-    /// What a refusal or failure changes (C22). The part's state is written before anything is sent again.
-    private func react(_ reaction: RecordingDayReaction, id: UUID, part number: Int, appending: Bool) async -> Flow {
+    /// What a refusal or failure changes. The part's state is written before anything is sent again. `refused`:
+    /// the segments the refused request carried.
+    private func react(_ reaction: RecordingDayReaction, id: UUID, part number: Int, appending: Bool, refused: Int) async -> Flow {
         switch reaction {
         case .cancelled:
             return .stop(.cancelled)
@@ -1048,12 +1170,12 @@ nonisolated enum RecordingDayUpload {
         case .baseChanged(let base, let next):
             await store.update(id) { record in
                 guard let i = record.parts.firstIndex(where: { $0.part == number }) else { return }
-                if let base, base == record.parts[i].pendingPut {
-                    // A replacement this phone decided on was stored, its answer lost: it is the base.
+                if let base, base > 0, base == record.parts[i].pendingPut || base == record.parts[i].base {
+                    // The phone's own latest replacement is the base (its answer may have been lost): on from the hub's count.
                     Self.adopt(&record.parts[i], base: base, next: next)
                 } else {
-                    // A base this phone can't vouch for (a restore, another device): replace the text.
-                    record.parts[i].created = false
+                    // A base this phone can't vouch for (a restore, another device, a lost meta): replace the text.
+                    record.parts[i].needsRepair = true
                 }
             }
             return .again
@@ -1063,7 +1185,7 @@ nonisolated enum RecordingDayUpload {
                 if let next, next >= 0, next <= record.parts[i].count {
                     record.parts[i].next = next
                 } else {
-                    record.parts[i].created = false
+                    record.parts[i].needsRepair = true
                 }
             }
             return .again
@@ -1077,6 +1199,14 @@ nonisolated enum RecordingDayUpload {
             unsupportedSeen.insert(id)
             await store.update(id) { $0.unsupportedUntilHello = true }
             return .stop(.blocked)
+        case .rejected(let code):
+            // That part stops, shown, until a hello or a launch lets it try once more, or an erase changes it.
+            rejectedSeen.insert(id)
+            await store.update(id) { record in
+                guard let i = record.parts.firstIndex(where: { $0.part == number }) else { return }
+                record.parts[i].problem = code
+            }
+            return .stop(.done)
         case .tooLarge:
             guard appending, let hubID = await store.record(id)?.parts.first(where: { $0.part == number })?.hubID else {
                 return await halt(id, problem: "too_large")
@@ -1087,22 +1217,18 @@ nonisolated enum RecordingDayUpload {
             batch[hubID] = size / 2
             return .again
         case .dayFull(let next):
-            guard appending else { return await halt(id, problem: "day_full") }
-            await startNextPart(id, after: number, hubNext: next)
-            return .again
+            let moved = appending ? await startNextPart(id, after: number, hubNext: next)
+                                  : await repartition(id, from: number, refused: refused)
+            return moved ? .again : await halt(id, problem: "day_full")
         case .conflict(let code):
             return await halt(id, problem: code)
         case .forbidden:
             paused = true
             return .stop(.blocked)
         case .deleted:
-            await store.update(id) { record in
-                guard let i = record.parts.firstIndex(where: { $0.part == number }) else { return }
-                record.parts[i].deleted = true
-                record.parts[i].pendingPut = nil
-            }
-            if await removeIfAllDeleted(id) { return .stop(.done) }
-            return .again
+            // Deleted on the hub (docs/assistant/day-recap.md「Deleting」): the whole day goes, every part of it.
+            removeEverywhere(id)
+            return .stop(.done)
         }
     }
 
@@ -1116,76 +1242,72 @@ nonisolated enum RecordingDayUpload {
         part.base = base
         part.pendingPut = nil
         if let next, next > part.count {
-            part.created = false
+            part.needsRepair = true
         } else if let next, next >= 0 {
             part.next = next
         }
     }
 
-    /// `413 day_full` (C18): positions from the hub's count on were not stored and go to a next part, which starts at
-    /// the earliest of the sentences left over. The new part and its id are on disk before its `PUT`, so a crash creates
-    /// no second one. The full part then gets one last append with its end and `complete`.
-    private func startNextPart(_ id: UUID, after number: Int, hubNext: Int?) async {
+    /// The hub's stored revision, as an answer said it: every later request goes above it.
+    private func noteHub(_ revision: Int64?, _ hubID: UUID) {
+        if let revision { hubRevision[hubID] = max(hubRevision[hubID] ?? 0, revision) }
+    }
+
+    /// An append's `413 day_full`: that part is closed (its next request says `ended_at`, and its `pending` gaps
+    /// go to the next part), and every position from the hub's count on, which it didn't store, moves to the next part
+    /// with the text still to come. The new part and its id are on disk before its `PUT`, so a crash creates no second
+    /// one. False past the contract's 99 parts.
+    private func startNextPart(_ id: UUID, after number: Int, hubNext: Int?) async -> Bool {
         let hubID = UUID()
-        let fallback = now()
+        let at = now()
+        // The edit runs on the store's queue: what it decided comes back through this.
+        let moved = OSAllocatedUnfairLock(initialState: false)
         await store.update(id) { record in
             guard let i = record.parts.firstIndex(where: { $0.part == number }),
-                  !record.parts.contains(where: { $0.part > number }) else { return }
+                  let target = RecordingDayUpload.nextPart(&record, after: number, newID: hubID) else { return }
             let held = max(0, min(hubNext ?? record.parts[i].next, record.parts[i].count))
-            RecordingDayUpload.unplace(&record, part: number, from: held)
-            let start = RecordingDayUpload.earliestUnplaced(record) ?? fallback
+            RecordingDayUpload.move(&record, part: number, from: held, to: target)
             record.parts[i].count = held
             record.parts[i].next = min(record.parts[i].next, held)
-            record.parts[i].endedAt = max(start, record.parts[i].startedAt)
-            record.parts.append(RecordingDayPart(hubID: hubID, part: number + 1, startedAt: max(start, record.parts[i].startedAt)))
+            record.parts[i].endedAt = record.parts[i].endedAt ?? at
+            moved.withLock { $0 = true }
         }
         _ = await store.flush(id)
         if let record = await store.record(id) { notePartsIfNeeded(id, record) }
+        return moved.withLock { $0 }
     }
 
-    /// The hub deleted these parts: marked; the day goes here too once none is left. True when it went.
-    private func applyDeletes(_ hubIDs: Set<UUID>, to id: UUID) async -> Bool {
+    /// A repair `PUT`'s `413 day_full`: the durable repartition plan (`RecordingDayUpload.repartition`), then a `PUT` of
+    /// every part it changed.
+    private func repartition(_ id: UUID, from number: Int, refused: Int) async -> Bool {
+        let at = now()
+        let planned = OSAllocatedUnfairLock(initialState: false)
         await store.update(id) { record in
-            for i in record.parts.indices where hubIDs.contains(record.parts[i].hubID) {
-                record.parts[i].deleted = true
-                record.parts[i].pendingPut = nil
-            }
+            let done = RecordingDayUpload.repartition(&record, from: number, refused: refused, now: at, newID: { UUID() })
+            planned.withLock { $0 = done }
         }
-        guard let record = await store.record(id) else { return true }
-        // A day not uploaded in parts yet is the watch id's alone.
-        if record.parts.isEmpty, hubIDs.contains(id) {
-            removeLocally(id)
-            return true
-        }
-        return await removeIfAllDeleted(id)
+        _ = await store.flush(id)
+        if let record = await store.record(id) { notePartsIfNeeded(id, record) }
+        return planned.withLock { $0 }
     }
 
-    private func removeIfAllDeleted(_ id: UUID) async -> Bool {
-        guard let record = await store.record(id), !record.parts.isEmpty, record.parts.allSatisfy(\.deleted) else { return false }
-        removeLocally(id)
-        return true
-    }
-
-    /// Deleted in the knowledge base (every part): the text there is the truth, so the day goes here too, like a
-    /// recording deleted on the web (`RecordingSync`).
-    private func removeLocally(_ id: UUID) {
-        try? library.remove(id)
-        removedHere(id)
-    }
-
-    /// Reconciliation's word on the day's parts: the recap's state, and the hub's base and count. On the same base a
-    /// count below the phone's is sent again from there; another base, a count above the phone's, or a part the hub no
-    /// longer lists (`absent`) is replaced. A base equal to a replacement decided on is that replacement, stored.
+    /// Reconciliation's word on the day's parts: the recap's state and final time, and the hub's base and count. On the
+    /// same base a count below the phone's is sent again from there; another base, a count above the phone's, or a part
+    /// the hub no longer lists (`absent`) is replaced. A base equal to a replacement decided on is that replacement,
+    /// stored. A row without a base is an older manager's: nothing goes to the day until a hello.
     private func apply(_ rows: [RecordingDayHubRow], listedAt: Date, to id: UUID) async {
         let byID = Dictionary(rows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        for row in rows { if let revision = row.revision { hubRevision[row.id] = max(hubRevision[row.id] ?? 0, revision) } }
+        for row in rows { noteHub(row.revision, row.id) }
         let absentMatters = knownCreated.contains(id)
+        let older = rows.contains { $0.base == nil }
+        if older { unsupportedSeen.insert(id) }
         let before = await store.record(id)?.parts ?? []
         // Parts with a request stored since about when the list was made: the list may not show it yet.
         let newer = Set(before.map(\.hubID).filter { hubID in
             lastStored[hubID].map { $0 >= listedAt.addingTimeInterval(-Self.listSlack) } ?? false
         })
         await store.update(id) { record in
+            if older { record.unsupportedUntilHello = true }
             for i in record.parts.indices where !record.parts[i].expired && !record.parts[i].deleted {
                 let fresh = newer.contains(record.parts[i].hubID)
                 guard let row = byID[record.parts[i].hubID] else {
@@ -1193,6 +1315,8 @@ nonisolated enum RecordingDayUpload {
                     continue
                 }
                 record.parts[i].recapState = row.recapState
+                if let final = row.recapFinal { record.parts[i].recapFinal = final }
+                if let finalAt = row.recapFinalAt { record.parts[i].recapFinalAt = finalAt }
                 guard !fresh, let base = row.base, let next = row.next else { continue }
                 if let pending = record.parts[i].pendingPut {
                     if base == pending { Self.adopt(&record.parts[i], base: base, next: next) }
@@ -1200,53 +1324,17 @@ nonisolated enum RecordingDayUpload {
                 }
                 guard record.parts[i].created else { continue }
                 if base != record.parts[i].base || next > record.parts[i].count {
-                    record.parts[i].created = false
+                    record.parts[i].needsRepair = true
                 } else if next < record.parts[i].next {
                     record.parts[i].next = next
                 }
             }
         }
-        // A recap that turned ready on a part the hub has whole: its detail says now whether it's the final one.
-        for part in before where byID[part.hubID]?.recapState == "ready" && part.recapState != "ready" {
-            recapProbeAt[part.hubID] = nil
+        // The first final recap's time is the audio's 3-day clock.
+        let after = await store.record(id)?.parts ?? []
+        if after.contains(where: { part in part.recapFinalAt != nil && before.first { $0.hubID == part.hubID }?.recapFinalAt != part.recapFinalAt }) {
+            recapFinal()
         }
-    }
-
-    /// The final recap's time for each complete part whose recap is ready (C21), read from the detail: at once after
-    /// `pending → ready` and once per launch, and every `recapProbeInterval` while it says the recap isn't final (the
-    /// final one may be written between two reconciliations that both list `ready`). Starts the keeper's 3-day clock.
-    private func readRecaps(_ id: UUID, _ record: RecordingDayRecord, api: APIClient) async {
-        var found = false
-        for part in record.parts where awaitsFinalRecap(part, of: record) && (recapProbeAt[part.hubID].map { $0 <= now() } ?? true) {
-            // Not again before then, whatever the answer.
-            recapProbeAt[part.hubID] = now().addingTimeInterval(Self.recapProbeInterval)
-            let probe: RecordingDayRecapProbe
-            do {
-                probe = try await api.getDecodedOffMain("/api/v1/kb/recordings/\(part.hubID.uuidString.lowercased())",
-                                                        as: RecordingDayRecapProbe.self)
-            } catch {
-                // Not read: the next visit tries again.
-                recapProbeAt[part.hubID] = nil
-                continue
-            }
-            guard let recap = probe.detail?.recap, recap.final == true else { continue }
-            let at = recap.generatedAt.flatMap(JSON.parseDate) ?? now()
-            let hubID = part.hubID
-            await store.update(id) { record in
-                guard let i = record.parts.firstIndex(where: { $0.hubID == hubID }) else { return }
-                record.parts[i].recapFinalAt = at
-            }
-            found = true
-        }
-        if found { recapFinal() }
-    }
-
-    /// A complete part whose recap is ready but not known to be the final one, within the audio's days: after them its
-    /// time changes nothing (`RecordingDayRetention` deletes the audio by then whatever the recap).
-    private func awaitsFinalRecap(_ part: RecordingDayPart, of record: RecordingDayRecord) -> Bool {
-        guard part.complete, part.recapState == "ready", part.recapFinalAt == nil, !part.deleted, !part.expired,
-              let start = record.hubStartedAt else { return false }
-        return now().timeIntervalSince(start) < (RecordingDayContract.audioMaxDays + 1) * 86_400
     }
 
     /// The day's hub ids past its first part, for `RecordingSync`'s deletes, once per change.
@@ -1260,7 +1348,7 @@ nonisolated enum RecordingDayUpload {
     private static func path(_ hubID: UUID) -> String { "/api/v1/recordings/\(hubID.uuidString.lowercased())" }
 
     /// One request for day `id`, shown as uploading while it is out. Sent off the main actor: a repair's body is the
-    /// whole day's text, encoded where the UI isn't.
+    /// whole part's text, encoded where the UI isn't.
     private func send(_ id: UUID, _ api: APIClient, _ method: String, _ path: String,
                       _ body: some Encodable & Sendable) async throws -> Data {
         uploading = id
@@ -1268,23 +1356,4 @@ nonisolated enum RecordingDayUpload {
         let request = Task.detached(priority: .utility) { try await api.request(method, path, body: body, timeout: 60) }
         return try await withTaskCancellationHandler { try await request.value } onCancel: { request.cancel() }
     }
-}
-
-/// The little of a day's detail (`GET /api/v1/kb/recordings/{id}`) that says whether its recap is the final one.
-nonisolated struct RecordingDayRecapProbe: Decodable, Sendable {
-    nonisolated struct Detail: Decodable, Sendable {
-        var recap: Recap?
-    }
-
-    nonisolated struct Recap: Decodable, Sendable {
-        var final: Bool?
-        var generatedAt: String?
-
-        private nonisolated enum CodingKeys: String, CodingKey {
-            case final
-            case generatedAt = "generated_at"
-        }
-    }
-
-    var detail: Detail?
 }

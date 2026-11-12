@@ -2,19 +2,28 @@ import SwiftUI
 
 /// All-day recording's page (docs/assistant/day-recap.md): its state in words and a mark, the time it has recorded
 /// since it last started, one tap to continue when it is paused or stopped, and pause, bookmark, meeting mark, erase
-/// and stop while it records.
+/// and stop while it records. Before the user agreed on the iPhone (docs/assistant/day-recap.md「Retention and
+/// privacy」) it explains the mode in short and points there: the consent sheet is the phone's, never the watch's.
 struct WatchAllDayView: View {
     @State private var allDay = WatchAllDay.shared
     @State private var capture = RecordingCapture.shared
+    /// The phone's `recordingDay`: absent from a phone that doesn't take day recordings, 0 until its user agrees.
+    @AppStorage(WatchSync.phoneDayKey) private var phoneDay: Int?
     /// Absent until the phone says; only a phone that says its hub can't write the recap shows the line.
     @AppStorage(WatchSync.phoneDayHubKey) private var phoneDayHub = true
-    @State private var confirming = false
 
     var body: some View {
+        // Opened from the face or a link while the phone offers nothing yet, the page points to the phone too.
+        let startable = allDay.access(phoneDay: phoneDay) == .ready
         ScrollView {
             VStack(spacing: Theme.Space.m) {
-                WatchAllDayStatus(state: allDay.state, since: allDay.since)
-                controls
+                WatchAllDayStatus(state: allDay.state, since: allDay.since, startable: startable)
+                if allDay.deletedOnPhone, allDay.state == .off {
+                    Label("Today's all-day recording was deleted on your iPhone.", systemImage: Theme.Icon.delete)
+                        .font(Theme.Font.caption).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("watch-allday-deleted")
+                }
+                if startable { controls } else { waitingForConsent }
                 WatchAllDayFeedbackLine(feedback: allDay.feedback)
                 if allDay.waiting > 0 {
                     Label(String(localized: "\(allDay.waiting) waiting for iPhone"), systemImage: Theme.Icon.phone)
@@ -27,20 +36,20 @@ struct WatchAllDayView: View {
                 if let error = capture.error {
                     Text(error).font(Theme.Font.caption).foregroundStyle(Theme.cautionText)
                 }
-                Text("Your iPhone turns what's recorded into text as it arrives, and your hub writes a recap of your day. Audio is deleted 3 days after the recap.")
-                    .font(Theme.Font.caption).foregroundStyle(.secondary)
+                WatchAllDayExplanation()
             }
             .padding(Theme.Space.m)
         }
         .navigationTitle("All-Day Recording")
         .accessibilityIdentifier("watch-allday-page")
-        .allDayConsent(isPresented: $confirming)
-        // A start asked for from outside (a link, a notification, the phone) that needs the explanation first.
-        .onChange(of: allDay.consentPending, initial: true) { _, pending in
-            guard pending else { return }
-            allDay.consentPending = false
-            confirming = true
-        }
+    }
+
+    /// No start until the user agrees on the iPhone; what needs no start stays: erasing what an open day still holds,
+    /// and ending a wish to record left from before (it stopped by itself).
+    @ViewBuilder private var waitingForConsent: some View {
+        WatchAllDayConsentLine()
+        if allDay.dayOpen { erase }
+        if allDay.state == .stopped { stop }
     }
 
     @ViewBuilder private var controls: some View {
@@ -115,40 +124,69 @@ struct WatchAllDayView: View {
     }
 
     private func start() {
-        if !allDay.requestStart() { confirming = true }
+        allDay.requestStart()
+    }
+}
+
+/// Where a start waits: the consent sheet on the iPhone.
+struct WatchAllDayConsentLine: View {
+    var body: some View {
+        Label("Agree on your iPhone to start", systemImage: Theme.Icon.phone)
+            .font(Theme.Font.secondaryMedium)
+            .multilineTextAlignment(.center)
+            .accessibilityIdentifier("watch-allday-consent")
+    }
+}
+
+/// The short version of the iPhone's consent sheet, on the page whatever the state: what is recorded, whom to ask,
+/// where the text goes and how long the audio stays.
+struct WatchAllDayExplanation: View {
+    var body: some View {
+        Text("Records all the sound around you, other people included, so ask them first. Your iPhone turns it into text for your hub's recap of your day; the audio stays on your watch and iPhone and is deleted within 7 days.")
+            .font(Theme.Font.caption).foregroundStyle(.secondary)
     }
 }
 
 /// The home list's All-Day Recording card, shown once the phone takes day recordings (or while the mode is on): one
-/// tap starts it (with the explanation the first time) or continues it; while it records, the tap opens its page.
+/// tap starts or continues it; while it records, or until the user agreed on the iPhone, the tap opens its page.
 /// Reads only the capture's state, never the library's entries, which change with every chunk.
 struct WatchAllDayCard: View {
     @State private var allDay = WatchAllDay.shared
-    @AppStorage(WatchSync.phoneDayKey) private var phoneDay = 0
-    @State private var confirming = false
+    /// The phone's `recordingDay`: absent from a phone that doesn't take day recordings, 0 until its user agrees.
+    @AppStorage(WatchSync.phoneDayKey) private var phoneDay: Int?
 
     var body: some View {
-        if phoneDay > 0 || allDay.state != .off {
+        let access = allDay.access(phoneDay: phoneDay)
+        if access != .hidden {
             Group {
-                if allDay.state == .recording {
-                    NavigationLink { WatchAllDayView() } label: { label }
+                if access != .ready || allDay.state == .recording {
+                    NavigationLink { WatchAllDayView() } label: { label(startable: access == .ready) }
                 } else {
-                    Button { if !allDay.requestStart() { confirming = true } } label: { label }
+                    Button(action: start) { label(startable: true) }
                 }
             }
             .watchCard()
             .accessibilityIdentifier("watch-allday")
-            .allDayConsent(isPresented: $confirming)
         }
     }
 
-    private var label: some View {
-        VStack(alignment: .leading, spacing: Theme.Watch.lineSpacing) {
-            Label(allDay.state.word ?? String(localized: "All-Day Recording"), systemImage: allDay.state.symbol)
-                .font(Theme.Font.secondaryMedium).foregroundStyle(allDay.state.tone).lineLimit(2)
-            if allDay.state == .recording, let since = allDay.since {
+    private func start() {
+        // The phone took its word back since this was drawn: the page says what is missing.
+        if !allDay.requestStart() { allDay.pageRequested = true }
+    }
+
+    private func label(startable: Bool) -> some View {
+        let state = allDay.state
+        return VStack(alignment: .leading, spacing: Theme.Watch.lineSpacing) {
+            Label(state.word(startable: startable) ?? String(localized: "All-Day Recording"), systemImage: state.symbol)
+                .font(Theme.Font.secondaryMedium).foregroundStyle(state.tone).lineLimit(2)
+            if state == .recording, let since = allDay.since {
                 Text(timerInterval: since...Date.distantFuture, countsDown: false)
                     .font(Theme.Font.caption.monospacedDigit()).foregroundStyle(.secondary)
+            } else if !startable {
+                Text("Agree on your iPhone to start").font(Theme.Font.caption).foregroundStyle(.secondary)
+            } else if allDay.deletedOnPhone, state == .off {
+                Text("Today's all-day recording was deleted on your iPhone.").font(Theme.Font.caption).foregroundStyle(.secondary)
             }
         }
     }
@@ -180,10 +218,12 @@ struct WatchAllDaySummary: View {
 struct WatchAllDayStatus: View {
     let state: AllDaySnapshot.State
     let since: Date?
+    /// A tap would start or continue it; false while a start waits for the user to agree on the iPhone.
+    var startable = true
 
     var body: some View {
         VStack(spacing: Theme.Space.xs) {
-            if let word = state.word {
+            if let word = state.word(startable: startable) {
                 Label(word, systemImage: state.symbol)
                     .font(Theme.Font.secondaryMedium).foregroundStyle(state.tone).multilineTextAlignment(.center)
             }
@@ -210,29 +250,17 @@ struct WatchAllDayFeedbackLine: View {
     }
 }
 
-extension View {
-    /// The first start's explanation (App Review 5.1.2(i)): what is recorded all day, where it goes, how long the
-    /// audio stays, and asking others first.
-    func allDayConsent(isPresented: Binding<Bool>) -> some View {
-        confirmationDialog("All-Day Recording", isPresented: isPresented, titleVisibility: .visible) {
-            Button("Start All-Day Recording") { WatchAllDay.shared.confirmConsent() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Records what's around you all day. Your iPhone turns it into text, and your hub writes a recap of your day from that text. Audio stays on your devices and is deleted 3 days after the recap. Ask others before recording them.")
-        }
-    }
-}
-
 extension AllDaySnapshot.State {
     /// The state in words on the watch's page, card and Record page; nil when off, where the control says it. The
-    /// complication says the same in fewer words (`AllDaySnapshot.Face.title` and `hint`).
-    var word: String? {
+    /// complication says the same in fewer words (`AllDaySnapshot.Face.title` and `hint`). `startable` false: a tap
+    /// can't continue it yet (the iPhone's consent is missing), so a stopped day doesn't say it would.
+    func word(startable: Bool = true) -> String? {
         switch self {
         case .off: nil
         case .recording: String(localized: "Recording all day")
         case .paused: String(localized: "Paused")
         case .interrupted: String(localized: "Paused — tap to continue")
-        case .stopped: String(localized: "Stopped — tap to continue")
+        case .stopped: startable ? String(localized: "Stopped — tap to continue") : String(localized: "Stopped")
         }
     }
 

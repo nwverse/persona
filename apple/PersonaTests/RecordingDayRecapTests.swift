@@ -15,6 +15,7 @@ private let contractRecap = #"""
   "day": "2026-11-11",
   "covers": {"from": 0, "to": 46800.0},
   "final": false,
+  "final_reason": "complete",
   "summary": "Mostly the export release.",
   "timeline": [
     {
@@ -47,8 +48,9 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
 private func recap(_ json: String) throws -> RecordingDayRecap { try decode(RecordingDayRecap.self, json) }
 
 /// A recap with one timeline entry per `(offset, title)`, each with one point at its start.
-private func recap(entries: [(Double, String)], summary: String = "", isFinal: Bool = false) -> RecordingDayRecap {
-    RecordingDayRecap(isFinal: isFinal, summary: summary, timeline: entries.map { offset, title in
+private func recap(entries: [(Double, String)], summary: String = "", isFinal: Bool = false,
+                   finalReason: String? = nil) -> RecordingDayRecap {
+    RecordingDayRecap(isFinal: isFinal, finalReason: finalReason, summary: summary, timeline: entries.map { offset, title in
         RecordingDayRecap.Entry(from: offset, to: offset + 600, kind: "outside", title: title,
                                 points: [RecordingDayRecap.Point(text: title + " point", at: offset)])
     })
@@ -57,15 +59,18 @@ private func recap(entries: [(Double, String)], summary: String = "", isFinal: B
 private func summary(id: UUID = UUID(), hubIDs: [UUID] = [], sync: RecordingDaySyncState = .synced,
                      transcribedTo: Date? = dayStart.addingTimeInterval(600), recapState: String? = nil) -> RecordingDaySummary {
     RecordingDaySummary(id: id, day: "2026-11-11", timeZone: "Asia/Shanghai", firstAt: dayStart, lastAt: dayStart.addingTimeInterval(3600),
-                        recordedSeconds: 3600, transcribedTo: transcribedTo, chunks: 360, waiting: 0, skipped: 0, failed: 0, gaps: [],
-                        sync: sync, recapState: recapState, hubIDs: hubIDs, complete: false)
+                        closedAt: nil, recordedSeconds: 3600, transcribedTo: transcribedTo, chunks: 360, waiting: 0, skipped: 0,
+                        failed: 0, gaps: [], marks: [], sync: sync, recapState: recapState, recapFinal: false, hubIDs: hubIDs,
+                        complete: false)
 }
 
-/// The detail the hub answers for a day: its meta and, when given, its recap (raw JSON).
-private func detail(state: String?, recap: String? = nil, startedAt: String = "2026-11-11T08:02:11+08:00") -> String {
+/// The detail the hub answers for a day: its meta (`recap_final` when `final`) and, when given, its recap (raw JSON).
+private func detail(state: String?, final isFinal: Bool = false, recap: String? = nil,
+                    startedAt: String = "2026-11-11T08:02:11+08:00") -> String {
     let stateField = state.map { #", "recap_state": "\#($0)""# } ?? ""
+    let finalField = isFinal ? #", "recap_final": true"# : ""
     let recapField = recap.map { #", "recap": \#($0)"# } ?? ""
-    return #"{"detail": {"meta": {"kind": "day", "started_at": "\#(startedAt)"\#(stateField)}, "segments": [{"start": 1, "end": 2, "text": "…"}]\#(recapField)}}"#
+    return #"{"detail": {"meta": {"kind": "day", "tz": "Asia/Shanghai", "started_at": "\#(startedAt)"\#(stateField)\#(finalField)}, "segments": [{"start": 1, "end": 2, "text": "…"}]\#(recapField)}}"#
 }
 
 private func kbPath(_ id: UUID) -> String { "/api/v1/kb/recordings/\(id.uuidString.lowercased())" }
@@ -73,12 +78,13 @@ private func kbPath(_ id: UUID) -> String { "/api/v1/kb/recordings/\(id.uuidStri
 private let listPath = "/api/v1/recordings"
 
 /// `GET /api/v1/recordings` with a day's parts in order, each with its `recap_state` (nil: none due) and the day fields
-/// reconciliation reads.
-private func listing(_ parts: [(UUID, String?)]) -> String {
+/// reconciliation reads; `final` parts list `recap_final` and `recap_final_at`.
+private func listing(_ parts: [(UUID, String?)], final finalParts: Set<UUID> = []) -> String {
     let rows = parts.enumerated().map { i, part in
         let stateField = part.1.map { #", "recap_state": "\#($0)""# } ?? ""
+        let finalField = finalParts.contains(part.0) ? #", "recap_final": true, "recap_final_at": "2026-11-12T06:00:00Z""# : ""
         let dayFields = #""kind": "day", "day": "2026-11-11", "part": \#(i + 1), "next": 120, "base": 1762826467250"#
-        return #"{"id": "\#(part.0.uuidString.lowercased())", "revision": 1762830067891, \#(dayFields)\#(stateField)}"#
+        return #"{"id": "\#(part.0.uuidString.lowercased())", "revision": 1762830067891, \#(dayFields)\#(stateField)\#(finalField)}"#
     }
     return #"{"days": 14, "recordings": [\#(rows.joined(separator: ", "))]}"#
 }
@@ -96,6 +102,7 @@ private func listing(_ parts: [(UUID, String?)]) -> String {
         #expect(decoded.day == "2026-11-11")
         #expect(decoded.covers == .init(from: 0, to: 46_800))
         #expect(decoded.isFinal == false)
+        #expect(decoded.finalReason == RecordingDayRecap.Reason.complete)
         #expect(decoded.partial == false)
         #expect(decoded.summary == "Mostly the export release.")
         #expect(decoded.timeline?.count == 2)
@@ -135,6 +142,10 @@ private func listing(_ parts: [(UUID, String?)]) -> String {
         #expect(answer.startedAt == dayStart)
         let ready = try decode(RecordingDayRecapAnswer.self, detail(state: "ready", recap: contractRecap))
         #expect(ready.recap?.version == 3)
+        #expect(!ready.recapFinal)
+        let finalAnswer = try decode(RecordingDayRecapAnswer.self, detail(state: "ready", final: true, recap: contractRecap))
+        #expect(finalAnswer.recapFinal)
+        #expect(finalAnswer.seen == .listed("ready", final: true))
         let none = try decode(RecordingDayRecapAnswer.self, #"{"detail": {"meta": {"kind": "day"}}}"#)
         #expect(none == RecordingDayRecapAnswer())
     }
@@ -143,13 +154,18 @@ private func listing(_ parts: [(UUID, String?)]) -> String {
         let a = UUID(), b = UUID(), c = UUID()
         let listing = try decode(RecordingDayRecapListing.self, #"""
         {"days": 14, "recordings": [
-          {"id": "\#(a.uuidString.lowercased())", "kind": "day", "recap_state": "ready"},
+          {"id": "\#(a.uuidString.lowercased())", "kind": "day", "recap_state": "ready", "recap_final": true,
+           "recap_final_at": "2026-11-12T06:00:00Z"},
           {"id": "not-an-id", "recap_state": "failed"},
-          {"id": "\#(b.uuidString.lowercased())", "revision": 5}
+          {"id": "\#(b.uuidString.lowercased())", "revision": 5, "recap_final": "yes"}
         ]}
         """#)
         #expect(listing.rows.count == 2)
-        #expect(listing.seen([a, b, c]) == [a: .listed("ready"), b: .listed(nil), c: .absent])
+        #expect(listing.seen([a, b, c]) == [a: .listed("ready", final: true), b: .listed(nil, final: false), c: .absent])
+        #expect(listing.rows.first?.recapFinalAt == JSON.parseDate("2026-11-12T06:00:00Z"))
+        #expect(listing.rows.last?.recapFinalAt == nil)
+        #expect(RecordingDayRecapSeen.listed("failed", final: false).failed)
+        #expect(!RecordingDayRecapSeen.listed("ready", final: true).failed && !RecordingDayRecapSeen.absent.failed)
     }
 
     /// What the page hands the day's upload: the rows reconciliation would, and only when the list names every part.
@@ -160,6 +176,14 @@ private func listing(_ parts: [(UUID, String?)]) -> String {
             RecordingDayHubRow(id: a, revision: 1762830067891, part: 1, next: 120, base: 1762826467250, recapState: "ready"),
             RecordingDayHubRow(id: b, revision: 1762830067891, part: 2, next: 120, base: 1762826467250, recapState: nil),
         ])
+        let finalList = try decode(RecordingDayRecapListing.self, listing([(a, "ready")], final: [a]))
+        #expect(finalList.hubRows([a]) == [
+            RecordingDayHubRow(id: a, revision: 1762830067891, part: 1, next: 120, base: 1762826467250, recapState: "ready",
+                               recapFinal: true, recapFinalAt: JSON.parseDate("2026-11-12T06:00:00Z")),
+        ])
+        #expect(RecordingDayRecapListing.dayFinal(finalList.hubRows([a]) ?? []))
+        #expect(!RecordingDayRecapListing.dayFinal(list.hubRows([a, b]) ?? []), "final only once every part is")
+        #expect(!RecordingDayRecapListing.dayFinal([]))
         #expect(list.hubRows([a, UUID()]) == nil, "a part missing from the list is reconciliation's to judge")
         #expect(list.hubRows([]) == nil)
         // The day's state across its parts, as its record sums it.
@@ -186,8 +210,10 @@ private func listing(_ parts: [(UUID, String?)]) -> String {
         #expect(entries[0].points.first?.who == "Ada")
         #expect(content.actions.map(\.what) == ["Look at the flaky upload test."])
         #expect(content.actions.first?.at == dayStart.addingTimeInterval(7420.5))
+        #expect(content.actions.first?.by == "tomorrow" && content.actions.first?.dueDate == "2026-11-12")
         #expect(content.actions.first?.confirmed == false, "an empty todo_id is not confirmed")
         #expect(content.writtenAt == JSON.parseDate("2026-11-11T13:00:41Z"))
+        #expect(content.finality == .soFar, "a reason without final is no final recap")
         #expect(!content.isFinal)
         #expect(content.shareText == "# 2026-11-11\n…")
 
@@ -228,6 +254,21 @@ private func listing(_ parts: [(UUID, String?)]) -> String {
         #expect(content.markdown == "# part 1")
     }
 
+    /// "Final recap" vs "Recap so far": final once every part's recap is; one made at the cutoff says so, since the rest
+    /// of the day may still come.
+    @Test func theRecapIsFinalOnlyOnceEveryPartsIs() {
+        let complete = recap(entries: [], isFinal: true, finalReason: RecordingDayRecap.Reason.complete)
+        let cutoff = recap(entries: [], isFinal: true, finalReason: RecordingDayRecap.Reason.cutoff)
+        let soFar = recap(entries: [])
+        #expect(RecordingDayRecapContent.finality([complete]) == .final)
+        #expect(RecordingDayRecapContent.finality([recap(entries: [], isFinal: true)]) == .final, "a final recap without a reason")
+        #expect(RecordingDayRecapContent.finality([complete, cutoff]) == .cutoff)
+        #expect(RecordingDayRecapContent.finality([complete, soFar]) == .soFar)
+        #expect(RecordingDayRecapContent.finality([]) == .soFar)
+        let content = RecordingDayRecapContent(parts: [.init(recap: complete, startedAt: dayStart)], zone: shanghai)
+        #expect(content.finality == .final && content.isFinal)
+    }
+
     @Test func anEntryWithoutAStartIsPlacedByItsFirstPoint() {
         let recap = RecordingDayRecap(timeline: [
             .init(kind: "meeting", points: [.init(text: "Ship it.", at: 120)]),
@@ -261,8 +302,10 @@ private func listing(_ parts: [(UUID, String?)]) -> String {
         #expect(state([.init(recapState: "ready", recap: readyRecap, startedAt: dayStart)]) == .ready(content, note: nil))
         #expect(state([.init(recapState: "pending", recap: readyRecap)]) == .ready(content, note: .updating), "the previous recap stays readable")
         #expect(state([.init(recapState: "failed", recap: readyRecap)]) == .ready(content, note: .failed))
-        // Only part one may borrow the day's start; a later part without its own isn't placed on a guessed clock.
-        #expect(state([nil, .init(recapState: "ready", recap: readyRecap)]) == .waitingForText)
+        // Every part shares the day recording's clock, so a later part whose meta leaves it out borrows the day's start.
+        #expect(state([nil, .init(recapState: "ready", recap: readyRecap)]) == .ready(content, note: nil))
+        #expect(RecordingDayRecapState.of(parts: [.init(recapState: "ready", recap: readyRecap)], sync: .synced, transcribed: true,
+                                          fallbackStart: nil, zone: shanghai) == .waitingForText, "no clock at all: not placed")
     }
 
     @Test func onlyAStateOnItsWayIsFollowed() throws {
@@ -282,14 +325,16 @@ private func listing(_ parts: [(UUID, String?)]) -> String {
 
     @Test func theTranscriptIsOnTheWallClockByTheHour() {
         let id = UUID()
-        var record = RecordingDayRecord(id: id, day: "2026-11-11", timeZone: "Asia/Shanghai")
-        func chunk(_ seq: Int, at offset: Double, _ sentences: [RecordingSentence], erased: Bool = false) -> RecordingDayChunk {
-            RecordingDayChunk(seq: seq, startedAt: dayStart.addingTimeInterval(offset), duration: 60, erased: erased,
-                              receivedAt: dayStart, state: .transcribed, sentences: sentences, hasAudio: true)
+        var record = RecordingDayRecord(id: id, day: "2026-11-11", timeZone: "Asia/Shanghai", startedAt: dayStart)
+        func chunk(_ seq: Int, at offset: Double, _ sentences: [RecordingSentence], erased: Bool = false,
+                   lost: Bool = false) -> RecordingDayChunk {
+            RecordingDayChunk(seq: seq, startedAt: dayStart.addingTimeInterval(offset), duration: 60, receivedAt: dayStart,
+                              state: .transcribed, sentences: sentences, hasAudio: true, erased: erased, lost: lost)
         }
         record.chunks[1] = chunk(1, at: 3600, [.init(start: 5, end: 8, text: "Second hour."), .init(start: 9, end: 9.5, text: "   ")])
         record.chunks[0] = chunk(0, at: 0, [.init(start: 1, end: 4, text: " First line. "), .init(start: 30, end: 33, text: "Still 08:02.")])
         record.chunks[2] = chunk(2, at: 3700, [.init(start: 0, end: 2, text: "Erased words.")], erased: true)
+        record.chunks[3] = chunk(3, at: 3760, [.init(start: 0, end: 2, text: "Past the deadline.")], lost: true)
         let lines = RecordingDayTranscript.lines(record)
         #expect(lines.map(\.text) == ["First line.", "Still 08:02.", "Second hour."])
         #expect(lines.map(\.id) == ["s-0-0", "s-0-1", "s-1-0"])
@@ -376,6 +421,35 @@ private func listing(_ parts: [(UUID, String?)]) -> String {
 
     /// The list may say a recap is ready before the knowledge base serves it: the page shows what the detail says, and
     /// reads it again at each look until it agrees.
+    /// A recap can become the final one while its state stays `ready` (the day became complete between two looks): the
+    /// list's `recap_final` moving is enough to read the detail again, so the page says "Final recap".
+    @Test func aRecapThatBecameFinalIsReadAgain() async throws {
+        let id = UUID()
+        let hub = FakeHub()
+        hub.on("GET", listPath, json: listing([(id, "ready")]))
+        hub.on("GET", kbPath(id), json: detail(state: "ready", recap: contractRecap))
+        let model = RecordingDayRecapModel(api: { hub.client }, reconciled: { _, _ in })
+        let day = summary(id: id, recapState: "ready")
+        await model.load(day)
+        guard case .ready(let soFar, _) = model.state else {
+            Issue.record("not ready: \(model.state)")
+            return
+        }
+        #expect(soFar.finality == .soFar)
+        let finalRecap = contractRecap.replacingOccurrences(of: #""final": false"#, with: #""final": true"#)
+        hub.on("GET", listPath, json: listing([(id, "ready")], final: [id]))
+        hub.on("GET", kbPath(id), json: detail(state: "ready", final: true, recap: finalRecap))
+        await model.load(day)
+        #expect(hub.sent("GET", kbPath(id)).count == 2, "the state stayed ready, the recap became final")
+        guard case .ready(let finalContent, _) = model.state else {
+            Issue.record("not ready: \(model.state)")
+            return
+        }
+        #expect(finalContent.finality == .final)
+        await model.load(day)
+        #expect(hub.sent("GET", kbPath(id)).count == 2, "nothing moved since: not read again")
+    }
+
     @Test func aDetailBehindTheListIsReadAgain() async throws {
         let id = UUID()
         let hub = FakeHub()
@@ -428,6 +502,25 @@ private func listing(_ parts: [(UUID, String?)]) -> String {
         await model.load(stale)
         #expect(reported.count == 1)
         #expect(model.shown(stale).recapState == "pending")
+    }
+
+    /// A recap that became final is news too: the day's upload stores it (the audio's 3-day clock starts there), and
+    /// once the summary says it, there is nothing to tell.
+    @Test func aFinalRecapTheSummaryDoesntKnowIsReported() async throws {
+        let id = UUID()
+        let hub = FakeHub()
+        hub.on("GET", listPath, json: listing([(id, "ready")], final: [id]))
+        hub.on("GET", kbPath(id), json: detail(state: "ready", final: true, recap: contractRecap))
+        var reported: [[RecordingDayHubRow]] = []
+        let model = RecordingDayRecapModel(api: { hub.client }, reconciled: { reported.append($1) })
+        var day = summary(id: id, hubIDs: [id], recapState: "ready")
+        await model.load(day)
+        #expect(reported.count == 1)
+        #expect(reported.first?.first?.recapFinal == true)
+        #expect(reported.first?.first?.recapFinalAt == JSON.parseDate("2026-11-12T06:00:00Z"))
+        day.recapFinal = true
+        await model.load(day)
+        #expect(reported.count == 1)
     }
 
     @Test func aDayTheUploadHasNotNamedIsNotReported() async {

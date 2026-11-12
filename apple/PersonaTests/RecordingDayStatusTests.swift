@@ -5,12 +5,29 @@ import Testing
 private let anchor = Date(timeIntervalSince1970: 1_800_000_000) // 2027-01-15T08:00:00Z, 16:00 in Shanghai
 
 /// A day's summary as `RecordingDaySummaries` computes it, with what each test changes.
-private func summary(sync: RecordingDaySyncState = .synced, recapState: String? = nil, recorded: Double = 3600,
-                     transcribedTo: Date? = anchor.addingTimeInterval(3600), chunks: Int = 360, waiting: Int = 0, skipped: Int = 0,
-                     gaps: [RecordingDayGap] = []) -> RecordingDaySummary {
-    RecordingDaySummary(id: UUID(), day: "2027-01-15", timeZone: "Asia/Shanghai", firstAt: anchor, lastAt: anchor.addingTimeInterval(3600),
+private func summary(day: String = "2027-01-15", sync: RecordingDaySyncState = .synced, recapState: String? = nil,
+                     recorded: Double = 3600, lastAt: Date? = anchor.addingTimeInterval(3600),
+                     transcribedTo: Date? = anchor.addingTimeInterval(3600), closedAt: Date? = nil, chunks: Int = 360,
+                     waiting: Int = 0, skipped: Int = 0, gaps: [RecordingDayGap] = []) -> RecordingDaySummary {
+    RecordingDaySummary(id: UUID(), day: day, timeZone: "Asia/Shanghai", firstAt: anchor, lastAt: lastAt, closedAt: closedAt,
                         recordedSeconds: recorded, transcribedTo: transcribedTo, chunks: chunks, waiting: waiting, skipped: skipped,
-                        failed: 0, gaps: gaps, sync: sync, recapState: recapState, hubIDs: [], complete: false)
+                        failed: 0, gaps: gaps, marks: [], sync: sync, recapState: recapState, recapFinal: false, hubIDs: [],
+                        complete: false)
+}
+
+/// A switch whose consent is a flag of the test's: agreed or not, and what was sent.
+@MainActor private final class SwitchProbe {
+    var consented: Bool
+    var sent: [String] = []
+    var agreements = 0
+    var now = anchor
+
+    init(consented: Bool = true) { self.consented = consented }
+
+    func make(sleep: @escaping (Date) async throws -> Void = { _ in }) -> RecordingDaySwitch {
+        RecordingDaySwitch(send: { self.sent.append($0) }, agreed: { self.consented },
+                           agree: { self.consented = true; self.agreements += 1 }, now: { self.now }, sleep: sleep)
+    }
 }
 
 private func watch(_ state: RecordingDayWatchState.State, since: Date? = anchor, pending: Int? = 0) -> RecordingDayWatchState {
@@ -97,18 +114,82 @@ private func dayEntry(_ day: String, zone: String, createdAt: Date, id: UUID = U
     }
 
     @Test func theSwitchSendsTheCommandAndWaitsForTheWatch() {
-        var sent: [String] = []
-        let control = RecordingDaySwitch(send: { sent.append($0) }, now: { anchor })
+        let probe = SwitchProbe()
+        let control = probe.make()
         control.set(true)
-        #expect(sent == [RecordingDayContract.Command.start])
+        #expect(probe.sent == [RecordingDayContract.Command.start])
         #expect(control.pending == RecordingDayStatus.Pending(start: true, at: anchor))
+        #expect(control.asking == nil, "agreed already: no sheet")
         control.watchChanged(watch(.off, pending: 2))
         #expect(control.pending != nil, "still off: not answered")
         control.watchChanged(watch(.recording))
         #expect(control.pending == nil)
         control.set(false)
-        #expect(sent == [RecordingDayContract.Command.start, RecordingDayContract.Command.stop])
+        #expect(probe.sent == [RecordingDayContract.Command.start, RecordingDayContract.Command.stop])
         #expect(control.pending?.start == false)
+    }
+
+    // MARK: Consent
+
+    /// Nothing records before the user agreed (docs/assistant/day-recap.md「Retention and privacy」): turning the switch
+    /// on asks first, and the start goes only once they agree.
+    @Test func aStartBeforeTheConsentAsksFirstAndGoesOnAgree() {
+        let probe = SwitchProbe(consented: false)
+        let control = probe.make()
+        control.set(true)
+        #expect(control.asking == .start)
+        #expect(probe.sent.isEmpty, "nothing goes to the watch before the user agreed")
+        #expect(control.pending == nil)
+        #expect(!RecordingDayStatus.isOn(watch: nil, pending: control.pending, now: anchor), "the switch stays off meanwhile")
+        control.consentAnswered(agreed: true)
+        #expect(control.asking == nil)
+        #expect(probe.agreements == 1)
+        #expect(probe.sent == [RecordingDayContract.Command.start])
+        #expect(control.pending == RecordingDayStatus.Pending(start: true, at: anchor))
+        // The sheet's own dismissal after Agree is no second answer.
+        control.consentAnswered(agreed: false)
+        #expect(probe.agreements == 1 && probe.sent.count == 1)
+    }
+
+    @Test func notNowLeavesEverythingAsItWas() {
+        let probe = SwitchProbe(consented: false)
+        let control = probe.make()
+        control.set(true)
+        control.consentAnswered(agreed: false)
+        #expect(control.asking == nil)
+        #expect(probe.agreements == 0 && probe.sent.isEmpty && control.pending == nil)
+        // Stopping never asks: a recording already running goes on under the agreement it started with.
+        control.set(false)
+        #expect(control.asking == nil)
+        #expect(probe.sent == [RecordingDayContract.Command.stop])
+    }
+
+    /// The Agree row (the watch says "Agree on your iPhone to start"): agreeing starts nothing here, the start is the
+    /// watch's tap.
+    @Test func theAgreeRowOnlyAgrees() {
+        let probe = SwitchProbe(consented: false)
+        let control = probe.make()
+        control.askConsent()
+        #expect(control.asking == .agree)
+        control.consentAnswered(agreed: true)
+        #expect(probe.agreements == 1)
+        #expect(probe.sent.isEmpty)
+        #expect(control.pending == nil)
+        // Without the sheet up, an answer does nothing.
+        control.consentAnswered(agreed: true)
+        #expect(probe.agreements == 1)
+    }
+
+    /// Deleting the day the watch records stops it there (the delete reaches the watch): the switch shows the stop on
+    /// its way without a command of its own, until the watch says it is off.
+    @Test func deletingTheRecordedDayShowsTheStopWithoutSendingOne() {
+        let probe = SwitchProbe()
+        let control = probe.make()
+        control.deletedRecordedDay()
+        #expect(probe.sent.isEmpty)
+        #expect(RecordingDayStatus.line(watch: watch(.recording), pending: control.pending, now: anchor) == .stopping)
+        control.watchChanged(watch(.off))
+        #expect(control.pending == nil)
     }
 
     /// The Today section's follow: an unanswered start reads "on its way", then "no answer" after two minutes, then the
@@ -117,7 +198,7 @@ private func dayEntry(_ day: String, zone: String, createdAt: Date, id: UUID = U
         var clock = anchor
         var looks: [Date] = []
         var waits: [Date] = []
-        let control = RecordingDaySwitch(send: { _ in }, now: { clock }, sleep: { until in
+        let control = RecordingDaySwitch(send: { _ in }, agreed: { true }, agree: {}, now: { clock }, sleep: { until in
             looks.append(clock)
             waits.append(until)
             clock = until
@@ -141,11 +222,11 @@ private func dayEntry(_ day: String, zone: String, createdAt: Date, id: UUID = U
 
     @Test func theFollowStopsWhenAnsweredOrCancelled() async {
         var waits = 0
-        let answered = RecordingDaySwitch(send: { _ in }, now: { anchor }, sleep: { _ in waits += 1 })
+        let answered = RecordingDaySwitch(send: { _ in }, agreed: { true }, agree: {}, now: { anchor }, sleep: { _ in waits += 1 })
         answered.set(false)
         await answered.follow { nil }
         #expect(waits == 0, "a watch that never said is off: the stop is done")
-        let cancelled = RecordingDaySwitch(send: { _ in }, now: { anchor }, sleep: { _ in
+        let cancelled = RecordingDaySwitch(send: { _ in }, agreed: { true }, agree: {}, now: { anchor }, sleep: { _ in
             waits += 1
             throw CancellationError()
         })
@@ -196,7 +277,22 @@ private func dayEntry(_ day: String, zone: String, createdAt: Date, id: UUID = U
         #expect(RecordingDayStatus.progress(summary(recorded: 900, transcribedTo: nil)) == .recorded(seconds: 900))
         let to = anchor.addingTimeInterval(600)
         #expect(RecordingDayStatus.progress(summary(recorded: 900, transcribedTo: to)) == .transcribed(seconds: 900, to: to))
+        // From the recording's start to the end of its last audio; nothing before any audio.
         #expect(RecordingDayStatus.span(summary()) == anchor..<anchor.addingTimeInterval(3600))
+        #expect(RecordingDayStatus.span(summary(lastAt: nil)) == nil)
+        #expect(RecordingDayStatus.span(summary(lastAt: anchor.addingTimeInterval(-5))) == anchor..<anchor)
+    }
+
+    /// "Erase Last 10 Minutes" is for today's recording while it records, in the day's own zone.
+    @Test func onlyTodaysOpenRecordingOffersTheErase() {
+        let at = anchor // 2027-01-15 16:00 in Shanghai
+        #expect(RecordingDayStatus.offersErase(summary(), now: at))
+        #expect(!RecordingDayStatus.offersErase(summary(closedAt: at.addingTimeInterval(-60)), now: at), "closed: deleted or past midnight")
+        #expect(!RecordingDayStatus.offersErase(summary(day: "2027-01-14"), now: at), "yesterday's")
+        // 23:59:30 there is still today; 00:00:30 the next day is not.
+        let lateEvening = JSON.parseDate("2027-01-15T23:59:30+08:00")!
+        #expect(RecordingDayStatus.offersErase(summary(), now: lateEvening))
+        #expect(!RecordingDayStatus.offersErase(summary(), now: lateEvening.addingTimeInterval(60)))
     }
 
     @Test func gapsAddUpByReasonInTheirOrder() {
@@ -260,5 +356,26 @@ private func dayEntry(_ day: String, zone: String, createdAt: Date, id: UUID = U
         entry.title = ""
         #expect(RecordingDayStatus.title(day: "2027-01-15", timeZone: "Asia/Shanghai") == entry.displayTitle)
         #expect(RecordingDayStatus.title(day: "not-a-day", timeZone: "Asia/Shanghai") == "not-a-day")
+    }
+}
+
+
+/// What the consent sheet says (docs/assistant/day-recap.md「Retention and privacy」), point by point.
+@MainActor struct RecordingDayConsentSheetTests {
+    @Test func everyPointOfTheContractIsThereInItsOrder() {
+        #expect(RecordingDayConsentPoint.allCases == [.everyoneIsRecorded, .audioStaysOnDevices, .textGoesToTheModel,
+                                                      .readersOfKnowledge, .howLongItIsKept])
+        let symbols = RecordingDayConsentPoint.allCases.map(\.symbol)
+        #expect(Set(symbols).count == symbols.count, "one mark per point")
+        for point in RecordingDayConsentPoint.allCases {
+            #expect(!point.text(transcriptDays: 14).isEmpty, "\(point)")
+        }
+    }
+
+    /// The text's retention is the hub's `recording_days` (one test of the localized key).
+    @Test func theRetentionPointSaysTheHubsDays() {
+        #expect(RecordingDayConsentPoint.howLongItIsKept.text(transcriptDays: 30)
+                == String(localized: "The text is kept for \(30) days, and the day's recap as long as meeting minutes, which is forever by default."))
+        #expect(RecordingDayConsentPoint.howLongItIsKept.text(transcriptDays: 30) != RecordingDayConsentPoint.howLongItIsKept.text(transcriptDays: 14))
     }
 }

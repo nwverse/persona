@@ -18,10 +18,11 @@ private func refusal(_ status: Int, _ code: String? = nil, _ extra: [String: Str
     return APIError(status: status, message: "refused", fields: fields)
 }
 
-/// A hub that keeps day recordings as the contract says (docs/assistant/day-recap.md "Phone to hub"): a `PUT` replaces
-/// every segment and sets the base, an append stores by position on that base (`base_changed`, `segments_gap`,
-/// `day_full` past `capacity`, `too_large` past `maxPerAppend`), the detail carries the recap. Any request can be made
-/// to fail once (`fail`). Every request is kept, its body as JSON.
+/// A hub that keeps day recordings as the contract says (docs/assistant/day-recap.md「Phone to hub」): a `PUT` replaces
+/// every segment and sets the base (its `200` with `base` and `next`; `stale` below the stored revision; `day_full` past
+/// `capacity`), an append stores by position on that base (`base_changed`, `segments_gap`, `day_full` past `capacity`,
+/// `too_large` past `maxPerAppend`). Any request can be made to fail once (`fail`). Every request is kept, its body as
+/// JSON.
 private final class DayHub: @unchecked Sendable {
     struct Request {
         var method: String
@@ -43,13 +44,11 @@ private final class DayHub: @unchecked Sendable {
     private var capacity = Int.max
     private var maxPerAppend = Int.max
     private var status: [String: String] = [:]
-    private var recap: [String: Any]?
 
     var requests: [Request] { lock.withLock { log } }
     func calls(_ method: String) -> [Request] { requests.filter { $0.method == method } }
     func texts(_ id: UUID) -> [String] { lock.withLock { held[key(id)]?.segments.map { $0["text"] as? String ?? "" } ?? [] } }
     func base(_ id: UUID) -> Int64? { lock.withLock { held[key(id)]?.base } }
-    func count(_ id: UUID) -> Int? { lock.withLock { held[key(id)]?.segments.count } }
 
     /// The next `method` request fails with `error`.
     func fail(_ method: String, _ error: APIError) { lock.withLock { failures[method, default: []].append(error) } }
@@ -61,9 +60,6 @@ private final class DayHub: @unchecked Sendable {
     }
     /// Every `method` request answers `200` with this status (`expired`).
     func answer(_ method: String, status: String) { lock.withLock { self.status[method] = status } }
-    func setRecap(final: Bool, generatedAt: String) {
-        lock.withLock { recap = ["final": final, "generated_at": generatedAt, "summary": "A day."] }
-    }
     /// The hub lost its last segments (a restore), or the whole recording (a new hub).
     func truncate(_ id: UUID, to count: Int) {
         lock.withLock {
@@ -73,6 +69,11 @@ private final class DayHub: @unchecked Sendable {
         }
     }
     func forget(_ id: UUID) { lock.withLock { held[key(id)] = nil } }
+    /// The hub holds segments this phone never sent (another device, a bug), or a revision far above the phone's.
+    func inject(_ id: UUID, _ texts: [String]) {
+        lock.withLock { held[key(id)]?.segments += texts.map { ["start": 0.0, "end": 0.0, "text": $0] } }
+    }
+    func raise(_ id: UUID, revision: Int64) { lock.withLock { held[key(id)]?.revision = revision } }
     /// Called with every request as it arrives, before it is answered.
     func watch(_ body: @escaping @Sendable (Request) -> Void) { lock.withLock { watcher = body } }
 
@@ -86,24 +87,19 @@ private final class DayHub: @unchecked Sendable {
                 failures[request.method] = queued
                 throw error
             }
-            let parts = request.path.split(separator: "/").map(String.init)
-            switch request.method {
-            case "GET":
-                var detail: [String: Any] = ["meta": ["kind": "day"]]
-                if let recap { detail["recap"] = recap }
-                return try json(["detail": detail])
-            case "PUT": return try put(parts[3], body)
-            default: return try append(parts[3], body)
-            }
+            let id = request.path.split(separator: "/").map(String.init)[3]
+            return request.method == "PUT" ? try put(id, body) : try append(id, body)
         }
     }
 
     private func put(_ id: String, _ body: [String: Any]) throws -> Data {
         let revision = (body["revision"] as? NSNumber)?.int64Value ?? 0
         if let status = status["PUT"] { return try json(["id": id, "revision": revision, "status": status]) }
-        if let have = held[id], have.revision > revision { return try json(["id": id, "revision": have.revision, "status": "stale"]) }
-        held[id] = Held(base: revision, revision: revision, segments: body["segments"] as? [[String: Any]] ?? [])
-        return try json(["id": id, "revision": revision, "status": "stored"])
+        if let have = held[id], have.revision >= revision { return try json(["id": id, "revision": have.revision, "status": "stale"]) }
+        let segments = body["segments"] as? [[String: Any]] ?? []
+        guard segments.count <= capacity else { throw refusal(413, "day_full", ["next": "\(held[id]?.segments.count ?? 0)"]) }
+        held[id] = Held(base: revision, revision: revision, segments: segments)
+        return try json(["id": id, "revision": revision, "base": revision, "next": segments.count, "status": "stored"])
     }
 
     private func append(_ id: String, _ body: [String: Any]) throws -> Data {
@@ -203,20 +199,21 @@ private final class Gate: Sendable {
     let store: RecordingDayStore
     var features: Set<String> = [RecordingDayContract.feature]
     var removed: [UUID] = []
+    var deletedEverywhere: [UUID] = []
     var noted: [UUID: [UUID]] = [:]
     var finals = 0
+    private var events = 0
 
     init() {
         library = RecordingLibrary(root: root)
         let lib = library, clock = clock
-        store = RecordingDayStore(root: root, isDeleted: { lib.isDeletedSnapshot($0) }, zone: { TimeZone(identifier: "Asia/Shanghai")! },
-                                  now: { clock.now }, writeDelay: 3600)
+        store = RecordingDayStore(root: root, isDeleted: { lib.isDeletedSnapshot($0) }, now: { clock.now }, writeDelay: 3600)
         library.adoptDay(id: id, day: "2027-01-15", timeZone: "Asia/Shanghai", createdAt: anchor)
         library.change(id) { $0.locale = "en-US" }
     }
 
     func sync() -> RecordingDaySync {
-        let hub = hub, clock = clock, gate = gate
+        let hub = hub, gate = gate, clock = clock
         let api = APIClient(config: ServerConfig(url: URL(string: "https://hub.invalid")!, token: "t"), transport: { request in
             try await gate.pass()
             return try hub.answer(request)
@@ -225,32 +222,41 @@ private final class Gate: Sendable {
                                 now: { clock.now }, days: { 14 }, appState: app,
                                 noteParts: { [unowned self] day, ids in self.noted[day] = ids },
                                 removed: { [unowned self] in self.removed.append($0) },
+                                removeEverywhere: { [unowned self] id in
+                                    self.deletedEverywhere.append(id)
+                                    try? self.library.remove(id)
+                                },
                                 recapFinal: { [unowned self] in self.finals += 1 }, debounce: .zero)
     }
 
-    /// Chunk `seq`, `offset` seconds after `anchor`, stored as the watch sent it and transcribed: `texts` are its sentences,
-    /// the first starting 1 s in, a second apart.
-    func chunk(_ seq: Int, at offset: Double, texts: [String], marks: [RecordingDayHeader.Mark]? = nil) async throws {
-        let header = RecordingDayHeader(recording: id, day: "2027-01-15", seq: seq, startedAt: anchor.addingTimeInterval(offset),
-                                        duration: 10, level: -30, marks: marks, recordingStartedAt: anchor)
+    func at(_ offset: Double) -> Date { anchor.addingTimeInterval(offset) }
+
+    /// Chunk `seq`, `offset` seconds after `anchor`, stored as the watch sent it and transcribed as the transcriber saves
+    /// a run: `texts` are its sentences, the first starting 1 s in, a second apart, placed in the same change.
+    func chunk(_ seq: Int, at offset: Double, texts: [String]) async throws {
+        let header = RecordingDayHeader(recording: id, recordingStartedAt: anchor, tz: "Asia/Shanghai", day: "2027-01-15", seq: seq,
+                                        startedAt: at(offset), duration: 10, level: -30)
         _ = try store.store(header: header, audio: Data([1, 2, 3]))
         let sentences = texts.enumerated().map { RecordingSentence(start: Double($0.offset) + 1, end: Double($0.offset) + 1.5, text: $0.element) }
         await store.update(id) { record in
             record.chunks[seq]?.state = .transcribed
             record.chunks[seq]?.sentences = sentences
+            RecordingDayUpload.place(&record)
         }
     }
 
-    func erase(_ seq: Int, at offset: Double) throws {
-        let header = RecordingDayHeader(recording: id, day: "2027-01-15", seq: seq, startedAt: anchor.addingTimeInterval(offset),
-                                        duration: 10, erased: true, recordingStartedAt: anchor)
-        #expect(try store.store(header: header, audio: nil) == .updated)
+    /// The watch's next control event (numbered in the order the test sends them).
+    func event(_ make: (Int) -> RecordingDayEvent) throws {
+        let envelope = RecordingDayEventEnvelope(recording: id, recordingStartedAt: anchor, tz: "Asia/Shanghai", day: "2027-01-15",
+                                                 event: make(events))
+        events += 1
+        #expect(try store.store(event: envelope) == .applied)
     }
 
-    func end(_ seq: Int, at offset: Double) throws {
-        let header = RecordingDayHeader(recording: id, day: "2027-01-15", seq: seq, startedAt: anchor.addingTimeInterval(offset),
-                                        duration: 0, end: true, after: RecordingDayContract.Reason.stopped, recordingStartedAt: anchor)
-        _ = try store.store(header: header, audio: nil)
+    /// The microphone closed at `offset` by itself, and the day closed at `closed` with `seqCount` chunks.
+    func end(at offset: Double, closed: Double, seqCount: Int) throws {
+        try event { .paused($0, at: at(offset), reason: RecordingDayContract.Reason.stopped) }
+        try event { .closed($0, at: at(closed), seqCount: seqCount) }
     }
 
     func record() async throws -> RecordingDayRecord { try #require(await store.record(id)) }
@@ -268,11 +274,13 @@ private extension DayHub.Request {
     var segments: [[String: Any]] { body["segments"] as? [[String: Any]] ?? [] }
     var texts: [String] { segments.map { $0["text"] as? String ?? "" } }
     var coverage: [String: Any] { body["coverage"] as? [String: Any] ?? [:] }
+    var gaps: [[String: Any]] { coverage["gaps"] as? [[String: Any]] ?? [] }
+    func time(_ key: String) -> Date? { (body[key] as? String).flatMap { RecordingDayWire.date($0) } }
 }
 
-/// All-day recording's upload (docs/assistant/day-recap.md "Phone to hub"): only behind the flag, created with a `PUT`,
-/// grown by appends on wall-clock offsets, every contract error handled by its code (C22), parts on `day_full` (C18),
-/// repairs crash-safe and revisions only going up (C17).
+/// All-day recording's upload (docs/assistant/day-recap.md「Phone to hub」): only behind the flag, created with a `PUT`,
+/// grown by appends on the day's wall clock, every contract error handled by its code, parts on `day_full`, repairs
+/// that keep every other position, crash-safe, and revisions only going up.
 @MainActor struct RecordingDaySyncTests {
     @Test func nothingGoesWithoutTheHubFlag() async throws {
         let f = Fixture()
@@ -282,7 +290,7 @@ private extension DayHub.Request {
         let sync = f.sync()
         #expect(await sync.syncNow(f.id) == .blocked)
         #expect(f.hub.requests.isEmpty)
-        #expect(try await f.record().parts.isEmpty, "not even a part is made for a hub that doesn't take days")
+        #expect(try await f.part().created == false, "the positions are the phone's; nothing went")
 
         f.features = [RecordingDayContract.feature]
         #expect(await sync.syncNow(f.id) == .done)
@@ -292,7 +300,8 @@ private extension DayHub.Request {
     @Test func theCreatePutCarriesTheDayAndAppendsGoOnTheWallClock() async throws {
         let f = Fixture()
         defer { f.cleanUp() }
-        try await f.chunk(0, at: 0, texts: ["Morning."], marks: [RecordingDayHeader.Mark(at: 4, label: RecordingDayMark.meeting)])
+        try await f.chunk(0, at: 0, texts: ["Morning."])
+        try f.event { .mark($0, at: f.at(4), label: RecordingDayEvent.Label.meeting) }
         try await f.chunk(1, at: 10, texts: ["Second.", "Third."])
         let sync = f.sync()
         #expect(await sync.syncNow(f.id) == .done)
@@ -301,9 +310,10 @@ private extension DayHub.Request {
         #expect(put.path == "/api/v1/recordings/\(f.id.uuidString.lowercased())")
         #expect(put.body["kind"] as? String == "day")
         #expect(put.body["day"] as? String == "2027-01-15")
+        #expect(put.body["tz"] as? String == "Asia/Shanghai")
         #expect(put.body["part"] as? Int == 1)
         let started = try #require(put.body["started_at"] as? String)
-        #expect(try Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(started) == anchor)
+        #expect(started == "2027-01-15T16:00:00.000+08:00", "recording_started_at, in the recording's own offset")
         #expect(put.body["ended_at"] == nil, "still recording")
         #expect(put.body["duration"] as? Double == 20)
         #expect(put.body["language"] as? String == "en-US")
@@ -312,7 +322,8 @@ private extension DayHub.Request {
         #expect(put.texts.isEmpty)
         #expect(put.body["complete"] as? Bool == false)
         let bookmarks = put.body["bookmarks"] as? [[String: Any]] ?? []
-        #expect(bookmarks.count == 1 && bookmarks[0]["at"] as? Double == 4 && bookmarks[0]["label"] as? String == "meeting")
+        #expect(bookmarks.count == 1 && bookmarks[0]["at"] as? Double == 4 && bookmarks[0]["label"] as? String == "meeting",
+                "a mark event, on the day's clock")
         #expect(put.coverage["to"] as? Double == 0, "nothing transcribed is on the hub yet")
         #expect(put.revision > 0)
 
@@ -325,6 +336,7 @@ private extension DayHub.Request {
         // Seconds since started_at, pauses included: the chunk's start plus the sentence's offset in it.
         #expect(append.segments.map { $0["start"] as? Double } == [1, 11, 12])
         #expect(append.coverage["to"] as? Double == 20)
+        #expect(append.body["title"] == nil, "absent: unchanged, the hub names the day")
 
         var part = try await f.part()
         #expect(part.created && part.base == put.revision && part.next == 3 && part.count == 3)
@@ -344,24 +356,56 @@ private extension DayHub.Request {
         #expect(part.next == 4 && part.count == 4)
     }
 
-    @Test func theEndGoesAtOnceWithCompleteAndEndedAt() async throws {
+    @Test func theCloseGoesAtOnceWithCompleteAndEndedAt() async throws {
         let f = Fixture()
         defer { f.cleanUp() }
         try await f.chunk(0, at: 0, texts: ["Morning."])
         let sync = f.sync()
         await sync.syncNow(f.id)
         try await f.chunk(1, at: 10, texts: ["Evening."])
-        try f.end(2, at: 3600)
-        #expect(await sync.syncNow(f.id) == .done, "the day ended: no throttle")
+        try f.end(at: 20, closed: 3600, seqCount: 2)
+        #expect(await sync.syncNow(f.id) == .done, "the day closed: no throttle")
         let last = try #require(f.hub.calls("POST").last)
         #expect(last.texts == ["Evening."])
         #expect(last.body["complete"] as? Bool == true)
-        let ended = try #require(last.body["ended_at"] as? String)
-        #expect(try Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(ended) == anchor.addingTimeInterval(3600))
+        #expect(last.time("ended_at") == f.at(3600))
+        #expect((last.body["ended_at"] as? String)?.hasSuffix("+08:00") == true)
         #expect(last.coverage["to"] as? Double == 3600)
-        let gaps = last.coverage["gaps"] as? [[String: Any]] ?? []
-        #expect(gaps.map { $0["reason"] as? String } == ["stopped"])
+        #expect(last.gaps.map { $0["reason"] as? String } == ["stopped"])
+        #expect(last.gaps.first?["from"] as? Double == 20 && last.gaps.first?["to"] as? Double == 3600)
         #expect(try await f.part().complete)
+        // Complete: nothing more goes, whatever comes.
+        let sent = f.hub.requests.count
+        f.clock.advance(60)
+        #expect(await sync.syncNow(f.id) == .done)
+        #expect(f.hub.requests.count == sent)
+    }
+
+    @Test func anOpenPauseSendsItsGapAtMostEveryFewMinutes() async throws {
+        let f = Fixture()
+        defer { f.cleanUp() }
+        try await f.chunk(0, at: 0, texts: ["Morning."])
+        let sync = f.sync()
+        await sync.syncNow(f.id)
+        // A call took the microphone 10 s in, and the user hasn't continued yet.
+        try f.event { .paused($0, at: f.at(10), reason: RecordingDayContract.Reason.interrupted) }
+        f.clock.advance(30)
+        #expect(await sync.syncNow(f.id) == .done)
+        #expect(f.hub.requests.count == 2, "nothing new to say yet")
+        f.clock.advance(RecordingDayCoverage.openGapStep)
+        #expect(await sync.syncNow(f.id) == .done)
+        let first = try #require(f.hub.calls("POST").last)
+        #expect(first.texts.isEmpty && first.gaps.map { $0["reason"] as? String } == ["interrupted"])
+        #expect(first.coverage["to"] as? Double == 10, "the text ends where the microphone closed")
+        // Within the same step the coverage says the same: no request for it.
+        f.clock.advance(60)
+        #expect(await sync.syncNow(f.id) == .done)
+        #expect(f.hub.requests.count == 3)
+        f.clock.advance(RecordingDayCoverage.openGapStep)
+        #expect(await sync.syncNow(f.id) == .done)
+        #expect(f.hub.requests.count == 4)
+        let later = try #require(f.hub.calls("POST").last?.gaps.first?["to"] as? Double)
+        #expect(later > (first.gaps.first?["to"] as? Double ?? 0))
     }
 
     @Test func baseChangedOnABaseThePhoneDidNotPutRepairs() async throws {
@@ -380,7 +424,7 @@ private extension DayHub.Request {
         #expect(repair.texts == ["One.", "Two.", "Three."], "every positioned sentence")
         #expect(repair.revision > first.maxSentRevision)
         let part = try await f.part()
-        #expect(part.base == repair.revision && part.next == 3 && part.count == 3 && part.pendingPut == nil)
+        #expect(part.base == repair.revision && part.next == 3 && part.count == 3 && part.pendingPut == nil && !part.needsRepair)
         #expect(f.hub.texts(f.id) == ["One.", "Two.", "Three."])
     }
 
@@ -400,6 +444,23 @@ private extension DayHub.Request {
         #expect(f.hub.calls("PUT").count == 1, "no repair needed")
     }
 
+    @Test func aCountTheHubHoldsThatThePhoneNeverSentRepairs() async throws {
+        let f = Fixture()
+        defer { f.cleanUp() }
+        try await f.chunk(0, at: 0, texts: ["One."])
+        let sync = f.sync()
+        await sync.syncNow(f.id)
+        f.hub.inject(f.id, ["Not mine.", "Nor this."])
+        try await f.chunk(1, at: 10, texts: ["Two."])
+        f.clock.advance(60)
+        #expect(await sync.syncNow(f.id) == .done)
+        // The append's 200 says next 3, not from + 1 = 2: the logs disagree, and only a replacement mends that.
+        #expect(f.hub.requests.map(\.method) == ["PUT", "POST", "POST", "PUT"])
+        #expect(f.hub.texts(f.id) == ["One.", "Two."])
+        let part = try await f.part()
+        #expect(part.next == 2 && part.count == 2 && !part.needsRepair)
+    }
+
     @Test func recordingNotFoundCreatesItAgainWithItsText() async throws {
         let f = Fixture()
         defer { f.cleanUp() }
@@ -417,24 +478,52 @@ private extension DayHub.Request {
     }
 
     @Test func anOlderManagerIsLeftAloneUntilItsNextHello() async throws {
-        for error in [refusal(404), refusal(400)] {
-            let f = Fixture()
-            defer { f.cleanUp() }
-            try await f.chunk(0, at: 0, texts: ["One."])
-            let sync = f.sync()
-            f.hub.fail("PUT", error)
-            #expect(await sync.syncNow(f.id) == .blocked)
-            #expect(try await f.record().unsupportedUntilHello)
-            // New chunks don't bring a storm of refused requests (C22).
-            try await f.chunk(1, at: 10, texts: ["Two."])
-            f.clock.advance(60)
-            #expect(await sync.syncNow(f.id) == .blocked)
-            #expect(f.hub.requests.count == 1)
-            sync.helloReceived(offered: true)
-            #expect(await sync.syncNow(f.id) == .done)
-            #expect(f.hub.texts(f.id) == ["One.", "Two."])
-            #expect(try await f.record().unsupportedUntilHello == false)
-        }
+        let f = Fixture()
+        defer { f.cleanUp() }
+        try await f.chunk(0, at: 0, texts: ["One."])
+        let sync = f.sync()
+        await sync.syncNow(f.id)
+        // The append route is missing: a 404 without the contract's code.
+        f.hub.fail("POST", refusal(404))
+        try await f.chunk(1, at: 10, texts: ["Two."])
+        f.clock.advance(60)
+        #expect(await sync.syncNow(f.id) == .blocked)
+        #expect(try await f.record().unsupportedUntilHello)
+        // New chunks don't bring a storm of refused requests.
+        try await f.chunk(2, at: 20, texts: ["Three."])
+        f.clock.advance(60)
+        #expect(await sync.syncNow(f.id) == .blocked)
+        #expect(f.hub.requests.count == 3)
+        sync.helloReceived(offered: true)
+        #expect(await sync.syncNow(f.id) == .done)
+        #expect(f.hub.texts(f.id) == ["One.", "Two.", "Three."])
+        #expect(try await f.record().unsupportedUntilHello == false)
+    }
+
+    @Test func aRefusedPartStopsUntilAHelloThenGoesAsAReplacement() async throws {
+        let f = Fixture()
+        defer { f.cleanUp() }
+        try await f.chunk(0, at: 0, texts: ["One."])
+        let sync = f.sync()
+        await sync.syncNow(f.id)
+        f.hub.fail("POST", refusal(400, "bad_from"))
+        try await f.chunk(1, at: 10, texts: ["Two."])
+        f.clock.advance(60)
+        #expect(await sync.syncNow(f.id) == .done)
+        let part = try await f.part()
+        #expect(part.problem == "bad_from")
+        #expect(RecordingDaySyncState(try await f.record(), hubOffered: true) == .problem, "shown on the day's page")
+        // Never sent again unchanged: neither by new text nor by the next visit.
+        try await f.chunk(2, at: 20, texts: ["Three."])
+        f.clock.advance(60)
+        #expect(await sync.syncNow(f.id) == .done)
+        #expect(f.hub.requests.count == 3)
+        // A hello lets it try once more, as a full replacement.
+        sync.helloReceived(offered: true)
+        #expect(await sync.syncNow(f.id) == .done)
+        #expect(f.hub.requests.map(\.method) == ["PUT", "POST", "POST", "PUT"])
+        #expect(f.hub.texts(f.id) == ["One.", "Two.", "Three."])
+        #expect(try await f.part().problem == nil)
     }
 
     @Test func tooLargeHalvesTheBatchAndADaySizedSentenceStops() async throws {
@@ -447,7 +536,7 @@ private extension DayHub.Request {
         let sizes = f.hub.calls("POST").map(\.segments.count)
         #expect(sizes.prefix(7) == [10, 10, 10, 10, 10, 10, 7], "halved from 500 until a batch fits")
         #expect(sizes.dropFirst(7).allSatisfy { $0 <= 4 })
-        #expect(f.hub.texts(f.id) == (1...10).map { "S\($0)." }, "in order, none twice")
+        #expect(f.hub.texts(f.id) == (1...10).map { "S\($0)." }, "in order, none twice, the smaller batches without waiting")
         #expect(try await f.record().parts.count == 1, "too_large never starts a part")
 
         let g = Fixture()
@@ -458,7 +547,7 @@ private extension DayHub.Request {
         #expect(try await g.record().problem == "too_large")
     }
 
-    @Test func dayFullContinuesInTheNextPart() async throws {
+    @Test func dayFullOnAnAppendContinuesInTheNextPartOnTheSameClock() async throws {
         let f = Fixture()
         defer { f.cleanUp() }
         try await f.chunk(0, at: 0, texts: ["One.", "Two."])
@@ -467,31 +556,65 @@ private extension DayHub.Request {
         await sync.syncNow(f.id)
         try await f.chunk(1, at: 10, texts: ["Three."])
         f.clock.advance(60)
+        let closedAt = f.clock.now
         #expect(await sync.syncNow(f.id) == .done)
 
         let record = try await f.record()
         #expect(record.parts.count == 2)
         let first = try #require(record.parts.first { $0.part == 1 })
         let second = try #require(record.parts.first { $0.part == 2 })
-        // Part 2 starts at the first sentence that didn't fit: chunk 1 (10 s in) plus its 1 s.
-        let boundary = anchor.addingTimeInterval(11)
-        #expect(second.hubID != f.id && second.startedAt == boundary && second.created && second.next == 1)
-        #expect(first.endedAt == boundary && first.count == 2 && first.complete)
+        #expect(second.hubID != f.id && second.startedAt == anchor && second.created && second.next == 1 && second.count == 1)
+        #expect(first.endedAt == closedAt && first.count == 2 && first.next == 2 && !first.complete, "complete with the day")
+        #expect(record.chunks[1]?.positions == [RecordingDayPosition(part: 2, pos: 0)], "the sentence the hub didn't store moved")
         #expect(f.noted[f.id] == [second.hubID], "kept for deleting every part")
         // The new part was on disk before its PUT, so a crash can't make a second one.
-        let disk = try JSONDecoder().decode(RecordingDayRecord.self,
-                                            from: Data(contentsOf: f.root.appendingPathComponent(f.id.uuidString).appendingPathComponent("day.json")))
-        #expect(disk.parts.map(\.hubID) == record.parts.map(\.hubID))
+        #expect(Fixture.onDisk(f.root, f.id)?.parts.map(\.hubID) == record.parts.map(\.hubID))
 
         let calls = f.hub.requests.map { "\($0.method) \($0.path.contains(second.hubID.uuidString.lowercased()) ? 2 : 1)" }
         #expect(calls == ["PUT 1", "POST 1", "POST 1", "POST 1", "PUT 2", "POST 2"])
         let close = f.hub.calls("POST")[2]
-        #expect(close.texts.isEmpty && close.body["complete"] as? Bool == true && close.body["ended_at"] != nil,
-                "part 1 is told it ended, and complete")
+        #expect(close.texts.isEmpty && close.time("ended_at") == closedAt && close.body["complete"] as? Bool == false,
+                "part 1 is told it ended; it is complete only with the day")
         let create = try #require(f.hub.calls("PUT").last)
-        #expect(create.body["part"] as? Int == 2 && create.body["day"] as? String == "2027-01-15")
+        #expect(create.body["part"] as? Int == 2 && create.body["day"] as? String == "2027-01-15"
+                && create.body["tz"] as? String == "Asia/Shanghai")
+        #expect(create.time("started_at") == anchor, "part 1's started_at")
         #expect(f.hub.texts(second.hubID) == ["Three."])
-        #expect(f.hub.calls("POST").last?.segments.first?["start"] as? Double == 0, "on part 2's own clock")
+        #expect(f.hub.calls("POST").last?.segments.first?["start"] as? Double == 11, "the day's clock: never negative")
+
+        // The day closes: both parts are told they are complete.
+        try f.end(at: 20, closed: 3600, seqCount: 2)
+        #expect(await sync.syncNow(f.id) == .done)
+        let finals = f.hub.calls("POST").suffix(2)
+        #expect(finals.allSatisfy { $0.body["complete"] as? Bool == true && $0.texts.isEmpty })
+        #expect(Set(finals.map(\.path)) == Set([f.id, second.hubID].map { "/api/v1/recordings/\($0.uuidString.lowercased())/segments" }))
+        #expect(try await f.part(1).complete)
+        #expect(try await f.part(2).complete)
+    }
+
+    @Test func dayFullOnARepairPutRepartitionsThePartsAfterIt() async throws {
+        let f = Fixture()
+        defer { f.cleanUp() }
+        try await f.chunk(0, at: 0, texts: ["One.", "Two."])
+        try await f.chunk(1, at: 10, texts: ["Three.", "Four."])
+        let sync = f.sync()
+        await sync.syncNow(f.id)
+        // The hub now counts the day as fuller than the phone does; an erase on the phone asks for a repair.
+        f.hub.set(capacity: 3)
+        #expect(await f.store.requestErase(f.id, from: f.at(1), to: f.at(1.5)))
+        f.clock.advance(60)
+        #expect(await sync.syncNow(f.id) == .done)
+        let record = try await f.record()
+        #expect(record.parts.map(\.part) == [1, 2])
+        let second = try #require(record.parts.first { $0.part == 2 })
+        // In position order: part 1 keeps three (the erased one empty in its place), the fourth goes to part 2.
+        #expect(f.hub.texts(f.id) == ["", "Two.", "Three."])
+        #expect(f.hub.texts(second.hubID) == ["Four."])
+        #expect(record.chunks[1]?.positions == [RecordingDayPosition(part: 1, pos: 2), RecordingDayPosition(part: 2, pos: 0)])
+        let first = try await f.part(1)
+        #expect(first.count == 3 && first.next == 3 && first.endedAt != nil && !first.needsRepair)
+        #expect(second.count == 1 && second.next == 1 && second.endedAt == nil && second.created)
+        #expect(f.noted[f.id] == [second.hubID])
     }
 
     @Test func notDayIsAProblemAndNothingIsWrittenOverIt() async throws {
@@ -524,7 +647,7 @@ private extension DayHub.Request {
         #expect(f.hub.texts(f.id) == ["One."])
     }
 
-    @Test func deletedOnTheHubGoesHereToo() async throws {
+    @Test func aPartDeletedOnTheHubDeletesTheWholeDay() async throws {
         let f = Fixture()
         defer { f.cleanUp() }
         try await f.chunk(0, at: 0, texts: ["One."])
@@ -534,9 +657,25 @@ private extension DayHub.Request {
         f.clock.advance(60)
         f.hub.fail("POST", refusal(410, "recording_deleted"))
         #expect(await sync.syncNow(f.id) == .done)
+        #expect(f.deletedEverywhere == [f.id], "every part on the hub, the day here and on the watch")
         #expect(f.library.entry(f.id) == nil && f.library.isDeleted(f.id))
-        #expect(f.removed == [f.id])
         #expect(await f.store.record(f.id) == nil)
+    }
+
+    @Test func removingADayHereAsksTheWatchToDeleteItsCopy() async throws {
+        let f = Fixture()
+        defer { f.cleanUp() }
+        try await f.chunk(0, at: 0, texts: ["One."])
+        let sync = f.sync()
+        try f.library.remove(f.id)
+        sync.removedHere(f.id)
+        #expect(f.removed == [f.id], "its transcription stops")
+        var pending = await f.store.watchRequests()
+        for _ in 0..<200 where pending.deletes.isEmpty {
+            try? await Task.sleep(for: .milliseconds(2))
+            pending = await f.store.watchRequests()
+        }
+        #expect(pending.deletes == [RecordingDayDelete(recording: f.id)])
     }
 
     @Test func expiredStopsTheDayForGood() async throws {
@@ -569,7 +708,7 @@ private extension DayHub.Request {
         #expect(f.hub.texts(f.id) == ["One.", "Two."])
     }
 
-    @Test func anEraseRepairsTheHubWithAPut() async throws {
+    @Test func anEraseRepairsTheHubWithAPutThatKeepsEveryOtherPosition() async throws {
         let f = Fixture()
         defer { f.cleanUp() }
         try await f.chunk(0, at: 0, texts: ["Keep one."])
@@ -578,17 +717,25 @@ private extension DayHub.Request {
         let sync = f.sync()
         await sync.syncNow(f.id)
         let before = try await f.part()
-        try f.erase(1, at: 10)
+        // The watch erased 10–20 s after the phone had the chunk.
+        try f.event { .erase($0, id: UUID(), from: f.at(10), to: f.at(20), seqs: []) }
+        #expect(try await f.part().needsRepair)
         #expect(await sync.syncNow(f.id) == .done)
         let repair = try #require(f.hub.calls("PUT").last)
         #expect(f.hub.calls("PUT").count == 2)
         #expect(repair.revision > before.maxSentRevision)
-        #expect(repair.texts == ["Keep one.", "Keep two."])
-        let gaps = repair.coverage["gaps"] as? [[String: Any]] ?? []
-        #expect(gaps.contains { $0["reason"] as? String == "erased" && $0["from"] as? Double == 10 && $0["to"] as? Double == 20 })
+        #expect(repair.texts == ["Keep one.", "", "Keep two."], "an empty segment in place of the erased one")
+        #expect(repair.gaps.contains { $0["reason"] as? String == "erased" && $0["from"] as? Double == 10 && $0["to"] as? Double == 20 })
         let after = try await f.part()
-        #expect(after.base == repair.revision && after.next == 2 && after.count == 2 && after.pendingPut == nil)
-        #expect(f.hub.texts(f.id) == ["Keep one.", "Keep two."])
+        #expect(after.base == repair.revision && after.next == 3 && after.count == 3 && after.pendingPut == nil && !after.needsRepair)
+        #expect(f.hub.texts(f.id) == ["Keep one.", "", "Keep two."])
+
+        // The same on the phone: its own erase, then the next text appended after the kept positions.
+        #expect(await f.store.requestErase(f.id, from: f.at(20), to: f.at(30)))
+        try await f.chunk(3, at: 30, texts: ["After."])
+        f.clock.advance(60)
+        #expect(await sync.syncNow(f.id) == .done)
+        #expect(f.hub.texts(f.id) == ["Keep one.", "", "", "After."])
     }
 
     @Test func aRepairDecidedBeforeACrashGoesAgainWithItsRevision() async throws {
@@ -611,6 +758,25 @@ private extension DayHub.Request {
         #expect(part.pendingPut == nil && part.base == decided)
     }
 
+    @Test func aStalePutGoesAgainAboveTheHubsRevision() async throws {
+        let f = Fixture()
+        defer { f.cleanUp() }
+        try await f.chunk(0, at: 0, texts: ["One."])
+        let sync = f.sync()
+        await sync.syncNow(f.id)
+        // Another device (or a clock far ahead) left the hub at a revision above anything this phone sent.
+        let far: Int64 = 9_000_000_000_000
+        f.hub.raise(f.id, revision: far)
+        try f.event { .erase($0, id: UUID(), from: f.at(1), to: f.at(1.5), seqs: []) }
+        f.clock.advance(60)
+        #expect(await sync.syncNow(f.id) == .done)
+        let puts = f.hub.calls("PUT")
+        #expect(puts.count == 3, "the create, the stale repair, and the same repair above the hub's revision")
+        #expect(puts[1].revision < far && puts[2].revision == far + 1)
+        #expect(try await f.part().base == far + 1)
+        #expect(f.hub.texts(f.id) == [""])
+    }
+
     @Test func revisionsOnlyGoUpEvenWhenTheClockGoesBack() async throws {
         let f = Fixture()
         defer { f.cleanUp() }
@@ -619,7 +785,7 @@ private extension DayHub.Request {
         await sync.syncNow(f.id)
         f.clock.advance(-3600)
         try await f.chunk(1, at: 10, texts: ["Two."])
-        try f.end(2, at: 20)
+        try f.end(at: 20, closed: 20, seqCount: 2)
         await sync.syncNow(f.id)
         let revisions = f.hub.requests.map(\.revision)
         #expect(revisions.count >= 3)
@@ -674,26 +840,49 @@ private extension DayHub.Request {
         #expect(part.base == decided && part.pendingPut == nil && part.next == 1)
     }
 
-    @Test func aReadyRecapOnACompleteDayIsReadForItsFinalTime() async throws {
+    @Test func reconciliationBringsTheRecapsFinalTimeWithoutReadingTheDetail() async throws {
         let f = Fixture()
         defer { f.cleanUp() }
         try await f.chunk(0, at: 0, texts: ["One."])
-        try f.end(1, at: 10)
+        try f.end(at: 10, closed: 10, seqCount: 1)
         let sync = f.sync()
         await sync.syncNow(f.id)
         #expect(try await f.part().complete)
-        f.hub.setRecap(final: true, generatedAt: "2027-01-15T13:00:41Z")
-        f.clock.advance(120)
         let base = try await f.part().base
-        sync.reconciled([f.id: [RecordingDayHubRow(id: f.id, part: 1, next: 1, base: base, recapState: "ready")]])
+        let finalAt = try #require(RecordingDayWire.date("2027-01-15T13:00:41Z"))
+        f.clock.advance(120)
+        let row = RecordingDayHubRow(id: f.id, part: 1, next: 1, base: base, recapState: "ready", recapFinal: true, recapFinalAt: finalAt)
+        sync.reconciled([f.id: [row]])
         await sync.syncNow(f.id)
         let part = try await f.part()
-        #expect(part.recapState == "ready")
-        #expect(part.recapFinalAt == JSON.parseDate("2027-01-15T13:00:41Z"))
+        #expect(part.recapState == "ready" && part.recapFinal && part.recapFinalAt == finalAt)
         #expect(f.finals == 1, "the keeper's 3-day clock starts")
-        #expect(f.hub.calls("GET").count == 1)
+        #expect(f.hub.calls("GET").isEmpty, "the list says it all")
+        // The same rows again change nothing; a row from the day's page without those fields doesn't forget them.
+        sync.reconciled([f.id: [row]])
+        await sync.whenIdle()
+        sync.reconciled([f.id: [RecordingDayHubRow(id: f.id, part: 1, next: 1, base: base, recapState: "ready")]])
+        await sync.whenIdle()
+        #expect(try await f.part().recapFinalAt == finalAt)
+        #expect(f.finals == 1)
+    }
+
+    @Test func aRowWithoutABaseIsAnOlderManagersAndGetsNothing() async throws {
+        let f = Fixture()
+        defer { f.cleanUp() }
+        try await f.chunk(0, at: 0, texts: ["One."])
+        let sync = f.sync()
         await sync.syncNow(f.id)
-        #expect(f.hub.calls("GET").count == 1, "read once")
+        let sent = f.hub.requests.count
+        sync.reconciled([f.id: [RecordingDayHubRow(id: f.id, part: 1, next: 1)]])
+        try await f.chunk(1, at: 10, texts: ["Two."])
+        f.clock.advance(60)
+        #expect(await sync.syncNow(f.id) == .blocked)
+        #expect(f.hub.requests.count == sent)
+        #expect(try await f.record().unsupportedUntilHello)
+        sync.helloReceived(offered: true)
+        #expect(await sync.syncNow(f.id) == .done)
+        #expect(f.hub.texts(f.id) == ["One.", "Two."])
     }
 
     @Test func aDayPastTheHubsWindowIsNotUploaded() async throws {
@@ -712,7 +901,7 @@ private extension DayHub.Request {
         let sync = f.sync()
         await sync.syncNow(f.id)
         // The hub fails the next two appends. The upload follows the store's changes as in the app, the ones its own
-        // bookkeeping makes with every request among them (C22).
+        // bookkeeping makes with every request among them.
         f.hub.fail("POST", refusal(503, "kb_unavailable"))
         f.hub.fail("POST", refusal(503, "kb_unavailable"))
         sync.start()
@@ -743,7 +932,7 @@ private extension DayHub.Request {
     @Test func everyRequestsRevisionIsOnDiskBeforeItGoes() async throws {
         let f = Fixture()
         defer { f.cleanUp() }
-        // What a crash at the moment each request reaches the hub would leave: a revision at least as high (C17).
+        // What a crash at the moment each request reaches the hub would leave: a revision at least as high.
         let seen = OSAllocatedUnfairLock(initialState: [(sent: Int64, onDisk: Int64)]())
         let root = f.root, id = f.id
         f.hub.watch { request in
@@ -759,7 +948,7 @@ private extension DayHub.Request {
         f.hub.fail("POST", refusal(503, "kb_unavailable"))
         #expect(await sync.syncNow(f.id) == .failed)
         #expect(await sync.syncNow(f.id) == .done, "the retry")
-        try f.end(2, at: 20)
+        try f.end(at: 20, closed: 20, seqCount: 2)
         #expect(await sync.syncNow(f.id) == .done, "an append with no segments: the end")
         let requests = seen.withLock { $0 }
         #expect(f.hub.requests.map(\.method) == ["PUT", "POST", "POST", "POST", "POST"])
@@ -772,7 +961,7 @@ private extension DayHub.Request {
             let f = Fixture()
             defer { f.cleanUp() }
             try await f.chunk(0, at: 0, texts: silent ? [] : ["Un."])
-            try f.end(1, at: 10)
+            try f.end(at: 10, closed: 10, seqCount: 1)
             let sync = f.sync()
             await sync.syncNow(f.id)
             let before = try await f.part()
@@ -792,39 +981,6 @@ private extension DayHub.Request {
             let after = try await f.part()
             #expect(after.pendingPut == nil && after.base == decided && after.complete)
         }
-    }
-
-    @Test func aRecapThatIsNotFinalYetIsReadAgainLater() async throws {
-        let f = Fixture()
-        defer { f.cleanUp() }
-        try await f.chunk(0, at: 0, texts: ["One."])
-        try f.end(1, at: 10)
-        let sync = f.sync()
-        await sync.syncNow(f.id)
-        let base = try await f.part().base
-        let rows = [f.id: [RecordingDayHubRow(id: f.id, part: 1, next: 1, base: base, recapState: "ready")]]
-        f.hub.setRecap(final: false, generatedAt: "2027-01-15T09:00:00Z")
-        f.clock.advance(120)
-        sync.reconciled(rows)
-        await sync.whenIdle()
-        #expect(f.hub.calls("GET").count == 1)
-        #expect(try await f.part().recapFinalAt == nil)
-        // The final recap is written between two lists that both say `ready` (C21).
-        f.hub.setRecap(final: true, generatedAt: "2027-01-15T22:00:00Z")
-        f.clock.advance(600)
-        sync.reconciled(rows)
-        await sync.whenIdle()
-        #expect(f.hub.calls("GET").count == 1, "not read again before the interval")
-        f.clock.advance(RecordingDaySync.recapProbeInterval)
-        sync.reconciled(rows)
-        await sync.whenIdle()
-        #expect(f.hub.calls("GET").count == 2)
-        #expect(try await f.part().recapFinalAt == JSON.parseDate("2027-01-15T22:00:00Z"))
-        #expect(f.finals == 1, "the keeper's 3-day clock starts")
-        f.clock.advance(RecordingDaySync.recapProbeInterval)
-        sync.reconciled(rows)
-        await sync.whenIdle()
-        #expect(f.hub.calls("GET").count == 2, "final: not read again")
     }
 
     @Test func theCatchUpRunningOutLeavesNothingRunning() async throws {
@@ -876,5 +1032,89 @@ private extension DayHub.Request {
         await sync.whenIdle()
         #expect(f.hub.texts(f.id) == ["One."])
         #expect(f.app.grants.count == 1 && f.app.grants[0].ended)
+    }
+}
+
+/// The upload's pure decisions: positions given once (long sentences split first), the throttle, the clock.
+struct RecordingDayUploadTests {
+    private func record(_ sentences: [[RecordingSentence]]) -> RecordingDayRecord {
+        var record = RecordingDayRecord(id: UUID(), day: "2027-01-15", timeZone: "Asia/Shanghai", startedAt: anchor)
+        for (seq, list) in sentences.enumerated() {
+            record.chunks[seq] = RecordingDayChunk(seq: seq, startedAt: anchor.addingTimeInterval(Double(seq) * 10), duration: 10,
+                                                   receivedAt: anchor, state: .transcribed, sentences: list, hasAudio: true)
+        }
+        return record
+    }
+
+    @Test func placingGivesEachSentenceTheNextPositionOnceAndMakesPartOne() {
+        var day = record([[RecordingSentence(start: 1, end: 2, text: "a"), RecordingSentence(start: 3, end: 4, text: "b")],
+                          [RecordingSentence(start: 1, end: 2, text: "c")]])
+        RecordingDayUpload.place(&day)
+        #expect(day.parts.map(\.part) == [1] && day.parts[0].hubID == day.id && day.parts[0].count == 3 && !day.parts[0].created)
+        #expect(day.chunks[0]?.positions == [RecordingDayPosition(part: 1, pos: 0), RecordingDayPosition(part: 1, pos: 1)])
+        #expect(day.chunks[1]?.positions == [RecordingDayPosition(part: 1, pos: 2)])
+        let placed = day
+        RecordingDayUpload.place(&day)
+        #expect(day == placed, "a position is given once")
+        // New text goes to the part that takes it now: the highest the hub hasn't deleted.
+        day.parts.append(RecordingDayPart(hubID: UUID(), part: 2, startedAt: anchor))
+        day.chunks[2] = RecordingDayChunk(seq: 2, startedAt: anchor.addingTimeInterval(20), duration: 10, receivedAt: anchor,
+                                          state: .transcribed, sentences: [RecordingSentence(start: 1, end: 2, text: "d")], hasAudio: true)
+        RecordingDayUpload.place(&day)
+        #expect(day.chunks[2]?.positions == [RecordingDayPosition(part: 2, pos: 0)] && day.parts[1].count == 1)
+    }
+
+    @Test func aSentenceOver64KBIsSplitBeforeItGetsAPosition() throws {
+        let word = String(repeating: "x", count: 1000)
+        let long = Array(repeating: word, count: 100).joined(separator: " ")   // 100 099 bytes
+        var day = record([[RecordingSentence(start: 0, end: 10, text: long)]])
+        RecordingDayUpload.place(&day)
+        let sentences = try #require(day.chunks[0]?.sentences)
+        #expect(sentences.count == 2)
+        #expect(sentences.allSatisfy { $0.text.utf8.count <= RecordingDayUpload.maxSentenceBytes })
+        #expect(sentences.map(\.text).joined() == long, "nothing lost, cut at a space")
+        #expect(sentences[0].text.hasSuffix(" ") && sentences[0].start == 0 && sentences[1].end == 10)
+        #expect(sentences[0].end == sentences[1].start)
+        #expect(day.chunks[0]?.positions?.count == 2 && day.parts[0].count == 2)
+        // Without a space, at a character boundary: multi-byte characters stay whole.
+        let wide = String(repeating: "語", count: 30_000)   // 90 000 bytes
+        let pieces = RecordingDayUpload.split(RecordingSentence(start: 0, end: 1, text: wide))
+        #expect(pieces.count == 2 && pieces.map(\.text).joined() == wide)
+        #expect(pieces.allSatisfy { $0.text.utf8.count <= RecordingDayUpload.maxSentenceBytes })
+    }
+
+    @Test func newTextWaitsOutTheThrottleAndABacklogGoesOnAtOnce() {
+        var day = record([(0..<3).map { RecordingSentence(start: Double($0), end: Double($0) + 0.5, text: "s\($0)") }])
+        RecordingDayUpload.place(&day)
+        day.parts[0].created = true
+        day.parts[0].base = 1
+        let now = anchor.addingTimeInterval(100)
+        let recent = now.addingTimeInterval(-5)
+        func step(_ last: RecordingDayUpload.LastAppend?, force: Bool = false, limit: Int = 500) -> RecordingDayUpload.Step {
+            RecordingDayUpload.step(day, partIndex: 0, isLast: true, now: now, lastAppend: last, sentMeta: nil, force: force, limit: limit)
+        }
+        // All three were placed after an append 5 s ago: they wait for the interval.
+        #expect(step(.init(at: recent, count: 0)) == .wait(recent.addingTimeInterval(RecordingDayContract.appendInterval)))
+        #expect(step(.init(at: recent, count: 0), limit: 2) == .wait(recent.addingTimeInterval(RecordingDayContract.appendInterval)))
+        // They were waiting already at that append (it carried a smaller batch): on at once.
+        #expect(step(.init(at: recent, count: 3), limit: 2) == .append(from: 0, to: 2))
+        #expect(step(nil) == .append(from: 0, to: 3), "the first append after the create")
+        #expect(step(.init(at: recent, count: 0), force: true) == .append(from: 0, to: 3), "the day ended")
+        #expect(step(.init(at: now.addingTimeInterval(-RecordingDayContract.appendInterval), count: 0)) == .append(from: 0, to: 3))
+        // A hole or a position held twice: only a replacement mends it.
+        var holed = day
+        holed.chunks[0]?.positions?[1].pos = 5
+        #expect(RecordingDayUpload.step(holed, partIndex: 0, isLast: true, now: now, lastAppend: nil, sentMeta: nil, force: true) == .put)
+        var repair = day
+        repair.parts[0].needsRepair = true
+        #expect(RecordingDayUpload.step(repair, partIndex: 0, isLast: true, now: now, lastAppend: nil, sentMeta: nil, force: true) == .put)
+    }
+
+    @Test func aSentenceIsOnTheDaysWallClock() {
+        let chunk = RecordingDayChunk(seq: 4, startedAt: anchor.addingTimeInterval(3600.5), duration: 10, receivedAt: anchor)
+        #expect(RecordingDayUpload.segment(RecordingSentence(start: 1.25, end: 2, text: "x"), of: chunk, since: anchor)
+                == RecordingDaySegment(start: 3601.75, end: 3602.5, text: "x"))
+        #expect(RecordingDayUpload.segment(RecordingSentence(start: .nan, end: .infinity, text: "y"), of: chunk, since: anchor)
+                == RecordingDaySegment(start: 3600.5, end: 3600.5, text: "y"), "a time no JSON carries is the chunk's start")
     }
 }

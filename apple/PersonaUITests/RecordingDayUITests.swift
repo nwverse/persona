@@ -1,11 +1,11 @@
 import XCTest
 
-/// All-day recording on the phone (docs/assistant/day-recap.md, #4741) against a mock hub (PERSONA_MOCK_HUB, fresh per run,
-/// with its `recording_day` block). Made-up days stand in for the watch (`-showDaySample`: yesterday's, ended, and today's,
-/// which the watch records or waits on after a call); the phone uploads them as it would a real day, and the mock writes
-/// the recap it is told to (`POST /mock/day_recap`). PERSONA_SHOTS=<dir> saves the Today section, the recap ready, being
-/// written and failed, and both pages at the largest accessibility text size (PERSONA_SHOTS_APPEARANCE names the
-/// appearance).
+/// All-day recording on the phone (docs/assistant/day-recap.md, #4741) against a mock hub (PERSONA_MOCK_HUB, with its
+/// `recording_day` block: `POST /mock/recording_day {"on", "recap"}`). Made-up days stand in for the watch
+/// (`-showDaySample`: yesterday's, closed, and today's, which the watch records or waits on after a call; `consent`: a
+/// user who hasn't agreed to the consent sheet yet); the phone uploads them as it would a real day, and the mock writes
+/// the recap its mode says. PERSONA_SHOTS=<dir> saves the Today section, the consent sheet, the recap ready, being written
+/// and failed, and the pages at the largest accessibility text size (PERSONA_SHOTS_APPEARANCE names the appearance).
 final class RecordingDayUITests: XCTestCase {
     private let pastDay = "00000000-0000-0000-0000-0000000000da"
     private let todayDay = "00000000-0000-0000-0000-0000000000db"
@@ -16,12 +16,12 @@ final class RecordingDayUITests: XCTestCase {
     /// The Today section: the switch mirrors the watch (recording: on), today's row opens the day, yesterday is a row of
     /// Recent Recordings and today's is not listed twice; today's text reaches the hub as a day recording.
     @MainActor func testTodaySection() throws {
-        let hub = try mockHub()
-        try switchMock(hub, ["on": true, "mode": "pending", "seconds": 0])
+        let hub = try mockHub(recap: "pending")
         let app = launch(hub, sample: "today")
         let toggle = app.switches["allday-switch"].firstMatch
         XCTAssertTrue(toggle.waitForExistence(timeout: 20), app.debugDescription)
         XCTAssertTrue(wait(10) { "\(toggle.value ?? "")" == "1" }, "the switch doesn't show the watch recording: \(toggle.debugDescription)")
+        XCTAssertFalse(app.buttons["allday-consent"].exists, "the samples stand in for a user who agreed")
         let today = app.buttons["allday-today"].firstMatch
         XCTAssertTrue(today.exists, app.debugDescription)
         let past = app.buttons["recording-day-row"].firstMatch
@@ -32,12 +32,12 @@ final class RecordingDayUITests: XCTestCase {
         today.tap()
         XCTAssertTrue(app.descendants(matching: .any)["day-title"].firstMatch.waitForExistence(timeout: 10), app.debugDescription)
         XCTAssertTrue(app.descendants(matching: .any)["day-state"].firstMatch.exists, app.debugDescription)
+        XCTAssertTrue(app.buttons["day-erase"].firstMatch.exists, "today's open recording offers Erase Last 10 Minutes")
     }
 
     /// Paused by a call on the watch: the mode is still on, and the line says the tap that continues it is on the watch.
     @MainActor func testPausedByACallSaysWhereToContinue() throws {
-        let hub = try mockHub()
-        try switchMock(hub, ["on": true, "mode": "pending", "seconds": 0])
+        let hub = try mockHub(recap: "pending")
         let app = launch(hub, sample: "paused")
         let toggle = app.switches["allday-switch"].firstMatch
         XCTAssertTrue(toggle.waitForExistence(timeout: 20), app.debugDescription)
@@ -46,17 +46,92 @@ final class RecordingDayUITests: XCTestCase {
         try shot(app, "today-paused")
     }
 
-    /// The recap on the day's page: its summary, the timeline under the time of day with the meeting the watch marked,
-    /// a suggested to-do, and a time that opens the transcript at its line. The day went up whole.
+    /// Before the user agreed: the Agree row opens the consent sheet (what is recorded, where it goes, who reads it, how
+    /// long it is kept); Not Now changes nothing, and turning the switch on asks first too. Agree stores it, and the row
+    /// goes.
+    @MainActor func testConsentComesBeforeTheFirstRecording() throws {
+        let hub = try mockHub(recap: "none")
+        let app = launch(hub, sample: "consent")
+        let agreeRow = app.buttons["allday-consent"].firstMatch
+        XCTAssertTrue(agreeRow.waitForExistence(timeout: 20), app.debugDescription)
+        let toggle = app.switches["allday-switch"].firstMatch
+        XCTAssertEqual("\(toggle.value ?? "")", "0", toggle.debugDescription)
+        try shot(app, "consent-row")
+
+        agreeRow.tap()
+        let title = app.descendants(matching: .any)["allday-consent-title"].firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "allday-consent-point").count, 5, app.debugDescription)
+        try shot(app, "consent-sheet")
+        app.buttons["allday-consent-not-now"].tap()
+        XCTAssertTrue(wait(5) { !title.exists }, "Not Now didn't close the sheet")
+        XCTAssertTrue(agreeRow.exists, "Not Now agreed")
+
+        // The switch asks first, and stays off until the user agrees.
+        toggle.tap()
+        XCTAssertTrue(title.waitForExistence(timeout: 10), "turning the switch on didn't ask for consent:\n\(app.debugDescription)")
+        XCTAssertEqual("\(toggle.value ?? "")", "0", "the switch went on before the user agreed")
+        app.buttons["allday-consent-agree"].tap()
+        XCTAssertTrue(wait(5) { !title.exists }, "Agree didn't close the sheet")
+        XCTAssertTrue(wait(5) { !agreeRow.exists }, "the Agree row stays after agreeing")
+        // Agreed from the switch: the start went to the watch, which needs a tap there.
+        XCTAssertTrue(wait(5) { "\(toggle.value ?? "")" == "1" }, toggle.debugDescription)
+    }
+
+    /// The consent sheet at the largest accessibility text size: every point readable, Agree and Not Now within reach.
+    @MainActor func testConsentAtTheLargestTextSize() throws {
+        let hub = try mockHub(recap: "none")
+        let app = launch(hub, sample: "consent", extra: Self.largestText)
+        let agreeRow = app.buttons["allday-consent"].firstMatch
+        XCTAssertTrue(agreeRow.waitForExistence(timeout: 20), app.debugDescription)
+        reveal(app, agreeRow)
+        agreeRow.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["allday-consent-title"].firstMatch.waitForExistence(timeout: 10), app.debugDescription)
+        try shot(app, "consent-sheet-largest")
+        XCTAssertTrue(app.buttons["allday-consent-agree"].isHittable, app.debugDescription)
+        XCTAssertTrue(app.buttons["allday-consent-not-now"].isHittable, app.debugDescription)
+    }
+
+    /// Erase Last 10 Minutes on today's page: asked first, then the last minutes' text goes from the hub too (a repair that
+    /// keeps every other sentence's place), with the range as an erased gap.
+    @MainActor func testEraseTheLastTenMinutes() throws {
+        let hub = try mockHub(recap: "none")
+        let app = launch(hub, sample: "today")
+        let today = app.buttons["allday-today"].firstMatch
+        XCTAssertTrue(today.waitForExistence(timeout: 20), app.debugDescription)
+        // Every made-up line is on the hub before the erase, so the erase has something there to take back.
+        var said = 0
+        XCTAssertTrue(wait(60) {
+            said = try self.spoken(hub, self.todayDay)
+            return said >= 6
+        }, "today's text didn't reach the hub")
+        today.tap()
+        let erase = app.buttons["day-erase"].firstMatch
+        XCTAssertTrue(erase.waitForExistence(timeout: 10), app.debugDescription)
+        reveal(app, erase)
+        erase.tap()
+        let confirm = app.buttons.matching(NSPredicate(format: "label IN %@", ["删掉", "Erase"])).firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), app.debugDescription)
+        try shot(app, "erase-confirm")
+        confirm.tap()
+        XCTAssertTrue(wait(60) {
+            let day = try self.day(hub, self.todayDay)
+            let gaps = (day?["coverage"] as? [String: Any])?["gaps"] as? [[String: Any]] ?? []
+            return try self.spoken(hub, self.todayDay) < said && gaps.contains { $0["reason"] as? String == "erased" }
+        }, "the hub still has the last 10 minutes: \(String(describing: try? day(hub, todayDay)))")
+    }
+
+    /// The recap on the day's page: its summary (final: the day is complete), the timeline under the time of day with the
+    /// meeting, a suggested to-do, and a time that opens the transcript at its line. The day went up whole.
     @MainActor func testRecapReadyJumpsToTheTranscript() throws {
-        let hub = try mockHub()
-        try switchMock(hub, ["on": true, "mode": "ready", "seconds": 0])
+        let hub = try mockHub(recap: "ready")
         let app = launch(hub, sample: "recap", open: true)
         let summary = app.descendants(matching: .any)["dayrecap-summary"].firstMatch
         XCTAssertTrue(summary.waitForExistence(timeout: Self.recapTimeout), app.debugDescription)
         try shot(app, "recap")
-        // Ended, every chunk settled and appended: the phone said the day is complete.
+        // Closed, every seq settled and appended: the phone said the day is complete.
         XCTAssertTrue(wait(60) { try self.day(hub, self.pastDay)?["complete"] as? Bool == true }, "the day never became complete on the hub")
+        XCTAssertTrue(app.descendants(matching: .any)["dayrecap-finality"].firstMatch.exists, app.debugDescription)
         let entry = app.descendants(matching: .any)["dayrecap-entry"].firstMatch
         reveal(app, entry)
         XCTAssertTrue(entry.exists, app.debugDescription)
@@ -64,6 +139,7 @@ final class RecordingDayUITests: XCTestCase {
         let action = app.descendants(matching: .any)["dayrecap-action"].firstMatch
         reveal(app, action)
         XCTAssertTrue(action.exists, "no suggested to-do:\n\(app.debugDescription)")
+        XCTAssertFalse(app.buttons["day-erase"].exists, "a closed day offers no erase of its last minutes")
         let time = app.buttons.matching(identifier: "dayrecap-time").firstMatch
         reveal(app, time)
         time.tap()
@@ -75,8 +151,7 @@ final class RecordingDayUITests: XCTestCase {
 
     /// Being written: says so, with a spinner.
     @MainActor func testRecapBeingWritten() throws {
-        let hub = try mockHub()
-        try switchMock(hub, ["on": true, "mode": "pending", "seconds": 0])
+        let hub = try mockHub(recap: "pending")
         let app = launch(hub, sample: "pending", open: true)
         let writing = app.descendants(matching: .any)["dayrecap-writing"].firstMatch
         XCTAssertTrue(writing.waitForExistence(timeout: Self.recapTimeout), app.debugDescription)
@@ -85,24 +160,27 @@ final class RecordingDayUITests: XCTestCase {
 
     /// Writing it failed: Retry asks the hub again (`POST …/minutes` on the day), and the page follows it to the recap.
     @MainActor func testRecapRetry() throws {
-        let hub = try mockHub()
-        try switchMock(hub, ["on": true, "mode": "failed", "seconds": 0])
+        let hub = try mockHub(recap: "failed")
         let app = launch(hub, sample: "failed", open: true)
         let retry = app.buttons["dayrecap-retry"].firstMatch
         XCTAssertTrue(retry.waitForExistence(timeout: Self.recapTimeout), app.debugDescription)
         try shot(app, "recap-failed")
-        try switchMock(hub, ["mode": "ready", "seconds": 2])
+        // Settled first, so no later upload rewrites the recap and moves its version.
+        XCTAssertTrue(wait(60) { try self.day(hub, self.pastDay)?["complete"] as? Bool == true }, "the day never became complete on the hub")
+        // The mock writes recaps from now on (its switch writes one at once, version 1); a failed page doesn't look again by
+        // itself, so the recap it then shows, one version on, is the one Retry asked for.
+        try switchMock(hub, ["recap": "ready"])
+        let before = try recapVersion(hub, pastDay) ?? 0
         reveal(app, retry)
         retry.tap()
-        XCTAssertTrue(wait(10) { try self.asked(hub).contains(self.pastDay) }, "Retry didn't reach the hub")
+        XCTAssertTrue(wait(10) { (try self.recapVersion(hub, self.pastDay) ?? 0) > before }, "Retry didn't reach the hub")
         XCTAssertTrue(app.descendants(matching: .any)["dayrecap-summary"].firstMatch.waitForExistence(timeout: 60), app.debugDescription)
     }
 
     /// The largest accessibility text size: the Today section and the recap still lay out (shots), and their controls
     /// can still be reached.
     @MainActor func testLargestTextSize() throws {
-        let hub = try mockHub()
-        try switchMock(hub, ["on": true, "mode": "ready", "seconds": 0])
+        let hub = try mockHub(recap: "ready")
         var app = launch(hub, sample: "today", extra: Self.largestText)
         let toggle = app.switches["allday-switch"].firstMatch
         XCTAssertTrue(toggle.waitForExistence(timeout: 20), app.debugDescription)
@@ -123,8 +201,7 @@ final class RecordingDayUITests: XCTestCase {
     /// Without a day and without a paired watch the Recordings page is as it was: no Today section, no day rows (an
     /// earlier test's made-up days go when the page appears).
     @MainActor func testWithoutAllDayRecordingThePageIsUnchanged() throws {
-        let hub = try mockHub()
-        try switchMock(hub, ["on": true])
+        let hub = try mockHub(recap: "none")
         let app = launch(hub, sample: nil)
         XCTAssertTrue(app.buttons["recording-meeting-start"].waitForExistence(timeout: 15), app.debugDescription)
         XCTAssertTrue(wait(10) { !app.switches["allday-switch"].exists && !app.buttons["recording-day-row"].exists },
@@ -136,8 +213,7 @@ final class RecordingDayUITests: XCTestCase {
 
     /// A hub without `recording_day`: the day is still shown, with a caution that its text stays on the phone.
     @MainActor func testHubWithoutTheFlagSaysTheRecapNeedsAnUpdate() throws {
-        let hub = try mockHub()
-        try switchMock(hub, ["on": false])
+        let hub = try mockHub(recap: "none", on: false)
         defer { try? switchMock(hub, ["on": true]) }
         let app = launch(hub, sample: "today")
         let notice = app.descendants(matching: .any)["allday-hub-update"].firstMatch
@@ -165,32 +241,59 @@ final class RecordingDayUITests: XCTestCase {
         while !(element.exists && element.isHittable), swipes < 12 { app.swipeDown(); swipes += 1 }
     }
 
-    /// `POST /mock/day_recap`: the mock's switches (`mode`, `seconds`, `on`…); only the keys sent change.
+    /// The mock hub, starting this test fresh: no recordings stored (an earlier test's recaps and versions go;
+    /// `/mock/recording_minutes` resets them), the hub listing `recording_day` (`on`) and writing recaps as `recap` says
+    /// (`ready`, `pending`, `failed`, `none`).
+    private func mockHub(recap: String, on: Bool = true) throws -> String {
+        guard let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] else { throw XCTSkip("needs its own mock hub (PERSONA_MOCK_HUB)") }
+        _ = try post(hub, "/mock/recording_minutes", ["mode": "pending"])
+        try switchMock(hub, ["on": on, "recap": recap])
+        return hub
+    }
+
+    /// `POST /mock/recording_day`: only the switches sent change; the answer is all of them.
     private func switchMock(_ hub: String, _ body: [String: Any]) throws {
-        var request = URLRequest(url: URL(string: hub + "/mock/day_recap")!)
+        let state = try post(hub, "/mock/recording_day", body)
+        // A mock without main's all-day block answers this route with an error, not its switches.
+        XCTAssertNotNil(state["recap"], "the mock hub has no recording_day switches (/mock/recording_day)")
+        // As JSON values (a Bool comes back as an NSNumber).
+        for (key, value) in body { XCTAssertEqual(state[key] as? NSObject, value as? NSObject, "the mock didn't take \(key)") }
+    }
+
+    private func post(_ hub: String, _ path: String, _ body: [String: Any]) throws -> [String: Any] {
+        var request = URLRequest(url: URL(string: hub + path)!)
         request.httpMethod = "POST"
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let done = expectation(description: "day_recap")
-        URLSession.shared.dataTask(with: request) { _, _, _ in done.fulfill() }.resume()
+        var answer = Data()
+        let done = expectation(description: path)
+        URLSession.shared.dataTask(with: request) { data, _, _ in
+            answer = data ?? Data()
+            done.fulfill()
+        }.resume()
         wait(for: [done], timeout: 5)
-        // A mock without the all-day block answers this route with an error, not its switches.
-        XCTAssertNotNil(try mockState(hub)["mode"], "the mock hub has no recording_day switches (/mock/day_recap)")
+        return (try? JSONSerialization.jsonObject(with: answer)) as? [String: Any] ?? [:]
     }
 
-    /// `GET /mock/day_recap`: the switches, the recaps asked for, and each day as the hub holds it.
-    private func mockState(_ hub: String) throws -> [String: Any] {
-        let data = try Data(contentsOf: URL(string: hub + "/mock/day_recap")!)
-        return try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
-    }
-
-    /// A day as the hub holds it (`next`, `complete`, `recap_state`…); nil when it has none.
+    /// A recording as the hub holds it (`/mock/recordings`: its last body with `next`, `coverage`, `complete`,
+    /// `recap_state`…); nil when it has none.
     private func day(_ hub: String, _ id: String) throws -> [String: Any]? {
-        (try mockState(hub)["days"] as? [String: Any])?[id] as? [String: Any]
+        let data = try Data(contentsOf: URL(string: hub + "/mock/recordings")!)
+        let state = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        return (state?["recordings"] as? [String: Any])?[id] as? [String: Any]
     }
 
-    /// The days a recap was asked for again (`POST …/minutes`), in order.
-    private func asked(_ hub: String) throws -> [String] {
-        try mockState(hub)["asked"] as? [String] ?? []
+    /// The day's sentences on the hub that have text (an erased one keeps its place, empty).
+    private func spoken(_ hub: String, _ id: String) throws -> Int {
+        let segments = try day(hub, id)?["segments"] as? [[String: Any]] ?? []
+        return segments.filter { !($0["text"] as? String ?? "").isEmpty }.count
+    }
+
+    /// The version of the day's recap on the hub (`detail.recap.version`); nil before one was written.
+    private func recapVersion(_ hub: String, _ id: String) throws -> Int? {
+        let data = try Data(contentsOf: URL(string: hub + "/api/v1/kb/recordings/\(id)")!)
+        let answer = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let detail = answer?["detail"] as? [String: Any]
+        return (detail?["recap"] as? [String: Any])?["version"] as? Int
     }
 
     @MainActor private func shot(_ app: XCUIApplication, _ name: String) throws {
@@ -203,11 +306,6 @@ final class RecordingDayUITests: XCTestCase {
         guard let dir = env["PERSONA_SHOTS"] else { return }
         let appearance = env["PERSONA_SHOTS_APPEARANCE"] ?? "unknown"
         try image.pngRepresentation.write(to: URL(fileURLWithPath: "\(dir)/allday-\(appearance)-\(name).png"))
-    }
-
-    private func mockHub() throws -> String {
-        guard let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] else { throw XCTSkip("needs its own mock hub (PERSONA_MOCK_HUB)") }
-        return hub
     }
 
     private func pair(_ hub: String) -> String {

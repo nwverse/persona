@@ -7,7 +7,11 @@ Since 2026-11-05 (#3235), there is no longer a "Composer + › Recording context
 
 Rolling recording (the watch keeps recording and only retains the last 6 hours, with health bookmarks) is a mode of this same system — see `docs/apple/recording-rolling.md`. Pulled ranges are transcribed on device and sync into Knowledge like any other recording; there is no composer "as context" path.
 
-All-day recording (the watch records the whole day, the phone transcribes it as it arrives and appends the text to the hub, which writes a daily recap) is the recording kind `day`; its contract, the watch-to-phone transfer included, is `docs/assistant/day-recap.md`.
+All-day recording (the watch records the whole day, the phone transcribes it as it arrives and appends the text to the hub, which writes a daily recap) is the recording kind `day`; its contract, the watch-to-phone transfer included, is `docs/assistant/day-recap.md`. On Apple devices:
+
+- **Consent is the phone's** (`RecordingDayConsent`, `RecordingDayConsentView`): Knowledge › Recordings shows a **Today** section with a paired watch that has Persona, whatever the hub supports: the All-Day Recording switch, **Agree to Start on Apple Watch** until the consent sheet was agreed, and today's day. The watch shows All-Day Recording only once the phone said it takes day recordings, and says "Agree on your iPhone to start" until the phone has the consent.
+- **Erase Last 10 Minutes** on today's page (with a confirmation) erases the range on the phone and asks the watch to erase its copies; deleting a day deletes it on the hub, the phone and the watch.
+- **Chunk files**: AVAudioFile's m4a writer leaves a `free` box of about 23 KB between `moov` and `mdat`, so 10 s of 32 kbps AAC came to about 65 KB, over the live envelope's 48 000 bytes. `RecordingSegmentWriter` drops it from each finished all-day chunk (`compactsFiles`, `RecordingM4A`, the chunk offsets moved back), which leaves about 42 KB; every other recording keeps its files as written.
 
 ## Why send only text
 

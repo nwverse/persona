@@ -410,6 +410,11 @@ final class AppModel {
         let language = LanguageStore.shared.apply()
         WatchSync.shared.onActivated = { [weak self] in
             WatchSync.shared.push(language: language)
+            #if os(iOS) || os(visionOS)
+            // All-day recording: the erases and deletes the watch hasn't confirmed go now that a send reaches it
+            // (docs/assistant/day-recap.md「Erasing」「Deleting」), paired with a hub or not.
+            RecordingDayReceiver.shared.sessionActivated()
+            #endif
             guard let self, self.isPaired, !self.isDemo else { return }
             WatchSync.shared.push(persona: self.personas.chosenID)
             self.pushWatchConfigs()
@@ -3615,16 +3620,15 @@ enum Haptics {
 #endif
 
 extension AppModel {
-    /// All-day recording (docs/assistant/day-recap.md): whether the hub-level hub takes day recordings, from each of its
-    /// hellos (an empty feature list included: a manager that lost the flag says so). Cached for launches in the
-    /// background, told to the watch (`recordingDayHub`), and the upload tries a day an older manager refused once more.
+    /// All-day recording (docs/assistant/day-recap.md「Phone to hub」): whether the hub-level hub takes day recordings,
+    /// from each of its hellos (an empty feature list included: a manager that lost the flag says so). Cached for launches
+    /// in the background, told to the watch (`recordingDayHub`, with the consent and `recordingDayKeepDays`), and the
+    /// upload tries a day an older manager or a refusal stopped once more.
     func learnedRecordingDay(_ hello: HubHello) {
         let offered = hello.features.contains(RecordingDayContract.feature)
         let changed = RecordingDayDefaults.offered([]) != offered
         RecordingDayDefaults.remember(offered: offered)
-        #if os(iOS) || os(visionOS)
-        WatchSync.shared.pushRecordingDay(hub: offered)
-        #endif
+        RecordingDayPhoneCapabilities.shared.hubChanged(offered: offered)
         // Every day's sync state reads the flag.
         if changed { RecordingDaySummaries.shared.refreshAll() }
         RecordingDaySync.shared.helloReceived(offered: offered)

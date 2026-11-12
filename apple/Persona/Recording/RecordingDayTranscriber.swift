@@ -5,18 +5,19 @@ import UIKit
 #endif
 
 // All-day recording's transcription lane (docs/assistant/day-recap.md): the chunks the watch sends, transcribed on the
-// phone as they arrive, in runs of contiguous chunks so words aren't cut at a chunk's edge (C8). Its own lane and its
-// own `current`, apart from `RecordingTranscription` (C30), which goes first: a recording the user is waiting for
+// phone as they arrive, in runs of contiguous chunks so words aren't cut at a chunk's edge. Its own lane and its
+// own `current`, apart from `RecordingTranscription`, which goes first: a recording the user is waiting for
 // never waits behind a day's backlog.
 
 // MARK: - Runs
 
-/// Which chunks of a day to transcribe next, decided from its record alone (unit tested).
+/// Which chunks of a day to transcribe next, and how a chunk's text is taken back to transcribe it again, decided from its
+/// record alone (unit tested).
 nonisolated enum RecordingDayRuns {
     nonisolated enum Step: Sendable, Equatable {
         /// Quieter than `silenceDBFS`: no text, no engine (recorded silence is not a gap).
         case skip([Int])
-        /// Their audio went before they were transcribed: `failed`, reported as an `untranscribed` gap (C20).
+        /// Their audio went before they were transcribed: `failed`, reported as an `untranscribed` gap.
         case missingAudio([Int])
         /// Transcribe these contiguous chunks together, in this order.
         case run([Int])
@@ -38,11 +39,17 @@ nonisolated enum RecordingDayRuns {
         chunk.level.map { $0 < RecordingDayContract.silenceDBFS } ?? false
     }
 
+    /// Not transcribed yet and still to be: neither erased nor lost. With its audio it is read; without it (retention
+    /// took it first) it is settled as untranscribed.
+    static func isWaiting(_ chunk: RecordingDayChunk) -> Bool {
+        !chunk.isErasedOrLost && chunk.state == .waiting
+    }
+
     /// The next step for `record`, nil when nothing waits for transcription. Chunks without audio and silent ones are
     /// settled first, all at once; then the first run in seq order. A chunk that already failed a run is tried alone
     /// next time, so one unreadable file doesn't use up its neighbours' tries.
     static func next(_ record: RecordingDayRecord, now: Date) -> Step? {
-        let waiting = record.chunks.values.filter(\.needsTranscription).sorted { $0.seq < $1.seq }
+        let waiting = record.chunks.values.filter(isWaiting).sorted { $0.seq < $1.seq }
         guard !waiting.isEmpty else { return nil }
         let gone = waiting.filter { !$0.hasAudio }.map(\.seq)
         if !gone.isEmpty { return .missingAudio(gone) }
@@ -54,7 +61,7 @@ nonisolated enum RecordingDayRuns {
         var open = first.attempts == 0
         if open {
             while let previous = run.last, let next = record.chunks[previous.seq + 1] {
-                guard joins(next, after: previous, total: total) else {
+                guard joins(next, after: previous, total: total, in: record) else {
                     open = false
                     break
                 }
@@ -63,32 +70,40 @@ nonisolated enum RecordingDayRuns {
             }
         }
         guard let last = run.last else { return nil }
-        // Over once something follows it, the day or this chunk is the end, it is full, or no newer chunk came for a while.
+        // Over once something follows it, the microphone closed after it (a pause, the day's end), it is full, or no
+        // newer chunk came for a while. Never inferred from silence: only the watch's events say the microphone closed.
         let later = record.chunks.keys.contains { $0 > last.seq }
+        let ended = record.closedAt != nil || record.seqCount.map { last.seq + 1 >= $0 } == true
+            || record.pauses.contains { $0.from >= last.startedAt }
         let full = total + RecordingDayContract.liveChunkSeconds > RecordingDayContract.runSeconds + lengthSlack
         let settled = now.timeIntervalSince(last.receivedAt) >= settleSeconds
-        if !open || later || last.end || record.endedAt != nil || full || settled { return .run(run.map(\.seq)) }
+        if !open || later || ended || full || settled { return .run(run.map(\.seq)) }
         return .wait(last.receivedAt.addingTimeInterval(settleSeconds))
     }
 
-    /// Whether `next` continues a run that ends with `previous` (`total` seconds long so far).
-    private static func joins(_ next: RecordingDayChunk, after previous: RecordingDayChunk, total: Double) -> Bool {
-        next.needsTranscription && next.hasAudio && !isSilent(next) && next.attempts == 0 && next.after == nil && !previous.end
+    /// Whether `next` continues a run that ends with `previous` (`total` seconds long so far): its audio follows on, with
+    /// no pause of the microphone in between.
+    private static func joins(_ next: RecordingDayChunk, after previous: RecordingDayChunk, total: Double,
+                              in record: RecordingDayRecord) -> Bool {
+        isWaiting(next) && next.hasAudio && !isSilent(next) && next.attempts == 0
             && abs(next.startedAt.timeIntervalSince(previous.endedAt)) < joinTolerance
+            && !record.pauses.contains { $0.from >= previous.startedAt && $0.from < next.startedAt }
             && total + next.duration <= RecordingDayContract.runSeconds + lengthSlack
     }
 
     /// Transcribed chunks with a sentence that runs into an erased chunk after them: that sentence holds erased words,
-    /// so the chunk is transcribed again on its own, or loses the sentence when its audio is gone (C8: an erase must
+    /// so the chunk is transcribed again on its own, or loses the sentence when its audio is gone (an erase must
     /// reach every sentence its audio contributed to). A sentence ends past its chunk's duration only when its run went
     /// on into the next seq (`RecordingRun.assign` measures it on the header lengths, and a chunk transcribed alone or
     /// last in its run never does), so how far it reaches is counted in the following seqs' durations, with no tolerance
-    /// and whatever wall-clock gap the run joined across.
+    /// and whatever wall-clock gap the run joined across. A sentence with no text (an erase or a repair took it) holds
+    /// no words.
     static func bleeding(_ record: RecordingDayRecord) -> [Int] {
         guard record.chunks.values.contains(where: \.erased) else { return [] }
         var out: [Int] = []
-        for chunk in record.chunks.values where chunk.state == .transcribed && !chunk.erased {
-            guard let reach = chunk.sentences?.map(\.end).max(), reach > chunk.duration + crossEpsilon else { continue }
+        for chunk in record.chunks.values where chunk.state == .transcribed && !chunk.isErasedOrLost {
+            guard let reach = chunk.sentences?.filter({ !$0.text.isEmpty }).map(\.end).max(),
+                  reach > chunk.duration + crossEpsilon else { continue }
             var edge = chunk.duration
             var seq = chunk.seq + 1
             // Every seq the sentence's audio came from: the run joined them in seq order, end to end.
@@ -104,9 +119,59 @@ nonisolated enum RecordingDayRuns {
         return out.sorted()
     }
 
-    /// The sentences of `chunk` that stay inside it, for one whose audio is gone and can't be read again.
-    static func keptInside(_ chunk: RecordingDayChunk) -> [RecordingSentence] {
-        (chunk.sentences ?? []).filter { $0.end <= chunk.duration + crossEpsilon }
+    /// The chunk as if it had just arrived, to be transcribed again: waiting, with no tries and none of its text. A
+    /// sentence that has a hub position keeps it, with no text (a position never moves except by a `PUT`, and the
+    /// repair `PUT` sends it empty; the new text gets new positions); one without goes. Returns the parts whose text on
+    /// the hub this took words from: they need that repair.
+    static func reset(_ chunk: inout RecordingDayChunk) -> Set<Int> {
+        chunk.state = .waiting
+        chunk.attempts = 0
+        return blank(&chunk) { _ in true }
+    }
+
+    /// For a chunk whose audio is gone and can't be read again: only the sentences inside it keep their text (see
+    /// `reset` for the others). Returns the parts that need a repair.
+    static func keepInside(_ chunk: inout RecordingDayChunk) -> Set<Int> {
+        let duration = chunk.duration
+        return blank(&chunk) { $0.end > duration + crossEpsilon }
+    }
+
+    /// Takes the text of the sentences `matching` picks: a placed one keeps its place with no text, an unplaced one goes
+    /// (unplaced ones come after the placed, so the positions stay paired with their sentences).
+    private static func blank(_ chunk: inout RecordingDayChunk, matching: (RecordingSentence) -> Bool) -> Set<Int> {
+        guard let sentences = chunk.sentences else { return [] }
+        let positions = chunk.positions ?? []
+        var kept: [RecordingSentence] = []
+        var repaired = Set<Int>()
+        for (index, sentence) in sentences.enumerated() {
+            guard matching(sentence) else {
+                kept.append(sentence)
+                continue
+            }
+            guard index < positions.count else { continue }
+            if !sentence.text.isEmpty { repaired.insert(positions[index].part) }
+            kept.append(RecordingSentence(start: sentence.start, end: sentence.end, text: ""))
+        }
+        chunk.sentences = kept.isEmpty && positions.isEmpty ? nil : kept
+        return repaired
+    }
+
+    /// Asks a repair `PUT` of these parts (`RecordingDayPart.needsRepair`).
+    static func needRepair(_ record: inout RecordingDayRecord, _ parts: Set<Int>) {
+        guard !parts.isEmpty else { return }
+        for i in record.parts.indices where parts.contains(record.parts[i].part) { record.parts[i].needsRepair = true }
+    }
+
+    /// A run's new sentences for a chunk, as its save puts them: after the sentences an earlier transcription left
+    /// placed (with no text), and without any said in a range erased since the run started (the store drops those too,
+    /// `keepSettled`; leaving them out here spends no position on them).
+    static func saved(_ found: [RecordingSentence], onto chunk: RecordingDayChunk, in record: RecordingDayRecord) -> [RecordingSentence] {
+        let placed = Array((chunk.sentences ?? []).prefix(chunk.positions?.count ?? 0))
+        let fresh = found.filter { sentence in
+            let span = chunk.span(of: sentence)
+            return !record.erasures.contains { RecordingDayRecord.spans(span.start, span.end, overlap: $0.from, $0.to) }
+        }
+        return placed + fresh
     }
 }
 
@@ -117,8 +182,8 @@ nonisolated enum RecordingDayRuns {
     func end()
 }
 
-/// When the day lanes may work (DESIGN §6.2): always in front; in the background only inside a grant the system gives
-/// (a WatchConnectivity wake), ended at once when it runs out, or inside the catch-up task (C9).
+/// When the day lanes may work: always in front; in the background only inside a grant the system gives
+/// (a WatchConnectivity wake), ended at once when it runs out, or inside the catch-up task.
 @MainActor protocol RecordingDayAppState: AnyObject {
     var inForeground: Bool { get }
     /// A grant, or nil when the system gives none. `onExpiry` runs on the main actor when it runs out first; the grant is
@@ -144,15 +209,23 @@ nonisolated enum RecordingDayRuns {
 }
 
 #if os(iOS) || os(visionOS)
+/// In front unless the system put the app in the background. Grants of background time are iOS's
+/// (`beginBackgroundTask`); visionOS gives none, so the lanes work there only in front.
 @MainActor private final class RecordingDayUIKitState: RecordingDayAppState {
     var inForeground: Bool { UIApplication.shared.applicationState != .background }
 
     func beginGrant(named name: String, onExpiry: @escaping @MainActor () -> Void) -> RecordingDayGrant? {
+        #if os(iOS)
         let grant = RecordingDayBackgroundTask(onExpiry: onExpiry)
         return grant.begin(name) ? grant : nil
+        #else
+        return nil
+        #endif
     }
 }
+#endif
 
+#if os(iOS)
 /// `beginBackgroundTask`, ended exactly once: by its owner, or synchronously in the expiration handler (which must end
 /// it before returning, or the system ends the app).
 @MainActor private final class RecordingDayBackgroundTask: RecordingDayGrant {
@@ -186,10 +259,11 @@ nonisolated enum RecordingDayRuns {
 /// Transcribes each day's chunks as they arrive (docs/assistant/day-recap.md, "Transcribe as it arrives"): silent ones
 /// skipped, the rest in runs of contiguous chunks (`RecordingDayRuns`), each sentence saved on the chunk it starts in.
 /// A run that fails counts a try against its chunks (persisted; `failed` after `maxAttempts`, an `untranscribed` gap);
-/// a failure of the device itself (no permission, no model, an unsupported language) stops the lane without counting
-/// (C20). In the background it works only inside a grant or the catch-up task, never downloads a model, and stops at
-/// the step it is on the moment that time ends; what it was cut short of goes again only when it may work again: the app
-/// in front, a chunk arriving (a grant of its own), or the next catch-up (C9).
+/// a failure of the device itself (no permission, no model, an unsupported language) stops the lane without counting.
+/// A run's sentences get their hub positions in the same write that saves them (`RecordingDayUpload.place`). In the
+/// background it works only inside a grant or the catch-up task, never downloads a model, and stops at the step it is
+/// on the moment that time ends; what it was cut short of goes again only when it may work again: the app in front, a
+/// chunk arriving (a grant of its own), or the next catch-up.
 @MainActor @Observable final class RecordingDayTranscriber {
     static let shared = RecordingDayTranscriber()
 
@@ -197,7 +271,7 @@ nonisolated enum RecordingDayRuns {
                                   _ downloadsAssets: Bool) async throws -> [(file: Int, sentence: RecordingSentence)]
 
     /// The day whose run is in the engine now (this lane's own; `RecordingTranscription.current` is never set for a
-    /// day). Set per run, not per look at a day: a chunk arrives every ten seconds (C30).
+    /// day). Set per run, not per look at a day: a chunk arrives every ten seconds.
     private(set) var current: UUID?
     /// Why the lane stopped for the whole device (`RecordingSpeechError.isEntryLevel`); cleared when the app comes to the
     /// front (a model may download then) or a day's language changes.
@@ -292,7 +366,7 @@ nonisolated enum RecordingDayRuns {
         kick()
     }
 
-    /// The app went to the background (C9): a run in progress may finish only inside a grant, and none given stops it
+    /// The app went to the background: a run in progress may finish only inside a grant, and none given stops it
     /// now (a cut-short run counts no try). A run that started in front may be downloading a model: it is cut short and
     /// goes again at once without the download, which waits for the app to be in front.
     func background() {
@@ -307,9 +381,10 @@ nonisolated enum RecordingDayRuns {
         }
     }
 
-    /// A day's language changed: every chunk whose audio is still here is transcribed again in it, failed ones included,
-    /// and the hub gets a repair `PUT` with the new language whether or not any text changed (chunks whose audio
-    /// retention deleted keep their text; a silent day has none).
+    /// A day's language changed: every chunk whose audio is still here is transcribed again in it, failed ones included
+    /// (its old sentences keep their hub positions with no text, the new ones get new positions), and the hub gets a
+    /// repair `PUT` with the new language whether or not any text changed (chunks whose audio retention deleted keep
+    /// their text; a silent day has none).
     func setLocale(_ id: UUID, _ locale: String) {
         guard library.entry(id)?.locale != locale else { return }
         library.change(id) { $0.locale = locale }
@@ -317,16 +392,14 @@ nonisolated enum RecordingDayRuns {
         blocked = nil
         Task {
             await store.update(id) { record in
-                for (seq, chunk) in record.chunks where chunk.hasAudio && !chunk.isMarker {
-                    record.chunks[seq] = Self.reset(chunk)
-                }
+                Self.reset(&record) { $0.hasAudio && !$0.isErasedOrLost }
             }
             await languageChanged(id)
             changed(id)
         }
     }
 
-    /// The user asked to try the day's untranscribed chunks again (C20: explicit retry): those whose audio is still here
+    /// The user asked to try the day's untranscribed chunks again (explicit retry): those whose audio is still here
     /// get their tries back.
     func retryFailed(_ id: UUID) {
         blocked = nil
@@ -435,7 +508,7 @@ nonisolated enum RecordingDayRuns {
     }
 
     /// The worker ended. It starts again here only after `cancel` stopped it for one day; time that ran out, or the app
-    /// leaving the front without a grant, leaves the rest for the next time the lane may work (C9).
+    /// leaving the front without a grant, leaves the rest for the next time the lane may work.
     private func finish(interrupted: Bool) {
         visiting = nil
         worker = nil
@@ -534,7 +607,7 @@ nonisolated enum RecordingDayRuns {
         let durations = seqs.map { record.chunks[$0]?.duration ?? 0 }
         let locale = Locale(identifier: library.entry(id)?.locale ?? RecordingDefaults.locale)
         let generation = generations[id, default: 0]
-        // A model downloads only with the app in front, never inside a grant or the catch-up (C9).
+        // A model downloads only with the app in front, never inside a grant or the catch-up.
         let downloads = appState.inForeground && !draining
         let engine = engine
         let task = Task { try await engine(urls, durations, locale, downloads ? .utility : .background, downloads) }
@@ -562,7 +635,7 @@ nonisolated enum RecordingDayRuns {
             }
             // Anything else is this run's, a cancellation the engine made on its own included: a try, so it ends.
             await store.update(id) { record in
-                for seq in seqs where record.chunks[seq]?.needsTranscription == true {
+                for seq in seqs where record.chunks[seq].map(RecordingDayRuns.isWaiting) == true {
                     record.chunks[seq]?.attempts += 1
                     if (record.chunks[seq]?.attempts ?? 0) >= RecordingDayContract.maxAttempts { record.chunks[seq]?.state = .failed }
                 }
@@ -572,7 +645,8 @@ nonisolated enum RecordingDayRuns {
     }
 
     /// A run's sentences onto its chunks, only as one whole: an erase or a reset of any of its chunks meanwhile means its
-    /// sentences may hold erased words, and the chunks left are transcribed again without it.
+    /// sentences may hold erased words, and the chunks left are transcribed again without it. The sentences get their hub
+    /// positions in the same change (`RecordingDayUpload.place`), so a chunk is never on disk transcribed without them.
     private func save(_ found: [(file: Int, sentence: RecordingSentence)], of seqs: [Int], in id: UUID) async {
         var bySeq: [Int: [RecordingSentence]] = Dictionary(uniqueKeysWithValues: seqs.map { ($0, []) })
         for (file, sentence) in found where seqs.indices.contains(file) { bySeq[seqs[file], default: []].append(sentence) }
@@ -581,70 +655,77 @@ nonisolated enum RecordingDayRuns {
         await store.update(id) { record in
             guard seqs.allSatisfy({ record.chunks[$0]?.needsTranscription == true }) else { return }
             for seq in seqs {
+                guard let chunk = record.chunks[seq] else { continue }
                 var sentences = result[seq] ?? []
-                if seq == last, let duration = record.chunks[seq]?.duration {
+                if seq == last {
                     // Nothing of the run came after its last chunk, so nothing of it reaches past (`bleeding` reads an
                     // end past the duration as audio from the next seq).
                     sentences = sentences.map { sentence in
                         var sentence = sentence
-                        sentence.end = min(sentence.end, duration)
+                        sentence.end = min(sentence.end, chunk.duration)
                         sentence.start = min(sentence.start, sentence.end)
                         return sentence
                     }
                 }
-                record.chunks[seq]?.sentences = sentences
-                record.chunks[seq]?.positions = nil
+                let saved = RecordingDayRuns.saved(sentences, onto: chunk, in: record)
+                record.chunks[seq]?.sentences = saved
                 record.chunks[seq]?.state = .transcribed
             }
+            RecordingDayUpload.place(&record)
         }
     }
 
     private func settle(_ id: UUID, _ seqs: [Int], as state: RecordingDayChunk.State) async {
         await store.update(id) { record in
-            for seq in seqs where record.chunks[seq]?.needsTranscription == true {
-                record.chunks[seq]?.state = state
-                if state == .skipped { record.chunks[seq]?.sentences = [] }
+            for seq in seqs {
+                guard var chunk = record.chunks[seq], RecordingDayRuns.isWaiting(chunk) else { continue }
+                chunk.state = state
+                // Recorded silence has no text, and is no gap; what a transcription left placed stays.
+                if state == .skipped { chunk.sentences = chunk.sentences ?? [] }
+                record.chunks[seq] = chunk
             }
         }
     }
 
     /// Chunks whose text reaches into erased audio (`RecordingDayRuns.bleeding`): transcribed again alone, or, without
-    /// their audio, cut to the sentences inside them. Their positions go too, so the upload repairs the hub.
+    /// their audio, cut to the sentences inside them. Text the hub may hold goes there by a repair `PUT`.
     private func redo(_ id: UUID, _ seqs: [Int]) async {
         await store.update(id) { record in
+            var repaired = Set<Int>()
             for seq in seqs {
-                guard let chunk = record.chunks[seq] else { continue }
-                if chunk.hasAudio {
-                    record.chunks[seq] = Self.reset(chunk)
-                } else {
-                    record.chunks[seq]?.sentences = RecordingDayRuns.keptInside(chunk)
-                    record.chunks[seq]?.positions = nil
-                }
+                guard var chunk = record.chunks[seq] else { continue }
+                repaired.formUnion(chunk.hasAudio ? RecordingDayRuns.reset(&chunk) : RecordingDayRuns.keepInside(&chunk))
+                record.chunks[seq] = chunk
             }
+            RecordingDayRuns.needRepair(&record, repaired)
         }
     }
 
     /// A new engine: chunks given up on whose audio is still here get their tries back.
     private func retryFailedChunks(_ id: UUID, _ record: RecordingDayRecord) async {
-        guard record.chunks.values.contains(where: { $0.state == .failed && $0.hasAudio && !$0.isMarker }) else { return }
+        guard record.chunks.values.contains(where: Self.retriable) else { return }
         await store.update(id) { Self.resetFailed(&$0) }
+    }
+
+    /// A chunk given up on whose audio is still here.
+    private nonisolated static func retriable(_ chunk: RecordingDayChunk) -> Bool {
+        chunk.state == .failed && chunk.hasAudio && !chunk.isErasedOrLost
     }
 
     /// Every chunk given up on whose audio is still here, waiting again with its tries back.
     private nonisolated static func resetFailed(_ record: inout RecordingDayRecord) {
-        for (seq, chunk) in record.chunks where chunk.state == .failed && chunk.hasAudio && !chunk.isMarker {
-            record.chunks[seq] = reset(chunk)
-        }
+        reset(&record, where: retriable)
     }
 
-    /// A chunk as if it had just arrived: waiting, no tries, no text, no hub positions.
-    private nonisolated static func reset(_ chunk: RecordingDayChunk) -> RecordingDayChunk {
-        var chunk = chunk
-        chunk.state = .waiting
-        chunk.attempts = 0
-        chunk.sentences = nil
-        chunk.positions = nil
-        return chunk
+    /// The chunks `matching` picks, to be transcribed again (`RecordingDayRuns.reset`), and the repairs that asks for.
+    private nonisolated static func reset(_ record: inout RecordingDayRecord, where matching: (RecordingDayChunk) -> Bool) {
+        var repaired = Set<Int>()
+        for (seq, chunk) in record.chunks where matching(chunk) {
+            var chunk = chunk
+            repaired.formUnion(RecordingDayRuns.reset(&chunk))
+            record.chunks[seq] = chunk
+        }
+        RecordingDayRuns.needRepair(&record, repaired)
     }
 
     /// Remembers which system transcribed; a different one than last time retries the failed chunks.

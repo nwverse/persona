@@ -35,7 +35,8 @@ final class WatchRecordingTransfer {
         guard ticker == nil else { return }
         // These slots have one owner, this transfer. All-day recording rides on the same events (activation, reachability,
         // a saved chunk) through this fan-out instead of taking a slot over, which would silently stop clips and rolling
-        // recordings from being sent (docs/assistant/day-recap.md).
+        // recordings from being sent (docs/assistant/day-recap.md「Watch to phone」). Its own slots (acknowledgements, the
+        // phone's erase and delete requests) are taken in `WatchDayTransfer.start()`, here before WatchSync activates.
         WatchSync.shared.onRecordingEvent = { [weak self] in
             self?.pump(force: true)
             WatchDayTransfer.shared.pump()
@@ -57,7 +58,8 @@ final class WatchRecordingTransfer {
     }
 
     /// The watch can't read health data, so it only goes by age (kept is never set here); see `RecordingRolling.expiredOnWatch`.
-    /// Rolling only: all-day records are never pruned by age, `WatchDayTransfer` drops them once the phone has them.
+    /// Rolling only: an all-day chunk goes once the phone acknowledges it, or as a reported loss past the phone's
+    /// `recordingDayKeepDays` (`WatchDayTransfer`), never by this window.
     private func pruneRolling() {
         let now = Date()
         guard now.timeIntervalSince(lastPrune) >= RecordingRolling.pruneInterval else { return }
@@ -83,7 +85,8 @@ final class WatchRecordingTransfer {
         let batch = ProcessInfo.processInfo.isLowPowerModeEnabled ? RecordingAudioSpec.lowPowerTransferBatchSeconds
             : RecordingAudioSpec.transferBatchSeconds
         let batchDue = reachable || force || now.timeIntervalSince(lastBatch) >= batch
-        // All-day recordings go their own way (`WatchDayTransfer`): chunk by chunk, acknowledged by seq.
+        // All-day recordings go their own way (`WatchDayTransfer`): chunk by chunk and event by event, acknowledged by
+        // seq and `n`.
         for entry in RecordingLibrary.shared.entries where entry.source == .watch && !entry.isDay {
             guard !entry.active || batchDue else { continue }
             for segment in entry.segments where !segment.delivered {

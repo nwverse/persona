@@ -1,68 +1,33 @@
 import Foundation
 
-// All-day recording's retention on the phone (docs/assistant/day-recap.md, "Retention and privacy"): a chunk's audio
-// goes 3 days after the day's final recap and at most 7 days after the day, whether or not the hub ever got its text
-// (C21); the whole day (audio, text, upload state, the library's row) goes once the day is older than the hub's
-// `recording_days`. Never reads health data.
+// All-day recording's retention on the phone (docs/assistant/day-recap.md「Retention and privacy」): a day's audio goes at
+// the earliest of 3 days after its first final recap, 7 days after its day and `recording_days` after its day, whether or
+// not its text reached the hub (the store holds the same deadline for audio that arrives late,
+// `RecordingDayRecord.audioDeadline`); the whole day (audio, text, upload state, the library's row) goes once it began
+// more than `recording_days` ago, like the hub's transcript. Never reads health data.
 
 /// When a day's audio and the day itself go, from its record alone (unit tested).
 nonisolated enum RecordingDayRetention {
-    static let day: TimeInterval = 86_400
+    static let day = RecordingDayRecord.secondsPerDay
 
-    /// The end of the recording's local date in its own time zone (a 23- or 25-hour day ends where it does): the 7-day
-    /// cap counts from here, so a day that was never closed is capped too. Without a readable date, the recording's end
-    /// or its last audio.
-    static func dayEnd(_ record: RecordingDayRecord) -> Date? {
-        let zone = TimeZone(identifier: record.timeZone) ?? .autoupdatingCurrent
-        if let start = RecordingDayCalendar.start(of: record.day, in: zone) {
-            return RecordingDayCalendar.nextMidnight(after: start, in: zone)
-        }
-        return record.endedAt ?? record.chunks.values.map(\.endedAt).max()
+    /// The seqs whose audio is due at `now`: every chunk still holding audio once the day's deadline passed, transcribed
+    /// or not (an untranscribed one's time stays an `untranscribed` gap). `recordingDays`: the hub's, nil while unknown.
+    static func audioDue(_ record: RecordingDayRecord, now: Date, recordingDays: Int?) -> [Int] {
+        guard let deadline = record.audioDeadline(recordingDays: recordingDays), deadline <= now else { return [] }
+        return record.chunks.values.filter(\.hasAudio).map(\.seq).sorted()
     }
 
-    /// When the day's final recap was written: the latest across its parts, once every part the hub keeps has one (the
-    /// audio serves all of them). nil until then.
-    static func recapFinalAt(_ record: RecordingDayRecord) -> Date? {
-        let kept = record.parts.filter { !$0.deleted && !$0.expired }
-        guard !kept.isEmpty, kept.allSatisfy({ $0.recapFinalAt != nil }) else { return nil }
-        return kept.compactMap(\.recapFinalAt).max()
+    /// The day's audio deadline when it is still ahead and audio is left for it, to wake for.
+    static func nextDeadline(_ record: RecordingDayRecord, now: Date, recordingDays: Int?) -> Date? {
+        guard record.chunks.values.contains(where: \.hasAudio),
+              let deadline = record.audioDeadline(recordingDays: recordingDays), deadline > now else { return nil }
+        return deadline
     }
 
-    /// When a chunk's audio goes: transcribed or skipped ones `audioDaysAfterRecap` after the final recap, and every one,
-    /// transcribed or not, `audioMaxDays` after the day (C21: the cap waits on nothing; an untranscribed chunk's time is
-    /// then an `untranscribed` gap). nil for a chunk without audio.
-    static func audioDeadline(_ chunk: RecordingDayChunk, in record: RecordingDayRecord) -> Date? {
-        guard chunk.hasAudio else { return nil }
-        let cap = dayEnd(record).map { $0.addingTimeInterval(RecordingDayContract.audioMaxDays * day) }
-        let done = !chunk.isMarker && (chunk.state == .transcribed || chunk.state == .skipped)
-        let afterRecap = done ? recapFinalAt(record).map { $0.addingTimeInterval(RecordingDayContract.audioDaysAfterRecap * day) } : nil
-        switch (cap, afterRecap) {
-        case let (cap?, recap?): return min(cap, recap)
-        case let (cap?, nil): return cap
-        case let (nil, recap?): return recap
-        case (nil, nil): return nil
-        }
-    }
-
-    /// The seqs whose audio is due at `now`.
-    static func audioDue(_ record: RecordingDayRecord, now: Date) -> [Int] {
-        record.chunks.values.filter { chunk in audioDeadline(chunk, in: record).map { $0 <= now } ?? false }.map(\.seq).sorted()
-    }
-
-    /// The soonest audio deadline after `now`, to wake for.
-    static func nextDeadline(_ record: RecordingDayRecord, now: Date) -> Date? {
-        record.chunks.values.compactMap { audioDeadline($0, in: record) }.filter { $0 > now }.min()
-    }
-
-    /// Whether a day that began at `start` is older than `days` (the hub's `recording_days`): the hub no longer keeps its
-    /// text, and the phone doesn't either.
+    /// Whether a day that began at `start` (`recording_started_at`, how the hub counts its window) is older than `days`
+    /// (the hub's `recording_days`): the hub no longer keeps its text, and the phone doesn't either.
     static func isExpired(start: Date, now: Date, days: Int) -> Bool {
         start < now.addingTimeInterval(-Double(days) * day)
-    }
-
-    /// When the day began, as the hub measures its window: the recording's start, else its date's midnight.
-    static func start(_ record: RecordingDayRecord) -> Date? {
-        record.hubStartedAt ?? RecordingDayCalendar.start(of: record.day, in: TimeZone(identifier: record.timeZone) ?? .autoupdatingCurrent)
     }
 }
 
@@ -90,8 +55,8 @@ nonisolated enum RecordingDayRetention {
 
     /// - Parameters:
     ///   - days: the hub's `recording_days` once it said it (`RecordingSync`), nil before: until then no day is purged
-    ///     for its age (the hub may keep them longer than the default).
-    ///   - forget: a purged day's transcription and upload let go of it.
+    ///     for its age (the hub may keep them longer than the default), and the audio's deadline is the other two.
+    ///   - forget: a purged day's transcription and upload let go of it, and the watch is asked to delete its copy.
     init(store: RecordingDayStore = .shared, library: RecordingLibrary = .shared,
          days: @escaping () -> Int? = { RecordingSync.shared.store.daysKnown ? RecordingSync.shared.store.days : nil },
          now: @escaping () -> Date = { .now },
@@ -132,14 +97,15 @@ nonisolated enum RecordingDayRetention {
         let ids = await store.ids()
         for id in ids {
             guard let record = await store.record(id) else { continue }
-            if let window, let start = RecordingDayRetention.start(record),
-               RecordingDayRetention.isExpired(start: start, now: now(), days: window) {
+            if let window, RecordingDayRetention.isExpired(start: record.startedAt, now: now(), days: window) {
                 purge(id)
                 continue
             }
-            let due = RecordingDayRetention.audioDue(record, now: now())
+            let due = RecordingDayRetention.audioDue(record, now: now(), recordingDays: window)
             if !due.isEmpty { await store.removeAudio(id, seqs: due) }
-            if let next = RecordingDayRetention.nextDeadline(record, now: now()) { soonest = min(soonest ?? next, next) }
+            if let next = RecordingDayRetention.nextDeadline(record, now: now(), recordingDays: window) {
+                soonest = min(soonest ?? next, next)
+            }
         }
         // A day row whose chunks are gone (its folder emptied by hand, a crash before the first chunk was written).
         if let window {

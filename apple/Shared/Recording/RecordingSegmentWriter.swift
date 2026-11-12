@@ -9,10 +9,11 @@ import os
 /// opens the next file. Pausing stops the tap, so the timeline (`elapsed`, segment offsets, marks) never contains
 /// the paused time. Used by both the watch and the iPhone (docs/apple/recording.md).
 ///
-/// All-day recordings (docs/assistant/day-recap.md) cut at local midnight without stopping the microphone: the samples
-/// before `setBoundary`'s time close the old day's folder, the ones from it on open the next day's, and both kinds of
-/// event go into one ordered log (`takeEvents`) so whoever registers them never sees a new day's chunk before the
-/// rotation that made its folder.
+/// All-day recordings (docs/assistant/day-recap.md「The day recording on the watch」) cut at their midnight without
+/// stopping the microphone: the samples before `setBoundary`'s time close the old day's folder, the ones from it on open
+/// the next day's, and both kinds of event go into one ordered log (`takeEvents`) so whoever registers them never sees a
+/// new day's chunk before the rotation that made its folder. Their chunks take their seqs from the recording's counter
+/// (`allocateSeq`), asked on the writer's queue just before each file opens, so a seq is on disk before any audio of it.
 nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
     nonisolated struct Segment: Sendable, Equatable {
         let index: Int
@@ -112,6 +113,11 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
     private var audioThrough: Date?
     /// Left by `cutForErase` for the next file: it starts no earlier, so it lies wholly after the erased range.
     private var startFloor: Date?
+    /// The seq taken for a file that could not be opened, used again for the next try in the same folder: a failing disk
+    /// leaves one seq without audio, not one per buffer. Dropped when the folder changes.
+    private var reservedSeq: Int?
+    /// Gives each file its seq from the folder it is in; nil: seqs count up from `firstIndex`.
+    private let allocateSeq: (@Sendable (_ directory: URL) -> Int?)?
 
     // Shared with readers on other threads.
     private nonisolated struct Shared {
@@ -125,12 +131,18 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
     private var converter: AVAudioConverter?
 
     /// - Parameters:
-    ///   - firstIndex / startOffset: continue an existing recording (an all-day recording's day, after the microphone
-    ///     was off): its next index, and where its timeline goes on from.
-    init(directory: URL, firstIndex: Int = 0, startOffset: Double = 0) {
+    ///   - firstIndex / startOffset: continue an existing recording: its next index, and where its timeline goes on from.
+    ///   - allocateSeq: all-day recordings: the seq of the next file in a folder, saved by the time it returns
+    ///     (`RecordingLibrary.allocateSeq`). Called on the writer's queue, once per file, before the file is created.
+    /// Rewrites each finished file without the container's padding (`RecordingM4A`), so a 10-second all-day chunk fits
+    /// the watch's live envelope. Set before `start()`; off for every other recording.
+    var compactsFiles = false
+
+    init(directory: URL, firstIndex: Int = 0, startOffset: Double = 0, allocateSeq: (@Sendable (_ directory: URL) -> Int?)? = nil) {
         self.directory = directory
         self.index = firstIndex
         self.segmentStart = startOffset
+        self.allocateSeq = allocateSeq
         let frames = AVAudioFramePosition(startOffset * RecordingAudioSpec.sampleRate)
         self.consumedFrames = frames
         shared.withLock { $0.frames = frames }
@@ -143,6 +155,11 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
     var level: Float { shared.withLock { $0.level } }
     var failure: String? { shared.withLock { $0.failure } }
     var isRunning: Bool { shared.withLock { $0.running } }
+
+    /// Wall-clock end of the newest sample written, or when the microphone last opened if nothing came since; nil before
+    /// the first start. Read after a pause's cut or a stop, it is when the audio ended: an all-day `paused` event's time.
+    /// Waits for the buffers already handed to the writer.
+    var audioEnd: Date? { queue.sync { audioThrough } }
 
     /// Takes every segment finalized and not taken yet, in order (a rotation's last segment included): after a stop,
     /// what the main thread has not registered yet, so the end message's count leaves nothing out. Draining: a second
@@ -225,6 +242,19 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
         }
     }
 
+    /// `cut()` for an erase the phone asked for, of `recording` up to `end`: closes the file being written when it is
+    /// that recording's (its folder names it, as `Segment.owner` does) and began before `end`, the one case where it
+    /// holds audio of the range. Checked and cut in one step on the queue, so a midnight or a full chunk can't swap the
+    /// open file in between; and the folder, not the recording the main thread thinks is being written (a midnight
+    /// moves that on late), says whose it is. Nil when nothing was cut.
+    @discardableResult
+    func cutOpenChunk(of recording: UUID, startedBefore end: Date) -> Segment? {
+        queue.sync {
+            guard file != nil, UUID(uuidString: directory.lastPathComponent) == recording, fileStartedAt < end else { return nil }
+            return closeAndLog()
+        }
+    }
+
     /// Whether a notification's object is this writer's engine: `.AVAudioEngineConfigurationChange` comes from every engine
     /// in the process (dictation's, a voice call's), and only this one's changes concern the recording.
     func owns(_ object: ObjectIdentifier?) -> Bool {
@@ -245,9 +275,9 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
 
     // MARK: - All-day rotation
 
-    /// From the sample at `boundary` (a local midnight) on, audio goes to `nextDirectory`, whose segments start again at
-    /// index 0 on a timeline of their own. Serialized with the buffers: those already handed to the writer are written
-    /// under the boundary they came with. Replaces a boundary not crossed yet.
+    /// From the sample at `boundary` (a day recording's midnight) on, audio goes to `nextDirectory`, whose segments are
+    /// numbered from its own start (its counter's seq 0) on a timeline of their own. Serialized with the buffers: those
+    /// already handed to the writer are written under the boundary they came with. Replaces a boundary not crossed yet.
     func setBoundary(at boundary: Date, nextDirectory: URL) {
         queue.sync {
             self.boundary = boundary
@@ -255,17 +285,15 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
         }
     }
 
-    /// Moves to another folder now, for a day that changed while nothing was being written (paused past midnight, the
-    /// clock or the time zone changed): closes the open segment first (returned, and logged under its own folder),
-    /// creates `next`, and goes on at `firstIndex` on a new timeline. A boundary not crossed yet belonged to the old
-    /// folder's day and is dropped; set the new day's one after.
+    /// Moves to another folder now, for a day that is over while no boundary will cut it (paused past its midnight, the
+    /// clock moved on): closes the open segment first (returned, and logged under its own folder), creates `next`, and
+    /// goes on there on a new timeline, its seqs from `allocateSeq` (from 0 without it). A boundary not crossed yet
+    /// belonged to the old folder's day and is dropped; set the new day's one after.
     @discardableResult
-    func switchDirectory(to next: URL, firstIndex: Int) -> Segment? {
+    func switchDirectory(to next: URL) -> Segment? {
         queue.sync {
             let last = closeAndLog()
-            directory = next
-            index = firstIndex
-            segmentStart = 0
+            moveTo(next)
             boundary = nil
             nextDirectory = nil
             restartTimeline(dropping: consumedFrames)
@@ -414,8 +442,8 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
     private static let bufferClockJitter: TimeInterval = 0.25
 
     /// Crossing the boundary at frame `offset` of a buffer that started at `bufferStart`: the old folder's file ends
-    /// there, the next folder starts at index 0, and the timeline (`elapsed`, segment offsets) starts again with the
-    /// first sample past the boundary while still counting buffers queued behind this one.
+    /// there, the next folder's segments are numbered from its start, and the timeline (`elapsed`, segment offsets)
+    /// starts again with the first sample past the boundary while still counting buffers queued behind this one.
     private func rotate(atFrame offset: AVAudioFrameCount, of bufferStart: Date) {
         guard let crossed = boundary, let next = nextDirectory else {
             boundary = nil
@@ -426,15 +454,22 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
         nextDirectory = nil
         let last = closeFile()
         let previous = directory
-        directory = next
-        index = 0
-        segmentStart = 0
+        moveTo(next)
         restartTimeline(dropping: consumedFrames + AVAudioFramePosition(offset))
         // Before the first file there: the folder's entry is made later, on the main thread.
         makeDirectory(next)
         let firstSampleAt = max(crossed, bufferStart.addingTimeInterval(Double(offset) / RecordingAudioSpec.sampleRate))
         events.append(.rotated(Rotation(last: last, previous: previous, next: next, boundary: crossed, firstSampleAt: firstSampleAt)))
         onRotate?(last, next)
+    }
+
+    /// Segments go to `next` from the next file on, numbered there from the start: a seq taken in the old folder stays
+    /// its own.
+    private func moveTo(_ next: URL) {
+        directory = next
+        index = 0
+        segmentStart = 0
+        reservedSeq = nil
     }
 
     /// Starts the timeline again after `frames` already on it: what is counted beyond them (buffers queued behind) stays.
@@ -449,7 +484,10 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
     }
 
     private func openFile() {
-        let url = directory.appendingPathComponent(RecordingSegment.fileName(index))
+        let seq = reservedSeq ?? allocateSeq?(directory) ?? index
+        reservedSeq = seq
+        index = seq
+        let url = directory.appendingPathComponent(RecordingSegment.fileName(seq))
         try? FileManager.default.removeItem(at: url)
         let settings: [String: Any] = [
             AVFormatIDKey: kAudioFormatMPEG4AAC,
@@ -461,6 +499,7 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
             file = try AVAudioFile(forWriting: url, settings: settings, commonFormat: .pcmFormatFloat32, interleaved: false)
             fileFrames = 0
             fileSumOfSquares = 0
+            reservedSeq = nil
         } catch {
             shared.withLock { $0.failure = String(localized: "Couldn't create the recording file") }
         }
@@ -487,6 +526,9 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
             try? FileManager.default.removeItem(at: url)
             return nil
         }
+        // Without the writer's padding a 10-second chunk fits the live envelope (docs/assistant/day-recap.md「Chunks」).
+        // Only all-day chunks: every other recording keeps the files AVAudioFile writes, byte for byte.
+        if compactsFiles { RecordingM4A.compact(url) }
         let duration = Double(fileFrames) / RecordingAudioSpec.sampleRate
         let level = RecordingDayLevel.dBFS(sumOfSquares: fileSumOfSquares, count: Int(fileFrames))
         let segment = Segment(index: index, url: url, start: segmentStart, duration: duration, startedAt: fileStartedAt, level: level)
@@ -512,3 +554,118 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
 
 /// Hands a freshly converted buffer (owned by nobody else) to the writer queue.
 nonisolated private struct BufferBox: @unchecked Sendable { let buffer: AVAudioPCMBuffer }
+
+/// The finished segment files' container. AVAudioFile's m4a writer leaves a `free` box of about 23 KB between `moov` and
+/// `mdat` (room for the header to grow, never used once the file is closed), so 10 seconds of 32 kbps AAC come to about
+/// 65 KB instead of 42 KB, over the all-day live envelope's 48 000 bytes (docs/assistant/day-recap.md「Chunks」).
+nonisolated enum RecordingM4A {
+    /// Rewrites a finished file without its padding (`compacted`). A file that can't be read or rewritten, or whose
+    /// layout this doesn't know, stays as it was: still a valid file, only larger.
+    static func compact(_ url: URL) {
+        guard let data = try? Data(contentsOf: url), // perf-ok: the writer's queue, once per finished file
+              let compact = compacted(data) else { return }
+        try? compact.write(to: url, options: .atomic)
+    }
+
+    /// `data` without its top-level `free` and `skip` boxes, each chunk offset (`stco`, `co64`) moved back by what was
+    /// removed before it. nil when there is no such box, or the layout is not one this knows how to rewrite (boxes that
+    /// don't add up, not exactly one `moov`, an offset into a removed box).
+    static func compacted(_ data: Data) -> Data? {
+        let bytes = [UInt8](data)
+        guard let top = boxes(bytes, in: 0..<bytes.count) else { return nil }
+        let removed = top.filter { $0.type == "free" || $0.type == "skip" }.map(\.range)
+        let movies = top.filter { $0.type == "moov" }
+        guard !removed.isEmpty, movies.count == 1, let tables = chunkOffsetTables(bytes, in: movies[0]) else { return nil }
+        var out = bytes
+        for table in tables {
+            let width = table.type == "co64" ? 8 : 4
+            // After the version and flags: the entry count, then the entries.
+            let countAt = table.body.lowerBound + 4
+            guard countAt + 4 <= table.body.upperBound else { return nil }
+            let count = Int(read(bytes, at: countAt, width: 4))
+            guard count <= (table.body.upperBound - countAt - 4) / width else { return nil }
+            for i in 0..<count {
+                let at = countAt + 4 + i * width
+                guard let offset = moved(read(bytes, at: at, width: width), removing: removed) else { return nil }
+                write(&out, offset, at: at, width: width)
+            }
+        }
+        for range in removed.reversed() { out.removeSubrange(range) }
+        return Data(out)
+    }
+
+    /// Where a byte offset lands once `removed` (in file order) is gone; nil for one inside a removed box.
+    private static func moved(_ offset: UInt64, removing removed: [Range<Int>]) -> UInt64? {
+        var shift: UInt64 = 0
+        for range in removed {
+            if offset >= UInt64(range.upperBound) {
+                shift += UInt64(range.count)
+            } else if offset >= UInt64(range.lowerBound) {
+                return nil
+            }
+        }
+        return offset - shift
+    }
+
+    private struct Box {
+        var type: String
+        /// The whole box, its header included.
+        var range: Range<Int>
+        /// What follows the header.
+        var body: Range<Int>
+    }
+
+    /// The boxes one after the other in `range`; nil when they don't fill it exactly.
+    private static func boxes(_ bytes: [UInt8], in range: Range<Int>) -> [Box]? {
+        var result: [Box] = []
+        var at = range.lowerBound
+        while at < range.upperBound {
+            guard at + 8 <= range.upperBound else { return nil }
+            var size = Int(read(bytes, at: at, width: 4))
+            var header = 8
+            if size == 1 {
+                // A 64-bit size follows the type.
+                guard at + 16 <= range.upperBound else { return nil }
+                let large = read(bytes, at: at + 8, width: 8)
+                guard large <= UInt64(range.upperBound - at) else { return nil }
+                size = Int(large)
+                header = 16
+            } else if size == 0 {
+                // To the end.
+                size = range.upperBound - at
+            }
+            guard size >= header, size <= range.upperBound - at else { return nil }
+            let type = String(decoding: bytes[(at + 4)..<(at + 8)], as: UTF8.self)
+            result.append(Box(type: type, range: at..<(at + size), body: (at + header)..<(at + size)))
+            at += size
+        }
+        return result
+    }
+
+    /// Every `stco` and `co64` of the movie's tracks (`moov` › `trak` › `mdia` › `minf` › `stbl`).
+    private static func chunkOffsetTables(_ bytes: [UInt8], in movie: Box) -> [Box]? {
+        var level = [movie]
+        for container in ["trak", "mdia", "minf", "stbl"] {
+            var next: [Box] = []
+            for box in level {
+                guard let children = boxes(bytes, in: box.body) else { return nil }
+                next += children.filter { $0.type == container }
+            }
+            level = next
+        }
+        var tables: [Box] = []
+        for table in level {
+            guard let children = boxes(bytes, in: table.body) else { return nil }
+            tables += children.filter { $0.type == "stco" || $0.type == "co64" }
+        }
+        return tables
+    }
+
+    private static func read(_ bytes: [UInt8], at: Int, width: Int) -> UInt64 {
+        bytes[at..<(at + width)].reduce(0) { $0 << 8 | UInt64($1) }
+    }
+
+    private static func write(_ bytes: inout [UInt8], _ value: UInt64, at: Int, width: Int) {
+        for i in 0..<width { bytes[at + i] = UInt8(truncatingIfNeeded: value >> (8 * (width - 1 - i))) }
+    }
+}

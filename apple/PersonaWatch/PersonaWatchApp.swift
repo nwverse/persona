@@ -152,7 +152,7 @@ final class WatchModel {
             missing.forEach { names[$0] = $0 }
         }
         WatchMeetingSamples.install(self) // `-showMeetingSample recording|minutes` (screenshots)
-        WatchAllDaySamples.installIfAsked() // `-showAllDaySample recording|paused|interrupted|stopped|off` (screenshots)
+        WatchAllDaySamples.installIfAsked() // `-showAllDaySample recording|paused|interrupted|stopped|off|consent|deleted` (screenshots)
         #endif
         WatchSync.shared.onConfig = { [weak self] c in
             guard let self else { return }
@@ -988,7 +988,9 @@ struct WatchSessionView: View {
 /// phone's.
 struct WatchPairView: View {
     @Environment(WatchModel.self) private var model
-    @AppStorage(WatchSync.phoneDayKey) private var phoneDay = 0
+    @State private var allDay = WatchAllDay.shared
+    /// The phone's `recordingDay`: absent from a phone that doesn't take day recordings, 0 until its user agrees.
+    @AppStorage(WatchSync.phoneDayKey) private var phoneDay: Int?
 
     var body: some View {
         ScrollView {
@@ -1013,8 +1015,9 @@ struct WatchPairView: View {
                     Label("Record [Recordings Section ef2821]", systemImage: Theme.Icon.recording).lineLimit(1)
                 }
                 .padding(.top, Theme.Space.s)
-                // Recording needs the phone, not the hub: all-day recording too, once the phone takes it.
-                if phoneDay > 0 {
+                // Recording needs the phone, not the hub: all-day recording too, once the phone takes it (its page
+                // points to the phone's consent until the user agreed there).
+                if allDay.access(phoneDay: phoneDay) != .hidden {
                     NavigationLink { WatchAllDayView() } label: {
                         Label("All-Day Recording", systemImage: Theme.Icon.allDay).lineLimit(1)
                     }

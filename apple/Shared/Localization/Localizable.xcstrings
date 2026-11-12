@@ -162999,29 +162999,6 @@
         }
       }
     },
-    "All-day recording stops on your Apple Watch, and today's audio and text on this iPhone are deleted now. Its text in Knowledge is removed after sync succeeds.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "All-day recording stops on your Apple Watch, and today's audio and text on this iPhone are deleted now. Its text in Knowledge is removed after sync succeeds."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Apple Watch 上的全天录音会停止，这台 iPhone 上今天的音频和文字会马上删除。知识库里的文字会在同步成功后移除。"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Apple Watchの終日録音が停止し、このiPhone上の今日の音声とテキストはすぐに削除されます。ナレッジのテキストは同期が完了すると削除されます。"
-          }
-        }
-      }
-    },
     "Audio stays on this iPhone until 3 days after the day's final recap, 7 days at most. Only the text goes to Knowledge, where it's kept for %lld days; the recap is kept like meeting minutes.": {
       "extractionState": "manual",
       "localizations": {
@@ -163689,29 +163666,6 @@
         }
       }
     },
-    "Records what's around you all day. Your iPhone turns it into text, and your hub writes a recap of your day from that text. Audio stays on your devices and is deleted 3 days after the recap. Ask others before recording them.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Records what's around you all day. Your iPhone turns it into text, and your hub writes a recap of your day from that text. Audio stays on your devices and is deleted 3 days after the recap. Ask others before recording them."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "全天录下你身边的声音。iPhone 把它转成文字，hub 再根据这些文字写出当日回顾。音频只留在你自己的设备上，回顾生成 3 天后删除。录别人说话前先征得同意。"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "周りの音を1日中録音します。iPhoneがテキストにし、ハブがそのテキストから1日のまとめを書きます。音声はご自身のデバイスにだけ残り、まとめの3日後に削除されます。他の人を録音する前に同意を得てください。"
-          }
-        }
-      }
-    },
     "Shows whether all-day recording is on. A tap starts or continues it.": {
       "extractionState": "manual",
       "localizations": {
@@ -163731,29 +163685,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "終日録音がオンかどうかを表示します。タップで開始または再開します。"
-          }
-        }
-      }
-    },
-    "Start All-Day Recording": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Start All-Day Recording"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "开始全天录音"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "終日録音を開始"
           }
         }
       }
@@ -164402,25 +164333,508 @@
         }
       }
     },
-    "Your iPhone turns what's recorded into text as it arrives, and your hub writes a recap of your day. Audio is deleted 3 days after the recap.": {
+    "Agents and extensions allowed to read the knowledge base can read it too.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Your iPhone turns what's recorded into text as it arrives, and your hub writes a recap of your day. Audio is deleted 3 days after the recap."
+            "value": "Agents and extensions allowed to read the knowledge base can read it too."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "录到的内容一传到 iPhone 就转成文字，hub 再写出当日回顾。音频在回顾生成 3 天后删除。"
+            "value": "能读取知识库的 Agent 和扩展也能读到它。"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "録音はiPhoneに届きしだいテキストになり、ハブがその日の1日のまとめを書きます。音声はまとめの3日後に削除されます。"
+            "value": "ナレッジの読み取りを許可されたエージェントと拡張機能も、このテキストを読めます。"
+          }
+        }
+      }
+    },
+    "Agree": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agree"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "同意"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "同意する"
+          }
+        }
+      }
+    },
+    "Agree on your iPhone to start": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agree on your iPhone to start"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在 iPhone 上同意后即可开始"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "iPhoneで同意すると開始できます"
+          }
+        }
+      }
+    },
+    "Agree to Start on Apple Watch": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agree to Start on Apple Watch"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "同意后在 Apple Watch 上开始"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "同意してApple Watchで開始"
+          }
+        }
+      }
+    },
+    "All-day recording stops on your Apple Watch, and today's audio and text are deleted from it and this iPhone now. Its text in Knowledge is removed after sync succeeds.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "All-day recording stops on your Apple Watch, and today's audio and text are deleted from it and this iPhone now. Its text in Knowledge is removed after sync succeeds."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Watch 上的全天录音会停止，今天的音频和文字会马上从手表和这台 iPhone 上删除。知识库里的文字会在同步成功后移除。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Watchの終日録音が停止し、今日の音声とテキストはApple WatchとこのiPhoneからすぐに削除されます。ナレッジのテキストは同期が完了すると削除されます。"
+          }
+        }
+      }
+    },
+    "Before Your Apple Watch Records Your Day": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Before Your Apple Watch Records Your Day"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Watch 录下你的一天之前"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Watchで1日を録音する前に"
+          }
+        }
+      }
+    },
+    "Erase Last 10 Minutes": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erase Last 10 Minutes"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "删掉最近 10 分钟"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "直近10分を削除"
+          }
+        }
+      }
+    },
+    "Final recap": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Final recap"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最终当日回顾"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最終的な1日のまとめ"
+          }
+        }
+      }
+    },
+    "Final recap of what reached the hub in time": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Final recap of what reached the hub in time"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "按时送到 hub 的内容写成的最终回顾"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "期限までにハブに届いた内容による最終的なまとめ"
+          }
+        }
+      }
+    },
+    "It records all the sound around you, other people included. Ask them first: some places require everyone's consent.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "It records all the sound around you, other people included. Ask them first: some places require everyone's consent."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "它会录下你身边的所有声音，包括其他人说的话。请先征得他们同意：有些地方要求所有人都同意。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "周りのすべての音を、他の人の声も含めて録音します。先に相手の同意を得てください。全員の同意が必要な場所もあります。"
+          }
+        }
+      }
+    },
+    "It records the whole day, and your hub writes a recap of it every evening.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "It records the whole day, and your hub writes a recap of it every evening."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "它会录下一整天，hub 每晚据此写出当日回顾。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1日中録音し、ハブが毎晩その日のまとめを作成します。"
+          }
+        }
+      }
+    },
+    "Not Now [Day Consent]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not Now"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "以后再说"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "今はしない"
+          }
+        }
+      }
+    },
+    "Recap so far": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recap so far"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "目前的当日回顾"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "現時点の1日のまとめ"
+          }
+        }
+      }
+    },
+    "Records all the sound around you, other people included, so ask them first. Your iPhone turns it into text for your hub's recap of your day; the audio stays on your watch and iPhone and is deleted within 7 days.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Records all the sound around you, other people included, so ask them first. Your iPhone turns it into text for your hub's recap of your day; the audio stays on your watch and iPhone and is deleted within 7 days."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会录下你身边的所有声音，包括其他人说的话，所以请先征得他们同意。iPhone 会把它转成文字，供 hub 写出当日回顾；音频只留在你的手表和 iPhone 上，7 天内删除。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "周りのすべての音を、他の人の声も含めて録音します。先に相手の同意を得てください。iPhoneがテキストにし、ハブがそこから1日のまとめを作成します。音声はApple WatchとiPhoneにだけ保存され、7日以内に削除されます。"
+          }
+        }
+      }
+    },
+    "The audio stays on your Apple Watch and iPhone and is deleted within 7 days.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The audio stays on your Apple Watch and iPhone and is deleted within 7 days."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "音频只留在你的 Apple Watch 和 iPhone 上，7 天内删除。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "音声はApple WatchとiPhoneにだけ保存され、7日以内に削除されます。"
+          }
+        }
+      }
+    },
+    "The day's audio and text are deleted from this iPhone and your Apple Watch now. Its text in Knowledge is removed after sync succeeds.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The day's audio and text are deleted from this iPhone and your Apple Watch now. Its text in Knowledge is removed after sync succeeds."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这一天的音频和文字会马上从这台 iPhone 和你的 Apple Watch 上删除。知识库里的文字会在同步成功后移除。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この日の音声とテキストは、このiPhoneとApple Watchからすぐに削除されます。ナレッジのテキストは同期が完了すると削除されます。"
+          }
+        }
+      }
+    },
+    "The last 10 minutes weren't erased. Try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The last 10 minutes weren't erased. Try again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最近 10 分钟没有删掉，请再试一次。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "直近10分を削除できませんでした。もう一度お試しください。"
+          }
+        }
+      }
+    },
+    "The text goes to your Persona hub, which sends it to the AI model set up for the knowledge base and the main chat.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The text goes to your Persona hub, which sends it to the AI model set up for the knowledge base and the main chat."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "文字会发到你的 Persona hub，再由它发给知识库和主对话所用的 AI 模型。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "テキストはPersonaハブに送られ、ハブがナレッジとメインチャットに設定されたAIモデルに送ります。"
+          }
+        }
+      }
+    },
+    "The text is kept for %lld days, and the day's recap as long as meeting minutes, which is forever by default.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The text is kept for %lld days, and the day's recap as long as meeting minutes, which is forever by default."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "文字保留 %lld 天，当日回顾和会议纪要保留一样久，默认永久保留。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "テキストは%lld日間保存されます。1日のまとめは会議の議事録と同じ期間保存され、初期設定では無期限です。"
+          }
+        }
+      }
+    },
+    "Today's all-day recording was deleted on your iPhone.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Today's all-day recording was deleted on your iPhone."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "今天的全天录音已在 iPhone 上删除。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "今日の終日録音はiPhoneで削除されました。"
+          }
+        }
+      }
+    },
+    "What was said in the last 10 minutes is deleted from this iPhone and your Apple Watch now, and from Knowledge after sync succeeds.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "What was said in the last 10 minutes is deleted from this iPhone and your Apple Watch now, and from Knowledge after sync succeeds."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最近 10 分钟说的话会马上从这台 iPhone 和你的 Apple Watch 上删除，同步成功后也会从知识库删除。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "直近10分間の内容は、このiPhoneとApple Watchからすぐに削除され、同期が完了するとナレッジからも削除されます。"
+          }
+        }
+      }
+    },
+    "You can pause at any time, erase the last 10 minutes, or delete a whole day.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You can pause at any time, erase the last 10 minutes, or delete a whole day."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你随时可以暂停、删掉最近 10 分钟，或删除一整天的录音。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "いつでも一時停止したり、直近10分や1日分の録音を削除したりできます。"
           }
         }
       }

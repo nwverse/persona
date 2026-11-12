@@ -105,7 +105,7 @@ struct PersonaApp: App {
                 // again until the app is back (the network returning, a refresh ending: LiveConnection.suspended).
                 model.suspendLinks()
                 // All-day recording: a run or request in progress finishes only inside a grant of background time, and a
-                // model download a run started in front stops (C9).
+                // model download a run started in front stops.
                 RecordingDayTranscriber.shared.background()
                 RecordingDaySync.shared.background()
                 #if os(iOS)
