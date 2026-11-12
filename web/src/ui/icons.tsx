@@ -61,7 +61,7 @@ const P: Record<string, React.ReactNode> = {
   // a drag handle: two columns of three dots (the composer's queued messages, #5327)
   grip: <g fill="currentColor" stroke="none"><circle cx="9" cy="5" r="1.7" /><circle cx="9" cy="12" r="1.7" /><circle cx="9" cy="19" r="1.7" /><circle cx="15" cy="5" r="1.7" /><circle cx="15" cy="12" r="1.7" /><circle cx="15" cy="19" r="1.7" /></g>,
   menu: <path d="M4 7h16M4 12h16M4 17h16" />,
-  // "Branch to new chat": a path that splits in two
+  // "Start a new session" (a branch of the chat): a path that splits in two
   fork: <path d="M16 3h5v5M8 3H3v5M12 22v-8.3a4 4 0 0 0-1.17-2.87L3 3M15 9l6-6" />,
   sidebar: <g><rect x="3" y="4" width="18" height="16" rx="2.5" /><path d="M9 4v16" /></g>,
   loop: <path d="M17 2l4 4-4 4M3 11v-1a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 13v1a4 4 0 0 1-4 4H3" />,

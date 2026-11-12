@@ -193,7 +193,7 @@ const ULTRACODE_SEND_TRIES = 4;
 /** How long after the hub took a stop the button stays blocked if the agent keeps working: it may have ignored it. */
 const STOP_SETTLE_MS = 15_000;
 
-/** "Branch to new chat" (#2137): the node copies the conversation up to this reply's turn into a new one, which opens here. */
+/** "Start a new session" (#2137, #5314): the node copies the conversation up to this reply's turn into a new one, which opens here. */
 async function forkAt(mid: string, sid: string, itemId: string, assistant: boolean, space?: string, manager?: string) {
   try {
     const r = await api<{ session_id: string }>(`${sessionPath(mid, sid)}/fork`, { method: "POST", json: { at_item_id: itemId } });
@@ -514,6 +514,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       speaker: assistant ? persona.name : "Agent",
       images: () => items.current.filter((i) => i.kind === "image"),
       fork: canFork ? (itemId: string) => void forkAt(mid, sid, itemId, Boolean(assistant), session?.space, session?.manager) : undefined,
+      assistant: Boolean(assistant),
       rewind: canRewind ? { block: rewindLive, run: (messageId, text, restore) => rewindTo(mid, sid, draftKey, items.current, messageId, text, restore) } : undefined,
     }),
     [draftKey, title, canCompose, canFork, canRewind, rewindLive, mid, sid, assistant, persona.name],
@@ -1105,6 +1106,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     [tr.items, lastLive, outgoing, foldBackground],
   );
   lastLines.current = lines;
+  // the last exchange while the chat is at work, even while a message of yours on its way draws it finished (live needs
+  // !outgoing above): its words get no reply bar until the work is over (#5314, SegmentView `busy`)
+  const busySegment = useMemo(() => (lastLive ? lines.findLast((line) => line.kind === "segment")?.id : undefined), [lastLive, lines]);
   // the last two exchanges are always drawn (the one going on, the one just done); those before them skip drawing while
   // off screen (SegmentView `offscreen`). Not on a touch-only screen: a script moving the view (keeping it still as one
   // is drawn) can stop a fling there.
@@ -1731,6 +1735,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
                         limit={d.line.kind === "apiError" && d.line.id === limitOn ? limitLine : undefined}
                         assistant={assistant}
                         offscreen={offscreen(d.line)}
+                        busy={d.line.id === busySegment || undefined}
                       />
                     ),
                   ])
@@ -1748,6 +1753,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
                   limit={line.kind === "apiError" && line.id === limitOn ? limitLine : undefined}
                   assistant={assistant}
                   offscreen={offscreen(line)}
+                  busy={line.id === busySegment || undefined}
                 />
               )])}
               </CardConversation.Provider>
