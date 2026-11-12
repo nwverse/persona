@@ -55,7 +55,7 @@ The Agents page on Android shows the same sessions as on iOS, in the same groupi
 - Interrupt in the row's long-press menu. Done (11-12): after Pin while the agent works or needs you and can be interrupted, on the list and the space page (`AgentOperations.interruptSession`, `AgentsHomeAffordancesTest`).
 - A tab with several agents shows as a tab row in By Repository too, not only by computer.
 - The space page: two-column cards by urgency, the computer opening its projects page, the path shortened with ~, a dashed "Open a new tab" card.
-- The Personal Agents pill beside the grouping pill.
+- The Personal Agents pill beside the grouping pill. Not done (11-12): iOS's pill (`AgentsPersonalPill`, "Personal Agents" with `person.crop.circle.badge.checkmark` and a chevron) is no filter and no switch of assistant: it opens the personal agents page, the conversations an extension's personal-agent source lists (`GET /api/v1/agents/sessions`), and shows only in the phone shell while a source is set up and lists one. Android has no such page to open, and no phase of this plan adds one; the pill waits for that page. `docs/design/DESIGN_SYSTEM.md` ("List controls") also asks for a navigation entry such as personal Agents to be a row or in the sidebar, never chip-shaped, as the web's sidebar has it, so the entry Android gets with the page is for the owner to settle.
 
 ### Already decided by the spec: which assistant's computers show
 
@@ -99,6 +99,7 @@ Each becomes an iOS issue or a row in the intentional-differences list, decided 
 - "Requests and history" moves under ⋯, where iOS keeps its history.
 - Tests: the needs-you fixtures, plus a page test that the header count equals the badge.
 - Done (11-11): `agentNeedsYouRows` in `AgentsListInfo.kt` builds the section from `needsYouRows`: muted sessions included, the computer filter applied, shown under All and Needs You and never while searching. A session waiting only in its terminal is a "Terminal needs you" row that opens it. The section's title is the state name. The header, the page's summary and the Needs You filter count these rows. Left: "Requests and history" stays a row (not yet under ⋯), and the Assistant home's list goes with decision 10 (#4339 C11) instead of being recounted.
+- Done (11-12): iOS has no list of requests or their history (its requests live in Needs You and in each session); its ⋯ ends with the pages it opens, Machines and Terminals. On Glass "Requests and history" left the list for the end of ⋯, after Machine monitor and Terminal, in Android's own words since iOS has none, and opens the same sheet under any range. Brief and Board keep the row and add nothing to ⋯ (decision 8) (`AgentsHomeAffordancesTest`, `AgentsRequestSheetTest`, `RequestsMenuShotsTest`).
 
 ### A2, A7, A8, A9
 

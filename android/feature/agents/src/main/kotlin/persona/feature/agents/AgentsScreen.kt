@@ -131,6 +131,9 @@ internal fun AgentsScreen(
         }
     }
     var allRequests by rememberSaveable { mutableStateOf(false) }
+    // On Glass the requests and their history are a page in ⋯, after Machines and Terminals where iOS keeps its pages
+    // (#4338 A1), not a row in the list; Brief and Board keep the row (decision 8).
+    val requestsInMenu = PersonaTheme.style == AppStyle.Glass
     var requestDetail by remember(model) { mutableStateOf<Interaction?>(null) }
     val cardRequest by cardRequests.requests.collectAsStateWithLifecycle()
     LaunchedEffect(cardRequest, everyRequest) {
@@ -442,7 +445,7 @@ internal fun AgentsScreen(
                     }
                 }
             }
-            if (page.preferences.range != AgentRange.History) item("request-history") {
+            if (!requestsInMenu && page.preferences.range != AgentRange.History) item("request-history") {
                 JRow(stringResource(R.string.agents_requests_history), onClick = { allRequests = true })
             }
             if (page.settings.quick == AgentQuickFilter.Unread && page.list.unreadShown.isNotEmpty()) item("mark-read") {
@@ -637,6 +640,8 @@ internal fun AgentsScreen(
         add(JAction(stringResource(R.string.agents_menu_machines), icon = PhIcons.Gauge, onClick = { navigator.navigate(MachinesRoute) }))
         if (terminalPanes) add(JAction(stringResource(R.string.agents_menu_terminals), icon = PhIcons.TerminalWindow,
             onClick = { navigator.navigate(persona.core.navigation.TerminalPanesRoute) }))
+        if (requestsInMenu) add(JAction(stringResource(R.string.agents_requests_history), icon = PersonaIcons.waitsForYou,
+            onClick = { allRequests = true }))
     }, { menu = false }, title = stringResource(R.string.agents_action_list_settings), note = stringResource(R.string.agents_menu_note))
     if (groupingMenu) JActionSheet(groupings.map { grouping ->
         JAction(grouping.label, grouping.icon, checked = page.preferences.grouping == grouping, onClick = { model.grouping(grouping) })
