@@ -58,8 +58,11 @@ struct ExtensionTileView: View {
     private var content: some View {
         VStack(alignment: .leading, spacing: Theme.Space.flush) {
             if let img = tile.image {
+                // As tall as the tile's width makes it: offered only part of the tile's height, a 16:9 shape fits
+                // narrower than the tile.
                 picture(img)
                     .aspectRatio(16 / 9, contentMode: .fit)
+                    .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity)
                     .clipped()
                     .accessibilityHidden(true)
@@ -181,7 +184,6 @@ struct ExtensionCarouselItem: View {
     var model: (any ExtensionViewControlling)?
     @Binding var link: LinkTarget?
     @Environment(\.pluginUICompact) private var compact
-    @State private var width: CGFloat = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
@@ -196,7 +198,7 @@ struct ExtensionCarouselItem: View {
                         ExtensionTileView(tile: t, model: model,
                                           minHeight: carousel.width == ExtensionTileWidth.narrow ? Theme.Size.box80 : Theme.Size.tileHeight,
                                           link: $link)
-                            .frame(width: tileWidth)
+                            .containerRelativeFrame(.horizontal) { visible, _ in tileWidth(visible) }
                     }
                 }
                 .scrollTargetLayout()
@@ -205,15 +207,16 @@ struct ExtensionCarouselItem: View {
             .scrollTargetBehavior(.viewAligned)
             .scrollIndicators(.hidden)
             .scrollClipDisabled()
-            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         }
         .accessibilityElement(children: .contain)
     }
 
-    private var tileWidth: CGFloat {
+    /// From the scroll view's width, known at the first layout: a width learnt after it leaves a list row as tall as
+    /// that first layout made it (a wide tile's picture then fitted small inside it).
+    private func tileWidth(_ visible: CGFloat) -> CGFloat {
         switch carousel.width {
         case ExtensionTileWidth.narrow: Theme.Size.tileNarrow
-        case ExtensionTileWidth.wide: max(Theme.Size.tileRegular, (width - Theme.Space.page * 2) * Theme.Size.tileWideShare)
+        case ExtensionTileWidth.wide: max(Theme.Size.tileRegular, (visible - Theme.Space.page * 2) * Theme.Size.tileWideShare)
         default: Theme.Size.tileRegular
         }
     }
