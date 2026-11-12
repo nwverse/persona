@@ -73,6 +73,7 @@ extension ChatLines {
     private static func quickLine(_ call: ToolCall) -> ChatLine? {
         if let q = QuickResult(call) { return .quick(q) }
         if let m = PlaceMapResult(call) { return .placeMap(m) }
+        if let r = RouteMapResult(call) { return .routeMap(r) }
         return nil
     }
 }

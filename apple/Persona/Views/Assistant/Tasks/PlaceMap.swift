@@ -67,15 +67,7 @@ nonisolated struct PlaceMapResult: Hashable, Sendable {
 
     /// The region that shows every place with room around it; at least `span` meters across, so one place is not a
     /// street-level close-up.
-    func region(span: Double = 600) -> MKCoordinateRegion {
-        let lats = places.map(\.latitude), lons = places.map(\.longitude)
-        let (minLat, maxLat, minLon, maxLon) = (lats.min()!, lats.max()!, lons.min()!, lons.max()!)
-        let center = CLLocationCoordinate2D(latitude: (minLat + maxLat) / 2, longitude: (minLon + maxLon) / 2)
-        let metersPerDegree = 111_000.0
-        let least = span / metersPerDegree
-        return MKCoordinateRegion(center: center, span: MKCoordinateSpan(latitudeDelta: max((maxLat - minLat) * 1.5, least),
-                                                                      longitudeDelta: max((maxLon - minLon) * 1.5, least)))
-    }
+    func region(span: Double = 600) -> MKCoordinateRegion { PlaceMapSnapshot.region(places.map(\.coordinate), span: span) }
 }
 
 /// What a place is called in a row: its name, else its address, else "Place N".
@@ -122,17 +114,30 @@ nonisolated final class PlaceMapSnapshot: @unchecked Sendable {
         return c
     }()
 
-    static func key(_ result: PlaceMapResult, size: CGSize, dark: Bool) -> NSString {
-        "\(result.callID)|\(Int(size.width))x\(Int(size.height))|\(dark ? "d" : "l")" as NSString
+    static func key(_ id: String, size: CGSize, dark: Bool) -> NSString {
+        "\(id)|\(Int(size.width))x\(Int(size.height))|\(dark ? "d" : "l")" as NSString
+    }
+
+    /// The region that shows every coordinate with room around it; at least `span` meters across, so one place is not
+    /// a street-level close-up.
+    static func region(_ coordinates: [CLLocationCoordinate2D], span: Double = 600) -> MKCoordinateRegion {
+        let lats = coordinates.map(\.latitude), lons = coordinates.map(\.longitude)
+        let (minLat, maxLat) = (lats.min() ?? 0, lats.max() ?? 0), (minLon, maxLon) = (lons.min() ?? 0, lons.max() ?? 0)
+        let center = CLLocationCoordinate2D(latitude: (minLat + maxLat) / 2, longitude: (minLon + maxLon) / 2)
+        let metersPerDegree = 111_000.0
+        let least = span / metersPerDegree
+        return MKCoordinateRegion(center: center, span: MKCoordinateSpan(latitudeDelta: max((maxLat - minLat) * 1.5, least),
+                                                                      longitudeDelta: max((maxLon - minLon) * 1.5, least)))
     }
 
     static func cached(_ key: NSString) -> PlaceMapSnapshot? { cache.object(forKey: key) }
 
-    static func make(_ result: PlaceMapResult, size: CGSize, dark: Bool, scale: CGFloat) async -> PlaceMapSnapshot? {
-        let key = key(result, size: size, dark: dark)
+    /// The map around `coordinates` and where each of them falls on it.
+    static func make(_ id: String, coordinates: [CLLocationCoordinate2D], size: CGSize, dark: Bool, scale: CGFloat) async -> PlaceMapSnapshot? {
+        let key = key(id, size: size, dark: dark)
         if let hit = cache.object(forKey: key) { return hit }
         let options = MKMapSnapshotter.Options()
-        options.region = result.region()
+        options.region = region(coordinates)
         options.size = size
         options.traitCollection = UITraitCollection { traits in
             traits.userInterfaceStyle = dark ? .dark : .light
@@ -140,8 +145,8 @@ nonisolated final class PlaceMapSnapshot: @unchecked Sendable {
         }
         options.pointOfInterestFilter = .excludingAll
         guard let shot = try? await MKMapSnapshotter(options: options).start() else { return nil }
-        let points = result.places.map { place -> CGPoint in
-            let p = shot.point(for: place.coordinate)
+        let points = coordinates.map { coordinate -> CGPoint in
+            let p = shot.point(for: coordinate)
             return CGPoint(x: p.x / size.width, y: p.y / size.height)
         }
         let made = PlaceMapSnapshot(image: shot.image, points: points)
@@ -210,11 +215,12 @@ struct PlaceMapCard: View {
             }
             .clipped()
             .animation(Theme.Motion.state, value: snapshot != nil)
-            .task(id: PlaceMapSnapshot.key(result, size: size, dark: scheme == .dark)) {
+            .task(id: PlaceMapSnapshot.key(result.callID, size: size, dark: scheme == .dark)) {
                 guard size.width > 0, size.height > 0 else { return }
-                let key = PlaceMapSnapshot.key(result, size: size, dark: scheme == .dark)
+                let key = PlaceMapSnapshot.key(result.callID, size: size, dark: scheme == .dark)
                 if let hit = PlaceMapSnapshot.cached(key) { snapshot = hit; return }
-                snapshot = await PlaceMapSnapshot.make(result, size: size, dark: scheme == .dark, scale: scale)
+                snapshot = await PlaceMapSnapshot.make(result.callID, coordinates: result.places.map(\.coordinate), size: size,
+                                                       dark: scheme == .dark, scale: scale)
             }
     }
 

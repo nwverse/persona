@@ -6264,8 +6264,8 @@ if MOCK_TASKS:
         _base = min(x["seq"] for x in ITEMS[ASK1])
         for _i, _x in enumerate(ITEMS[ASK1]):
             _x["seq"] = _base + _i
-    # MOCK_PLACE_MAP=1 (with MOCK_TASKS=1): "where am I" and "coffee near me" answered with the phone's location tools,
-    # drawn as map cards under their work lines (#5543); the places are made up.
+    # MOCK_PLACE_MAP=1 (with MOCK_TASKS=1): "where am I", "coffee near me" and "how long on foot" answered with the
+    # phone's location tools, drawn as map cards under their work lines (#5543, #5544); the places are made up.
     if os.environ.get("MOCK_PLACE_MAP") == "1":
         _cafes = [("街角咖啡", 31.2318, 121.4752, 180), ("安静书房咖啡", 31.2291, 121.4769, 340),
                   ("老弄堂咖啡馆", 31.2335, 121.4711, 420), ("河边烘焙咖啡", 31.2276, 121.4702, 610)]
@@ -6286,6 +6286,16 @@ if MOCK_TASKS:
                                "source": "Apple Maps (MapKit local search)",
                                "note": "Opening hours are not available from Apple Maps to apps."}, ensure_ascii=False), 1.15)
             + [it("assistant", "text", 1.1, text="找到 4 家：最近的是 1 号街角咖啡，180 米；想安静些可以去 2 号安静书房咖啡，340 米。营业时间苹果地图不提供，去之前最好确认一下。")]
+            + [it("user", "text", 0.9, text="走去 2 号要多久")]
+            + tool("mcp__persona__phone_maps_route", {"latitude": 31.2291, "longitude": 121.4769, "name": "安静书房咖啡", "mode": "walking"},
+                   json.dumps({"destination": {"name": "安静书房咖啡", "latitude": 31.2291, "longitude": 121.4769},
+                               "origin": {"latitude": 31.2304, "longitude": 121.4737, "from": "current_location"},
+                               "mode": "walking", "distance_meters": 420, "expected_travel_seconds": 330,
+                               "path": [[31.2304, 121.4737], [31.2306, 121.4749], [31.2299, 121.4752], [31.2296, 121.4763], [31.2291, 121.4769]],
+                               "source": "Apple Maps (MapKit directions)",
+                               "note": "Nothing was opened. The user sees this route in the chat with Start in Maps; phone_maps_navigate opens Maps."},
+                              ensure_ascii=False), 0.85)
+            + [it("assistant", "text", 0.8, text="走过去 420 米，大约 6 分钟。要出发的话点下面的「在地图中开始」。")]
         )
         ITEMS[ASK1].sort(key=lambda x: x["ts"])
         _base = min(x["seq"] for x in ITEMS[ASK1])

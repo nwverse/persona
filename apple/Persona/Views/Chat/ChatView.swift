@@ -1386,6 +1386,7 @@ struct ChatView: View {
         case .feed(let item): FeedLine(item: item, group: shownKey.group)
         case .quick(let result): QuickResultCard(result: result)
         case .placeMap(let result): PlaceMapCard(result: result)
+        case .routeMap(let route): RouteMapCard(route: route)
         case .day(let date): DayLine(date: date)
         case .apiError(_, let info, _) where turnErrorCard(line, raw: info.raw) != nil:
             turnErrorCard(line, raw: info.raw)
@@ -6209,6 +6210,8 @@ struct ChatLine: Identifiable {
         case quick(QuickResult)
         /// Where the phone is, or the places a search found, on a map under its turn's work line (PlaceMapResult, #5543).
         case placeMap(PlaceMapResult)
+        /// A route phone_maps_route looked up, on a map with Start in Maps (RouteMapResult, #5544).
+        case routeMap(RouteMapResult)
         /// The date over the first line of a day (the assistant's conversation).
         case day(Date)
         /// The images an exchange's work looked at, between it and the answer (`ViewedImages`, docs/protocol/protocol.md「Images viewed this turn」).
@@ -6233,6 +6236,7 @@ struct ChatLine: Identifiable {
             case .feed(let f): "feed-" + f.id
             case .quick(let q): "quick-" + q.callID
             case .placeMap(let m): "map-" + m.callID
+            case .routeMap(let r): "route-" + r.callID
             case .day(let d): "day-\(Int(d.timeIntervalSince1970))"
             case .viewed(let id, _): id
             case .answerPart(let item, _, let index, _): index == 0 ? item.id : item.id + "/part-\(index)"
@@ -6269,6 +6273,7 @@ struct ChatLine: Identifiable {
     static func feed(_ item: FeedItem) -> Self { Self(.feed(item)) }
     static func quick(_ result: QuickResult) -> Self { Self(.quick(result)) }
     static func placeMap(_ result: PlaceMapResult) -> Self { Self(.placeMap(result)) }
+    static func routeMap(_ route: RouteMapResult) -> Self { Self(.routeMap(route)) }
     static func day(_ date: Date) -> Self { Self(.day(date)) }
     static func viewed(id: String, images: [ViewedImage]) -> Self { Self(.viewed(id: id, images: images)) }
     static func answerPart(item: Item, part: AnswerParts.Part, index: Int, count: Int) -> Self {

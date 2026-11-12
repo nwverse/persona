@@ -84,6 +84,7 @@
   "step_message_compose": "メッセージを下書き",
   "step_call": "電話をかける",
   "step_maps_nearby": "周辺を検索",
+  "step_maps_route": "マップで経路を調べる",
   "step_maps_navigate": "マップで経路を開く",
   "step_shortcut_run": "ショートカットを実行",
   "step_media_play": "音楽を再生",

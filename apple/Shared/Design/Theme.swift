@@ -560,6 +560,8 @@ nonisolated enum Theme {
         static let placeMap: CGFloat = 220
         /// The map a place answer draws in the chat (`PlaceMapCard`, #5543): small enough to scroll past.
         static let chatMap: CGFloat = 160
+        /// A route's line on a map (`RouteMapCard`, #5544).
+        static let routeLine: CGFloat = 4
         static let box110: CGFloat = 110
         static let box120: CGFloat = 120
         /// The longest a tab's name gets in the chat header's strip of the space's tabs: one long name cannot push the

@@ -84,6 +84,7 @@
   "step_message_compose": "Draft message",
   "step_call": "Call",
   "step_maps_nearby": "Search nearby",
+  "step_maps_route": "Look up a route in Maps",
   "step_maps_navigate": "Open directions in Maps",
   "step_shortcut_run": "Run shortcut",
   "step_media_play": "Play music",

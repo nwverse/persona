@@ -2,7 +2,7 @@ import XCTest
 
 /// Place maps in the main conversation (#5543): "where am I" and a nearby search each draw a map card under the turn's
 /// work line, with the tool calls still folded; tapping a map opens the full map with the same places, and Done closes
-/// it. Against scripts/mock/mock_hub.py with MOCK_TASKS=1 MOCK_PLACE_MAP=1 MOCK_TASKS_NO_ASKS=1 (PERSONA_MOCK_HUB).
+/// it. A route (#5544) draws a route card with Start in Maps, and its map opens the same way. Against scripts/mock/mock_hub.py with MOCK_TASKS=1 MOCK_PLACE_MAP=1 MOCK_TASKS_NO_ASKS=1 (PERSONA_MOCK_HUB).
 /// PERSONA_SHOTS saves the cards and the sheet there (PERSONA_SHOTS_APPEARANCE names the simulator's appearance);
 /// PERSONA_SHOTS_LARGE=1 runs at the largest accessibility text size.
 final class PlaceMapUITests: XCTestCase {
@@ -51,6 +51,24 @@ final class PlaceMapUITests: XCTestCase {
         app.launchPinned()
 
         let any = app.descendants(matching: .any)
+        let sheet = any["place-map-sheet.map"].firstMatch
+        let done = app.buttons.matching(NSPredicate(format: "label IN %@", ["完成", "Done"])).firstMatch
+
+        let route = any.matching(NSPredicate(format: "identifier BEGINSWITH %@", "chat.route-map.")).firstMatch
+        XCTAssertTrue(route.waitForExistence(timeout: 20), "no route card:\n\(app.debugDescription)")
+        for _ in 0..<40 where !clear(route, in: app) { nudge(app, older: true) }
+        XCTAssertTrue(any["route-map.start"].firstMatch.exists, "the route card has no Start in Maps")
+        sleep(2)
+        try shot(app, "route")
+        route.tap()
+        let routeSheet = any["route-map-sheet.map"].firstMatch
+        XCTAssertTrue(routeSheet.waitForExistence(timeout: 5), "tapping the route did not open its map")
+        sleep(2)
+        try shot(app, "route-sheet")
+        done.tap()
+        let routeGone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: routeSheet)
+        XCTAssertEqual(XCTWaiter.wait(for: [routeGone], timeout: 5), .completed, "Done did not close the route's map")
+
         let maps = any.matching(NSPredicate(format: "identifier BEGINSWITH %@", "chat.place-map."))
         let nearby = maps.matching(NSPredicate(format: "label CONTAINS %@", "街角咖啡")).firstMatch
         XCTAssertTrue(nearby.waitForExistence(timeout: 20), "no map for the nearby search:\n\(app.debugDescription)")
@@ -65,11 +83,9 @@ final class PlaceMapUITests: XCTestCase {
         try shot(app, "here")
 
         here.tap()
-        let sheet = any["place-map-sheet.map"].firstMatch
         XCTAssertTrue(sheet.waitForExistence(timeout: 5), "tapping the map did not open the full map")
         sleep(2)
         try shot(app, "here-sheet")
-        let done = app.buttons.matching(NSPredicate(format: "label IN %@", ["完成", "Done"])).firstMatch
         XCTAssertTrue(done.exists, "the full map has no Done")
         done.tap()
         let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: sheet)

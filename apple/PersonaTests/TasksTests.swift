@@ -245,6 +245,44 @@ struct TasksTests {
         #expect(one.region().span.latitudeDelta > 0.004)
     }
 
+    /// A route becomes a route card (#5544) with its time, distance and shape; a time without a shape (public transport)
+    /// still does, and a failed or incomplete one does not.
+    @Test func routeMapsComeFromTheRouteTool() throws {
+        let r = try #require(RouteMapResult(toolCall("mcp__persona__phone_maps_route", result: """
+            {"destination":{"name":"安静书房咖啡","latitude":31.2291,"longitude":121.4769},"origin":{"latitude":31.2304,"longitude":121.4737},
+            "mode":"walking","distance_meters":420,"expected_travel_seconds":330,"path":[[31.2304,121.4737],[31.2299,121.4752],[31.2291,121.4769]]}
+            """)))
+        #expect(r.mode == .walking && r.distance == 420 && r.seconds == 330 && r.destination.name == "安静书房咖啡")
+        #expect(r.path.count == 3 && r.coordinates.count == 5)
+        #expect(RouteMapText.detail(r).contains("安静书房咖啡") && RouteMapText.summary(r).contains("·"))
+        let eta = try #require(RouteMapResult(toolCall("phone_maps_route", result: """
+            {"destination":{"latitude":31.2,"longitude":121.4},"origin":{"latitude":31.3,"longitude":121.5},"mode":"transit",
+            "distance_meters":9000,"expected_travel_seconds":1800}
+            """)))
+        #expect(eta.path.isEmpty && eta.mode == .transit && eta.destination.name == nil)
+        #expect(RouteMapResult(toolCall("phone_maps_route", result: #"{"destination":{"latitude":31.2,"longitude":121.4}}"#)) == nil)
+        #expect(RouteMapResult(toolCall("phone_maps_route", result: #"{"error":"no route"}"#, error: true)) == nil)
+        #expect(RouteMapResult(toolCall("phone_maps_navigate", result: #"{"latitude":31.2,"longitude":121.4}"#)) == nil)
+        #expect(PlaceMapResult(toolCall("phone_maps_route", result: #"{"latitude":31.2,"longitude":121.4}"#)) == nil)
+    }
+
+    /// A long route's shape is cut to a fixed number of points, keeping both ends.
+    @Test func aRouteShapeIsThinned() {
+        let points = (0..<1000).map { CLLocationCoordinate2D(latitude: Double($0) / 1000, longitude: 0) }
+        let thin = MapsTool.thin(points, most: 120)
+        #expect(thin.count == 120 && thin.first?.latitude == 0 && thin.last?.latitude == 0.999)
+        #expect(MapsTool.thin(Array(points.prefix(50)), most: 120).count == 50)
+    }
+
+    /// A route card goes right after its turn's work line, like the other quick results.
+    @Test func routeMapFollowsItsWork() {
+        let call = toolCall("mcp__persona__phone_maps_route", result: """
+            {"destination":{"latitude":31.2,"longitude":121.4},"origin":{"latitude":31.3,"longitude":121.5},"distance_meters":1,"expected_travel_seconds":60}
+            """)
+        let work = ChatLine.work(id: "wt-1", items: [.step(.call(call))], live: false, start: .now, end: .now)
+        #expect(ChatLines.quickResults([user(1, 5), work, answer(2, 4)]).map(\.id) == ["1#0", "wt-1", "route-10#0", "2#0"])
+    }
+
     /// A map card goes where a reminder's card goes: right after its turn's work line.
     @Test func placeMapFollowsItsWork() {
         let call = toolCall("mcp__persona__phone_location_current", result: #"{"latitude":31.2,"longitude":121.4}"#)

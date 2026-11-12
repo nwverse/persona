@@ -333,6 +333,10 @@ extension Theme {
         static let currentLocation = "location"
         /// Directions to a place, handed to Apple Maps (the chat's place map, #5543).
         static let directions = "arrow.triangle.turn.up.right.diamond"
+        /// How a route goes (the chat's route card, #5544): by car, on foot, by public transport.
+        static let byCar = "car"
+        static let onFoot = "figure.walk"
+        static let byTransit = "tram"
         /// The phone's own health trends (steps, sleep, weight drawn from Apple Health, #3272).
         static let healthTrends = "chart.line.uptrend.xyaxis"
         /// Persona itself (the brand's four-point star).

@@ -104,6 +104,7 @@ final class ChatTrace {
         case .feed(let f): "feed:\(f.kind.rawValue)"
         case .quick: "quick"
         case .placeMap: "map"
+        case .routeMap: "route"
         case .day: "day"
         case .viewed(_, let images): "viewed\(images.count)"
         }

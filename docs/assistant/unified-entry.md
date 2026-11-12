@@ -959,6 +959,8 @@ Agents started manually in Agents have no to-do, or a to-do with empty `origin`,
     Successful `phone_location_current`, `phone_location_search` and `phone_maps_search_nearby` results render there as a map (`PlaceMapResult`, `PlaceMapCard`, #5543):
     the phone's dot or up to ten numbered pins in result order (the numbers the answer uses), the first three places listed with Directions to Apple Maps,
     and the whole map in a sheet. The chat draws a cached `MKMapSnapshotter` still; only the sheet's map is live.
+    A `phone_maps_route` result is a route card there (`RouteMapResult`, `RouteMapCard`, #5544): the route on the same kind of still, time · distance, where to and how,
+    and Start in Maps, which opens Apple Maps with that destination and transport; the sheet draws it on a live map.
   - **Today**: first main-chat display each day calls `POST …/today` (`TasksStore.loadToday`), placing the card at midnight: completed tasks, waiting tasks, working count,
     Lark meetings (Prepare sends a message for you), chats mentioning you (Review); if the App already has reminder permission, also include reminders due today (no permission prompt for this).
   - **Direct-start tasks**: Persona profile's Proactive work section lists remembered kinds, with swipe-left deletion.
