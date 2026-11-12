@@ -111,5 +111,7 @@
   "resume": "恢复",
   "resume_failed": "没能恢复这个 Agent。{error}",
   "handoff_from": "从「{title}」跳来 · 点这里返回",
-  "handoff_dismiss": "关闭返回提示"
+  "handoff_dismiss": "关闭返回提示",
+  "team": "协同",
+  "team_needs_you": "协同：有子 Agent 在等你"
 }

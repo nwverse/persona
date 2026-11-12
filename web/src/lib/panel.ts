@@ -29,6 +29,9 @@ export type Panel =
   | { kind: "link"; url: string; title?: string; manager?: string }
   /** A chat's plan: its latest TodoWrite as a whole list, following the chat (#5602). */
   | { kind: "plan"; mid: string; sid: string }
+  /** A lead's Team (#5180, lib/team.ts): its workers' strip and the conversation of `worker` (else the one lib/team.ts
+   *  shownWorker picks). `sid` is the lead's: the panel stays while the page shows the lead. */
+  | { kind: "team"; mid: string; sid: string; worker?: string }
   /** The session's dev server in a headless browser on its computer (docs/web/preview.md); `port` / `path`: the one to
    *  show (a localhost link of a reply), else the one shown last or the first running one. */
   | { kind: "preview"; mid: string; sid: string; cwd: string; port?: number; path?: string };

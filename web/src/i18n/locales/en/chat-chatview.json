@@ -111,5 +111,7 @@
   "resume": "Resume",
   "resume_failed": "Couldn't resume this Agent. {error}",
   "handoff_from": "Came from {title} · click to return",
-  "handoff_dismiss": "Hide the way back"
+  "handoff_dismiss": "Hide the way back",
+  "team": "Team",
+  "team_needs_you": "Team: a worker needs you"
 }

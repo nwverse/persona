@@ -111,5 +111,7 @@
   "resume": "再開",
   "resume_failed": "このエージェントを再開できませんでした。{error}",
   "handoff_from": "{title} から移動しました · クリックして戻る",
-  "handoff_dismiss": "戻るヒントを閉じる"
+  "handoff_dismiss": "戻るヒントを閉じる",
+  "team": "コラボ",
+  "team_needs_you": "コラボ：対応を待っている Worker があります"
 }
