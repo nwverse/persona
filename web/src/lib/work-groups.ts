@@ -5,6 +5,7 @@
 // pieces of it an inner summary of its own. Compaction boundaries and unloaded history gaps retain their behavior.
 
 import { t } from "../i18n";
+import { isChildSessionStep } from "./child-cards";
 import type { Step } from "./turns";
 import type { Item } from "./types";
 
@@ -84,8 +85,9 @@ const boundaryTs = (s: Step | undefined): number | null => (s && (s.kind === "te
 const isAnswer = (s: Step) => s.kind === "text" && Boolean(s.item.text?.trim());
 
 /** The step a group is known by: its first real one (cindy keys a group by its first activity, so a live group keeps
- *  its key as it grows and once it is done). */
-const anchorStep = (run: Step[]) => run.find((s) => s.kind !== "text") ?? run[0];
+ *  its key as it grows and once it is done). A child session's card is not one: it comes in with the child's row, and
+ *  the group keeps the key (and the reader's open state) it had without it. */
+const anchorStep = (run: Step[]) => run.find((s) => s.kind !== "text" && !isChildSessionStep(s)) ?? run.find((s) => s.kind !== "text") ?? run[0];
 
 /** A group's key: its anchor's seq and block (a fold's is the seq of the first step it stands for, block 0). */
 function anchorKey(run: Step[]): string {
