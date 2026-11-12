@@ -189,6 +189,11 @@ final class ReadinessUITests: XCTestCase {
         try waitForReadinessRead(after: recoveringAt)
         XCTAssertFalse(scoped.exists)
         try switchReadiness("rate_limited")
+        let failingAt = try readinessReadCount()
+        XCUIDevice.shared.press(.home)
+        sleep(1)
+        app.activate() // full stops polling; a foreground revisit observes the later failure without resetting app state.
+        try waitForReadinessRead(after: failingAt)
         XCTAssertTrue(warning.waitForExistence(timeout: 20), "a real failure after recovery did not appear:\n\(app.debugDescription)")
         XCTAssertTrue(scoped.waitForExistence(timeout: 5), "the new card lost the active Codex scope:\n\(app.debugDescription)")
         XCTAssertEqual(field.value as? String, "synthetic draft")
