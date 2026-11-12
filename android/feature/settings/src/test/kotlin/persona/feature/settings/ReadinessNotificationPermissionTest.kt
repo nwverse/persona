@@ -213,7 +213,7 @@ class ReadinessNotificationPermissionTest {
         assertTrue(restored.inputs.isEmpty())
 
         // The launched key is already gone, so a duplicate result cannot invoke the new owner's callback again.
-        complete(restored, granted = true, requestCode = requestCode)
+        assertFalse(restored.dispatchResult(requestCode, true))
         assertEquals(0, pendingLaunches(restored))
         tapFirst(R.string.settings_ready_open)
         assertNotificationSettingsOpened()
