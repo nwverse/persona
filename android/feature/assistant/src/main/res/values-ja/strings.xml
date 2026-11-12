@@ -70,8 +70,13 @@
     <string name="assistant_greeting_noon">こんにちは</string>
     <string name="assistant_greeting_afternoon">こんにちは</string>
     <string name="assistant_greeting_evening">こんばんは</string>
-    <string name="assistant_home_lead">メッセージや予定、手元の作業をお任せください。</string>
-    <string name="assistant_home_note">送信した内容はメインチャットに入ります。オフラインのときは、まずこの端末に保存されます。</string>
+    <string name="assistant_home_lead_main">ここはあなたのメインチャットです。ここで話したことは覚えておきます。コンピューター、スマホ、メール、Lark、整理済みのプロジェクトを確認でき、物事を見守って時間になったらお知らせすることもできます。</string>
+    <string name="assistant_home_lead_side">新しいサイドチャットを始めます。コンピューター、スマホ、メール、Lark、整理済みのプロジェクトを確認でき、物事を見守って時間になったらお知らせすることもできます。</string>
+    <string name="assistant_time_just_now">たった今</string>
+    <plurals name="assistant_time_minutes_ago">
+        <item quantity="other">%1$d分前</item>
+    </plurals>
+    <string name="assistant_time_yesterday">昨日</string>
     <string name="assistant_online_devices">オンラインのデバイス</string>
     <string name="assistant_this_phone">このスマホ</string>
     <string name="assistant_phone_tools_unavailable">スマホのツールは利用不可</string>

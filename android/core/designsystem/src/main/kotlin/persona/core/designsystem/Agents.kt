@@ -183,7 +183,7 @@ private fun SectionRule() {
  * `StateCounts`. Each is spoken as one. [lighter]: the counted agents only wait in the background, so their dots take that tone.
  */
 @Composable
-private fun StateCounts(counts: List<Pair<Status, Int>>, waiting: Int = 0, lighter: Boolean = false) {
+internal fun StateCounts(counts: List<Pair<Status, Int>>, waiting: Int = 0, lighter: Boolean = false) {
     val palette = PersonaTheme.palette
     @Composable fun count(n: Int, spoken: String, mark: @Composable () -> Unit) {
         Spacer(Modifier.width(Tokens.Space.s + Tokens.Space.xxs))
