@@ -24,7 +24,7 @@
     <string name="chat_rewind_input_kept">Rewound, but Claude\'s input on the computer still holds this message.</string>
     <string name="chat_rewind_failed">Couldn\'t rewind: %1$s</string>
     <string name="chat_rewind_running">Rewinding…</string>
-    <string name="chat_tool_open_subagent">View sub-agent</string>
+    <string name="chat_tool_open_subagent">View Subagent</string>
     <string name="chat_tool_no_answer">No answer</string>
     <string name="chat_computer_script">Run script</string>
     <string name="chat_computer_script_named">Run script: %1$s</string>

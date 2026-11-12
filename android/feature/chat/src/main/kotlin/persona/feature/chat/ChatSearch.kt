@@ -87,6 +87,7 @@ internal fun searchTarget(lines: List<ChatLine>, itemId: String): ChatSearchTarg
     lines.forEach { line ->
         if (line is ChatLine.Row && line.row.id == itemId) return ChatSearchTarget(line.contentKey)
         if (line is ChatLine.Step && line.step.containsItem(itemId)) return ChatSearchTarget(line.id)
+        if (line is ChatLine.Agents && line.calls.any { WorkItem.Tool(it).containsItem(itemId) }) return ChatSearchTarget(line.id)
         if (line is ChatLine.ApiError && line.item.id == itemId) return ChatSearchTarget(line.id)
         if (line is ChatLine.Recaps && line.items.any { it.id == itemId }) return ChatSearchTarget(line.id)
     }

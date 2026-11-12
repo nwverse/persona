@@ -27,6 +27,12 @@ data class Subagent(
     @WireTime @SerialName("started_at") val startedAt: String? = null,
     @WireTime @SerialName("updated_at") val updatedAt: String? = null,
     @SerialName("last_text") val lastText: String? = null,
+    /**
+     * How many tool calls it made, and its latest one (what it does while it runs); absent from older hubs
+     * (docs/protocol/protocol.md, a session's `subagents`).
+     */
+    val steps: Int? = null,
+    @SerialName("last_tool") val lastTool: WorkflowTool? = null,
 )
 
 @KeepGeneratedSerializer
@@ -500,7 +506,7 @@ data class WorkflowAgent(
     val calls: Int? = null,
 )
 
-/** A [WorkflowAgent]'s latest tool call: its [name] and what it does ([summary], in the reader's language). */
+/** A [WorkflowAgent]'s or a [Subagent]'s latest tool call: its [name] and what it does ([summary], in the reader's language). */
 @KeepGeneratedSerializer
 @Serializable(with = WorkflowToolSerializer::class)
 data class WorkflowTool(

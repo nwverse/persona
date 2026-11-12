@@ -348,6 +348,10 @@ internal fun ChatLineContent(
         is ChatLine.Step -> Box(Modifier.fillMaxWidth().workRail(lastWorkStep)) {
             WorkStep(line.step, session, loader, onFold, folding, foldErrors, onFullText, style, textUpdates, workRunning, lastWorkStep, plan)
         }
+        // Subagents launched one after another share one line in Glass, their cards in a grid (#4339 C2, iOS `SubagentGrid`).
+        is ChatLine.Agents -> SubagentGrid(line.calls, lastWorkStep) { call ->
+            SubagentCard(call) { ToolCallStep(call, session, loader, onFullText, style, workRunning, false, null) }
+        }
         is ChatLine.End -> TimelineMark(pluralStringResource(R.plurals.chat_content_collapse_steps, line.count, line.count),
             Modifier.heightIn(min = 44.dp).clickable(role = Role.Button) { onToggle(line.groupId) })
         is ChatLine.Wakes -> ChatSystemLine(pluralStringResource(R.plurals.chat_content_wakes, line.turn.wakes.size, line.turn.wakes.size))
@@ -401,75 +405,12 @@ private fun WorkStep(step: WorkItem, session: SessionKey, loader: ImageLoader, o
                     return
                 }
             }
-            var open by remember(call.id) { mutableStateOf(false) }
-            val diff = remember(call.use.item) { toolDiff(call.use.item) }
-            val todos = remember(call.use.item) { todoEntries(call.use.item) }
-            val searchItem = LocalChatSearchItem.current
-            LaunchedEffect(searchItem) {
-                if (searchItem != null && (searchItem == call.use.id || call.results.any { it.id == searchItem })) {
-                    open = true
-                }
-            }
-            if (todos != null && !style.compactToolSummary && plan?.id == call.id) {
-                PlanStep(plan, running)
+            // Glass draws a subagent as iOS does (#4339 C2): its card while it runs, the tool's own row once it reported.
+            if (PersonaTheme.style == AppStyle.Glass && Subagents.isAgent(call)) {
+                SubagentCard(call) { ToolCallStep(call, session, loader, onFullText, style, running, last, plan) }
                 return
             }
-            val presentation = toolPresentation(LocalResources.current, call.use.item)
-            val taskBadge = if (call.results.any { it.task?.kind == "agent" })
-                LocalChatTaskIndex.current.badge(call.use.item.toolUseId, concise = true)?.text?.text() else null
-            Column(Modifier.fillMaxWidth()) {
-                // A named tool with nothing to name ("Read agent chat") is its title already: no verb tag saying it twice.
-                TimelineStep(toolCategory(call.name), presentation.title, verb = presentation.verb.takeUnless { it == presentation.title },
-                    detail = listOfNotNull(presentation.detail, taskBadge ?: if (call.running) stringResource(if (running) R.string.chat_content_tool_running else R.string.chat_content_tool_no_result) else null)
-                        .joinToString(stringResource(R.string.chat_status_clause_separator)).ifBlank { null },
-                    state = when {
-                        call.failed -> WorkState.Failed
-                        running && call.running -> WorkState.Running
-                        call.running -> WorkState.Waiting
-                        else -> WorkState.Done
-                    },
-                    last = last, mono = presentation.mono, added = diff?.added ?: 0, removed = diff?.removed ?: 0,
-                    onClick = { open = !open })
-                if (todos != null) TodoList(todos, call.failed)
-                if (call.name == "Task" || call.name == "Agent") SubagentEntry(call.use.item.toolUseId)
-                if (call.failed && !open && call.result?.task?.kind != "agent") call.result?.text?.takeIf { it.isNotBlank() }?.let {
-                    Text(it, maxLines = 3, overflow = TextOverflow.Ellipsis, color = PersonaTheme.palette.danger.text,
-                        style = PersonaTheme.type.caption)
-                }
-                if (open) Column(Modifier.fillMaxWidth().padding(start = Tokens.Space.m),
-                    verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                    if (diff != null) {
-                        toolPath(call.use.item)?.let { DiffHeader(it, diff.added, diff.removed) }
-                        DiffView(diff, call.id)
-                    } else if (todos == null) ToolInputDetail(call.use.item, call.result?.item)
-                    // A truncated output opens in full from "Raw output" below. An edit's own result only says it worked; an
-                    // answered ask_user's result repeats the ticked choices above in the model's words (iOS ToolViews).
-                    val agentReports = call.results.any { it.task?.kind == "agent" }
-                    if (agentReports) {
-                        call.results.forEachIndexed { index, report ->
-                            val result = report.item
-                            val body = if (report.kind == "tool_result") result.text?.takeIf(String::isNotBlank) ?: report.task?.detail
-                                else report.task?.detail
-                            // A launch receipt and a status-only notification are lifecycle evidence, not reports.
-                            if (!body.isNullOrBlank() && !TaskIndex.isLaunchReceipt(body)) {
-                                if (report.task != null) TaskNoteLine(report, last = index == call.results.lastIndex, onFullText = onFullText)
-                                else {
-                                    CodeText(body, stringResource(R.string.chat_content_output))
-                                    ToolReaderActions(null, body, result.takeIf { it.fullSize != null }?.let { { onFullText(it) } })
-                                }
-                            }
-                        }
-                    } else call.result?.item?.let { result ->
-                        if (todos == null && (diff == null || call.failed) && (!PersonaTools.isAskUser(call.name) || call.failed))
-                            CodeText(result.text.orEmpty(), stringResource(R.string.chat_content_output))
-                    }
-                    // A dev server saying where it listens (docs/operations/ports.md).
-                    if (call.name == "Bash") call.result?.text?.let { PortBadges(it) }
-                    call.images.forEach { ChatPicture(session, it.item, loader) }
-                    ToolReaderActions(call.use.item.toolInput?.toString(), call.result?.text?.takeUnless { agentReports },
-                        call.result?.item?.takeIf { !agentReports && it.fullSize != null }?.let { result -> { onFullText(result) } })
-                }
-            }
+            ToolCallStep(call, session, loader, onFullText, style, running, last, plan)
         }
 
         is WorkItem.Narration -> MessageContent(step.item.item, false, textUpdates[step.item.id])
@@ -479,6 +420,84 @@ private fun WorkStep(step: WorkItem, session: SessionKey, loader: ImageLoader, o
         else step.item.compaction?.let { TimelineMark(it.label.text()) }
             ?: step.item.takeIf { it.task != null }?.let { TaskNoteLine(it, last, onFullText) }
             ?: ChatSystemLine(step.item.task?.detail ?: step.item.text.orEmpty(), step.item.task?.failed == true)
+    }
+}
+
+/** A tool call's step: its row, opened its input and output (iOS `ToolCallRow`). */
+@Composable
+private fun ToolCallStep(call: ToolCall, session: SessionKey, loader: ImageLoader, onFullText: (Item) -> Unit,
+    style: ChatRenderStyle, running: Boolean, last: Boolean, plan: LinePlan?) {
+    var open by remember(call.id) { mutableStateOf(false) }
+    val diff = remember(call.use.item) { toolDiff(call.use.item) }
+    val todos = remember(call.use.item) { todoEntries(call.use.item) }
+    val searchItem = LocalChatSearchItem.current
+    LaunchedEffect(searchItem) {
+        if (searchItem != null && (searchItem == call.use.id || call.results.any { it.id == searchItem })) {
+            open = true
+        }
+    }
+    if (todos != null && !style.compactToolSummary && plan?.id == call.id) {
+        PlanStep(plan, running)
+        return
+    }
+    val presentation = toolPresentation(LocalResources.current, call.use.item)
+    val taskBadge = if (call.results.any { it.task?.kind == "agent" })
+        LocalChatTaskIndex.current.badge(call.use.item.toolUseId, concise = true)?.text?.text() else null
+    Column(Modifier.fillMaxWidth()) {
+        // A named tool with nothing to name ("Read agent chat") is its title already: no verb tag saying it twice.
+        TimelineStep(toolCategory(call.name), presentation.title, verb = presentation.verb.takeUnless { it == presentation.title },
+            detail = listOfNotNull(presentation.detail, taskBadge ?: if (call.running) stringResource(if (running) R.string.chat_content_tool_running else R.string.chat_content_tool_no_result) else null)
+                .joinToString(stringResource(R.string.chat_status_clause_separator)).ifBlank { null },
+            state = when {
+                call.failed -> WorkState.Failed
+                running && call.running -> WorkState.Running
+                call.running -> WorkState.Waiting
+                else -> WorkState.Done
+            },
+            last = last, mono = presentation.mono, added = diff?.added ?: 0, removed = diff?.removed ?: 0,
+            onClick = { open = !open })
+        if (todos != null) TodoList(todos, call.failed)
+        // Glass keeps a finished subagent's row as iOS's (its card's View Subagent goes inside the opened row, #4339 C2).
+        val glass = PersonaTheme.style == AppStyle.Glass
+        if (Subagents.isAgent(call) && !glass) SubagentEntry(call.use.item.toolUseId)
+        if (call.failed && !open && call.result?.task?.kind != "agent") call.result?.text?.takeIf { it.isNotBlank() }?.let {
+            Text(it, maxLines = 3, overflow = TextOverflow.Ellipsis, color = PersonaTheme.palette.danger.text,
+                style = PersonaTheme.type.caption)
+        }
+        if (open) Column(Modifier.fillMaxWidth().padding(start = Tokens.Space.m),
+            verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+            if (diff != null) {
+                toolPath(call.use.item)?.let { DiffHeader(it, diff.added, diff.removed) }
+                DiffView(diff, call.id)
+            } else if (todos == null) ToolInputDetail(call.use.item, call.result?.item)
+            // A truncated output opens in full from "Raw output" below. An edit's own result only says it worked; an
+            // answered ask_user's result repeats the ticked choices above in the model's words (iOS ToolViews).
+            val agentReports = call.results.any { it.task?.kind == "agent" }
+            if (agentReports) {
+                call.results.forEachIndexed { index, report ->
+                    val result = report.item
+                    val body = if (report.kind == "tool_result") result.text?.takeIf(String::isNotBlank) ?: report.task?.detail
+                        else report.task?.detail
+                    // A launch receipt and a status-only notification are lifecycle evidence, not reports.
+                    if (!body.isNullOrBlank() && !TaskIndex.isLaunchReceipt(body)) {
+                        if (report.task != null) TaskNoteLine(report, last = index == call.results.lastIndex, onFullText = onFullText)
+                        else {
+                            CodeText(body, stringResource(R.string.chat_content_output))
+                            ToolReaderActions(null, body, result.takeIf { it.fullSize != null }?.let { { onFullText(it) } })
+                        }
+                    }
+                }
+            } else call.result?.item?.let { result ->
+                if (todos == null && (diff == null || call.failed) && (!PersonaTools.isAskUser(call.name) || call.failed))
+                    CodeText(result.text.orEmpty(), stringResource(R.string.chat_content_output))
+            }
+            // A dev server saying where it listens (docs/operations/ports.md).
+            if (call.name == "Bash") call.result?.text?.let { PortBadges(it) }
+            call.images.forEach { ChatPicture(session, it.item, loader) }
+            ToolReaderActions(call.use.item.toolInput?.toString(), call.result?.text?.takeUnless { agentReports },
+                call.result?.item?.takeIf { !agentReports && it.fullSize != null }?.let { result -> { onFullText(result) } })
+            if (Subagents.isAgent(call) && glass) SubagentEntry(call.use.item.toolUseId)
+        }
     }
 }
 

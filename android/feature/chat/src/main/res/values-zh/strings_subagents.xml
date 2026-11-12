@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chat_subagent_starting">正在启动…</string>
+    <string name="chat_subagent_done">已完成</string>
+    <string name="chat_subagent_failed">失败</string>
+    <string name="chat_subagent_stopped">已停止</string>
+    <plurals name="chat_subagent_steps">
+        <item quantity="other">%1$d 步</item>
+    </plurals>
+    <plurals name="chat_subagent_grid_running">
+        <item quantity="other">%1$d 个子 Agent 在运行</item>
+    </plurals>
+    <plurals name="chat_subagent_grid_ran">
+        <item quantity="other">跑了 %1$d 个子 Agent</item>
+    </plurals>
+    <plurals name="chat_subagent_grid_steps">
+        <item quantity="other">共 %1$d 步</item>
+    </plurals>
+</resources>

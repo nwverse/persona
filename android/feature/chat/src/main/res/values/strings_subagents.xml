@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- A subagent's card in an Agent's chat (#4339 C2, iOS SubagentCard): what it is doing, then how it went. -->
+    <string name="chat_subagent_starting">Starting…</string>
+    <string name="chat_subagent_done">Done</string>
+    <string name="chat_subagent_failed">Failed</string>
+    <string name="chat_subagent_stopped">Stopped</string>
+    <plurals name="chat_subagent_steps">
+        <item quantity="one">%1$d step</item>
+        <item quantity="other">%1$d steps</item>
+    </plurals>
+    <!-- Over a grid of subagents launched one after another (iOS SubagentGrid). -->
+    <plurals name="chat_subagent_grid_running">
+        <item quantity="one">Running %1$d agent</item>
+        <item quantity="other">Running %1$d agents</item>
+    </plurals>
+    <plurals name="chat_subagent_grid_ran">
+        <item quantity="one">Ran %1$d agent</item>
+        <item quantity="other">Ran %1$d agents</item>
+    </plurals>
+    <plurals name="chat_subagent_grid_steps">
+        <item quantity="one">%1$d step</item>
+        <item quantity="other">%1$d steps</item>
+    </plurals>
+</resources>

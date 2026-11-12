@@ -32,6 +32,7 @@ import persona.core.designsystem.icons.PhIcons
 import persona.core.domain.ChatTaps
 import persona.core.domain.chatBubbles
 import persona.core.domain.lines.ChatLine
+import persona.core.domain.lines.gridAgents
 import persona.core.domain.lines.isLiveStatus
 import persona.core.domain.sort.READ_ONLY
 import persona.core.domain.sort.canApprove
@@ -396,7 +397,9 @@ private fun ChatPage(
         } else persona.core.domain.tasks.AssistantConversation(projection.lines, emptyList())
     }
     LaunchedEffect(key, tasks) { tasks?.load(key.sessionId); tasks?.loadTodayIfMain(key.sessionId) }
-    val lines = remember(assistantPresentation, search.selected, jumpItem, feed, tasks, taskPlans, taskTodos, taskCardProjection, renderStyle) {
+    // Glass draws parallel subagents as one grid (#4339 C2); Brief and Board list them as steps.
+    val subagentGrid = PersonaTheme.style == AppStyle.Glass
+    val lines = remember(assistantPresentation, search.selected, jumpItem, feed, tasks, taskPlans, taskTodos, taskCardProjection, renderStyle, subagentGrid) {
         searchVisibleLines(assistantPresentation.foreground, search.selected?.itemId ?: jumpItem)
             .let {
                 when {
@@ -406,7 +409,7 @@ private fun ChatPage(
                     else -> persona.core.domain.tasks.AssistantLines.lines(it,
                         persona.core.domain.tasks.SentToAgents.shown(feed))
                 }
-            }.asReversed()
+            }.let { if (subagentGrid) gridAgents(it) else it }.asReversed()
     }
     val searchableItems by produceState(emptyList<Item>(), snapshot.items, timelineVersion, search.visible) {
         if (search.visible) value = withContext(Dispatchers.Default) { timeline.searchItems(snapshot.items) }
@@ -594,14 +597,15 @@ private fun ChatPage(
                 }
             }
         }) else null
-    // "View sub-agent" under Task / Agent steps (iOS): the session's sub-agents by the call that started them, done ones too.
-    val subagentLinks = remember(session?.subagents, chrome.onOpenSession, readOnly, key.machineId) {
-        val open = chrome.onOpenSession
-        if (readOnly || open == null) null
-        else session?.subagents.orEmpty().filter { !it.toolUseId.isNullOrBlank() && it.sessionId.isNotBlank() }
-            .associate { it.toolUseId!! to SessionKey(key.machineId, it.sessionId) }
-            .takeIf { it.isNotEmpty() }?.let { ChatSubagents(it, open) }
+    // The session's subagents by the call that started them, done ones too (iOS `subagentsByCall`): what their cards say,
+    // where an open card reads its latest steps, and "View Subagent" where they can be opened.
+    val subagentLinks = remember(session?.subagents, chrome.onOpenSession, readOnly, key.machineId, repository) {
+        val listed = session?.subagents.orEmpty().filter { !it.toolUseId.isNullOrBlank() }
+        if (listed.isEmpty()) null
+        else ChatSubagents(listed.filter { it.sessionId.isNotBlank() }.associate { it.toolUseId!! to SessionKey(key.machineId, it.sessionId) },
+            chrome.onOpenSession?.takeIf { !readOnly }, listed.associateBy { it.toolUseId!! }, repository)
     }
+    val subagentFolds = remember(key) { SubagentFolds() }
     // A Workflow call draws its run's card (#3435): the session's runs by the call that launched them, their agents
     // opening as "View sub-agent" does. What the reader opens or folds in them lasts while this chat is open.
     val workflowFolds = remember(key) { persona.core.designsystem.WorkflowFolds() }
@@ -852,7 +856,7 @@ private fun ChatPage(
         persona.core.contracts.api.AssistantManagerChoice.itemHeader(listOf("assistant", "conversations", key.sessionId)) else null
     CompositionLocalProvider(LocalChatMarkdownCache provides markdownCache, LocalChatRowActions provides rowActions,
         LocalContentColor provides PersonaTheme.palette.ink, LocalChatPorts provides chatPorts,
-        persona.core.designsystem.LocalAssistantCards provides cardsHost, LocalChatSubagents provides subagentLinks, LocalChatWorkflows provides workflowCards,
+        persona.core.designsystem.LocalAssistantCards provides cardsHost, LocalChatSubagents provides subagentLinks, LocalSubagentFolds provides subagentFolds, LocalChatWorkflows provides workflowCards,
         LocalChatTaskIndex provides projection.tasks, LocalChatJumpToCall provides callJumps::jump) {
         ChatLinkHost(Modifier.fillMaxSize().background(PersonaTheme.palette.background)
             .then(if (embedded) Modifier else Modifier.imePadding()), preloadUrls, list.isScrollInProgress,
@@ -1084,10 +1088,12 @@ private fun ChatPage(
                                     }, style = renderStyle, textUpdates = liveTextUpdates,
                                         userImages = contentUserImages[line.id].orEmpty(),
                                         imagesInUserBubble = line.id in contentHiddenImages,
-                                        workRunning = (line as? ChatLine.Step)?.let { contentWorkGroups[it.groupId]?.live } == true,
-                                        lastWorkStep = (line as? ChatLine.Step)?.let {
-                                            contentWorkGroups[it.groupId]?.steps?.lastOrNull()?.id == it.step.id
-                                        } == true,
+                                        workRunning = line.workGroup()?.let { contentWorkGroups[it]?.live } == true,
+                                        lastWorkStep = when (line) {
+                                            is ChatLine.Step -> contentWorkGroups[line.groupId]?.steps?.lastOrNull()?.id == line.step.id
+                                            is ChatLine.Agents -> contentWorkGroups[line.groupId]?.steps?.lastOrNull()?.id == line.calls.last().id
+                                            else -> false
+                                        },
                                         plan = (line as? ChatLine.Step)?.let { contentPlans[it.groupId] },
                                         showSourceLabel = line.id in contentSourceLabels, waiting = waitingOnYou,
                                         closeoutReply = closeoutReply, hideTaskPrompts = foldsBackground)

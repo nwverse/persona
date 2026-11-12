@@ -31,6 +31,9 @@ private fun recordTarget(lines: List<ChatLine>, matches: (WorkItem) -> Boolean):
         if (folded != null) return TaskRecordTarget(expandFold = folded.item.item)
         return TaskRecordTarget(rowId = it.id)
     }
+    // A subagent in a grid of them (Glass): the grid's line.
+    lines.filterIsInstance<ChatLine.Agents>().firstOrNull { grid -> grid.calls.any { matches(WorkItem.Tool(it)) } }
+        ?.let { return TaskRecordTarget(rowId = it.id) }
     return lines.filterIsInstance<ChatLine.Work>().firstOrNull { it.steps.any(matches) }?.let { TaskRecordTarget(expandGroup = it.id) }
 }
 
