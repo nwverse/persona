@@ -306,6 +306,7 @@ func runHub(ctx context.Context, b update.Build, cfg *Config, budget *shutdownBu
 	go h.fullKeepalive(ctx)
 	go h.live.run(ctx)
 	h.sayMovedSections()
+	h.sayRetiredKeys()
 	// The assistant, its own process on the bus (assistant_process.go); it carries the machines, so the hub's stop
 	// waits for it as it waited for the node connections.
 	h.nodeWorkers.Add(1)
