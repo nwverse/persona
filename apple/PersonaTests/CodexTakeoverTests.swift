@@ -48,4 +48,29 @@ struct CodexTakeoverTests {
         #expect(json["continuation_prompt"] == nil)
         #expect(json["todo_id"] as? String == "todo-1")
     }
+
+    @Test @MainActor func continueOnlyTakeoverRefusalMapsToEncryptedContinuation() throws {
+        let original = APIClient.CodexTakeoverInfo(running: true, canResume: true, reason: nil, token: "token",
+                                                   cwd: "/work", transcriptPath: "/tmp/transcript", continuationPrompt: "Continue")
+        let error = APIError(status: 409, message: "", fields: ["code": "codex_takeover_continue_only"])
+        let continuation = try #require(CodexTakeoverCoordinator.continuationOnlyInfo(for: error, original: original))
+
+        #expect(!continuation.canResume)
+        #expect(continuation.reason == "encrypted_context")
+        #expect(continuation.running == original.running)
+        #expect(continuation.token == original.token)
+        #expect(continuation.cwd == original.cwd)
+        #expect(continuation.transcriptPath == original.transcriptPath)
+        #expect(continuation.continuationPrompt == original.continuationPrompt)
+    }
+
+    @Test @MainActor func unrelatedTakeoverErrorsKeepExistingHandling() {
+        let original = APIClient.CodexTakeoverInfo(running: true, canResume: true, reason: nil, token: "token",
+                                                   cwd: "/work", transcriptPath: "/tmp/transcript", continuationPrompt: "Continue")
+        let apiError = APIError(status: 409, message: "", fields: ["code": "other_conflict"])
+        let plainError = NSError(domain: "test", code: 1)
+
+        #expect(CodexTakeoverCoordinator.continuationOnlyInfo(for: apiError, original: original).map(\.canResume) == nil)
+        #expect(CodexTakeoverCoordinator.continuationOnlyInfo(for: plainError, original: original).map(\.canResume) == nil)
+    }
 }

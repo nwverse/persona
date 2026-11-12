@@ -26,6 +26,14 @@ final class CodexTakeoverCoordinator {
         return false
     }
 
+    static func continuationOnlyInfo(for error: Error, original: APIClient.CodexTakeoverInfo) -> APIClient.CodexTakeoverInfo? {
+        guard (error as? APIError)?.code == "codex_takeover_continue_only" else { return nil }
+        var info = original
+        info.canResume = false
+        info.reason = "encrypted_context"
+        return info
+    }
+
     func takeOver(_ session: Session, model: AppModel) async -> Session? {
         guard !isBusy else { return nil }
         guard session.isCodex, !session.canSend, session.capabilities?.takeover != nil else { return nil }
@@ -80,8 +88,14 @@ final class CodexTakeoverCoordinator {
         } catch { return fail(error.localizedDescription) }
     }
 
-    private func executeTakeover(_ session: Session, info: APIClient.CodexTakeoverInfo, confirmStop: Bool, api: APIClient) async throws -> Session {
-        try await api.codexTakeover(machine: session.machineID, session: session.sessionID, token: info.token, confirmStop: confirmStop)
+    private func executeTakeover(_ session: Session, info: APIClient.CodexTakeoverInfo, confirmStop: Bool, api: APIClient) async throws -> Session? {
+        do {
+            return try await api.codexTakeover(machine: session.machineID, session: session.sessionID, token: info.token, confirmStop: confirmStop)
+        } catch {
+            guard let continuation = Self.continuationOnlyInfo(for: error, original: info) else { throw error }
+            pending = .continuation(session, continuation)
+            return nil
+        }
     }
 
     private func executeContinuation(_ session: Session, info: APIClient.CodexTakeoverInfo, api: APIClient) async throws -> Session {

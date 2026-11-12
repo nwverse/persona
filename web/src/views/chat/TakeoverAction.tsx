@@ -13,6 +13,7 @@ export default function TakeoverAction({ session }: { session: Session }) {
   const [confirmStop, setConfirmStop] = useState(false);
   const [busy, setBusy] = useState(false);
   const path = `/machines/${enc(session.machine_id)}/codex/${enc(session.session_id)}/takeover`;
+  const takeoverAvailable = Boolean(session.capabilities?.takeover);
 
   const commit = async (p: CodexTakeoverPlan, confirm: boolean) => {
     const body = takeoverBody(p, confirm);
@@ -63,9 +64,11 @@ export default function TakeoverAction({ session }: { session: Session }) {
     setPlan(null); setConfirmStop(false);
   };
 
+  if (!takeoverAvailable && !plan) return null;
+
   return <>
     {session.capabilities?.takeover?.can_resume && <Button size="sm" busy={loading} disabled={loading} onClick={() => void prepare()}>{t("chat-takeover.takeover")}</Button>}
-    <Button size="sm" disabled={loading} onClick={() => void continueNew()}>{t("chat-takeover.takeover_new")}</Button>
+    {takeoverAvailable && <Button size="sm" disabled={loading} onClick={() => void continueNew()}>{t("chat-takeover.takeover_new")}</Button>}
     <Dialog open={Boolean(plan && (confirmStop || !plan.can_resume))} onClose={() => { setPlan(null); setConfirmStop(false); }} title={t("chat-takeover.takeover_title")}
       footer={plan && !plan.can_resume
         ? <Button tone="secondary" onClick={continueElsewhere}>{t("chat-takeover.takeover_new")}</Button>

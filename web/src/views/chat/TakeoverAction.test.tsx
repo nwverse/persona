@@ -126,4 +126,31 @@ describe("TakeoverAction interactions", () => {
     expect(state.api.mock.calls[1][1]).toMatchObject({ json: { token: "token-1" } });
     expect(state.api.mock.calls[3][1]).toMatchObject({ json: { token: "token-2" } });
   });
+
+  it("keeps a pending continue-only dialog when SSE removes takeover capability", async () => {
+    let rejectPost!: (error: Error) => void;
+    state.api.mockImplementation(async (_path: string, options?: { method?: string }) => {
+      if (options?.method === "POST") return new Promise((_resolve, reject) => { rejectPost = reject; });
+      return plan();
+    });
+    render();
+    await act(async () => button(host, t("chat-takeover.takeover")).click()); await flush();
+    await act(async () => button(document.body, t("chat-takeover.takeover_confirm")).click()); await flush();
+    expect(state.api.mock.calls.map(([, options]) => options?.method ?? "GET")).toEqual(["GET", "POST"]);
+
+    render({ ...baseSession, source_kind: "codex_app_server", capabilities: undefined } as Session);
+    await act(async () => rejectPost(new ApiError(409, "continue only", { code: "codex_takeover_continue_only" })));
+    await flush();
+
+    expect(document.body.textContent).toContain(t("chat-takeover.reason_encrypted_context"));
+    expect(document.body.textContent).not.toContain("encrypted_context");
+    expect([...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].filter((b) => b.getAttribute("aria-label") !== t("ui-atoms.close"))).toHaveLength(1);
+    expect(button(host, t("chat-takeover.takeover"))).toBeFalsy();
+    expect(state.api.mock.calls.map(([, options]) => options?.method ?? "GET")).toEqual(["GET", "POST"]);
+  });
+
+  it("renders no takeover controls for an ordinary live Codex session without a capability", () => {
+    render({ ...baseSession, source_kind: "codex_app_server", capabilities: undefined } as Session);
+    expect(host.querySelectorAll("button")).toHaveLength(0);
+  });
 });

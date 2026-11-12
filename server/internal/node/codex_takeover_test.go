@@ -134,6 +134,36 @@ func TestCodexTakeoverHandlesTrustAfterATransientComposer(t *testing.T) {
 	}
 }
 
+func TestCodexTakeoverSealedContextAfterLaunchOffersOnlyContinuation(t *testing.T) {
+	withCodexWaits(t)
+	n, f, cwd := codexHistoryNode(t)
+	listSessions(t, n)
+	resumeFile(f, cwd)
+	f.setScreen("w1:p2", cxReady)
+	n.takeovers.writers = func(codexSource) ([]codexWriter, error) { return nil, nil }
+	n.takeovers.shared = func(context.Context, codexSource) ([]string, error) {
+		return []string{"codex", "--remote", "unix:///shared/socket"}, nil
+	}
+	f.after(func(c herdrCall) {
+		if c.Method == "pane.send_input" && strings.Contains(str(c.Params["text"]), "codex-start") {
+			f.setScreen("w1:p2", codexStartError+" invalid_encrypted_content")
+		}
+	})
+	plan, err := n.prepareCodexTakeover(context.Background(), startThread)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := n.commitCodexTakeover(context.Background(), startThread, plan.Token, false); refusalCode(err) != "codex_takeover_continue_only" {
+		t.Fatalf("late encrypted-context failure was not made continuation-only: %v", err)
+	}
+	n.takeovers.mu.Lock()
+	failed := n.takeovers.failed[startThread]
+	n.takeovers.mu.Unlock()
+	if !failed {
+		t.Fatal("sealed context was not remembered")
+	}
+}
+
 func TestCodexTakeoverExitedWriterUsesSharedNewTab(t *testing.T) {
 	n, file, calls := takeoverNode(t, false)
 	p, err := n.prepareCodexTakeover(context.Background(), startThread)

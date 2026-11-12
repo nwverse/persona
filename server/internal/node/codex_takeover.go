@@ -176,8 +176,19 @@ func (n *Node) prepareCodexTakeover(ctx context.Context, id string) (*codexTakeo
 	return &p, nil
 }
 
-func (n *Node) commitCodexTakeover(ctx context.Context, id, token string, confirm bool) (*proto.Session, error) {
+func (n *Node) commitCodexTakeover(ctx context.Context, id, token string, confirm bool) (session *proto.Session, err error) {
 	defer n.typing.lock(id)()
+	defer func() {
+		if err != nil && encryptedCodexFailure(err.Error()) {
+			n.takeovers.mu.Lock()
+			if n.takeovers.failed == nil {
+				n.takeovers.failed = map[string]bool{}
+			}
+			n.takeovers.failed[id] = true
+			n.takeovers.mu.Unlock()
+			err = takeoverRefusal("continue_only")
+		}
+	}()
 	n.takeovers.mu.Lock()
 	p, ok := n.takeovers.plans[token]
 	if ok {
@@ -197,7 +208,7 @@ func (n *Node) commitCodexTakeover(ctx context.Context, id, token string, confir
 	if !ok || src != p.source {
 		return nil, takeoverRefusal("changed")
 	}
-	ctx, err := n.takeoverHost(ctx)
+	ctx, err = n.takeoverHost(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -251,15 +262,6 @@ func (n *Node) commitCodexTakeover(ctx context.Context, id, token string, confir
 	st := sessionState{Launcher: "codex", Cwd: p.Cwd}
 	err = n.resumeCodex(ctx, launch, id, st, argv, "", ws, n.resumeTabName(id))
 	if err != nil {
-		if encryptedCodexFailure(err.Error()) {
-			n.takeovers.mu.Lock()
-			if n.takeovers.failed == nil {
-				n.takeovers.failed = map[string]bool{}
-			}
-			n.takeovers.failed[id] = true
-			n.takeovers.mu.Unlock()
-			return nil, takeoverRefusal("continue_only")
-		}
 		return nil, err
 	}
 	a, ok := n.agent(id)
