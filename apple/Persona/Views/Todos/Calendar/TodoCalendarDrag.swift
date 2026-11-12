@@ -357,7 +357,9 @@ struct CalendarHold: UIGestureRecognizerRepresentable {
 
 /// A to-do's button on the calendar that can be moved (#2045): the hold takes its touches, and a tap that is let go
 /// before the pick-up opens it. A hold attached around a plain button never began: `gesture(_:)` ranks below the
-/// button's own press, so a drag ended as a tap, which opened the to-do. With the pointer's hover a plain button has.
+/// button's own press, so a drag ended as a tap, which opened the to-do. No `.hoverEffect()` (a plain button has none
+/// either): with it an iPad's finger never reached the axis's blocks, which are placed by an offset, and a tap on one
+/// went to the axis under it (#2045's UI tests, round 5).
 struct CalendarCarryStyle: PrimitiveButtonStyle {
     var hold: CalendarHold
 
@@ -366,7 +368,6 @@ struct CalendarCarryStyle: PrimitiveButtonStyle {
         hold.tapped = { configuration.trigger() }
         return configuration.label
             .contentShape(.rect)
-            .hoverEffect()
             .gesture(hold)
     }
 }

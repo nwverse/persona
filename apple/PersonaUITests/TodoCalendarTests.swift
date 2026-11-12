@@ -78,7 +78,7 @@ final class TodoCalendarTests: XCTestCase {
 
     /// Moving a to-do (#2045): held and dragged on the day's axis two hours later, onto the All Day row, to the next
     /// day's column of the week and to the next day of the month; each saved at once with a toast whose Undo puts it
-    /// back. The mock hub's "检查 PR #42" is due today at 10:00. PERSONA_BEFORE (the app built from main, for the
+    /// back. The mock hub's 「检查 PR #42」 is due today at 10:00. PERSONA_BEFORE (the app built from main, for the
     /// before / after recordings) makes the same gestures and checks nothing; PERSONA_APPEARANCE dark / light.
     @MainActor func testDragMovesAToDo() throws {
         guard let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] else {
@@ -220,7 +220,7 @@ final class TodoCalendarTests: XCTestCase {
     }
 
     /// The way without dragging (VoiceOver's "Change Due Date…", opened here by `-openRescheduleTitled`): All Day on,
-    /// Save, and "检查 PR #42" is due today, all day; Undo puts it back.
+    /// Save, and 「检查 PR #42」 is due today, all day; Undo puts it back.
     @MainActor func testChangeDueDateWithoutDragging() throws {
         guard let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] else {
             throw XCTSkip("needs scripts/mock/mock_hub.py (PERSONA_MOCK_HUB)")
@@ -234,7 +234,7 @@ final class TodoCalendarTests: XCTestCase {
         XCTAssertTrue(calendarSwitch.waitForExistence(timeout: 60))
         XCTAssertTrue(waitForSheet(calendarSwitch), "no sheet; trace: \(trace())")
         let allDay = app.switches["todo.calendar.rescheduleAllDay"]
-        XCTAssertTrue(app.navigationBars["改截止时间"].exists)
+        XCTAssertTrue(allDay.waitForExistence(timeout: 5))
         shot("reschedule-sheet")
         allDay.switches.firstMatch.tap()
         app.buttons["todo.calendar.rescheduleSave"].tap()
@@ -275,13 +275,14 @@ final class TodoCalendarTests: XCTestCase {
 
     /// The `-openRescheduleTitled` sheet is up. It opens with the calendar, asked again for a few seconds when the
     /// page's push drops it; else once the calendar is switched to (from the list, or from the list and back). A tap
-    /// on the switch while it is up would close it, so the switch waits until the asking is over.
+    /// on the switch while it is up would close it, so the switch waits until the asking is over. The sheet is known
+    /// by its bar: at the largest text size an iPad's sheet has its All Day switch below the fold, not drawn.
     @MainActor private func waitForSheet(_ calendarSwitch: XCUIElement) -> Bool {
-        let allDay = app.switches["todo.calendar.rescheduleAllDay"]
-        if allDay.waitForExistence(timeout: 15) { return true }
+        let sheet = app.navigationBars["改截止时间"]
+        if sheet.waitForExistence(timeout: 15) { return true }
         if calendarSwitch.isSelected { app.buttons["列表"].tap() }
         calendarSwitch.tap()
-        return allDay.waitForExistence(timeout: 20)
+        return sheet.waitForExistence(timeout: 20)
     }
 
     /// An hour on the axis (`Theme.CalendarGrid.hour`), and where a month day's first line is from its top (its date,
@@ -347,7 +348,7 @@ final class TodoCalendarTests: XCTestCase {
             .press(forDuration: 0.6, thenDragTo: target, withVelocity: .slow, thenHoldForDuration: 0.5)
     }
 
-    /// "检查 PR #42" due today at 10:00 again, whatever an earlier run left.
+    /// 「检查 PR #42」 due today at 10:00 again, whatever an earlier run left.
     private func resetReview(_ hub: String, to ten: Date) throws {
         try send(hub, "PATCH", "/api/v1/todos/todo_review", ["due_at": ISO8601DateFormatter().string(from: ten)])
     }

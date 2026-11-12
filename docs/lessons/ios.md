@@ -56,8 +56,9 @@ it; the compiler and the unit tests had nothing to say.
 - A representable has no `simultaneousGesture` or `highPriorityGesture`. Make the recognizer the button's own
   interaction instead: a `PrimitiveButtonStyle` whose label carries it and calls `configuration.trigger()` on a tap
   (`CalendarCarryStyle`). The recognizer recognizes the tap itself, so no gesture under it takes the touch as well.
-- A custom style loses the pointer's hover that a plain button has: add `.hoverEffect()`. Never wrap
-  `Button(configuration)` inside the style (`Styling.swift`).
+- Never wrap `Button(configuration)` inside the style (`Styling.swift`). Leave `.hoverEffect()` off the carried
+  label too: with it, an iPad's finger never reached the blocks placed on the axis by an offset, and a tap on one
+  went to the axis under it (a phone, whose hover effect does nothing, and the month's chips were fine).
 - When a gesture misbehaves only in UI tests, note its steps in a DEBUG trace shown as an accessibility value
   (`CalendarDragTrace`) and print it in the failure message. An empty trace says the recognizer never saw the touch.
 

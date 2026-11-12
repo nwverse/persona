@@ -536,6 +536,9 @@ struct TodoCalendarTimeline: View {
             Color.clear
                 .contentShape(.rect)
                 .gesture(SpatialTapGesture().onEnded { tap in
+                    #if DEBUG
+                    CalendarDragTrace.shared.note("axis tap \(CalendarDragTrace.point(tap.location))") // i18n-ignore: DEBUG trace
+                    #endif
                     let minutes = Double(tap.location.y / hour) * 60
                     add(TodoCalendarSlot(day: day, time: TodoCalendar.slot(day: day, minutes: minutes, snap: Theme.CalendarGrid.snapMinutes, calendar: calendar)))
                 })
