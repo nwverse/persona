@@ -8,7 +8,7 @@ file with no entry starts at zero, so a new file cannot add one. Sizes come from
 roles in docs/design/task-cards.md section 4.1 (`text-xs`, `text-sm`, the `--chat-*` variables).
 
 A file under its baseline fails too: run --update, which rewrites the baseline downward and drops
-files that no longer have any. --update refuses to raise a count or to add a file, and will not
+files that no longer have any. --update refuses to raise a count, and lets a file with no entry take only the sizes that left other files in the same change (a split or a move), and will not
 create a baseline (that would record what is already in the tree).
 """
 import argparse
@@ -91,7 +91,8 @@ def violations(actual, baseline):
         if got > allowed:
             found.append(
                 "{0}: {1} hard-coded px font size(s), baseline {2}; use a named size "
-                "(text-xs, text-sm, a --chat-* variable; docs/design/task-cards.md 4.1)".format(path, got, allowed))
+                "(text-xs, text-sm, a --chat-* variable; docs/design/task-cards.md 4.1). "
+                "If the sizes moved here from another file, run --update: a new file may take what other files lost".format(path, got, allowed))
         elif got < allowed:
             found.append(
                 "{0}: {1} hard-coded px font size(s), baseline {2}; "
@@ -100,16 +101,26 @@ def violations(actual, baseline):
 
 
 def plan_update(old, actual):
-    """The lowered baseline, or (None, refusals) when a count would rise or a file would be added."""
+    """The lowered baseline, or (None, refusals) when a count would rise or a file would take more than moved to it.
+
+    A file with no entry may be given sizes that left other files in the same change (a component split out of, or
+    moved from, a file): what a file lost, by a lowered count or by being gone, is a pool the new files draw on, so the
+    total still never goes up."""
+    pool = sum(max(0, allowed - actual.get(path, 0)) for path, allowed in old.items())
     refusals = []
     for path in sorted(actual):
         got = actual[path]
         allowed = old.get(path, 0)
-        if got > allowed:
-            if allowed == 0:
-                refusals.append("web font ratchet: refusing to add {0} with {1} px font size(s)".format(path, got))
-            else:
-                refusals.append("web font ratchet: refusing to raise {0} from {1} to {2}".format(path, allowed, got))
+        if got <= allowed:
+            continue
+        if allowed:
+            refusals.append("web font ratchet: refusing to raise {0} from {1} to {2}".format(path, allowed, got))
+        elif got <= pool:
+            pool -= got
+        else:
+            refusals.append(
+                "web font ratchet: refusing to add {0} with {1} px font size(s); only {2} left other files in this change "
+                "(a moved file's sizes may follow it, new ones may not)".format(path, got, pool))
     if refusals:
         return None, refusals
     return {path: count for path, count in actual.items() if count > 0}, []

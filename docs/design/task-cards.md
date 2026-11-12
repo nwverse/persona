@@ -126,7 +126,7 @@ P7 已定，Web 一侧已删（§7）。**更正**：`OutcomeReceipt`、`Receipt
   Needs you 里的失败行用（见 §4.4 和 §7）。
 - 理由：失败是要用户注意的状态，浅色下和普通灰卡片分不出来是缺陷；两端同一个语义色按同一个比例混合，也方便做 token 表。
   对比度（实测，WCAG）：12% 红叠在浅色画布上，`--red` 4.31、`--ink-2` 4.37、`--ink-3` 4.12，都不到 4.5；叠在浅色 surface 上 4.78 / 4.85 / 4.57。
-  所以聊天里（画布上）的失败 / 中断卡正文用 `--ink`（12:1），托盘（surface 上）里红字和 `--ink-2` 够用。
+  所以失败 / 中断卡和托盘里失败行上的**字一律用 `--ink`**（画布和 surface 上都在 11:1 以上，`theme-contrast.test.ts` 钉着）；`--red` 和 `--accent` 在浅色画布上都不到 4.5（`--accent` 在 12% 红底上只有 2.7–3.0），只给图标用，Retry / Remove 也写成 `--ink`。
 
 ### D11 圆角、间距、字号
 
@@ -272,9 +272,9 @@ Web 的 `--orange` 浅色 `#a64c00` 比 iOS 的 `caution` 暗很多，更接近 
 2026-11-12 用户拍板：P1–P7 全部按下面的推荐执行。每条后面写了落地时的具体做法。
 
 - **P1 拍板行：窄屏堆叠还是收菜单（D8）。** 推荐：堆叠，主按钮满宽。依据：菜单让主操作多一次点击。
-  **已定：堆叠，主按钮满宽；两端都做，iOS 去掉「Actions」菜单收纳。** 窄屏时文字占满宽，次要按钮一行，主按钮在它们下面独占一行满宽（§3.4）；宽屏不变。
+  **已定：堆叠，主按钮满宽；两端都做，iOS 去掉「Actions」菜单收纳。** 窄屏时文字占满宽，次要按钮一行（Open、Finish now、Later、Don't handle，放不下就换行），主按钮在它们下面独占一行满宽（§3.4）；宽屏不变。Web 的 Later / Don't handle 通过 `AcceptRow` 的 `secondary` 插进这一行。
 - **P2 Needs you 托盘形态（D4）：紧凑行、内联展开、折叠行 + 原地展开。** 推荐：折叠行 + 原地展开。依据：单手滚动成本和答一道题的点击数两头都不吃亏。代价：要在 iOS 托盘里做可展开的行，工作量最大的一项。
-  **已定：折叠行 + 原地展开，两端统一。** 默认全部折叠（只有一行时也不自动展开）；点行或行尾的 chevron 在原地展开成完整可答的卡；答完后折叠 / 消失。
+  **已定：折叠行 + 原地展开，两端统一。** 默认全部折叠（只有一行时也不自动展开）；点行或行尾的 chevron 在原地展开成完整可答的卡；答完后折叠 / 消失。展开状态的键带着这一轮的标识（任务的 review / ask 时间、Agent 的问题 id），同一个任务再问一次时回到折叠；展开后卡里不再重复标题（行头就是标题）。
   对话自己的问题 / 权限卡（已经在聊天底部）的行保持原来的「关掉托盘并滚到那张卡」。
 - **P3 Web 是否恢复聊天里的结论卡（D7）。** 推荐：恢复，结构取 iOS，加「Show all」。依据：结论是交付物，状态字不替代它。若当时去掉是有意的（避免和交接卡重复），则改成「交接卡在做完后展开成结论」，同样要把摘要带出来。
   **已定：Web 恢复聊天里的结论卡（done / stopped / failed / interrupted 四态），结构取 iOS，加「Show all」和 Copy / Quote；iOS 也补「Show all」和 Copy / Quote。**
@@ -309,6 +309,7 @@ Web 的 `--orange` 浅色 `#a64c00` 比 iOS 的 `caution` 暗很多，更接近 
 - `web-handoff-working-*`、`web-handoff-failed-*`：Web 聊天里的交接卡（运行中 / 没起来）
 - `ios-handoff-receipt-{done,stopped,failed,interrupted}-*`：iOS 聊天里的「Dispatched」行和结论卡的四种状态
 - `web-brief-to-verify-*`：早报里的拍板行（看 D8 的窄屏挤压）
+- `task-cards/impl/web-<状态>-<before|after>-<light|dark>.png`：#5569 Web 一侧的前后对比（430 px，对着 mock hub）：`tray-needs`、`decision-row`（展开的拍板行）、`failed-row`、`handoff-failed`（交接卡「Didn't start」）、`expanded-ask`、`expanded-plan`、`tray-running`、`receipt-interrupted`
 
 ## 7. 实现状态（#5569）
 
@@ -321,10 +322,10 @@ Web 一侧（本 PR）：
 | §3.2 / D1 进度行 | 已实现 | 状态字右对齐成独立一列（`max-w-[40%]` 截断），行尾固定宽槽位：`›` / 绿勾（已完成）/ 橙色 ⓘ（只有用量限制）；颜色：Needs you `attention`、用量限制 `orange`、打断和失败 `red`。`data-task-slot`、`data-task-mark`、`data-running-agent` 和标题的 `font-semibold` 不变，新增 `data-task-status` |
 | D2 Starting | 已实现 | 托盘行里 `not_started` 写 `assistant-tasks.status_starting`（Starting / 启动中 / 起動中）；`lib-state-labels.not_started` 不动（To-dos 页、任务板还用它） |
 | D3 用量限制第二行 | 已实现 | 用量限制行的第二行是 `usageLimitLabel`（「Usage limit · resets 14:20」，已知重置时间时）；没有重置时间时是 `lib-usage-limit.short` / `resumes_later`。每 30 秒跟着宽限时间刷新。聊天里的用量限制卡本来就有 |
-| P2 折叠行 | 已实现 | `AssistantActionBar` 的 `openRows`（不叫 `expanded`，那是整个托盘铺满，#4656）；`NeedsYouRow` 对计划、消息、有问题的 Agent / 任务、拍板、验收折叠成 `button[aria-expanded]`（标记、标题、在等什么、种类、chevron），展开后外层 `div[data-needs-row][data-needs-open]` 里是标题按钮（再点折叠）和原来的完整卡。`data-needs-row` 在两种状态下都在最外层。没有问题的 Agent、只是在等的任务、失败行本来就是一行，不变；对话自己的卡（`OwnAskRow`）不变。换托盘时全部折叠；答完的卡从 Needs you 消失，展开状态的键留在集合里直到换托盘（撤销「不处理」后行回来时仍是展开的）。展开后卡里的任务标题不再是单独的「打开任务」按钮（标题行改成折叠开关） |
+| P2 折叠行 | 已实现 | `AssistantActionBar` 的 `openRows`（不叫 `expanded`，那是整个托盘铺满，#4656）；`NeedsYouRow` 对计划、消息、有问题的 Agent / 任务、拍板、验收折叠成 `button[aria-expanded]`（标记、标题、在等什么、种类、chevron），展开后外层 `div[data-needs-row][data-needs-open]` 里是标题按钮（再点折叠）和原来的完整卡。`data-needs-row` 在两种状态下都在最外层。没有问题的 Agent、只是在等的任务、失败行本来就是一行，不变；对话自己的卡（`OwnAskRow`）不变。换托盘时全部折叠；答完的卡从 Needs you 消失，展开状态的键是「行键 @ 这一轮」，留在集合里直到换托盘：撤销「不处理」后行回来仍是展开的，同一个任务再问一次（新一轮）回到折叠。展开后卡里的任务标题不再是单独的「打开任务」按钮（标题行改成折叠开关） |
 | P4 用词 | Web 无需改 | Web 本来就是 Later / Don't handle；本文 D9 / P4 已改正 |
 | P5 `--danger-wash` | 已实现 | 新 token，失败 / 中断结论卡、待处理的中断批次卡、Needs you 里的失败行用；`--red-tint` 不动。对比度见 D10，`theme-contrast.test.ts` 钉住 |
-| P6 px 字号棘轮 | 已实现 | `scripts/ci/web_font_ratchet.py` + `web_font_baseline.json`（3423 处，314 个文件）+ `test_web_font_ratchet.py`，接在 `guards.sh`；只能减不能增，`--update` 只降 |
+| P6 px 字号棘轮 | 已实现 | `scripts/ci/web_font_ratchet.py` + `web_font_baseline.json`（3423 处，314 个文件）+ `test_web_font_ratchet.py`，接在 `guards.sh`；只能减不能增，`--update` 只降；拆分或搬动文件时，没有记录的新文件可以拿走别的文件在同一次改动里少掉的数（总数不会升） |
 | P7 死代码 | Web 已删 | `TaskCard`、`useTaskCard`、`TaskLine`、`TaskSentList`、`useTaskUltracode`、`TaskTitle`、`useTaskMenu`、`taskCardDrawn`、`useTaskCardShown`、`FeedLineView` 的 `task` / `plan` 非简化分支，`receipt_failed_above` 等 6 个只有它们用的 i18n 键，和只测这些的用例。保留：`takenIn`（`lib/feed.ts`，隐藏交接消息的规则，原来是 `TaskCard` 列出它们；现在没有地方列，留待后续决定）、`ReceiptSummary`、`Clamped` |
 | 文档 | 已改 | 本文 §0、D1–D5、D7、D9、D10、P1–P7、§4.1、§4.4、§6；`DESIGN_SYSTEM.md` 的 `--danger-wash` 行和 4.8.0；`docs/operations/testing.md` |
 

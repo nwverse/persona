@@ -52,7 +52,7 @@ describe("default palette contrast", () => {
       expect(css).toContain(".dark .bg-user-bubble { --ink-3: var(--ink-2); }");
       expect(css).toContain(".bg-user-bubble :is(button, a, summary):focus-visible { outline-color: var(--ink); --tw-ring-color: var(--ink); }");
     });
-    it(`${scheme}: --danger-wash (red at 12%) keeps --ink readable on the canvas and the tray's surface, --red and --ink-2 on the surface`, () => {
+    it(`${scheme}: --danger-wash (red at 12%) keeps --ink readable on the canvas and the tray's surface (words on it are --ink; --red only colours icons)`, () => {
       expect(css).toContain("--danger-wash: color-mix(in srgb, var(--red) 12%, transparent)");
       const over = (full: string) => {
         const bg = full.length === 4 ? `#${[...full.slice(1)].map((c) => c + c).join("")}` : full;
@@ -60,7 +60,6 @@ describe("default palette contrast", () => {
         return `#${[r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
       };
       for (const bg of ["canvas", "surface"]) expect(contrast(t.ink, over(t[bg])), `ink on the wash over ${bg}`).toBeGreaterThanOrEqual(4.5);
-      for (const role of ["red", "ink-2"]) expect(contrast(t[role], over(t.surface)), `${role} on the wash over surface`).toBeGreaterThanOrEqual(4.5);
     });
     it(`${scheme}: --ink-3 stays a step quieter than --ink-2`, () => {
       expect(contrast(t["ink-3"], t.surface)).toBeLessThan(contrast(t["ink-2"], t.surface));

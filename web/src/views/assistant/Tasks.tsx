@@ -600,7 +600,7 @@ export function InterruptBatchCard({ batch }: { batch: InterruptBatch }) {
                 className="flex min-w-0 items-center gap-2 rounded-control px-2 py-1.5 text-left text-[13px] enabled:hover:bg-hover"
               >
                 <span className="min-w-0 flex-1 truncate">{known?.title || task.title}</span>
-                <span className={cx("shrink-0 whitespace-nowrap", waiting ? "font-medium text-red" : "text-ink-2")}>{resolutionLabel(task.resolution)}</span>
+                <span className={cx("shrink-0 whitespace-nowrap", waiting ? "font-semibold text-ink" : "text-ink-2")}>{resolutionLabel(task.resolution)}</span>
                 {known && <Icon name="chevronRight" size={12} className="shrink-0 text-ink-3" />}
               </button>
             );
@@ -1130,6 +1130,14 @@ function foldedRow(item: NeedsYouItem): { title: string; line?: string; kicker: 
   return undefined;
 }
 
+/** What a Needs you row's open state is kept under: its key and the round it asks, so the same task or Agent asking
+ *  again comes back folded while a row that only blinks out (hidden for a moment, then restored) keeps its state. */
+function openKey(item: NeedsYouItem): string {
+  if (item.kind === "task") return `${item.key}@${item.todo.supervision?.reviews?.at(-1)?.at || item.todo.decision_review?.review_at || openAsk(item.todo)?.asked_at || item.asks.map((ix) => ix.id).join(",")}`;
+  if (item.kind === "agent") return `${item.key}@${item.asks.map((ix) => ix.id).join(",")}`;
+  return item.key;
+}
+
 /** A Needs you row. The ones with something to answer are folded to a line until opened; a click on the line, or its
  *  chevron, opens the whole card where it is, and the card leaves with the answer. */
 function NeedsYouRow({ item, open, onToggle }: { item: NeedsYouItem; open: boolean; onToggle: () => void }) {
@@ -1185,10 +1193,10 @@ function NeedsYouBody({ item, nested = false }: { item: NeedsYouItem; nested?: b
   if (isDecision(todo))
     return (
       <Suspense fallback={<div data-needs-row={rowKey} className="truncate rounded-control bg-field px-3 py-2.5 text-[12px] text-ink-2">{todo.title}</div>}>
-        <TaskDecision key={todo.id + (todo.supervision?.reviews?.at(-1)?.at || todo.decision_review?.review_at || ask?.asked_at)} rowKey={rowKey} todo={todo} />
+        <TaskDecision key={todo.id + (todo.supervision?.reviews?.at(-1)?.at || todo.decision_review?.review_at || ask?.asked_at)} rowKey={rowKey} hideTitle={nested} todo={todo} />
       </Suspense>
     );
-  if (ask) return <div data-needs-row={rowKey}><AcceptRow stacked key={todo.id + ask.asked_at} row={{ id: todo.id, title: todo.title, waited_s: Math.max(0, (Date.now() - Date.parse(ask.asked_at)) / 1000), outcome: ask.outcome, verdict: ask.verdict, recommend: ask.recommend, asked_at: ask.asked_at }} /></div>;
+  if (ask) return <div data-needs-row={rowKey}><AcceptRow stacked hideTitle={nested} key={todo.id + ask.asked_at} row={{ id: todo.id, title: todo.title, waited_s: Math.max(0, (Date.now() - Date.parse(ask.asked_at)) / 1000), outcome: ask.outcome, verdict: ask.verdict, recommend: ask.recommend, asked_at: ask.asked_at }} /></div>;
   if (status === "failed") return <FailedTaskRow rowKey={item.key} todo={todo} />;
   return <button type="button" data-needs-row={rowKey} onClick={() => openTask(todo.id)} className="flex items-center gap-2 rounded-control bg-field px-3 py-2 text-left text-sm"><Icon name="hand" className="shrink-0 text-attention" /><span className="min-w-0 flex-1 truncate">{todo.title}</span><span className="shrink-0 text-xs text-ink-2">{waitsLabel(todo, status)}</span></button>;
 }
@@ -1203,15 +1211,15 @@ function FailedTaskRow({ rowKey, todo }: { rowKey: string; todo: Todo }) {
       <div className="flex min-w-0 items-center gap-2">
         <Icon name="info" className="shrink-0 text-red" />
         <button type="button" onClick={() => openTask(todo.id)} className="min-w-0 flex-1 truncate text-left hover:underline">{todo.title}</button>
-        <span className="shrink-0 text-xs text-ink-2">{waitsLabel(todo, "failed")}</span>
+        <span className="shrink-0 text-xs text-ink">{waitsLabel(todo, "failed")}</span>
       </div>
-      {why && <div className="truncate pl-6 text-xs text-red" title={why}>{why}</div>}
+      {why && <div className="truncate pl-6 text-xs text-ink" title={why}>{why}</div>}
       <div className="flex items-center gap-4 pl-6 text-[12.5px]">
-        <button type="button" disabled={retrying} onClick={() => retryTaskNow(todo)} className="touch-hit inline-flex items-center gap-1 whitespace-nowrap font-semibold text-accent hover:underline disabled:opacity-50 disabled:hover:no-underline">
+        <button type="button" disabled={retrying} onClick={() => retryTaskNow(todo)} className="touch-hit inline-flex items-center gap-1 whitespace-nowrap font-semibold text-ink hover:underline disabled:opacity-50 disabled:hover:no-underline">
           <Icon name="retry" size={12} />
           {retrying ? t("assistant-tasks.retrying") : t("assistant-tasks.retry")}
         </button>
-        <button type="button" onClick={() => removeTaskNow(todo)} className="touch-hit inline-flex items-center gap-1 whitespace-nowrap font-semibold text-red hover:underline">
+        <button type="button" onClick={() => removeTaskNow(todo)} className="touch-hit inline-flex items-center gap-1 whitespace-nowrap font-semibold text-ink hover:underline">
           <Icon name="trash" size={12} />
           {t("assistant-tasks.remove")}
         </button>
@@ -1345,13 +1353,13 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
             {showShelved && entries.shelved.map((item) => item.kind === "task" && <ProgressTaskRow key={item.key} card={item.card} conversation={conversation} activity={item.activity} />)}
           </div>}
           {tray === "needs" && <div className="flex flex-col gap-2 p-2">
-            {asking.map((item) => <NeedsYouRow key={item.key} item={item} open={openRows.has(item.key)} onToggle={() => toggleRow(item.key)} />)}
+            {asking.map((item) => <NeedsYouRow key={item.key} item={item} open={openRows.has(openKey(item))} onToggle={() => toggleRow(openKey(item))} />)}
             {ownAsks.map((ix) => <OwnAskRow key={ix.id} ix={ix} onOpen={() => openOwn(ix.id)} />)}
-            {rest.map((item) => <NeedsYouRow key={item.key} item={item} open={openRows.has(item.key)} onToggle={() => toggleRow(item.key)} />)}
+            {rest.map((item) => <NeedsYouRow key={item.key} item={item} open={openRows.has(openKey(item))} onToggle={() => toggleRow(openKey(item))} />)}
             {groups.slice(1).map((group) => (
               <section key={group.supervisor} data-needs-supervisor={group.supervisor} aria-label={supervisorTitle(group.supervisor)} className="flex flex-col gap-2">
                 <h3 className="truncate px-1 pt-1 text-xs text-ink-2">{supervisorTitle(group.supervisor)}</h3>
-                {[...group.items.filter(isAsking), ...group.items.filter((item) => !isAsking(item))].map((item) => <NeedsYouRow key={item.key} item={item} open={openRows.has(item.key)} onToggle={() => toggleRow(item.key)} />)}
+                {[...group.items.filter(isAsking), ...group.items.filter((item) => !isAsking(item))].map((item) => <NeedsYouRow key={item.key} item={item} open={openRows.has(openKey(item))} onToggle={() => toggleRow(openKey(item))} />)}
               </section>
             ))}
             {!counts.needs && <p className="px-1 py-2 text-sm text-ink-2">{t("assistant-tasks.tray_empty_pending")}</p>}

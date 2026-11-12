@@ -275,7 +275,10 @@ describe("a decision in the Needs you tray", () => {
     await act(async () => row().querySelector("[data-decision-actions]")!.querySelectorAll<HTMLButtonElement>("button")[1].click());
     const next = "2026-11-11T09:00:00Z";
     await act(async () => putTodo({ ...todo, supervision: { ...todo.supervision!, reviews: [{ at: next, verdict: "needs_user" }] }, ask: { ...decision, asked_at: next } }));
+    // a new round of the same task asks folded again (#5569)
     expect(row()).not.toBeNull();
+    expect(row().querySelector("[data-decision-option]")).toBeNull();
+    await act(async () => host.querySelector<HTMLButtonElement>('button[data-needs-row="task:decision-task"]')?.click());
     expect(row().querySelector("[data-decision-option]")).not.toBeNull();
   });
 

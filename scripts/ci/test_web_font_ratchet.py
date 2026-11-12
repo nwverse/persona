@@ -82,6 +82,16 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(len(refusals), 2)
         self.assertEqual(json.loads((root / ratchet.BASELINE_REL).read_text()), {"web/src/a.tsx": 1})
 
+    def test_update_lets_a_split_file_take_what_the_old_one_lost(self):
+        root = tree({"web/src/a.tsx": "text-[13px]", "web/src/n.tsx": "text-[13px] text-[12px]"}, {"web/src/a.tsx": 3})
+        self.assertEqual(ratchet.update(root), [])
+        self.assertEqual(json.loads((root / ratchet.BASELINE_REL).read_text()), {"web/src/a.tsx": 1, "web/src/n.tsx": 2})
+
+    def test_update_refuses_a_new_file_that_takes_more_than_was_lost(self):
+        root = tree({"web/src/a.tsx": "text-[13px]", "web/src/n.tsx": "text-[13px] text-[12px] text-[11px]"}, {"web/src/a.tsx": 3})
+        self.assertEqual(len(ratchet.update(root)), 1)
+        self.assertEqual(json.loads((root / ratchet.BASELINE_REL).read_text()), {"web/src/a.tsx": 3})
+
     def test_update_does_not_create_a_baseline(self):
         with self.assertRaises(ratchet.FontError):
             ratchet.update(tree({"web/src/a.tsx": "text-[13px]"}))
