@@ -262,6 +262,9 @@ private struct SourcesGraphContent: View {
             SourcesGraphDetails(model: model, source: s, assistant: assistant, manager: manager)
                 // At accessibility sizes half the screen holds only the name and a step: the sheet opens full height.
                 .presentationDetents(typeSize.isAccessibilitySize ? [.large] : [.medium, .large])
+                // A solid panel, as the web's details card: on the half-height glass sheet the page's badges showed
+                // through, and Open Settings' glass on that glass left its label at 1.9:1 in dark.
+                .presentationBackground(Theme.card)
         }
     }
 
