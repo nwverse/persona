@@ -57,6 +57,7 @@ import { CloseoutCard } from "./CloseoutCard";
 import { shownCloseout } from "../../lib/closeout";
 import { AWAIT_MS, awaitingTurn, DOCK_MAX, turnStart } from "./dock";
 import { HEADER_SLOT, HEADER_SLOT_END, HEADER_SLOT_START } from "./header";
+import { contextUsage } from "../../lib/context-usage";
 import { ContextMeter } from "./ContextMeter";
 import { AgentModelPill } from "./ModelPill";
 import { switchRefused } from "../../lib/session-models";
@@ -1745,6 +1746,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           voice={voiceEntry.offer}
         />
         )}
+        {!stoppedLine && session && !assistant && contextUsage(session) !== null && (
+          <div data-composer-usage className="flex items-center justify-end px-2 pt-0.5"><ContextMeter session={session} /></div>
+        )}
         </div>
       </div>
       </ViewLayer>
@@ -2124,12 +2128,6 @@ export const Header = memo(function Header({
           <h1 className="truncate text-[14px] font-semibold text-ink">{title}</h1>
           {/* wide, the pill gives the dot's state its words, not a second dot (#3956: the state is said once) */}
           {session && !assistant && (state !== "idle" || awaiting) && <span className="hidden @min-[800px]:contents"><StatePill state={state} awaiting={awaiting} waiting={Boolean(session && backgroundWaiting(session))} dot={false} /></span>}
-          {/* narrow: the context bar gives way to the title too (#3532); "Session info" still has the token count. The header's own
-              width decides (a container), so a side panel beside the chat narrows it as a phone does; the pill and the
-              bar go below 800px, the chips' words below 640px, so the title keeps room in between (#3670) */}
-          {session && !assistant && <span className="hidden @min-[800px]:contents"><ContextMeter session={session} /></span>}
-          {/* 680–800px (an iPad in landscape with the sidebar open, #4443): the share alone, so what is left stays in sight */}
-          {session && !assistant && <span className="hidden @min-[680px]:contents @min-[800px]:hidden"><ContextMeter session={session} compact /></span>}
         </div>
         {sub && !todoLine && <div title={sub} className="truncate text-[11.5px] text-ink-3">{sub}</div>}
         {/* the todo it works for, up top (#1836): opens the todo, "Change to-do…" picks another */}
