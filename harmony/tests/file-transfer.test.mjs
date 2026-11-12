@@ -263,6 +263,33 @@ test('known ids reconcile by GET and events must match manager, id, source, and 
   transfer.hide(); restored.hide();
 });
 
+for (const code of ['file_changed', 'file_transfer_disabled']) test(`a running transfer keeps ${code} failure across rebind without automatic creation`, async () => {
+  const { state, client, transfer } = fixture();
+  await enableTransfer(transfer);
+  const record = await transfer.start('target');
+  assert.equal(record.state, 'running');
+  const failed = { ...state.transfers.get(record.id), state: 'failed', code,
+    error: code === 'file_changed' ? 'Source computer: the source file changed' : 'Target computer: file transfer is off',
+    bytes: 40, updated_at: '2026-11-12T00:00:02Z' };
+  state.transfers.set(record.id, failed);
+  for (const listener of state.listeners) listener(JSON.stringify({ type: 'file_transfer', manager: 'manager-a', transfer: failed }));
+  assert.equal(record.state, 'failed');
+  assert.equal(record.code, code);
+  assert.equal(record.error, failed.error);
+  assert.equal(record.bytes, 40);
+  transfer.hide();
+  state.generation++;
+  const restored = new FileTransfer();
+  restored.bind(client, 'source', 'manager-a');
+  await openReadySource(restored);
+  const retained = restored.records.find(item => item.key === record.key);
+  assert.equal(retained.state, 'failed');
+  assert.equal(retained.code, code);
+  assert.equal(retained.error, failed.error);
+  assert.equal(state.calls.filter(call => call.channel === 'requestAccepted').length, 1);
+  restored.hide();
+});
+
 test('an uncertain cancel is reconciled and is never shown cancelled before server confirmation', async () => {
   const { state, transfer } = fixture();
   await openReadySource(transfer);
