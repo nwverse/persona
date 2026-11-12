@@ -114,7 +114,9 @@ internal fun ChatHeader(
                 headerTerminal)
         actions()
         // The permission mode, always in view and changed here (#3957, iOS #3719).
-        if (session != null && SessionModes.showsInHeader(session)) HeaderModeButton(session, state, online && !readOnly) { modeOverlay = it }
+        // Glass has the mode in the composer, by the model pill (Q11, #5055); Brief and Board keep it here.
+        if (session != null && SessionModes.showsInHeader(session) && PersonaTheme.style != AppStyle.Glass)
+            HeaderModeButton(session, state, online && !readOnly) { modeOverlay = it }
         JIconButton(PhIcons.DotsThree, stringResource(R.string.chat_chrome_more), { menu = true })
     }
     val resumeCopied = stringResource(R.string.chat_chrome_resume_copied)

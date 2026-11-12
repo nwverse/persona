@@ -822,6 +822,17 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   `?purpose=assistant` list. The sheet says the pick applies from the next message until changed and leaves settings
   unchanged; **Use the default** clears it. The pick follows every later send and retry in that conversation. Older hubs
   without a model list keep the launcher choices and show one disabled explanation row. No new token or style.
+- Android (Glass only, #5055; Brief and Board keep their Mode sheet, launcher chips and header mode button, decision 8):
+  `JModelPill`, `JModelPanel` and `JModelChangeDivider` in `android/core/designsystem` (`docs/android/android-design.md`
+  2.2), from tokens: the pill `wellXS` tall with `Space.s` sides, the tile at `markS`, the name in `caption` (at most
+  `box120` under 600 dp of composer), the marks at `markXS`; the same width rules, so on a phone the pill is the tile and
+  the chevron. It shows while the composer's toolbar does (focused or with a draft), as Android's mode button did. The
+  panel is a sheet (search, the rail, two-line rows, the strip for Persona chats) whose Customize is a page of the same
+  sheet; the star and Customize are always shown (no hover on a phone) and a provider's reason sits under its group's
+  name. The strip's text button is the design system's quiet `JTextButton` (`ink2` on Glass) rather than `accent-ink`.
+  The header's mode button moved into the composer beside the pill (decision 11). The divider uses the model mark (no
+  arrows-left-right glyph in Android's set yet). Not yet: the other engine's switch and its dialog (#5054), Codex's Fast,
+  quota bars and prices, forgetting a typed id.
 
 ### 3.9 Empty states
 

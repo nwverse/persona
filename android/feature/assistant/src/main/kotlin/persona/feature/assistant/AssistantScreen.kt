@@ -78,6 +78,9 @@ private class AssistantSendState {
     val clientId = mutableStateOf<String?>(null)
     val text = mutableStateOf<String?>(null)
     val launcher = mutableStateOf<String?>(null)
+    /** The model and effort picked with it in the model panel (Glass, #5055); null: the launcher's defaults. */
+    val model = mutableStateOf<String?>(null)
+    val effort = mutableStateOf<String?>(null)
     val started = mutableStateOf<StarterStart?>(null)
     /** A new conversation's first message while it starts, or kept after its start failed (#4339 C18). */
     val first = mutableStateOf<FirstMessage?>(null)
@@ -150,6 +153,9 @@ fun AssistantScreen(
     /** A new conversation on a launcher picked for it alone (the blank page composer's "Launcher" chip); null: no chip. */
     startConversationWith: (suspend (String) -> SessionKey)? =
         (repository as? persona.core.contracts.api.AssistantConversations)?.let { conversations -> { launcher -> conversations.startConversation(launcher) } },
+    /** A new conversation on the launcher, model and effort picked in the model panel (Glass, #5055, `{launcher, model, effort}`). */
+    startConversationPicked: (suspend (persona.core.contracts.ModelPick) -> SessionKey)? =
+        (repository as? persona.core.contracts.api.AssistantConversations)?.let { conversations -> { pick -> conversations.startConversation(pick) } },
     /** The hub's link: while it is not up, the title menu offers Connection details (iOS); null: never. */
     connection: persona.core.contracts.api.ConnectionState? = null,
     /** The sessions New chat's @ lists (every computer's, iOS `StarterComposer`); null: no @ on New chat's page. */
@@ -237,6 +243,8 @@ fun AssistantScreen(
     // The launcher the next new conversation starts with, for it alone (iOS StarterComposer); null: the default.
     // Both belong to this hub: another one has other launchers and conversations.
     var starterLauncher by sendState.launcher
+    var starterModel by sendState.model
+    var starterEffort by sendState.effort
     // The sessions picked in New chat's @ list, to go in front of its first message (iOS `StarterDraft.quotes`).
     val starterMentions = rememberStarterMentions(managerChoice.hubId, managerChoice.shown)
     // The conversation that launcher started for a message that then failed to send: its retry goes there.
@@ -547,8 +555,15 @@ fun AssistantScreen(
                 // Started once: a retry after the message failed sends to the same new conversation, while the
                 // launcher is still the one that started it.
                 val target = when {
-                    launcher != null && startWith != null ->
-                        starterTarget(launcher, starterStarted, startWith).also { starterStarted = it }.session
+                    launcher != null && startWith != null -> {
+                        // a model or an effort picked in the panel goes with the start (#5055); a launcher alone as before
+                        val picked = persona.core.contracts.ModelPick(launcher, starterModel, starterEffort)
+                        val start: suspend (String) -> SessionKey = { l ->
+                            if ((picked.model != null || picked.effort != null) && startConversationPicked != null) startConversationPicked(picked.copy(launcher = l))
+                            else startWith(l)
+                        }
+                        starterTarget(launcher, starterStarted, start).also { starterStarted = it }.session
+                    }
                     fresh != null -> fresh.started ?: try {
                         val space = fresh.space
                         if (space != null) requireNotNull(conversationsOf).startConversationIn(space).also {
@@ -580,6 +595,8 @@ fun AssistantScreen(
                 if (persona.core.contracts.api.AssistantManagerChoice.current.value != submittedChoice) return@launch
                 if (launcher != null && target != null) {
                     starterLauncher = null
+                    starterModel = null
+                    starterEffort = null
                     starterStarted = null
                     assistantAttempt { repository.refresh() }
                     openConversation(target)
@@ -869,10 +886,23 @@ fun AssistantScreen(
                             onBlocked = { blocking?.primaryAction()?.let { runReadinessAction(it) } },
                             extraContent = starterQuotes.isNotEmpty(), mentions = mentions, onMention = starterMentions::add,
                             onMentionOpen = { mentionOpen = it },
-                            // A new conversation's launcher, for it alone (iOS StarterComposer, web StarterLauncherChip).
+                            // Glass: the model pill and its panel (#5055, the web's new-chat page): the pick is this chat's start.
+                            modelPill = if (PersonaTheme.style == AppStyle.Glass && active == null && !healthPage && pageManagement != null &&
+                                startConversationWith != null && !demo) ({ width ->
+                                persona.feature.chat.PersonaModelPill(null, assistantMachine, pageManagement, width,
+                                    pagePick = starterLauncher?.let { persona.core.contracts.ModelPick(it, starterModel, starterEffort) },
+                                    onPagePick = { pick ->
+                                        // Another setup does not reuse what the last one started.
+                                        if (pick?.launcher != starterLauncher || pick?.model != starterModel) starterStarted = null
+                                        starterLauncher = pick?.launcher; starterModel = pick?.model; starterEffort = pick?.effort
+                                    },
+                                    onNotice = { message -> if (feedback?.notice(message) != true) toast.show(persona.core.designsystem.FeedbackNotice(message)) },
+                                    enabled = !sending)
+                            }) else null,
+                            // A new conversation's launcher, for it alone (iOS StarterComposer, web StarterLauncherChip); Glass's is the pill.
                             accessory = if (active == null && !healthPage && pageManagement != null && startConversationWith != null && !demo) ({
                                 if (mentionsHere) StarterQuoteCards(starterMentions)
-                                StarterLauncherChip(starterLauncher, defaultLauncher, launchers, launchersFailed, enabled = !sending,
+                                if (PersonaTheme.style != AppStyle.Glass) StarterLauncherChip(starterLauncher, defaultLauncher, launchers, launchersFailed, enabled = !sending,
                                     onOpen = { scope.launch { loadStarterLaunchers() } }) { picked ->
                                     // Another launcher (or the default) does not reuse what the last one started.
                                     if (picked != starterLauncher) starterStarted = null
