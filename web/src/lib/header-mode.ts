@@ -1,51 +1,11 @@
-// The Agent header's permission mode (#3956, as iOS `SessionModes` from #3719 and Android #3957; its tones are
-// ModeTone in docs/design/DESIGN_SYSTEM.md): the mode's symbol in a tone that says how much it lets the agent do without asking, and the rules of the mode
-// menu the header and the composer's chip share (which modes it offers, which picks ask first).
+// The rules of an Agent's permission mode menu (#3956, as iOS `SessionModes` from #3719 and Android #3957): which modes the
+// composer's picker offers, which picks ask first, and each mode's symbol. The web's header no longer has a mode button
+// (#5421, cindy's: the mode is the composer's picker and Session info).
 import { t } from "../i18n";
 import type { IconName } from "../ui/icons";
 import type { MenuItem } from "../ui/menu-model";
-import { stateOf } from "./format";
 import { BYPASS_MODE, BYPASS_WARNING, canSwitchToBypass, hasModes, modeTitle, PERMISSION_MODES, switchableModes } from "./session-actions";
 import type { Session } from "./types";
-
-/** Ask First (the quiet gray), Plan Only (teal), Auto-Edit and Auto (purple), Allow Everything (red); unknown: not reported yet. */
-export type ModeTone = "asks" | "plans" | "acts" | "allows" | "unknown";
-
-/** A mode not reported yet, or one this app does not know, is `unknown`: never a guessed Ask First, which would make an agent
- *  started in Allow Everything look safe. */
-export function headerTone(mode: string | undefined): ModeTone {
-  switch (mode) {
-    case "default":
-      return "asks";
-    case "plan":
-      return "plans";
-    case "acceptEdits":
-    case "auto":
-      return "acts";
-    case BYPASS_MODE:
-      return "allows";
-    default:
-      return "unknown";
-  }
-}
-
-/** The header's symbol per mode: the composer picker's (`pickerIcon`, one symbol per mode on the web, #5324), and the plain
- *  shield while no mode is reported, never a guessed Default permissions. */
-export function headerIcon(mode: string | undefined): IconName {
-  return mode ? pickerIcon(mode) : "shield";
-}
-
-/** The mode can be changed from here: an agent with modes that runs (the composer's chips' rule). */
-export function modesChangeable(s: Session): boolean {
-  return hasModes(s) && stateOf(s) !== "offline";
-}
-
-/** The header shows an agent's mode when there is one to see or to change (iOS `showsInHeader`): Claude Code's, before its
- *  first prompt too. Not an assistant conversation (its page has its own controls), nor an agent whose mode can be neither
- *  read nor changed (Codex). */
-export function showsInHeader(s: Session | undefined, assistant?: boolean): boolean {
-  return Boolean(s && !assistant && !s.assistant && (s.permission_mode || modesChangeable(s)));
-}
 
 /** An assistant conversation (and Antigravity, as before) switches without asking. */
 const asksFirst = (s: Session, assistant?: boolean) => !(assistant || s.assistant || s.agent === "agy");
