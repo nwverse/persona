@@ -59,6 +59,8 @@ internal fun InteractionPanel(
     labels: Map<String, StackLabel> = emptyMap(),
     first: String? = null,
     counted: Boolean = true,
+    /** Drawn under a card that is not folded: the rule a question a supervisor passed up suggests (#4929); null: nothing. */
+    suggestion: (@Composable (Interaction) -> Unit)? = null,
 ) {
     // The card open on its full page, by its id: cards come and go around it (answered on another device, expired).
     var full by rememberSaveable { mutableStateOf<String?>(null) }
@@ -122,6 +124,7 @@ internal fun InteractionPanel(
                 ) {
                     if (full != request.id) body(request, false)
                 }
+                if (!folded) suggestion?.invoke(request)
             }
         }
     }

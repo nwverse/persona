@@ -334,6 +334,10 @@
     </plurals>
     <string name="chat_queue_deleted">Removed from the queue</string>
     <string name="chat_queue_restored">Moved back to the input box. Edit it and send again.</string>
+    <plurals name="chat_queue_photos_lost">
+        <item quantity="one">Moved back to the input box. %1$d photo couldn\'t be put back.</item>
+        <item quantity="other">Moved back to the input box. %1$d photos couldn\'t be put back.</item>
+    </plurals>
     <string name="chat_queue_not_found">Couldn\'t find this one. The queue may have changed; check and try again</string>
     <string name="chat_queue_failed">Didn\'t change: %1$s</string>
     <string name="chat_queue_edit">Take back to edit</string>
@@ -366,6 +370,7 @@
     <string name="chat_reader_empty">No content</string>
     <string name="chat_reader_open">View full text</string>
     <string name="chat_reader_raw_input">Raw input</string>
+    <string name="chat_tool_hide_raw_input">Hide raw input</string>
     <string name="chat_reader_full_output">Full output</string>
     <string name="chat_reader_raw_output">Raw output</string>
     <string name="chat_reader_copy_both">Copy all</string>

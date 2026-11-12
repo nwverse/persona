@@ -13,37 +13,58 @@ import persona.core.navigation.AppTab
 import persona.core.navigation.Navigator
 
 /**
- * A view model over fixed [sessions] and [machines], with some of them [pins]ned or [mutes]d (session ids as `machine/id`),
- * for the screenshots that draw the whole Agents screen: no hub, no network, preferences in memory.
+ * The Agents screens' dependencies over fixed [sessions] and [machines], with some of them [pins]ned or [mutes]d (session ids
+ * as `machine/id`, spaces as `machine/name` under [pinnedSpaces] and [mutedSpaces]): no hub, no network, preferences in memory.
  */
+internal fun agentsDependencies(
+    sessions: List<Session>, machines: List<Machine>, pins: List<String> = emptyList(), mutes: List<String> = emptyList(),
+    pinnedSpaces: List<String> = emptyList(), mutedSpaces: List<String> = emptyList(),
+): AgentsDependencies = object : AgentsDependencies {
+    private val repository = object : SessionsRepository {
+        override val sessions = MutableStateFlow(sessions)
+        override val machines = MutableStateFlow(machines)
+        override suspend fun refresh() = Unit
+    }
+    private val center = object : InteractionCenter {
+        override val pending = MutableStateFlow<List<Interaction>>(emptyList())
+        override suspend fun refresh() = Unit
+        override suspend fun resolve(id: String, resolution: Resolution) = Unit
+    }
+    private val hub = object : HubConnection {
+        override val state = MutableStateFlow(ConnectionState.Online)
+        override val events = MutableSharedFlow<ServerEvent>()
+        override fun reconnect() = Unit
+        override fun send(message: JsonObject) = true
+    }
+    private val outgoing = object : MessageSender {
+        override val outbox = MutableStateFlow<List<OutboxMessage>>(emptyList())
+        override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?) = Unit
+    }
+    private val stored = AgentsPreferences(object : DataStore<Preferences> {
+        override val data = MutableStateFlow<Preferences>(emptyPreferences())
+        override suspend fun updateData(transform: suspend (Preferences) -> Preferences) = transform(data.value).also { data.value = it }
+    }, object : HubPreferences {
+        override val preferences = MutableStateFlow(HubPreferencesSnapshot(
+            pins = HubPreferenceSet(spaces = pinnedSpaces, sessions = pins), mutes = HubPreferenceSet(spaces = mutedSpaces, sessions = mutes)))
+        override suspend fun refresh() = Unit
+        override suspend fun togglePin(path: String, space: Boolean) = Unit
+        override suspend fun toggleMute(path: String, space: Boolean) = Unit
+        override suspend fun markSeen(session: SessionKey, version: String) = Unit
+    })
+    override fun sessions() = repository
+    override fun interactions() = center
+    override fun connection() = hub
+    override fun sender() = outgoing
+    override fun preferences() = stored
+    override fun machines(): MachineManagement? = null
+}
+
+/** A view model over the same fixed data ([agentsDependencies]) for the screenshots that draw the whole Agents screen. */
 internal fun agentsModel(
     sessions: List<Session>, machines: List<Machine>, pins: List<String> = emptyList(), mutes: List<String> = emptyList(),
-): AgentsViewModel = AgentsViewModel(object : SessionsRepository {
-    override val sessions = MutableStateFlow(sessions)
-    override val machines = MutableStateFlow(machines)
-    override suspend fun refresh() = Unit
-}, object : InteractionCenter {
-    override val pending = MutableStateFlow<List<Interaction>>(emptyList())
-    override suspend fun refresh() = Unit
-    override suspend fun resolve(id: String, resolution: Resolution) = Unit
-}, object : HubConnection {
-    override val state = MutableStateFlow(ConnectionState.Online)
-    override val events = MutableSharedFlow<ServerEvent>()
-    override fun reconnect() = Unit
-    override fun send(message: JsonObject) = true
-}, object : MessageSender {
-    override val outbox = MutableStateFlow<List<OutboxMessage>>(emptyList())
-    override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?) = Unit
-}, AgentsPreferences(object : DataStore<Preferences> {
-    override val data = MutableStateFlow<Preferences>(emptyPreferences())
-    override suspend fun updateData(transform: suspend (Preferences) -> Preferences) = transform(data.value).also { data.value = it }
-}, object : HubPreferences {
-    override val preferences = MutableStateFlow(HubPreferencesSnapshot(pins = HubPreferenceSet(sessions = pins), mutes = HubPreferenceSet(sessions = mutes)))
-    override suspend fun refresh() = Unit
-    override suspend fun togglePin(path: String, space: Boolean) = Unit
-    override suspend fun toggleMute(path: String, space: Boolean) = Unit
-    override suspend fun markSeen(session: SessionKey, version: String) = Unit
-}))
+): AgentsViewModel = agentsDependencies(sessions, machines, pins, mutes).let {
+    AgentsViewModel(it.sessions(), it.interactions(), it.connection(), it.sender(), it.preferences())
+}
 
 /** A navigator that goes nowhere: the screens under test open nothing. */
 internal object NoNavigation : Navigator {

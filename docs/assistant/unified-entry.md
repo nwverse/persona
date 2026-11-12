@@ -684,6 +684,12 @@ call; nothing is turned on for the owner without the tap.
 - **A card already rung** keeps the suggestion it went out with (a plan and a to-do's decision are worded each time
   they are read). When a suggestion is answered, the manager takes it off every pending card that carries it and
   sends those cards again, so the line is gone on every device.
+- **Drawn by**: the Apple apps (#5802's Apple part, `docs/apple/ios.md` "Suggested standing rule and held decisions"):
+  one line under the plan card, the to-do's decision and the question card, with what Always creates, Always and Not
+  Now, and after Always where the rule is listed and removed. They have no list of standing authorizations, so that
+  result names the web app's. Android draws it too (#5802, `docs/android/android.md` "Rule suggestions, held
+  decisions, recommended setup and purpose descriptions"). No event is sent for a plan when its suggestion is
+  answered, so the Apple apps take the line off the plans they hold themselves (`TasksStore.ruleSuggestionSettled`).
 - **Two taps on Always at once** make one rule: the grant is stored only if no standing authorization covers the
   directory and action yet, checked under the lock every change of the list takes; the second tap gets 404.
 
@@ -765,6 +771,18 @@ work-log extension's progress card when one offers a tool for it, not by writing
 context names its direction and gives its rules: report up only reached, decision and stuck; a change counts only once
 deployed and checked live; send `leader_progress` for each reached task and each report cycle. See `docs/extensions/extensions.md` "Leader events".
 
+**A leader's pieces are to-dos (#5846).** How a leader split its direction used to live only in its own files and turns,
+so the owner could not see it. Now a leader records each piece with `todo_create` (a plain title saying what the piece
+achieves): in a leader conversation that tool opens the to-do under the direction (`origin` and ledger `supervisor` the
+leader, no `done_when`, no Agent; `createDirectionTodo` in `todo_plan.go`) instead of the owner's own to-do, and its answer
+gives the id. The leader runs an Agent on a piece with `task_plan todo_id` (no second to-do) and closes one finished
+without an Agent, or dropped (why in its notes), with `todo_complete`; when the owner asks how the work was split or how
+far it got, it answers from these to-dos, its files holding only details. The direction tree lists every piece, and one
+no Agent has worked on yet as `planned` (未开始), so the owner sees the whole split and what has not started. Like any
+to-do with an origin, a piece nothing touches for 48 h is shelved by the To-dos SOP and leaves the tree; a piece not
+started is never reported stuck (it has nothing to be stuck on) unless it waits on the owner.
+The main chat and other conversations still create the owner's own to-dos.
+
 **New chat opens a direction (#3607).** Right after the owner sends a New chat's first message (an app's
 `POST /api/v1/assistant/conversations`: not the main chat, a guest, the health space, a purpose or an extension's), the
 hub asks the model purpose `assistant.route` (Model configuration › Information processing, under the knowledge
@@ -835,9 +853,9 @@ Each direction (a leader conversation) opens into the open tasks it supervises, 
 - **Directions**: every current leader (`assistant.leaders` without the main chat), in the order `GET /api/v1/assistant/leaders` lists the current ones, named as it names them; then the secretary group (书记官, en "Secretary", ja 書記官), always last and always present, with the main chat's id and no name. Ended directions are not listed: their open tasks are the secretary's again, as their signals are (leader reports).
 - **Tasks**: exactly the to-dos the To-dos page counts open (`triageCountsAsOpen`, the #3340 rule; quiet tasks, a failed start still waiting, ask to-dos and concerns included, as the page includes them). Closed, cancelled, accepted, deployed and shelved ones are never listed.
 - **Whose**: the ledger's `supervisor`. A current leader's id → that direction. The main chat's id, `""`, no ledger, an ended or unknown conversation → the secretary. A task leader's Agent (`"machine/session"`, "Task leaders" above) → a worker: it is not listed or counted as a task of its own, and its active Agents are the `children` of that leader Agent inside the leader's task (a leader started again: the current leader Agent of the task its worker row names). When the leader's task is not open, the worker is listed as an ordinary task of the conversation above the leader (`supervisorAboveTask`). Workers whose leaders lead one another in a loop are each listed on their own (the same on every build).
-- **State** (first match wins): `needs_you` — the SOP's Waiting on you (an Agent asks or was interrupted, the owner decides, incl. `needs_user`, a failed start); `review` — waits for acceptance (`pending_review`, or an open acceptance ask) with nothing of it running; `stuck` — the leader reports' stuck rule (`taskStuck`: Waiting on you, PR to merge, Other open or Shelved, nothing moved for 24 h, every machine of its Agents answered); `working` — every other open task (shown as 在做).
-- **Counts**: per direction, how many of its listed tasks are in each state. A direction row shows `counts.working` and `counts.needs_you` as 「在做 N · 等你 N」 (en "Doing N · Needs you N", ja 「作業中 N · あなた待ち N」). The four counts of all groups add up to the To-dos page's open count for the same data, less the worker tasks nested under a leader Agent. The tree is the default manager's alone (it is not merged over managers the way `GET /api/v1/todos` is, `hub/ownership_lists.go`), so on a hub with more than one manager the sum matches only that manager's to-dos.
-- **Order**: tasks needs_you, review, stuck, working; within a state the newest activity first, then id.
+- **State** (first match wins): `needs_you` — the SOP's Waiting on you (an Agent asks or was interrupted, the owner decides, incl. `needs_user`, a failed start); `review` — waits for acceptance (`pending_review`, or an open acceptance ask) with nothing of it running; `planned` — no Agent has ever been on it and it is not a concern (shown as 未开始, en "Not started", ja 未着手; #5846: a leader's piece not handed out yet); `stuck` — the leader reports' stuck rule (`taskStuck`: Waiting on you, PR to merge, Other open or Shelved, nothing moved for 24 h, every machine of its Agents answered; a task no Agent has worked on counts only while it waits on you); `working` — every other open task (shown as 在做).
+- **Counts**: per direction, how many of its listed tasks are in each state. A direction row shows `counts.working` and `counts.needs_you` as 「在做 N · 等你 N」 (en "Doing N · Needs you N", ja 「作業中 N · あなた待ち N」). `counts.planned` is 0 from a hub before #5846. The five counts of all groups add up to the To-dos page's open count for the same data, less the worker tasks nested under a leader Agent. The tree is the default manager's alone (it is not merged over managers the way `GET /api/v1/todos` is, `hub/ownership_lists.go`), so on a hub with more than one manager the sum matches only that manager's to-dos.
+- **Order**: tasks needs_you, review, stuck, working, planned; within a state the newest activity first, then id.
 - **Agents**: a task's active Agents (not released, not dismissed); under each, the Agents of the task it spawned (`source: spawned`, `via` its `machine/session`), its workers' Agents, its running in-session sub-agents (`session_id` `"<parent>@<id>"`, title the description, nested by the sub-agent that launched each) and its Codex sub-agent sessions still going. An Agent appears once in its task. Its `state` is its session's as the apps get it on session rows (`""` when the session was not found). The tree asks each computer for its sessions once per build.
 - **Push**: `{"type":"directions"}` whenever the tree's content changed: a to-do, the sessions of a computer one of its Agents is on, a direction, its name or the leader list changed, or (every 10 minutes) a task may have become stuck; gathered for one second, compared with a digest of the last tree told, so an unchanged tree tells nothing. Clients read the tree again on it and on (re)connect; a hub without the route answers 404 and the clients keep the flat direction rows.
 
@@ -933,8 +951,13 @@ Hub-inserted chat entries do not enter Claude's transcript (that would trigger a
   Dynamic Type), 12 pt horizontal and 6 pt vertical padding, a full capsule radius, `Theme.Fill.chip` behind secondary
   text, 28 pt tall at the default size, 8 pt apart. Open is the filter chip's on look in the same size (accent fill, white
   semibold); Needs You with rows takes the waiting pill's tint, empty it is the plain grey capsule and opens "All Caught Up".
+  At the accessibility text sizes the entries (and the computer pill after them) are a `FlowLayoutRow`: one that doesn't
+  fit goes on to the next line, each whole. Side by side they made the row, and with it the whole chat page, wider than
+  the screen, the header and the composer cut off at both edges (#5702; `docs/design/DESIGN_SYSTEM.md` 1.2 rule 3 (c),
+  wrapping rather than a sideways scroll so Needs You and its count stay in view). Below those sizes the row is as before.
   Tests: `AssistantEntriesFixtureTests` (the shared fixture), `AssistantActionBarTests`, UI `AssistantActionBarUITests`
-  (`MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1`).
+  (`MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1`; `testEntriesStayOnScreenAtEveryTextSize` in zh-Hans, English and Japanese at
+  the default and the largest size, light and dark).
 - Task details have one header layer: the embedded Agent page takes over the task name, Close, and task ⋯ (#3255; see "Task details" above).
 - Screenshots: `MOCK_TASKS=1`, `MOCK_TASKS_AT`, `-showTaskDetail`, `-showTaskBoard` (`docs/operations/testing.md`).
 
