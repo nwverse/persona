@@ -15,6 +15,7 @@ struct PersonaApp: App {
             RootView()
                 #if DEBUG && os(iOS)
                 .modifier(TreeSwapFlip()) // `-swapTreeAway YES` (#2836)
+                .overlay { HomeGalleryOverlay() } // `-showHomeWidgets YES`: every widget, every size (docs/apple/home-widgets.md)
                 #endif
                 .environment(model)
                 .task(id: model.fleetLook) { LiveActivityController.shared.look(model.fleetLook) { model.fleetFaces } }
@@ -30,6 +31,7 @@ struct PersonaApp: App {
                         return
                     }
                     if RecordingLink.matches(url) { MeetingRecorder.openRecordings(); return } // the recording's activity
+                    if let kind = HomeWidgetLink.kind(url) { model.openWidget(kind); return } // a Home Screen widget
                     #endif
                     if let link = ExtensionSystemLink(url: url) { model.openExtension(link); return }
                     if SentSettingsLink.matches(url) { model.openSentRecords(); return }
@@ -77,6 +79,9 @@ struct PersonaApp: App {
                 PushRegistrar.shared.foreground() // notifications allowed in Settings since a denial: register now (#1861)
                 model.resumeLinks()
                 model.refreshExtensionSurfaces()
+                #if os(iOS)
+                HomeWidgetWriter.shared.tellHub() // whether the hub should wake it for its widgets (#5721)
+                #endif
                 // Rolling recordings expire even when no segment arrives and the recording page stays closed.
                 RecordingRollingKeeper.shared.schedule()
                 // All-day recording: what waited while the app was away (a model can download now, a 403 pause ends), and
@@ -265,6 +270,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                 try? Data(PushCrypto.publicKey(key).utf8).write(to: dir.appending(path: "push-key.txt"))
             }
         }
+        #if os(iOS)
+        // `-showHomeWidgetSample YES`: the widgets draw the gallery's made-up snapshot, written at once (Home Screen
+        // screenshots without a hub, docs/apple/home-widgets.md「Screenshots」).
+        if d.bool(forKey: "showHomeWidgetSample") { HomeWidgetWriter.shared.showSample() }
+        #endif
         if let phase = d.string(forKey: "showFleetSample") {
             LiveActivityController.shared.showSample(phase, details: d.bool(forKey: "fleetDetails"), island: d.string(forKey: "fleetIsland"),
                                                      count: d.integer(forKey: "showFleetCount"))
@@ -360,6 +370,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         AppModel.shared.wakeLinks(group)
         nonisolated(unsafe) let done = completionHandler
         DispatchQueue.main.asyncAfter(deadline: .now() + 25) {
+            #if os(iOS)
+            HomeWidgetWriter.shared.flush() // the hub woke it for the widgets (#5721), or anything they show changed
+            #endif
             if UIApplication.shared.applicationState == .background { AppModel.shared.suspendLinks() }
             done(.newData)
         }
