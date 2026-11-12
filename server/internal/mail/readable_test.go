@@ -1,6 +1,9 @@
 package mail
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestReadableText(t *testing.T) {
 	got := ReadableText("<html><style>p{color:red}</style><body><p>Hi Bob,\n  thanks</p><p>Two&nbsp;things:</p><ul><li>one</li><li>two</li></ul>Bye<br>Ann</body></html>")
@@ -24,5 +27,39 @@ func TestStripHTMLWhenLoweringChangesLength(t *testing.T) {
 		if got := stripHTML(c.in); got != c.want {
 			t.Errorf("stripHTML(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+// The text of an HTML mail separates what the HTML lays out as separate things: table cells and rows, list items,
+// headings and block quotes. Table- and list-built mail (receipts, notifications) otherwise reads as invented words
+// ("Order#123Total$9").
+func TestStripHTMLSeparatesBlockElements(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"<ul><li>one</li><li>two</li></ul>", "one two"},
+		{"<ol><li>one</li><li>two</li></ol>after", "one two after"},
+		{"<table><tr><td>Order</td><td>#123</td></tr><tr><td>Total</td><td>$9</td></tr></table>", "Order #123 Total $9"},
+		{"<table><tr><th>Item</th><th>Price</th></tr><tr><td>Tea</td><td>$3</td></tr></table>done", "Item Price Tea $3 done"},
+		{"<h1>Title</h1>Body<h2>Next</h2>More", "Title Body Next More"},
+		{"<blockquote>quoted</blockquote>reply", "quoted reply"},
+		{"<TABLE><TR><TD>Upper</TD><TD>Case</TD></TR></TABLE>", "Upper Case"},
+		// Inline tags do not break a word.
+		{"in<b>line</b> <span>te</span>xt <a href=\"https://example.com\">link</a>s", "inline text links"},
+	} {
+		if got := PlainText(c.in); got != c.want {
+			t.Errorf("PlainText(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// An HTML-only message gets that text as its Text and its list preview.
+func TestParseMessageHTMLOnlySeparatesBlockElements(t *testing.T) {
+	raw := "From: a@example.com\r\nTo: b@example.com\r\nSubject: Receipt\r\nMIME-Version: 1.0\r\n" +
+		"Content-Type: text/html; charset=utf-8\r\n\r\n" +
+		"<table><tr><td>Order</td><td>#123</td></tr><tr><td>Total</td><td>$9</td></tr></table><ul><li>one</li><li>two</li></ul>"
+	var msg MailMessage
+	parseMessage([]byte(raw), &msg)
+	want := "Order #123 Total $9 one two"
+	if got := strings.Join(strings.Fields(msg.Text), " "); got != want {
+		t.Fatalf("Text = %q, want %q", got, want)
 	}
 }
