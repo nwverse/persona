@@ -255,8 +255,9 @@ function ConvRow({ s, main, now, onRename, onArchive }: { s: Conversation; main?
   const st = stateOf(s);
   const flagged = st === "needs_you" || st === "working" || st === "unread";
   const last = plainMarkdown(s.last_text);
-  // opened by the hub itself (#3758, #5195): what opened it, in the channel's place, as on its sidebar row
-  const origin = autoOrigin(s);
+  // opened by the hub itself (#3758, #5195): what opened it, in the channel's place, as on its sidebar row; decided as the
+  // filters decide it, the background supervisor with the scheduled tasks' whatever its row says (#5082)
+  const origin = autoOrigin(s, builtIn ? s.session_id : undefined);
   // the chats outside the sidebar live here: 设为常驻 puts one in its 常驻 group (#4331)
   const leader = useStore((x) => !!x.assistant?.leaders?.includes(s.session_id));
   const own = !main && !builtIn;
