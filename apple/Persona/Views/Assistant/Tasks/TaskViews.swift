@@ -736,7 +736,10 @@ struct MessageCard: View {
     var itemID: String
     @State private var editing = false
     @State private var text = ""
+    @Environment(\.chatPin) private var pin
     private var store: TasksStore { .shared }
+    /// Edit turns the draft into a field in place: in the chat the card's top stays where it is (#3757).
+    private var pinKey: String { "message-card-" + itemID }
 
     var body: some View {
         let card = store.messageCard(item)
@@ -816,6 +819,7 @@ struct MessageCard: View {
         .card(padding: Theme.Space.l)
         .accessibilityElement(children: .contain)
         .animation(Theme.Motion.state, value: state)
+        .chatPinned(pinKey)
     }
 
     private func sendButton(_ card: FeedItem) -> some View {
@@ -834,7 +838,7 @@ struct MessageCard: View {
     private func editButton(_ card: FeedItem) -> some View {
         Button {
             if text.isEmpty { text = card.draft ?? "" }
-            withAnimation(Theme.Motion.state) { editing.toggle() }
+            toggleInPlace(pin, pinKey, animation: Theme.Motion.state, closing: editing) { editing.toggle() }
         } label: {
             Text(editing ? String(localized: "Done [Task Views 9b8ee8]") : String(localized: "Edit [Task Views 928324]"))
                 .lineLimit(1).fixedSize(horizontal: true, vertical: false)
@@ -1199,20 +1203,6 @@ struct DockCapsule: ViewModifier {
 extension View {
     /// An entry of the row above the assistant's composer (`DockCapsule`).
     func dockCapsule(_ look: DockCapsule.Look = .plain) -> some View { modifier(DockCapsule(look: look)) }
-
-    /// Over the end of the chat, right above the dock or the action bar (the footer adds no margin there): the page fades
-    /// in, instead of the list's edge cutting a message in two. As tall as the room the newest message keeps from that
-    /// edge (`ChatView.newestGap`), so at rest nothing is under it; out to the footer's side margins, where the chat shows too.
-    func dockChatFade() -> some View {
-        background(alignment: .top) {
-            LinearGradient(colors: [Theme.pageBackground.opacity(0), Theme.pageBackground], startPoint: .top, endPoint: .bottom)
-                .frame(height: ChatView.newestGap)
-                .padding(.horizontal, -Theme.Space.m)
-                .offset(y: -ChatView.newestGap)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-        }
-    }
 }
 
 /// A dock pill's face, the same for a task and an agent: its marks, the title (which gives way), and Needs You tinted with

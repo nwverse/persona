@@ -81,6 +81,17 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			WorkspaceID: a.WorkspaceID, AgentName: a.Name, Title: a.Title, Agent: a.Agent,
 			ExternalURL: a.ExternalURL, Chat: a.Chat, Topic: a.Topic, Dispatched: a.Dispatched,
 		}
+		if a.Agent == "codex" && isCodexWaitID(id) { // opened with no first message: no thread, no transcript yet (codex_waiting.go)
+			n.placeIn(&s, a)
+			codexWaitRow(&s, a)
+			if w := n.codexWaitByID(id); w != nil {
+				s.UpdatedAt = w.began.UTC()
+			}
+			n.decorateIn(&s, pass)
+			out = append(out, s)
+			seen[id] = true
+			continue
+		}
 		viaBotmux := host.ParsePane(a.PaneID).Kind == host.Botmux
 		switch {
 		case viaBotmux && (a.Agent == "codex" || a.Agent == traexAgent):
@@ -144,7 +155,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				if m.title != "" && a.Agent != "codex" && a.Agent != traexAgent {
 					s.Title = m.title
 				}
-				if s.Title == "" || s.Title == "Claude Code" {
+				if s.Title == "" || s.Title == "Claude Code" && !m.titleManual {
 					s.Title = ""
 					untitled(&s, m)
 				}
@@ -158,7 +169,6 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				m.turnErr.set(&s)
 				s.Activity, s.ActivityAt = m.activityOf()
 				setContext(&s, m)
-				s.Inventory = m.inventory
 				s.ModelFallback = m.modelFallback
 				if a.Agent != "codex" && a.Agent != traexAgent {
 					s.PermissionMode, s.Effort = n.currentModes(id, m)
@@ -192,7 +202,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			n.codexEffortRow(id, &s.Efforts, &s.Effort, rollout) // joined on its app-server: its effort (codex_effort.go)
 			n.codexSpeedRow(&s)
 		}
-		if a.Agent == piAgent {
+		if piFamily(a.Agent) {
 			n.mergePiRow(&s) // its conversation is the extension's (pi.go)
 		}
 		switch {
@@ -213,6 +223,11 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	n.forgetDialogs(livePanes)
 
 	for _, s := range n.starts.listed(seen) { // starting.go
+		n.decorateIn(&s, pass)
+		out = append(out, s)
+		seen[s.SessionID] = true
+	}
+	for _, s := range n.switches().listed(seen) { // an agent moving to another launcher, between its two (switch_share.go)
 		n.decorateIn(&s, pass)
 		out = append(out, s)
 		seen[s.SessionID] = true
@@ -270,6 +285,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	n.markInterrupted(out[from:], seen) // the restart cut these off (#1917)
 	for i := from; i < len(out); i++ {
 		n.decorateIn(&out[i], pass)
+		n.markStopped(&out[i]) // read-only (stopped.go, #4754)
 	}
 	n.listRows.Store(int32(max(peak, len(out))))
 	// Terminal-owned Codex parents were already seen before history was added: over the whole list, before any row goes.
@@ -345,6 +361,13 @@ func (n *Node) decorateIn(s *proto.Session, pass *codexListPass) {
 	}
 	if st, ok := n.decorateState(s); ok {
 		s.Compaction = st.Compaction
+		s.PendingSwitch = st.PendingSwitch // launcher_switch.go
+	}
+	if s.PendingSwitch == nil {
+		s.PendingSwitch = n.unrecordedSwitch(s.SessionID)
+	}
+	if ps := s.PendingSwitch; ps != nil && time.Since(ps.At) > switchMaxAge {
+		s.PendingSwitch = nil // dropped by the next message that would carry it out: not shown as waiting meanwhile
 	}
 	if s.Launcher == "" {
 		s.Launcher = n.inferLauncher(s.SessionID)

@@ -493,6 +493,11 @@ data class Session(
     /** Newest running workflow; bounded list metadata without its agent or phase arrays. */
     @SerialName("workflow_progress") val workflowProgress: Workflow? = null,
     @SerialName("background_working") val backgroundWorking: Boolean? = null,
+    /**
+     * Working only because of background work that only waits (`sleep`, a `--watch`, `tail -f`; the hub's
+     * `background_waiting`, #6045): set only with `state` working. False from older hubs.
+     */
+    @SerialName("background_waiting") val backgroundWaiting: Boolean = false,
 ) {
     val key: SessionKey get() = SessionKey(machineId, sessionId)
     /** A chat of the health space ([space]), which the assistant's own lists leave out. */
@@ -797,6 +802,10 @@ data class Interaction(
     val fields: List<InteractionField>? = null,
     /** Owning manager, including page permissions; older hubs omit it for the default manager. */
     @SerialName("manager") val manager: String? = null,
+    /** The manager's name for the tool, including what this call does where it adds that ("Report to supervisor · Done"). */
+    @SerialName("tool_title") val toolTitle: String? = null,
+    /** The tool alone, without what this call does, for the scope of "Always allow". */
+    @SerialName("tool_name_title") val toolNameTitle: String? = null,
 ) {
     val sessionKey: SessionKey get() = SessionKey(machineId, sessionId)
 
@@ -835,8 +844,8 @@ data class Interaction(
             "plan" -> CoreText.of(Key.FleetPlanWaiting)
             // A password card names the computer it runs on; its commands are in the card.
             "permission" -> secretRun?.let { CoreText.of(Key.HeadlineSecretRun, it.machine) } ?: run {
-                // An MCP tool reads "github · create issue", not its raw mcp__github__create_issue (#4806).
-                val tool: Any = toolDisplayName(toolName) ?: CoreText.of(Key.ToolGeneric)
+                // The manager's title is for people; the raw toolName still decides the card's type and icon.
+                val tool: Any = toolTitle?.takeIf(String::isNotBlank) ?: toolDisplayName(toolName) ?: CoreText.of(Key.ToolGeneric)
                 val detail = summary?.takeIf { it.isNotBlank() }
                 val agent = agentDisplayName
                 when {

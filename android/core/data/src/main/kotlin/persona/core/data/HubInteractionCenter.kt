@@ -4,6 +4,7 @@ import persona.core.contracts.*
 import persona.core.contracts.api.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.encodeToString
@@ -21,6 +22,8 @@ class HubInteractionCenter(
 ) : InteractionCenter {
     private val mutablePending = MutableStateFlow<List<Interaction>>(emptyList())
     override val pending = mutablePending.asStateFlow()
+    private val mutableArrivals = MutableSharedFlow<Interaction>(extraBufferCapacity = 16, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    override val arrivals = mutableArrivals.asSharedFlow()
     private val mutableAnswered = MutableStateFlow<Map<SessionKey, AnsweredMark>>(emptyMap())
     /** The agents a card was answered for here in the last [ANSWERED_MILLIS] (#4525, [answeredSessions]). */
     val answered = mutableAnswered.asStateFlow()
@@ -33,6 +36,12 @@ class HubInteractionCenter(
      * served before the hub caught up, does not bring its card back (#1688). Only a live event for the id does.
      */
     private val ended = LinkedHashSet<String>()
+    /**
+     * Of those, the ones this device ended (answered, found over): the hub still lists one until the node ends it, and
+     * the pending-card snapshot after a hello that resumes sends it again as an `interaction` frame (#2767). A frame for
+     * one never brings it back; one the hub withdrew may be raised again under the same id (as the web's `endedHere`).
+     */
+    private val endedHere = LinkedHashSet<String>()
     /** Cards the hub withdrew (interaction_resolved), newest last: the event often comes before the answer's own reply. */
     private val withdrawn = LinkedHashSet<String>()
     private var discarded = emptySet<String>()
@@ -51,8 +60,11 @@ class HubInteractionCenter(
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             connection.events.collect { event -> restored.await(); lock.withLock {
                 when (event) {
-                    is InteractionEvent -> if (event.interaction.id !in discarded) {
+                    is InteractionEvent -> if (event.interaction.id !in discarded && event.interaction.id !in endedHere) {
+                        // A card that changed (its prompt moved on) is no arrival; only one not showing yet is.
+                        val arrived = mutablePending.value.none { it.id == event.interaction.id }
                         ended.remove(event.interaction.id); change(event.interaction.id, event.interaction)
+                        if (arrived) mutableArrivals.tryEmit(event.interaction)
                     }
                     is InteractionResolvedEvent -> { withdrew(event.id); end(event.id) }
                     else -> Unit
@@ -99,10 +111,10 @@ class HubInteractionCenter(
         val since = asked?.let { key -> sessions?.value?.firstOrNull { it.key == key }?.stateSince }
         val outcome = try { transport.resolveOutcome(id, resolution) }
         catch (gone: InteractionGoneException) {
-            lock.withLock { end(id) }
+            lock.withLock { end(id, here = true) }
             throw gone
         }
-        val seen = lock.withLock { end(id); id in withdrawn }
+        val seen = lock.withLock { end(id, here = true); id in withdrawn }
         // Answered (now, or already): its agent goes on. An expired or withdrawn card (gone) says nothing of that, and a
         // card handed back to the computer, now or already (a second tap), leaves the agent waiting there (#709, as the
         // web's card-answer.ts).
@@ -131,11 +143,16 @@ class HubInteractionCenter(
         }
     }
 
-    private suspend fun end(id: String) {
+    private suspend fun end(id: String, here: Boolean = false) {
         ended.remove(id)
         ended.add(id)
-        // Ids are not reused; the bound only keeps a long-running app from holding every answer it ever gave.
+        // The bound only keeps a long-running app from holding every answer it ever gave.
         while (ended.size > ENDED_LIMIT) ended.remove(ended.first())
+        if (here) {
+            endedHere.remove(id)
+            endedHere.add(id)
+            while (endedHere.size > ENDED_LIMIT) endedHere.remove(endedHere.first())
+        }
         change(id, null)
     }
 

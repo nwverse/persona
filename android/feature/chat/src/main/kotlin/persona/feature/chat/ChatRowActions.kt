@@ -53,11 +53,16 @@ internal class ChatRowActions(
 internal val LocalChatRowActions = compositionLocalOf<ChatRowActions?> { null }
 
 /**
- * The session's sub-agents by the Task / Agent call that started them ([keys], running or done) and how to open one:
- * what "View sub-agent" under those steps needs. Null where they cannot be opened (a read-only conversation, no navigation).
+ * The session's subagents by the Task / Agent call that started them, running or done: their conversations ([keys]) and
+ * how to open one ([open], "View sub-agent" in Brief and Board; null where they cannot be opened: a read-only
+ * conversation, no navigation), and the session's listing of each by `Subagents.callOf` ([agents]: what a task card says).
  */
 @androidx.compose.runtime.Immutable
-internal data class ChatSubagents(val keys: Map<String, SessionKey>, val open: (SessionKey) -> Unit)
+internal data class ChatSubagents(
+    val keys: Map<String, SessionKey>,
+    val open: ((SessionKey) -> Unit)?,
+    val agents: Map<String, persona.core.contracts.Subagent> = emptyMap(),
+)
 
 internal val LocalChatSubagents = compositionLocalOf<ChatSubagents?> { null }
 
