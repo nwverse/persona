@@ -79,7 +79,10 @@ class PersonaInstallTests(unittest.TestCase):
         name = (FORMER_NAME + 'd-' if legacy_artifacts else 'personad-') + target
         with tempfile.TemporaryDirectory() as directory:
             downloads = Path(directory)
-            data = gzip.compress(b'#!/bin/sh\necho "$*" >> "$HOME/personad-calls"\nif [ "$1" = version ]; then printf "fixture-version\\n"; fi\n', mtime=0)
+            data = gzip.compress(b'#!/bin/sh\necho "$*" >> "$HOME/personad-calls"\nif [ "$1" = version ]; then printf "fixture-version\\n"; fi\n'
+                                 # the language hub setup is given (#5519)
+                                 b'if [ "$1 $2" = "hub setup" ]; then echo "${PERSONA_INSTALL_LANG-unset}" >> "$HOME/personad-setup-lang"; fi\n'
+                                 b'if [ "$1 $2" = "hub setup" ] && [ -n "$SETUP_FAILS" ]; then exit 1; fi\n', mtime=0)
             (downloads / (name + '.gz')).write_bytes(data)
             digest = '0' * 64 if corrupt else hashlib.sha256(data).hexdigest()
             sums = digest + '  ' + name + '.gz\n'
@@ -159,6 +162,35 @@ class PersonaInstallTests(unittest.TestCase):
             for key in keys:
                 self.assertRegex(text, r'(?m)^\s*' + re.escape(lang + ':' + key) + r'\)', (lang, key))
 
+    def test_installer_text_preserves_placeholders_for_its_caller(self):
+        # The catalog is shared with deploy.sh: reading a format string must not consume its placeholders.
+        script = r'''
+set -eu
+install=$1
+eval "$(sed -n '/^# >>> install language/,/^# <<< install language/p' "$install")"
+set -- not-a-catalog-value
+for lang in en zh-Hans ja; do
+  INSTALL_LANG=$lang
+  for key in $INSTALL_TEXT_KEYS; do
+    text=$(install_text "$key")
+    count=$(printf '%s' "$text" | awk '{n += gsub(/%s/, "")} END {print n + 0}')
+    case $count in
+      0) ;;
+      1) [ "$(install_format "$key" one)" = "$(printf "$text" one)" ] ;;
+      2) [ "$(install_format "$key" one two)" = "$(printf "$text" one two)" ] ;;
+      3) [ "$(install_format "$key" one two three)" = "$(printf "$text" one two three)" ] ;;
+      4) [ "$(install_format "$key" one two three four)" = "$(printf "$text" one two three four)" ] ;;
+      5) [ "$(install_format "$key" one two three four five)" = "$(printf "$text" one two three four five)" ] ;;
+      *) printf 'unexpected format count: %s %s: %s\n' "$lang" "$key" "$count" >&2; exit 1 ;;
+    esac
+  done
+done
+printf 'catalog placeholders preserved in all languages\n'
+'''
+        result = subprocess.run(['sh', '-c', script, 'probe', str(INSTALL)], capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('catalog placeholders preserved', result.stdout)
+
     def test_installer_language_from_environment_and_override(self):
         cases = (
             ('English', {'LANG': 'en_US.UTF-8', 'LC_ALL': ''}, (), 'installed at'),
@@ -176,6 +208,35 @@ class PersonaInstallTests(unittest.TestCase):
                 result = self.run_install(home, extra=env, args=args)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn(expected, result.stdout)
+
+    def test_hub_setup_gets_the_installer_language(self):
+        # The hub starts in the language the installer ran in (#5519): hub setup gets it in PERSONA_INSTALL_LANG, an
+        # environment variable an older personad ignores rather than refusing an unknown flag.
+        cases = (
+            ('from LANG', {'LANG': 'ja_JP.UTF-8', 'LC_ALL': ''}, (), 'ja'),
+            ('unknown is English', {'LANG': 'C', 'LC_ALL': ''}, (), 'en'),
+            ('override', {'LANG': 'en_US.UTF-8', 'LC_ALL': ''}, ('--lang', 'zh-Hans'), 'zh-Hans'),
+        )
+        for name, env, args, expected in cases:
+            with self.subTest(name), tempfile.TemporaryDirectory() as directory:
+                home = Path(directory)
+                result = self.run_install(home, extra=env, args=args)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual((home / 'personad-setup-lang').read_text(), expected + '\n')
+
+    def test_hub_setup_hints_carry_the_installer_language(self):
+        # Someone who runs hub setup by hand from the installer's hint records the same language (#5519).
+        for lang in ('en', 'zh-Hans', 'ja'):
+            with self.subTest(lang), tempfile.TemporaryDirectory() as directory:
+                home = Path(directory)
+                result = self.run_install(home, extra={'PERSONA_ROLE': ''}, args=('--lang', lang))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(f'{home}/.persona/bin/personad hub setup --lang {lang}', result.stdout)
+            with self.subTest(lang, setup='fails'), tempfile.TemporaryDirectory() as directory:
+                home = Path(directory)
+                result = self.run_install(home, extra={'SETUP_FAILS': '1'}, args=('--lang', lang))
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn(f'{home}/.persona/bin/personad hub setup --lang {lang}', result.stderr)
 
     def test_invalid_installer_language_stops_before_installing(self):
         for args in (('--lang',), ('--lang', 'fr'), ('--lang=',)):

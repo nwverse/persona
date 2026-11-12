@@ -1,5 +1,6 @@
 package persona.feature.chat
 
+import persona.core.designsystem.dense
 import persona.core.designsystem.text
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalDensity
@@ -62,7 +63,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 // Finish the fade in the existing gap below the tab strip, without changing the chat's content padding.
-private val TabbedChatScrollEdgeStyle = ScrollEdgeStyle.Gradient.copy(overlap = Tokens.Space.s)
+private val TabbedChatScrollEdgeStyle = ScrollEdgeStyle.Gradient.copy(overlap = Tokens.Space.Standard.s)
 
 /** The shell supplies repositories and optional terminal/navigation affordances, never wire clients. */
 @OptIn(ExperimentalMaterial3Api::class, FlowPreview::class)
@@ -146,6 +147,10 @@ private fun ChatPage(
     val allRequests by interactions.pending.collectAsStateWithLifecycle()
     val allMessages by sender.outbox.collectAsStateWithLifecycle()
     val writtenAt by sender.writtenAt.collectAsStateWithLifecycle()
+    val allSendReceipts by key(sender) { sender.sendReceipts.collectAsStateWithLifecycle() }
+    val sendReceipts = allSendReceipts.filter { receipt -> receipt.session == key ||
+        (receipt.session == PendingMainConversation && receipt.mainTarget &&
+            allMessages.any { it.session == key && it.clientMessageId == receipt.clientMessageId }) }
     val parent = sessionList.firstOrNull { it.machineId == key.machineId && it.subagents.orEmpty().any { child -> child.sessionId == key.sessionId } }
     val child = parent?.subagents?.firstOrNull { it.sessionId == key.sessionId }
     // A workflow's agent reads like a subagent (`<session>@<agent id>`, #2935).
@@ -337,6 +342,7 @@ private fun ChatPage(
             notice = res.getString(R.string.chat_screen_clear_sent)
     }
     var sending by remember { mutableStateOf(false) }
+    var sendingId by remember { mutableStateOf<String?>(null) }
     var overlay by remember { mutableStateOf(false) }
     var terminalHelp by remember { mutableStateOf(false) }
     var taskPageVisible by remember { mutableStateOf(false) }
@@ -364,7 +370,7 @@ private fun ChatPage(
     var awaitNow by remember { mutableStateOf(java.time.Instant.now()) }
     val awaited = remember(snapshot.items) { awaitedMessage(snapshot.items) }
     val startFailed = !session?.startError.isNullOrBlank()
-    val awaiting = !readOnly && awaitingTurn(awaited, session?.status, startFailed, awaitNow)
+    val awaiting = !readOnly && sendReceipts.none { it.processing } && awaitingTurn(awaited, session?.status, startFailed, awaitNow)
     val awaitingStatus = awaiting || (!readOnly && awaitingDelivered(messages, session?.status, startFailed))
     LaunchedEffect(awaited?.id, awaited?.ts, session?.status) {
         // Draw again when the wait runs out, so a message nobody picks up stops looking worked on.
@@ -579,10 +585,18 @@ private fun ChatPage(
         val id = UUID.randomUUID().toString()
         if (command == null) { submittedDraft = id to draft; submittedContexts = refs }
         if (command == "/clear") clearingPane = session?.paneId
+        sendingId = id
         sending = true
         followEnd()
         scope.launch {
-            try { sender.send(key, wireText, id, null, conversationLauncher, conversationModel) }
+            try {
+                sender.send(key, wireText, id, null, conversationLauncher, conversationModel)
+                if (command == null) {
+                    composer.clearIfUnchanged(draft)
+                    linkContexts = linkContexts.filterNot { ref -> refs.any { it.id == ref.id } }
+                    submittedDraft = null; submittedContexts = emptyList()
+                }
+            }
             catch (e: CancellationException) { throw e }
             catch (e: Exception) {
                 submittedDraft = null; submittedContexts = emptyList()
@@ -590,7 +604,7 @@ private fun ChatPage(
                 onFailed()
                 if (feedback?.failure(e) != true) notice = operationFeedback(e).text.resolve(res)
             }
-            finally { sending = false }
+            finally { sending = false; sendingId = null }
         }
         return true
     }
@@ -927,7 +941,8 @@ private fun ChatPage(
         }
     }
     val status = chatStatusState(res, snapshot, session, machine, messages, requests, taps.busy || controls.busy,
-        operationUnknown = taps.uncertain.isNotEmpty() || controls.pending != null, awaiting = awaitingStatus)
+        operationUnknown = taps.uncertain.isNotEmpty() || controls.pending != null, awaiting = awaitingStatus,
+        submittingId = sendingId.takeIf { sending } ?: submittedDraft?.first, receipts = sendReceipts)
     val replacement = if (snapshot.replaced) sessionList.firstOrNull { candidate ->
         session != null && candidate.key != key && SessionRuntimeState.map(session, listOf(candidate), true).replaced
     } else null
@@ -1031,6 +1046,8 @@ private fun ChatPage(
                     },
                     bottomBar = {
                         Column {
+                            if (renderStyle == ChatRenderStyle.Assistant && (status.submitting || status.processing ||
+                                    (status.unconfirmed && sendReceipts.isNotEmpty()))) StatusLine(status)
                             if (renderStyle != ChatRenderStyle.Assistant) ChatSessionStatusLine(status, session, snapshot.turnDurationSeconds, projection.turns.lastOrNull()?.toolCount ?: 0,
                                 onDetails = { statusSheet = true }, terminal = terminal, draftSaveError = statusBindings.draftSaveError,
                                 activityInHeader = activityInHeader)
@@ -1207,18 +1224,22 @@ private fun ChatPage(
                                 val busy = message.clientMessageId in deliveryActions.busyIds
                                 val onAction: ((DeliveryAction) -> Unit)? = if (readOnly) null else { action -> deliveryAction(message, action) }
                                 val failed = deliveryState == DeliveryState.Rejected || deliveryState == DeliveryState.Refused
+                                val receipt = sendReceipts.lastOrNull { it.clientMessageId == message.clientMessageId }
                                 Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
                                     // Glass: iOS's bubble, its mark and small menu in place of the status line, which still says why
                                     // one did not go (#4339 C9); a delivery to check keeps the status line.
                                     if (glass && drawsAsPendingBubble(deliveryState)) {
                                         OutboxBubble(composerMessagePreview(message.text), message.clientMessageId, deliveryState, busy, onAction)
+                                        if (receipt?.processing == true) Text(stringResource(persona.core.designsystem.R.string.designsystem_message_processing),
+                                            Modifier.align(Alignment.End), style = PersonaTheme.type.caption,
+                                            color = PersonaTheme.palette.ink2, maxLines = 1)
                                         if (failed) PendingBadge(PendingStatus.Refused, Modifier.align(Alignment.End),
                                             reason = message.copy(error = delivery?.refusal?.code ?: message.error).refusalReason())
                                     } else {
                                         UserBubble(composerMessagePreview(message.text), message.clientMessageId, deliveryState)
                                         OutboxStatus(message.copy(state = deliveryState,
                                             error = delivery?.refusal?.code ?: message.error),
-                                            busy = busy, onAction = onAction, onDetails = { statusSheet = true })
+                                            busy = busy, onAction = onAction, receipt = receipt, onDetails = { statusSheet = true })
                                     }
                                     if (!readOnly && failed) {
                                         // Edit puts the words back in the box and drops the refused bubble (nothing reached the computer).
@@ -1229,8 +1250,8 @@ private fun ChatPage(
                             }
                             ChatList(state = chatList, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(
                                 start = horizontalPadding, end = horizontalPadding,
-                                top = padding.calculateTopPadding() + 12.dp,
-                                bottom = padding.calculateBottomPadding() + 12.dp,
+                                top = padding.calculateTopPadding() + 12.dp.dense,
+                                bottom = padding.calculateBottomPadding() + 12.dp.dense,
                             )) {
                                 errorLine?.let { error -> item(key = ERROR_ROW, contentType = ERROR_ROW) { ChatSystemLine(error, failed = true) } }
                                 readyLine?.let { words -> item(key = READY_ROW, contentType = READY_ROW) { TypingLine(words) } }
@@ -1316,7 +1337,7 @@ private fun ChatPage(
                             }
                             if (!chatList.followsEnd) JumpToLatest(timeline.newMessageCount(snapshot.items, newestVisibleItem, readThrough),
                                 onClick = chatList::returnToLatest,
-                                modifier = Modifier.align(Alignment.BottomEnd).padding(end = horizontalPadding, bottom = padding.calculateBottomPadding() + 16.dp))
+                                modifier = Modifier.align(Alignment.BottomEnd).padding(end = horizontalPadding, bottom = padding.calculateBottomPadding() + 16.dp.dense))
                         }
                     }
                 }

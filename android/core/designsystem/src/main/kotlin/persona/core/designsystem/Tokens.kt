@@ -121,11 +121,18 @@ object Tokens {
         }
     }
     object Radius {
-        val badge: Dp = 6.dp
-        val bubble: Dp = 20.dp
-        val card: Dp = 14.dp
-        val control: Dp = 10.dp
-        val panel: Dp = 22.dp
+        val badge: Dp get() = Standard.badge * LayoutDensity.radiusScale
+        val bubble: Dp get() = Standard.bubble * LayoutDensity.radiusScale
+        val card: Dp get() = Standard.card * LayoutDensity.radiusScale
+        val control: Dp get() = Standard.control * LayoutDensity.radiusScale
+        val panel: Dp get() = Standard.panel * LayoutDensity.radiusScale
+        object Standard {
+            val badge: Dp = 6.dp
+            val bubble: Dp = 20.dp
+            val card: Dp = 14.dp
+            val control: Dp = 10.dp
+            val panel: Dp = 22.dp
+        }
     }
     object Semantic {
         object Claude {
@@ -299,20 +306,36 @@ object Tokens {
         val wellXS: Dp = 28.dp
     }
     object Space {
-        val block: Dp = 16.dp
-        val flush: Dp = 0.dp
-        val l: Dp = 16.dp
-        val lines: Dp = 4.dp
-        val m: Dp = 12.dp
-        val page: Dp = 16.dp
-        val s: Dp = 8.dp
-        val section: Dp = 24.dp
-        val sm: Dp = 6.dp
-        val titleToContent: Dp = 8.dp
-        val xl: Dp = 24.dp
-        val xs: Dp = 4.dp
-        val xxl: Dp = 32.dp
-        val xxs: Dp = 2.dp
+        val block: Dp get() = Standard.block * LayoutDensity.spaceScale
+        val flush: Dp get() = Standard.flush * LayoutDensity.spaceScale
+        val l: Dp get() = Standard.l * LayoutDensity.spaceScale
+        val lines: Dp get() = Standard.lines * LayoutDensity.spaceScale
+        val m: Dp get() = Standard.m * LayoutDensity.spaceScale
+        val page: Dp get() = Standard.page * LayoutDensity.spaceScale
+        val s: Dp get() = Standard.s * LayoutDensity.spaceScale
+        val section: Dp get() = Standard.section * LayoutDensity.spaceScale
+        val sm: Dp get() = Standard.sm * LayoutDensity.spaceScale
+        val titleToContent: Dp get() = Standard.titleToContent * LayoutDensity.spaceScale
+        val xl: Dp get() = Standard.xl * LayoutDensity.spaceScale
+        val xs: Dp get() = Standard.xs * LayoutDensity.spaceScale
+        val xxl: Dp get() = Standard.xxl * LayoutDensity.spaceScale
+        val xxs: Dp get() = Standard.xxs * LayoutDensity.spaceScale
+        object Standard {
+            val block: Dp = 16.dp
+            val flush: Dp = 0.dp
+            val l: Dp = 16.dp
+            val lines: Dp = 4.dp
+            val m: Dp = 12.dp
+            val page: Dp = 16.dp
+            val s: Dp = 8.dp
+            val section: Dp = 24.dp
+            val sm: Dp = 6.dp
+            val titleToContent: Dp = 8.dp
+            val xl: Dp = 24.dp
+            val xs: Dp = 4.dp
+            val xxl: Dp = 32.dp
+            val xxs: Dp = 2.dp
+        }
     }
     object Status {
         object Dark {
