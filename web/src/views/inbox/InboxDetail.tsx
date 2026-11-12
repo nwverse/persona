@@ -161,7 +161,12 @@ function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
                 <Button tone="accent" icon="write" onClick={() => setDialog("draft")}>{draft && !done ? t("inbox-inboxdetail.view_draft") : t("inbox-inboxdetail.ai_draft")}</Button>
               ) : (
                 // Answered in the source's own app (a CI run has nothing to answer: only "Hand to AI").
-                openURL(item) && <Button tone="accent" icon="external" onClick={() => openSystem(openURL(item)!)}>{openTitle(item)}</Button>
+                item.source !== "larkcli" && openURL(item) && <Button tone="accent" icon="external" onClick={() => openSystem(openURL(item)!)}>{openTitle(item)}</Button>
+              )}
+              {item.source === "larkcli" && openURL(item) && (
+                <Button tone="secondary" icon="external" onClick={() => openSystem(openURL(item)!)}>
+                  {openURL(item)!.startsWith("https://applink.larksuite.com/") ? t("inbox-inboxdetail.open_in_lark") : t("inbox-inboxdetail.open_in_feishu")}
+                </Button>
               )}
               <Button tone="secondary" icon="spark" onClick={() => setDialog("handoff")}>{t("inbox-inboxdetail.hand_to_ai")}</Button>
               {event && !embed && (showEvent ? (
