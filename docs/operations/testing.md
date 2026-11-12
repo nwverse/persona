@@ -491,6 +491,17 @@ Select Text copies only a segment (`SelectTextTests`: Agent reply with code bloc
 `TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<port>`, style `TEST_RUNNER_PERSONA_UI_STYLE=beautiful`, `TEST_RUNNER_PERSONA_SHOTS=<directory>` (named by simulator appearance).
 Run a new UI test against unfixed code first to confirm it fails, then apply the fix.
 
+Agents tab navigation (#5641): `AgentsTabNavigationTests/testDispatchBackThenAgentsAlwaysShowsList` opens a dispatched
+Agent from Assistant, goes Back, and selects Agents five times; it checks the list's visible control, navigation root
+and absence of an Agent detail. `testNativeTabReselectionAndSwitchBackShowList` runs on iPad's native tabs and checks
+reselection from a detail and three Assistant/Agents round trips. Use
+`PORT=<dedicated port> python3 apple/PersonaUITests/Fixtures/dispatch_hub.py` (defaults to a single assistant),
+`TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<port>`, and `TEST_RUNNER_PERSONA_SHOTS=<directory>`;
+`TEST_RUNNER_PERSONA_SHOTS_APPEARANCE=<name>` names evidence and `TEST_RUNNER_PERSONA_UI_TEXT_SIZE=UICTContentSizeCategoryAccessibilityXXXL`
+checks the largest text. Set actual appearance with `xcrun simctl ui <udid> appearance light|dark`.
+Run `PersonaTests/AgentsTabNavigationTests` too: explicit selection cancels restoration, reselection returns to the list,
+notification/link targets are preserved, and a consumed newer target invalidates an older deferred list reset.
+
 ### Simulators: always `scripts/app/sim-boot.sh`, slim by default (simslim, #2287, #2801)
 
 **Create, reuse and boot simulators through `scripts/app/sim-boot.sh`**, not direct `simctl create` / `simctl boot` or letting `xcodebuild test` create one.
