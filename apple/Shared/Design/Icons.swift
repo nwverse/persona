@@ -331,6 +331,8 @@ extension Theme {
         static let place = "mappin.and.ellipse"
         /// The phone's current location (Use Current Location).
         static let currentLocation = "location"
+        /// Directions to a place, handed to Apple Maps (the chat's place map, #5543).
+        static let directions = "arrow.triangle.turn.up.right.diamond"
         /// The phone's own health trends (steps, sleep, weight drawn from Apple Health, #3272).
         static let healthTrends = "chart.line.uptrend.xyaxis"
         /// Persona itself (the brand's four-point star).
