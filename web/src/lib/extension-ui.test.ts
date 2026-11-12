@@ -237,7 +237,6 @@ describe("收件箱条目（inbox_item）", () => {
     expect(outcome({ open_url: link }, undefined, "example-gateway")).not.toHaveProperty("ask"); // an extension can't send as the user
     expect(outcome({ open_url: link })).not.toHaveProperty("ask");
     expect(uiContext({ assistant: "Claude" })).toMatchObject({ assistant: "Claude" });
-    expect(uiContext({ assistant: "" })).toHaveProperty("assistant", ""); // the key says this app opens it (#5661)
     expect(uiContext()).not.toHaveProperty("assistant");
   });
   it("opens an extension's own settings in the app (persona://settings/extensions/<id>)", () => {

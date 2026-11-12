@@ -302,8 +302,7 @@ export interface UIContext {
   item?: string;
   size?: "compact" | "full";
   /** The assistant's name as the composer shows it ("Ask {name}…"), sent only to the manager's own subscription pages,
-   *  which name their Set Up with … after it (docs/extensions/subscriptions.md "Pages"). Sent even when "": the key says
-   *  this app opens Set Up with …, and the pages draw it only then (#5661). */
+   *  which name their Set Up with … after it (docs/extensions/subscriptions.md "Pages"). */
   assistant?: string;
 }
 
@@ -331,7 +330,7 @@ export function uiContext(context?: UIContext): UIContextSent {
   if (context?.machine) out.machine = context.machine;
   if (context?.item) out.item = context.item;
   if (context?.size) out.size = context.size;
-  if (context?.assistant !== undefined) out.assistant = context.assistant;
+  if (context?.assistant) out.assistant = context.assistant;
   return out;
 }
 
