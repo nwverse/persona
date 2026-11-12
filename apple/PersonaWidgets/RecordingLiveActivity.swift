@@ -41,6 +41,7 @@ struct RecordingLiveActivity: Widget {
                         .padding(.horizontal, IslandMetrics.gap)
                         RecordingAnswer(state: state).foregroundStyle(.white.opacity(0.85)).padding(.horizontal, IslandMetrics.gap)
                         RecordingButtons(id: id, onDark: true, attends: state.persona != nil, recording: state.phase == .recording)
+                            .padding(.horizontal, IslandMetrics.recordingIslandButtonsInset)
                     }
                     .environment(\.locale, LanguageStore.drawingLocale)
                 }
