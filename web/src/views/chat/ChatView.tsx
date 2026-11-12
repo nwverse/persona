@@ -221,7 +221,19 @@ async function rewindTo(mid: string, sid: string, draftKey: string, items: Item[
   else toast(tr("rewind.input_kept"), "info");
 }
 
-export function ChatView({ mid, sid, assistant, starting: launching, onToggleSidebar, topCenter, inPage, embedded, terminalAvailable, banner, offline, mainCache, refreshError, onRefresh, headerActions }: {
+/** In a side panel (TaskPanel, AgentPanel; #3333, iOS #3255; opened while Agents open in the side panel, #5424): the
+ *  chat's one-line header is the panel's only one. It closes the panel (× at its end), may stand for the task (its title,
+ *  with `sub` in the title's tooltip), carries the panel's own rows at the top of ⋯ and, beside the title, what the panel
+ *  puts there (a task's ⌄ to switch between its agents); the same space's other agents are left out. */
+export interface PanelChrome {
+  onClose: () => void;
+  title?: string;
+  sub?: string;
+  items?: MenuItem[];
+  beside?: React.ReactNode;
+}
+
+export function ChatView({ mid, sid, assistant, starting: launching, onToggleSidebar, topCenter, inPage, embedded, panel: chrome, terminalAvailable, banner, offline, mainCache, refreshError, onRefresh, headerActions }: {
   mid: string;
   sid: string;
   assistant?: boolean;
@@ -235,6 +247,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   /** A worker's conversation in its lead's Team panel (#5180, views/chat/TeamPanel.tsx): no header of its own (the panel's
    *  strip says whose it is), a phone's dock, and Esc there closes the panel rather than stopping the worker. */
   embedded?: boolean;
+  /** A task's or an Agent's side panel (TaskPanel, AgentPanel): the header is the panel's (PanelChrome). */
+  panel?: PanelChrome;
   /** The work browser has verified that this session has an interactive pane. Standalone chats use their existing policy. */
   terminalAvailable?: boolean;
   /** Under the header: the assistant page's manager switcher (docs/assistant/managers.md "Clients"). */
@@ -278,8 +292,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     if (becameThread && inPage) navigate({ name: "session", mid, sid: becameThread }, true);
   }, [becameThread, inPage, mid]);
   // a lead's Team panel (#5180, lib/team.ts): opened and closed by itself with cindy's timing; never in a worker's own
-  // conversation (embedded) or a Persona chat
-  const leads = !embedded && !assistant;
+  // conversation (embedded), a task's or an Agent's side panel (whose place the Team panel would take) or a Persona chat
+  const inPanel = Boolean(chrome);
+  const leads = !embedded && !inPanel && !assistant;
   useTeamReveal(mid, sid, session, leads);
   const panel = usePanel();
   // drawn: ⌘⇧↵ (the middle alone) keeps a wide screen's panel open but not drawn, so it shows nothing there
@@ -1078,8 +1093,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     const key = (e: KeyboardEvent) => {
       // in the terminal view Esc belongs to the program in the terminal; a message still waiting for its turn to start can be
       // stopped as a running turn can, as the Interrupt button shows for both
-      // a worker's conversation in a Team panel leaves Esc to the panel (it closes it) and to the lead's page
-      if (embedded) return;
+      // a worker's conversation in a Team panel, and an Agent's in a task's or an Agent's side panel, leave Esc to the
+      // panel (it closes it) and to the page beside it
+      if (embedded || inPanel) return;
       if (e.key === "Escape" && (state === "working" || awaiting) && view !== "term" && !document.querySelector("[role=dialog],[role=menu]")) {
         e.preventDefault();
         void interrupt();
@@ -1088,7 +1104,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     addEventListener("keydown", key);
     return () => removeEventListener("keydown", key);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state, awaiting, session, view, embedded]);
+  }, [state, awaiting, session, view, embedded, inPanel]);
 
   // The hub says its turn is over and a workflow it launched keeps it working (#3434): the exchange is drawn finished
   // (its work folded, the run's card inside it), and the running bar says the workflow, timed from its start, instead
@@ -1550,8 +1566,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // up while the composer has the focus on a touch screen alone
   const narrow = useMedia(NARROW);
   // a narrow screen's cards fold and its dock keeps to DOCK_MAX (#1282)
-  // a worker's conversation in a Team panel (embedded) is a phone's width, so its dock is one too (#1282)
-  const compactDock = narrow || Boolean(embedded);
+  // a worker's conversation in a Team panel (embedded) and a task's or an Agent's side panel are a phone's width, so
+  // their docks are one too: unbounded there, a plan with a question and a permission stood taller than the panel (#1282)
+  const compactDock = narrow || Boolean(embedded) || inPanel;
   const short = useMedia(SHORT);
   const [typing, setTyping] = useState(false);
   const keyboard = typing && !fine;
@@ -1694,6 +1711,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
         viewDot={view === "term" && (interactions.length > 0 || state === "needs_you")}
         actions={headerActions}
         team={team}
+        panel={chrome}
       />}
       {isMain && !embedded && <MainRuntimeSlot sid={sid} />}
       {!embedded && banner}
@@ -2139,6 +2157,7 @@ export const Header = memo(function Header({
   viewDot,
   actions,
   team,
+  panel: chrome,
 }: {
   session?: Session;
   title: string;
@@ -2163,6 +2182,7 @@ export const Header = memo(function Header({
   actions?: React.ReactNode;
   /** A lead with workers (#5180): its Team panel's button, whether the panel is open, and whether a worker needs you. */
   team?: { open: boolean; needs: boolean; onToggle: () => void };
+  panel?: PanelChrome;
 }) {
   const menu = useMenu();
   const tabs = useMenu();
@@ -2193,7 +2213,8 @@ export const Header = memo(function Header({
   const [sharingOpen, setSharingOpen] = useState(false);
   const allowed = session ? sessionMenuActions(session) : [];
   const attach = () => session && attachLive(session);
-  const others = siblings.filter((s) => s.session_id !== session?.session_id);
+  // a task's or an Agent's side panel leaves the space's other agents out of ⋯
+  const others = chrome ? [] : siblings.filter((s) => s.session_id !== session?.session_id);
   // the session's files and Git open in the side panel (docs/web/web.md "Side panel"); the assistant has none. Its terminal is
   // the page's other view, switched in place (view / onView)
   const here = (p: typeof panel, kind: string) => Boolean(p && p.kind === kind && "sid" in p && session && p.mid === session.machine_id && p.sid === session.session_id);
@@ -2297,7 +2318,9 @@ export const Header = memo(function Header({
         ...(!archived && deleteInsteadOfArchive(features) && sessionDeletable(session) ? [{ key: "delete", label: t("chat-chatview.delete_chat"), icon: "trash" as const, danger: true, onSelect: () => setDialog("delete") }] : []),
       ]
     : [];
-  const items: MenuItem[] = own;
+  // a side panel's own rows (Open in new window, Remove task…) at the top of ⋯
+  const panelItems = chrome?.items ?? [];
+  const items: MenuItem[] = panelItems.length > 0 && own.length > 0 ? [...panelItems, { ...own[0], divider: true }, ...own.slice(1)] : [...panelItems, ...own];
   // ⋯ follows the title (cindy's "More actions"); on a narrow page whose middle is the shell's switch the title is hidden,
   // and ⋯ goes to the right end instead
   const more = (where: "title" | "end") =>
@@ -2323,14 +2346,15 @@ export const Header = memo(function Header({
           <TitleEditor session={session} title={title} onDone={() => setEditing(false)} />
         ) : (
           <h1
-            onDoubleClick={canRename ? () => setEditing(true) : undefined}
-            title={title}
+            onDoubleClick={canRename && !chrome?.title ? () => setEditing(true) : undefined}
+            title={chrome?.title ? [chrome.title, chrome.sub].filter(Boolean).join(" · ") : title}
             data-chat-title
             className="min-w-0 cursor-default truncate text-[14px] font-medium text-ink select-none"
           >
-            {title}
+            {chrome?.title || title}
           </h1>
         )}
+        {!editing && chrome?.beside}
         {!editing && more("title")}
         {!editing && branch && (
           <span title={t("chat-chatview.branch_title", { branch })} data-chat-branch className="ml-1.5 flex min-w-0 max-w-44 shrink items-center gap-1 rounded-full px-1.5 py-0.5 text-[12px] text-ink-3 @max-[800px]:hidden">
@@ -2371,9 +2395,10 @@ export const Header = memo(function Header({
         </span>
       )}
       {/* wide screens have New chat at the top of the sidebar; a phone's sidebar is a drawer */}
-      {assistant && session?.space !== "health" && <IconButton icon="compose" label={t("chat-chatview.new_chat")} onClick={() => navigate({ name: "persona-new" })} className="lg:hidden" />}
-      {actions}
+      {assistant && !chrome && session?.space !== "health" && <IconButton icon="compose" label={t("chat-chatview.new_chat")} onClick={() => navigate({ name: "persona-new" })} className="lg:hidden" />}
+      {!chrome && actions}
       {Boolean(topCenter) && more("end")}
+      {chrome && <IconButton icon="x" label={t("sidepanel.close")} onClick={chrome.onClose} />}
       </div>
       {menu.anchor && <Menu anchor={menu.anchor} onClose={menu.close} align={topCenter && mediaMatches(NARROW) ? "right" : "left"} items={items} />}
       {tabs.anchor && (
