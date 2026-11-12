@@ -154,6 +154,7 @@
     <string name="agents_repo_repository">Repository</string>
     <string name="agents_repo_main_checkout">Main worktree</string>
     <string name="agents_repo_worktree">Worktree</string>
+    <string name="agents_repo_actions">Repository actions</string>
     <string name="agents_card_question">Claude has a question</string>
     <string name="agents_card_question_by">%1$s has a question</string>
     <string name="agents_card_permission">Waiting for your approval</string>

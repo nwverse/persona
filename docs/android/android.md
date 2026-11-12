@@ -95,6 +95,19 @@ Housekeeping notices (compaction, restarts, schedule setup) are hidden while dat
 metadata identifies supervision/patrol/follow-up turns; normal user messages are never hidden by their title or emoji.
 Original events and background records remain inspectable rather than being deleted from history.
 
+On Glass the conversation draws the hub's task records as iOS does ([chats](../plans/android-ios-alignment/chats.md) C13):
+`AssistantTaskCards.isBackgroundEvent(inline = true)` keeps only plans, task cards (the dispatched line stands for them) and
+message cards behind, and `FeedLine` draws the receipt (its PR button and **View**), the review line, the report as
+"task → @Persona" and Persona's hand-off as "Persona → @task" (both in Persona's box, the first three lines and **Expand**,
+`ExchangeHeader` / `ExchangeText` in `feature/chat/AgentExchange.kt`), the user's own word to a task as "Me → @task" in the
+user's bubble, and the hub's `notice` line, centered. A quiet supervision round stays in the conversation as one
+**Supervision record** line (`· running` while it runs, iOS `SupervisionRecordLine`) that opens to the round
+(`AssistantConversation.project(…, inline = true)` folds it with `BackgroundFolding(rounds = false)` outside the main
+conversation's background folding), scheduled and follow-up rounds read as they are unless background rounds fold, and
+Persona's work line is the Agent chat's (`WorkGroup` with `workSummary`, ticking while it runs) and opens to its thoughts
+too. Brief and Board keep the records behind the trays, the quiet rounds in the background record and **Checked N places**,
+as above. Tests: `TaskRecordsTest`, `SupervisionRecordTest` (core/domain), `TaskRecordsShotsTest`, `SupervisionRecordShotsTest`.
+
 #### Background rounds fold into one line (#4314)
 
 The main conversation folds the rounds it did not start, as web and iOS do (rules in
@@ -225,6 +238,49 @@ without opening sockets. JVM Native-rendered component captures are separate evi
 - **Browser (ego lite)**: when the hub's ego plugin is on (the machine has `browser`), a Mac's machine page has the **Let the assistant use this browser** toggle, install / uninstall, the first-time setup steps (open ego lite, import data from other browsers, finish setup, check again) and, once ready, its status (imports, usage stats), same as iOS `BrowserSection`. While a task is running or first-time setup is in progress it reads every 2 seconds. The phone has no live view of that Mac (the iOS "VNC" button); first-time setup is done on the Mac.
 - **Not done yet**: "Control computer" (Cua) and "Browser sign-in" (importing cookies) on the machine page, attachments in a new Agent's first message, "New worktree…".
 
+## Settings navigation and search (#5233)
+
+Settings keeps three scopes: the current assistant, this device, and Hub. This is a navigation reorganization;
+model choices, notification defaults, permissions, pairing, update installation and assistant ownership do not change.
+Search filters entry names and localized common aliases (including complete former labels from the existing
+localization resources), case-insensitively with
+Unicode width normalization. It never indexes credentials, account values or addresses. Clearing it restores the
+three groups; a query with no matches shows an empty state. Extension-contributed navigation stays in its original
+assistant scope and is shown when the search is empty.
+
+| Previous home entry | New home entry and location |
+| --- | --- |
+| Model providers; Model configuration | Models; uses first, then Advanced › Model providers and Add provider |
+| Assistant profile | Assistant profile (unchanged, current assistant) |
+| Claude Code; Codex; Session triage | Agent › Claude Code settings, Codex settings, Session triage |
+| Connectors; Extensions; Channels | Same current-assistant entries; plain home subtitles |
+| Notifications; Floating capsule; Background keep-alive; desktop presence/muting | Notifications and background; notification preferences, capsule entry, one complete phone-check list, desktop-muting details |
+| About; Check for updates | About and updates; version, manual check, recovery and verified APK installation |
+| Hub status card; hub address; Connection diagnostics; Pairing | Connection; status, selectable wrapping address, pairing and existing diagnostics |
+| Appearance; Language; Translation; Storage; native Inbox chats | This device, unchanged behavior |
+| Hubs; Hub version; Assistants; Avatar; Devices | Hub, unchanged behavior |
+
+The legacy `notify` and `ready` Settings destinations open the same Notifications and background page. `capsule`,
+`desktops`, `providers`, `models`, `claude`, `codex`, `triage`, `diag`, `pair`, `about` and connector routes retain their
+names and remain directly accessible. In-place navigation records the parent, so Back returns to the group page;
+the navigation shell keeps its existing stack. Switching assistants closes the new Agent group as it does the
+existing assistant-owned pages.
+
+The device page reuses `ReadinessScreen(backgroundOnly = true)` without assistant or computer setup, checklist
+completion/dismissal actions, or implicit writes to first-run pending state. System notification checks have one home;
+notification channels, manufacturer battery/autostart controls, lock-screen and cellular tests remain there.
+First-run onboarding still uses the original checklist behavior. When an older hub cannot supply phone-muting
+preferences, its online-computer detail entry remains visible in this page rather than disappearing with the switch.
+
+Android currently has knowledge-base browsing, searching and tagging, but no knowledge-base **selection** settings
+(priorities, context-source toggles or per-chat selection). No misleading selection entry is added; that capability
+remains separate work tracked by #2217.
+
+Verification: `SettingsSearchTest` pins alias matching and stable destinations; `SettingsGroupsShotsTest` checks scope
+order, assistant switching, real-page phone home/search/empty states in every style and light/dark; model tests check
+Advanced folding and owner-aware selection. Captures produced by these tests are **Native JVM Compose renders**,
+not emulator/handset screenshots, and do not prove system dialogs, background survival or live hub transport.
+
 ## Notifications (no push service)
 
 Android shares the hub WebSocket through the foreground service in `:platform:notify` and does not depend on FCM or vendor push. Notification channels, restore on boot, network reconnects, keep-alive scheduling and the setup checklist for Chinese-vendor ROMs are implemented.
@@ -310,7 +366,7 @@ Three things the hub already says, shown on Android (#3612, #3804, #3618; wire a
 Ported 2026-11-02 from the old App on the main line (inventory items C5–C7, C9, D2–D5). The rules match iOS; the logic is in `core:domain`: `sort/SessionSource.kt` (capabilities, origin wording, resume commands), `sort/AgentClose.kt` (close confirmation), `answer/RequestPresentation.kt` ("Always allow").
 
 - Session origin and capabilities (`docs/protocol/protocol.md` ("Codex sources and capabilities")): `Session` carries `source_kind` (`codex_app_server` / `codex_history` / `identity_conflict` / `runtime`), `source_thread_id`, `read_only_reason`, `capabilities` (read / send / interrupt / approve / terminal / attach, plus optional `modes`), `attached`, `agent_label`. Old sessions without `source_kind` can do everything; sessions with an origin only get capabilities that are explicitly true (a missing field means no, except that missing `modes` keeps the older agent-based fallback); `canAttach` = has an origin, `attach` is true, and not yet `attached`. Before session metadata arrives the phone doesn't block anything (the hub / node will still refuse); read-only and capability checks use the metadata that is known.
-  - Chat page: when it can't send, the composer is disabled with the placeholder **This session is view only**, and a line above shows the origin (`JTag`) and the reason (the node's "View only:" prefix isn't doubled); the web card's "Use as context / AI edit" are not accepted either. Without the terminal capability there is no terminal button or entry; without interrupt there's no **Stop** and no **Interrupt** menu item; without approve, the interaction panel still shows the request but no button can be pressed (not even **Leave to computer**), and the note says "Attach live to answer this request on the phone…" (when live attach is possible) or "This session can't be approved on the phone. Approve it on the computer." The top bar subtitle starts with the origin ("Codex live / server / directory").
+  - Chat page: when it can't send, the composer is disabled with the placeholder **This session is view only**, and a line above shows the origin (`JTag`) and the reason (the node's "View only:" prefix isn't doubled); the web card's "Use as context / AI edit" are not accepted either. Without the terminal capability there is no terminal entry (⋯'s Terminal, the work line's mark, the header's button on Brief and Board); without interrupt there's no **Stop** and no **Interrupt** menu item; without approve, the interaction panel still shows the request but no button can be pressed (not even **Leave to computer**), and the note says "Attach live to answer this request on the phone…" (when live attach is possible) or "This session can't be approved on the phone. Approve it on the computer." The top bar subtitle starts with the origin ("Codex live / server / directory").
   - ⋯ menu: **Join live** (`canAttach`, `ChatAction.Attach` → `POST …/attach`; when the result is unclear it checks `attached` in the session list; once attached the node lets it approve). **Rename** and **Close agent** need a terminal; **Copy resume command** is only for sessions with a terminal (Codex uses `codex resume <source_thread_id>`).
   - Agents list: rows with an origin show it in their facts ("Codex live / codex-desk"), plus **View only** when read-only; Agents the App doesn't know show the hub's `agent_label` ("DSH") instead of always calling them Claude. The long-press menu gains **Join live** (`AgentOperations.attachSession`); rename, close and resume command need a terminal, and **Stop loop** needs send. Request cards, request details and `AgentsViewModel.answer` never answer on behalf of sessions that can't approve, and request details offer no **Open terminal** without a terminal. Origin sessions opened from History don't offer **Continue this session**, and the read-only reason is shown.
   - Notifications: allow / approve on a notification first looks up the session the request belongs to (on cold start it refreshes the session list once first); if the session can't approve, nothing is sent back and it says **Can't approve on this phone** (`NotificationActionResult.ReadOnly`); if the session can't be found, the hub decides.
@@ -1322,7 +1378,7 @@ Connection state occupies each page's title (Agents, Inbox, Persona, chat); shel
 
 Second-batch module entries:
 
-- Chat terminal button opens full terminal; hidden for assistant chats. Notification fallback (`persona://open?target=terminal&machine=…&session=…`) opens the same page over original chat.
+- An Agent's chat opens its terminal as a cover over the chat (`TerminalCover` in `feature/terminal`, iOS `TerminalCover`, #4339 C7): ⋯'s first item **Terminal** in every style, the mark at the end of the live work line on Glass, a request's or a refused message's **Open terminal**, and on Brief and Board the header's button they keep (Glass's header has none, as iOS's: owner decision 11 of the Android alignment plan). It comes up under the status bar with no title; its bar has a handle, the read-only / control chip, what it shows ("Updates every second"), Select text, Display and **Close terminal**. Dragging the bar (or the not-running state) moves it down; let go past 140dp, or flung, it closes, otherwise it springs back; Back closes it. The chat stays mounted under it and counts as covered (no read receipts). Not for assistant chats. Notification fallback (`persona://open?target=terminal&machine=…&session=…`), Terminal's pane list and the Agents page's request cards still open the terminal as its own page over the original chat.
 - Inbox item/Lark deep links (`target=inbox&item=…`, `target=lark&chat=…`) wait for list refresh, then open the same Lark/mail page as list taps; missing items show explanation.
 - Agents List settings › Machine monitoring opens machine list; gauge button at each computer header opens that computer's detail.
 - Standalone terminal (#2972, `docs/integrations/terminal.md` section 19): with hub `terminal_panes`, List settings gains Terminal below Machine monitoring (like web sidebar Terminal below Machines), listing online computer → space → tab → pane (`GET …/machines/{mid}/panes`, every 8 seconds in foreground). Agent panes show title/state and open by session id; shell panes open same terminal with `pane:<pane>` (`TerminalAddress`; `/keys` doesn't recognize addresses and read-only typing reports not sent). New tab beside space sends `POST …/panes {workspace_id, kind}` then opens new pane. Multiple hubs route by machine suffix (`MergedShellServices.panes`); suffixed-machine terminal uses that group's connection/features (`groupTerminal`, strip suffix for subscription/input, restore on events). Keys use "host type/space id", preventing herdr/orca `w1` collisions on one computer. Close/split/rename not implemented.

@@ -160,6 +160,13 @@
     <string name="designsystem_machine_monitor">Machine monitor</string>
     <string name="designsystem_details">Details</string>
     <string name="designsystem_space">space</string>
+    <string name="designsystem_repository">Repository</string>
+    <string name="designsystem_main_worktree">Main worktree</string>
+    <string name="designsystem_worktree">Worktree</string>
+    <string name="designsystem_worktree_primary">Primary</string>
+    <string name="designsystem_worktree_detached">Detached HEAD</string>
+    <string name="designsystem_worktree_offline">This computer is offline</string>
+    <string name="designsystem_worktree_idle">Idle</string>
     <string name="designsystem_expand_named">Expand %1$s</string>
     <string name="designsystem_collapse_named">Collapse %1$s</string>
     <plurals name="designsystem_idle_more">
