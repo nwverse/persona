@@ -441,7 +441,7 @@ func (e *Engine) AppendRecording(rawID string, a RecordingAppend) (RecordingAppe
 	fresh := a.Segments[min(r.Next-*a.From, len(a.Segments)):]
 	add, size := make([]RecordingSegment, 0, len(fresh)), 0
 	for i, sg := range fresh {
-		sg.Text, sg.N = strings.TrimSpace(sg.Text), r.Next+i+1
+		sg.Text, sg.N, sg.Source = strings.TrimSpace(sg.Text), r.Next+i+1, "" // only the hub sets a source
 		if sg.Text == "" {
 			continue // its position is taken, and it is left out of the transcript
 		}

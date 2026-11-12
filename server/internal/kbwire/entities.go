@@ -156,6 +156,9 @@ type RecordingSegment struct {
 	// N is an all-day recording's line number: its upload position plus one, what the recap cites
 	// (docs/assistant/day-recap.md); 0 (absent) for every other recording.
 	N int `json:"n,omitempty"`
+	// Source is whose text a segment of the transcript of record is in hub transcription (docs/assistant/meeting-minutes.md
+	// "The transcript of record"): "hub" or "device"; absent means device. Only the hub sets it, never an upload.
+	Source string `json:"source,omitempty"`
 }
 
 // Hit is one search result.

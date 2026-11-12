@@ -64,6 +64,9 @@ type LiveSegment struct {
 	Start float64 `json:"start"`
 	End   float64 `json:"end"`
 	Text  string  `json:"text"`
+	// Source is whose sentence it is in hub mode (SourceHub, SourceDevice: filled from the phone's uploads); absent in
+	// device mode. Only the hub sets it.
+	Source string `json:"source,omitempty"`
 }
 
 // AskSource is an earlier meeting (kind recordings) or a project (kind projects) an answer drew on; When, Start and End

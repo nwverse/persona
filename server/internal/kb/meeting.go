@@ -60,6 +60,9 @@ type Meeting struct {
 	// Private is the private mark: nil until chosen.
 	Private  *bool            `json:"private,omitempty"`
 	Followup *MeetingFollowup `json:"followup,omitempty"`
+	// Transcription is the meeting's transcription mode and, in hub mode, its state and timeline (#3862 phase 5,
+	// transcription_api.go): nil until an upload named a mode.
+	Transcription *MeetingTranscription `json:"transcription,omitempty"`
 	// Revs are the parts' revisions (PartRoom, PartPrivate, PartFollowup): each only goes up.
 	Revs map[string]int64 `json:"revs,omitempty"`
 }

@@ -72,6 +72,9 @@ type Service struct {
 	ext ExtensionTools
 	// refs is the provider extensions' values for launcher keys that are references (launcher_secrets.go); nil: none.
 	refs launcherSecrets
+	// trans reaches the transcription contributions (meeting_transcribe_ext.go): the extensions' when they offer it
+	// (SetExtensions); nil: none (tests).
+	trans transcribers
 	// humanSent: the messages a person's own app sent, as the hub vouched (secret_handoff.go).
 	humanSent humanSends
 

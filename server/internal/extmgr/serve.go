@@ -122,6 +122,10 @@ func (h *Manager) registerRoutes(api *http.ServeMux) {
 	h.adminExtensionRoutes(api) // with the old /api/v1/admin/plugins paths
 	h.subscriptionRoutes(api)
 	api.HandleFunc("POST /api/v1/error-reports", h.postErrorReports)
+	// The assistant's WebSocket routes, relayed like the extensions' (a relay stream), are the assistant's to answer.
+	for _, pattern := range assistantwire.SocketRoutes {
+		api.HandleFunc(pattern, h.assistantSocket)
+	}
 	withMachine := func(fn func(http.ResponseWriter, *http.Request, *Machine)) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			m := h.localMachine(r.PathValue("mid"))
@@ -158,6 +162,15 @@ func (h *Manager) registerRoutes(api *http.ServeMux) {
 			writeErr(w, http.StatusNotFound, errors.New("mail is not set up"))
 		})
 	}
+}
+
+// assistantSocket hands one of assistantwire.SocketRoutes to the assistant in this process (Options.AssistantSocket).
+func (h *Manager) assistantSocket(w http.ResponseWriter, r *http.Request) {
+	if h.opts.AssistantSocket == nil {
+		writeErr(w, http.StatusNotFound, errors.New(http.StatusText(http.StatusNotFound)))
+		return
+	}
+	h.opts.AssistantSocket(w, r)
 }
 
 // ServeHTTP serves one request the hub relayed: who asked is in the hub's headers (principalFrom); the extensions'

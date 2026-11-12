@@ -43,6 +43,12 @@ const (
 	// "Phase 2: live view"). The hub lists meeting_live_view only while the default manager names it beside
 	// CapabilityMeetingConversation.
 	CapabilityMeetingLiveView = "meeting_live_view"
+	// CapabilityMeetingTranscription: the manager transcribes meetings on the hub (#3862 phase 5: the upload's
+	// transcription and timeline, the audio socket GET …/audio and the gap uploads PUT …/audio, the hub's transcript of
+	// record, the meeting_transcription_* settings; docs/assistant/meeting-minutes.md "Phase 5: hub transcription").
+	// The hub lists meeting_transcription only while the default manager names it beside CapabilityMeetingConversation
+	// and CapabilityMeetingLiveView.
+	CapabilityMeetingTranscription = "meeting_transcription"
 	// CapabilityRecordingDay: the manager takes all-day recordings and writes their daily recap (the upload's kind
 	// day, POST …/segments, detail.recap, recap_state; #4741). The hub lists the recording_day feature only while the
 	// default manager names it.
@@ -290,4 +296,13 @@ var Routes = []string{
 	"GET /api/v1/recordings/{id}/photos",
 	"GET /api/v1/recordings/{id}/photos/{n}",
 	"DELETE /api/v1/recordings/{id}/photos/{n}",
+	// Hub transcription's gap uploads (meeting_transcribe.go there, "Phase 5: hub transcription"); its audio socket is
+	// one of SocketRoutes.
+	"PUT /api/v1/recordings/{id}/audio",
 }
+
+// SocketRoutes are the assistant's routes that upgrade to a WebSocket. The hub relays them over a relay stream
+// (extwire.MethodAccept) to the default manager, as it relays the extensions' routes, never as http.request; the
+// manager's extensions layer hands them to the assistant (extmgr.Options.AssistantSocket). The assistant serves exactly
+// these on its socket handler (assistant.Service.ServeSocket).
+var SocketRoutes = []string{"GET /api/v1/recordings/{id}/audio"}

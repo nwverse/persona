@@ -102,4 +102,6 @@ func (s *Service) recordingRoutes(engine func(http.ResponseWriter, *http.Request
 	s.minutesRoutes(engine)
 	s.meetingRoutes()
 	s.dayRoutes()
+	// Hub transcription's gap uploads (meeting_transcribe.go); its audio socket is ServeSocket's.
+	s.handle("PUT /api/v1/recordings/{id}/audio", s.audioPut)
 }

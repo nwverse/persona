@@ -112,6 +112,10 @@ type RecordingUpload struct {
 	// room is the upload's room (meeting.go), nil without one; roomProblem what was wrong with its role.
 	room        *roomUpload
 	roomProblem string
+	// transcription is the mode the upload names ("" when none, or a value that names none) and timeline its timeline
+	// (nil without one, or when it was malformed or over the limits); see transcription_api.go.
+	transcription string
+	timeline      *Timeline
 }
 
 // MeetingRef is the knowledge base's calendar item (meetings or events) a recording overlaps.
@@ -284,6 +288,11 @@ type RecordingPut struct {
 	// after it (nil without one).
 	Room    bool
 	Meeting *Meeting
+	// Transcription is the transcription mode in effect after the upload (TranscriptionDevice, TranscriptionHub: the
+	// 200's transcription), and TranscriptionProblem why it is not the one asked for (TranscriptionUnavailable,
+	// TranscriptionNotMeeting).
+	Transcription        string
+	TranscriptionProblem string
 }
 
 var (
@@ -406,7 +415,7 @@ func (u *RecordingUpload) clean() error {
 	segs := u.Segments[:0]
 	total := 0
 	for i, sg := range u.Segments {
-		sg.Text, sg.N = strings.TrimSpace(sg.Text), 0
+		sg.Text, sg.N, sg.Source = strings.TrimSpace(sg.Text), 0, "" // only the hub sets a source
 		if day {
 			sg.N = i + 1 // its position, empty ones counted
 		}
