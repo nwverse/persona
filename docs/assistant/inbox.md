@@ -671,6 +671,17 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
 
 ## Item actions (`Persona/Views/Inbox/InboxActions.swift`)
 
+- **Recheck task link (maintenance)**: authenticated `POST /api/v1/inbox/{id}/task-link/recheck` reuses `inbox.judge`
+  with all current open tasks, including for an old open event with an existing processing conversation or draft.
+  Judge candidates do not inherit the assistant briefing's item limit or age window; closed/cancelled tasks are excluded.
+  It requires the AI twin to be enabled and preserves existing links. It answers `{status, method?, item}`: `linked`
+  or `unmatched` (with `method: "judge"` when the model ran), or `existing`; `409` distinguishes `disabled`, `closed`,
+  `changed` and `task_closed`. Model failures answer `502`, storage failures `503`, and a missing event `404`.
+  A changed message or a task closed during judgment invalidates the result. A new link is persisted through normal
+  Inbox writes before raising the existing supervisor signal; a saved reply draft also gets its task message card.
+  This action never starts processing, sends a reply, changes a suggestion or files an event/task. It does not
+  periodically rejudge old events: an operator explicitly requests each bounded recheck. Normal initial escalation
+  still judges only events without a processing session; refresh alone does not rejudge an existing draft.
 - **AI Draft Reply**: `POST /api/v1/inbox/{id}/draft {instruction}`. The manager uses the Draft reply model in the user's voice (Lark short and conversational; mail matches the incoming language and formality).
   Do not invent unknown facts or leave 【】 placeholders for the user; omit unknown details. Include `assistant.notes` as About the user. Edit directly in the sheet or enter "Have AI revise: …" to rewrite.
   Send uses `POST /api/v1/inbox/{id}/reply {text}`: the manager asks hub to post in the original Lark chat through its plugin, or reply by mail (Re: subject, In-Reply-To / References,

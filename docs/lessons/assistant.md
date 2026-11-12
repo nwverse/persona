@@ -1,5 +1,11 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- Rechecking an Inbox task link must not replay event handling (#5680). Existing processing conversations and saved
+  drafts skip the initial task judge; resetting their processing fields to force another pass can duplicate work.
+  Use the task-link maintenance action instead: validate the message and candidate after judgment, persist through
+  Inbox rollback-aware writes, then publish the draft's task card and supervisor signal. A model failure is distinct
+  from a successful no-match result.
+
 - Proven `prompt` source can describe either a terminal tool label or a first-message fallback (#5269).
   Ordinary Claude inventory falls back to the first message for a bare tool label but not its spinner-prefixed
   form, so spinner normalization alone still lets a generated name disappear. Accept recognizable bad fallback

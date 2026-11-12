@@ -343,6 +343,29 @@ func (s *Service) inboxAgentStarted(ctx context.Context, self, machine, session,
 // handling it; a model that fails leaves the event unlinked. w is the item's write not saved yet (nil: none): the link
 // joins that write while the item still holds it (a concurrent move keeps the write from being undone over it).
 func (s *Service) linkTaskFor(ctx context.Context, it *InboxItem, tasks []prompts.InboxTask, w *inboxWrite) bool {
+	id, err := s.judgeInboxTask(ctx, it, tasks)
+	if err != nil {
+		if paused, _ := modelPaused(err); ctx.Err() == nil && !paused {
+			s.logf("inbox: link %s to a task: %v", it.ID, err)
+		}
+		return false
+	}
+	b := &s.inbox
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if it.Agent != nil && id != "" {
+		held := w != nil && b.holds(w)
+		it.Agent.TodoID = id
+		if held {
+			b.settle(w)
+		}
+		return true
+	}
+	return false
+}
+
+// judgeInboxTask only chooses from the supplied candidates; callers own applying and saving the result.
+func (s *Service) judgeInboxTask(ctx context.Context, it *InboxItem, tasks []prompts.InboxTask) (string, error) {
 	b := &s.inbox
 	b.mu.Lock()
 	input := prompts.RenderInboxJudgeInput(prompts.InboxJudgeInput{Summary: it.Summary, Item: b.promptItem(it), Tasks: tasks})
@@ -355,22 +378,12 @@ func (s *Service) linkTaskFor(ctx context.Context, it *InboxItem, tasks []prompt
 	err := s.inboxModelJSON(cctx, purposeJudge, system, input, 0, &out)
 	cancel()
 	if err != nil {
-		if paused, _ := modelPaused(err); ctx.Err() == nil && !paused {
-			s.logf("inbox: link %s to a task: %v", it.ID, err)
-		}
-		return false
+		return "", err
 	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
 	for _, t := range tasks { // only a task it was shown
-		if it.Agent != nil && t.ID == strings.TrimSpace(out.TaskID) {
-			held := w != nil && b.holds(w)
-			it.Agent.TodoID = t.ID
-			if held {
-				b.settle(w)
-			}
-			return true
+		if t.ID == strings.TrimSpace(out.TaskID) {
+			return t.ID, nil
 		}
 	}
-	return false
+	return "", nil
 }
