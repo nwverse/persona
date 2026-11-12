@@ -23,12 +23,15 @@ import (
 // it (newImportGroup, importEnv). The text holds keys: it is never logged, and the answer carries none of its
 // secrets but the key itself (the user pasted it into the form it stays in).
 
-// What one paste answers at most: drafts (reading stops past them, too_many), notes in all (the top-level ones and
-// every draft's), variables and headers one draft names as left out. A text of the body's 256 KiB stays a small answer.
+// What one paste answers at most: drafts (too_many beyond), notes in all (the top-level ones and every draft's),
+// variables and headers one draft names as left out; and what it reads at most: shell lines' claude launches and
+// variables, cindy's providers past pasteMost drafts (too_many). A text of the body's 256 KiB stays a small answer.
 const (
 	pasteMost        = 50
 	pasteNotesMost   = 200
 	pasteSkippedMost = 100
+	pasteLaunchMost  = 500
+	pasteEnvMost     = 500
 )
 
 // The codes of a paste's notes (clients localize them): a note carries names (an alias, a variable, a header, an

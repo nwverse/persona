@@ -18,6 +18,8 @@ func TestSplit(t *testing.T) {
 		}, true},
 		{`echo "$(id)" > /tmp/x 2>&1`, []Segment{{Words: []string{"echo", "$(id)"}, Text: `echo "$(id)" > /tmp/x 2>&1`, Subst: true,
 			ArgSubst: true, Nested: []string{"id"}, Redirect: ">/tmp/x 2>&1"}}, true},
+		// A redirection's target ends before the blanks after it, the ones only Unicode calls blanks too.
+		{"x >a\v >b\u00a0", []Segment{{Words: []string{"x"}, Text: "x >a\v >b", Redirect: ">a >b"}}, true},
 		{`echo 'open`, nil, false},
 		{`(cd x)`, nil, false},
 		{`cat <<EOF`, nil, false},

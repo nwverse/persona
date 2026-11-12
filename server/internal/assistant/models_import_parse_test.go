@@ -433,8 +433,7 @@ func TestParsePasteTooMany(t *testing.T) {
 		fmt.Fprintf(&b, "alias a%d='ANTHROPIC_BASE_URL=https://gw%d.example.com claude'\n", i, i)
 		providers = append(providers, fmt.Sprintf(`{"name": "p%d", "endpoints": [{"protocol": "openai-chat", "baseUrl": "https://p%d.example.com/v1"}]}`, i, i))
 	}
-	b.WriteString("fi\n")                               // not read: no not_claude
-	providers = append(providers, `{"kind": "preset"}`) // not read: no cindy_kind
+	providers = append(providers, `{"kind": "preset"}`) // past the one past pasteMost drafts, not read: no cindy_kind
 	for _, text := range []string{b.String(), `{"providers": [` + strings.Join(providers, ",") + `]}`} {
 		res := parsePaste(text)
 		if len(res.Drafts) != pasteMost || res.Drafts[pasteMost-1].Provider.BaseURL == "" ||
@@ -457,19 +456,19 @@ func TestParsePasteLeavesSecretsOut(t *testing.T) {
 		name, text string
 		want       []string // fragments of the answer
 	}{
-		// A header with a line break, a backslash or a $ in its value is unsafe; one whose name is no plain token is
-		// not even named.
+		// A header with a line break, a backslash or a $ in its value is unsafe (with a Bearer one in it, a credential);
+		// one whose name is no plain token is not even named.
 		{"cindy header value with a line break", cindy(`{"protocol": "anthropic-messages", "baseUrl": "https://gw.example.com",
-			"headers": {"X-Org": "a\nAuthorization: Bearer ` + s + `", "X-Team": "blue"}}`),
-			[]string{`"headers":"X-Team: blue"`, `{"name":"X-Org","reason":"unsafe"}`}},
+			"headers": {"X-Org": "a\nAuthorization: Bearer ` + s + `", "X-Note": "a\nX-Other: ` + s + `", "X-Team": "blue"}}`),
+			[]string{`"headers":"X-Team: blue"`, `{"name":"X-Note","reason":"unsafe"}`, `{"name":"X-Org","reason":"credential"}`}},
 		{"cindy header name with a line break", cindy(`{"protocol": "anthropic-messages", "baseUrl": "https://gw.example.com",
 			"headers": {"X-Org: a\nAuthorization": "Bearer ` + s + `", "X Org": "` + s + `"}}`),
 			[]string{`"notes":[{"code":"header_unreadable"}]`}},
 		{"curl header names that are no token", curl + `-H 'X Api Key: ` + s + `' -H $'X-Org: a\nAuthorization: Bearer ` + s + `' -H 'x.api.key: ` + s + `'`,
 			[]string{`{"code":"header_unreadable"}`}},
-		{"curl header over two lines", curl + "-H 'X-Org: a\nAuthorization: Bearer " + s + "'",
-			[]string{`{"name":"X-Org","reason":"unsafe"}`}},
-		{"a literal backslash-n or a $ in ANTHROPIC_CUSTOM_HEADERS", gw + `export ANTHROPIC_CUSTOM_HEADERS="X-Org: a\nAuthorization: Bearer ` + s + `"` + "\n" +
+		{"curl header over two lines", curl + "-H 'X-Org: a\nAuthorization: Bearer " + s + "' -H 'X-Note: a\nX-Other: " + s + "'",
+			[]string{`{"name":"X-Org","reason":"credential"}`, `{"name":"X-Note","reason":"unsafe"}`}},
+		{"a literal backslash-n or a $ in ANTHROPIC_CUSTOM_HEADERS", gw + `export ANTHROPIC_CUSTOM_HEADERS="X-Org: a\nX-Other: ` + s + `"` + "\n" +
 			"claude\nexport ANTHROPIC_CUSTOM_HEADERS='X-Team: $" + s + "'\nclaude\n",
 			[]string{`{"name":"X-Org","reason":"unsafe"}`, `{"name":"X-Team","reason":"unsafe"}`}},
 		// --opt=value names only the option.
@@ -513,6 +512,17 @@ func TestParsePasteLeavesSecretsOut(t *testing.T) {
 				`{"name":"JWT","reason":"credential"}`, `{"name":"MY_PWD","reason":"credential"}`,
 				`{"name":"OPENAIKEY","reason":"credential"}`, `{"name":"RELAY_AUTH","reason":"credential"}`,
 				`{"name":"SESSIONID","reason":"credential"}`, `{"name":"X_AUTHORIZATION","reason":"credential"}`}},
+		// Values shaped like a secret, whatever they are named, and variables of headers.
+		{"variable values", gw + "export OPENROUTER=" + s + " GH=ghp_" + s + " RELAY=\"Bearer " + s + "\" OTEL_EXPORTER_OTLP_HEADERS='x-honeycomb-team=" + s +
+			"' NOTE=plain\n",
+			[]string{`"env":"NOTE=plain"`, `{"name":"GH","reason":"credential"}`, `{"name":"OPENROUTER","reason":"credential"}`,
+				`{"name":"OTEL_EXPORTER_OTLP_HEADERS","reason":"credential"}`, `{"name":"RELAY","reason":"credential"}`}},
+		{"header names and values", gw + "export ANTHROPIC_CUSTOM_HEADERS='X-Pwd: v" + s + "\nX-Hmac: v" + s + "\nX-Sig: v" + s + "\nX-Access: v" + s +
+			"\nX-Sid: v" + s + "\nX-Otp: v" + s + "\nX-Api: v" + s + "\nX-Org: bearer " + s + "\nX-Ref: " + s + "\nX-Org-Id: org-1\nX-Title: My App'\n",
+			[]string{`"headers":"X-Org-Id: org-1\nX-Title: My App"`, `{"name":"X-Pwd","reason":"credential"}`, `{"name":"X-Hmac","reason":"credential"}`,
+				`{"name":"X-Sig","reason":"credential"}`, `{"name":"X-Access","reason":"credential"}`, `{"name":"X-Sid","reason":"credential"}`,
+				`{"name":"X-Otp","reason":"credential"}`, `{"name":"X-Api","reason":"credential"}`, `{"name":"X-Org","reason":"credential"}`,
+				`{"name":"X-Ref","reason":"credential"}`}},
 		// A key with a line break in it is no key.
 		{"a key running on", "curl https://gw.example.com/v1/messages -H 'x-api-key: " + pasteKeyB + "\nAuthorization: Bearer " + s + "'",
 			[]string{`{"code":"no_key"}`}},
@@ -540,17 +550,21 @@ func TestParsePasteLeavesSecretsOut(t *testing.T) {
 // A paste of the body's size stays a small answer: reading stops past pasteMost launches, and notes and the
 // variables left out of a draft are capped.
 func TestParsePasteIsBounded(t *testing.T) {
+	const gw = "export ANTHROPIC_BASE_URL=https://gw.example.com\n"
 	var cmds, opts, headers, aliases, vars strings.Builder
-	cmds.WriteString("export ANTHROPIC_BASE_URL=https://gw.example.com\n")
+	cmds.WriteString(gw)
+	vars.WriteString(gw)
 	for i := range 3000 {
 		fmt.Fprintf(&cmds, "V%d=1\n", i)
 		fmt.Fprintf(&opts, " --o%d", i)
 		fmt.Fprintf(&headers, " -H 'X-Key-%d: v'", i)
 		fmt.Fprintf(&aliases, "alias a%d=x\n", i)
-		fmt.Fprintf(&vars, "export V%d=1\n", i)
+		if i < 400 {
+			fmt.Fprintf(&vars, "export V%d=1\n", i)
+		}
 	}
-	cmds.WriteString(strings.Repeat("claude\n", 3000) + "fi\n") // the line past the stop is not read
-	vars.WriteString("export ANTHROPIC_BASE_URL=https://gw.example.com\nclaude\n")
+	cmds.WriteString(strings.Repeat("claude\n", 3000) + "fi\n") // past pasteEnvMost variables nothing is read
+	vars.WriteString("claude\n")
 	for _, c := range []struct {
 		name, text   string
 		drafts       int
@@ -558,13 +572,14 @@ func TestParsePasteIsBounded(t *testing.T) {
 		skipped      int         // variables and headers each draft names as left out
 		skippedFirst string
 	}{
-		{"commands", cmds.String(), pasteMost, notes(pasteNote{Code: noteTooMany}), pasteSkippedMost, "V1042"},
+		{"variables past the bound", cmds.String(), 1, notes(pasteNote{Code: noteTooMany}), pasteSkippedMost, "V143"},
+		{"launches past the bound", gw + strings.Repeat("claude\n", pasteLaunchMost+1) + "fi\n", pasteMost, notes(pasteNote{Code: noteTooMany}), 0, ""},
 		{"curl options", "curl https://gw.example.com/v1/messages" + opts.String(), 1, []pasteNote{}, 0, ""},
 		{"curl headers", "curl https://gw.example.com/v1/messages" + headers.String(), 1, []pasteNote{}, pasteSkippedMost, "X-Key-0"},
 		{"aliases of something else", aliases.String(), 0, nil, 0, ""},
 		{"notes, then too many", aliases.String() + "export ANTHROPIC_BASE_URL=https://gw.example.com\n" + strings.Repeat("claude\n", pasteMost+1),
 			pasteMost, nil, 0, ""},
-		{"variables", vars.String(), 1, []pasteNote{}, pasteSkippedMost, "V1042"},
+		{"variables", vars.String(), 1, []pasteNote{}, pasteSkippedMost, "V143"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			res := parsePaste(c.text)
@@ -586,6 +601,62 @@ func TestParsePasteIsBounded(t *testing.T) {
 				t.Fatalf("%d drafts, %d notes, top %v", len(res.Drafts), all, res.Notes[:min(len(res.Notes), 3)])
 			}
 		})
+	}
+}
+
+// Arguments are left out for an option named for a secret or a value shaped like one, not for words that only
+// contain one (bypassPermissions, --fork-session).
+func TestParsePasteArgs(t *testing.T) {
+	for _, c := range []struct {
+		args string
+		kept []string
+	}{
+		{"--permission-mode bypassPermissions --fork-session --continue", []string{"--permission-mode", "bypassPermissions", "--fork-session", "--continue"}},
+		{`--model opus[1m] --add-dir ~/work --allowedTools "Bash(git:*)" --append-system-prompt "Be brief"`,
+			[]string{"--model", "opus[1m]", "--add-dir", "~/work", "--allowedTools", "Bash(git:*)", "--append-system-prompt", "Be brief"}},
+		{"--dangerously-skip-permissions --verbose", []string{"--dangerously-skip-permissions", "--verbose"}},
+		{"--api-key hidden", nil},
+		{"--apiKey hidden", nil},
+		{"--token=hidden", nil},
+		{"--auth hidden", nil},
+		{"--client-secret hidden", nil},
+		{"--resume sk-ant-hidden", nil},
+		{"--header 'Authorization: Bearer hidden'", nil},
+		{`--settings '{"a":1}'`, nil},
+		{"--settings={}", nil},
+		{"--append=plain --x=a=b", nil}, // a value with an = (KEY=value) may set anything
+		{"--append=plain", []string{"--append=plain"}},
+	} {
+		res := parsePaste("export ANTHROPIC_BASE_URL=https://gw.example.com\nclaude " + c.args)
+		d := res.Drafts[0]
+		if !slices.Equal(d.Provider.Args, c.kept) || (c.kept == nil) != slices.Contains(d.Notes, pasteNote{Code: noteArgsLeftOut}) {
+			t.Errorf("%s: args %q, notes %v", c.args, d.Provider.Args, d.Notes)
+		}
+	}
+}
+
+func TestNameWords(t *testing.T) {
+	for name, want := range map[string][]string{
+		"XApiKey": {"X", "API", "KEY"}, "bypassPermissions": {"BYPASS", "PERMISSIONS"}, "X-Org-Id": {"X", "ORG", "ID"},
+		"HTTPReferer": {"HTTP", "REFERER"}, "sha256Sig": {"SHA256", "SIG"}, "x.api key": {"X", "API", "KEY"}, "--": nil,
+	} {
+		if got := nameWords(name); !slices.Equal(got, want) {
+			t.Errorf("%s: %q, want %q", name, got, want)
+		}
+	}
+}
+
+// Aliases are read however many there are (up to pasteLaunchMost): sixty on one gateway and key that differ only in
+// the model are one draft with sixty models, and exports below them still count.
+func TestParsePasteManyAliases(t *testing.T) {
+	var b strings.Builder
+	for i := range 60 {
+		fmt.Fprintf(&b, "alias m%d='ANTHROPIC_MODEL=model-%d claude'\n", i, i)
+	}
+	b.WriteString("export ANTHROPIC_BASE_URL=https://gw.example.com ANTHROPIC_AUTH_TOKEN=" + pasteKeyA + "\n")
+	res := parsePaste(b.String())
+	if len(res.Drafts) != 1 || len(res.Drafts[0].Provider.Models) != 60 || res.Drafts[0].Provider.APIKey != pasteKeyA || len(res.Notes) != 0 {
+		t.Fatalf("%d drafts, notes %v", len(res.Drafts), res.Notes)
 	}
 }
 
