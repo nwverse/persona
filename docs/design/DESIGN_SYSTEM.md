@@ -333,6 +333,12 @@ For every component: use the design-system one, not a lookalike. Counts are appr
 - Accessibility: every control labelled; hold-to-talk has a hint and a tap action (`apple/Persona/DesignSystem/ComposerHoldMic.swift:105-110`). Reduce Motion read in the bar.
 - Source: `apple/Persona/DesignSystem/ShellComposerBar.swift:11`, `apple/Persona/DesignSystem/ComposerButtons.swift`.
 - Platforms: web composer (14 px radius, 28 px buttons, `web/src/views/chat/Composer.tsx:648`); Android `ComposerFrame` (radius 32 in Glass).
+- Web and Android text growth (owner-requested correction, #5645 / #5648): grow with the draft to six visible lines,
+  then scroll inside the same field. Keep the caret visible when typing or moving it; unrelated updates never take
+  over a manual draft scroll. Web reserves room for its toolbar in exceptionally short visible viewports (35% input
+  share); that safety cap is not the old 22% cap that stopped an ordinary keyboard-sized phone at three or four lines.
+  The existing phone-only full-screen editors are unchanged; their control colors and text placement were inspected,
+  not redesigned in this correction.
 - Pictures and videos (iOS `mediaPicker`, `VideoAttachmentsBar`, `PasteImageChip`): + › Photos takes pictures and videos,
   four together. A video waits above the field as a row with the video mark, its name and, once on the computer, "size ·
   length", and ✕. While the clipboard holds a picture not yet offered, the focused composer offers **Paste** (the accent's
