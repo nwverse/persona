@@ -27,6 +27,9 @@ import persona.core.contracts.InboxSuggestion
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
 import persona.core.domain.inbox.InboxTier
+import persona.core.navigation.AppTab
+import persona.core.navigation.ChatRoute
+import persona.core.navigation.ConversationKind
 import persona.core.navigation.Navigator
 
 /**
@@ -47,6 +50,22 @@ fun InboxEventScreen(repository: InboxRepository, route: InboxEventRoute, naviga
     var error by remember { mutableStateOf<String?>(null) }
     var stale by rememberSaveable(route.itemId) { mutableStateOf(false) }
     val open = LocalLarkLinkOpener.current
+    val handOff = rememberInboxHandOffBarModel(repository, route.itemId)
+    val composers = rememberReplyComposers(repository)
+    var drafting by rememberSaveable(route.itemId) { mutableStateOf(false) }
+    val draftComposer = if (record != null && !record.item.isDone && inboxSupportsDraftReply(record) && record.event.suggestion?.kind != "reply") {
+        composers.get(ReplyTarget.Inbox(record.item.id), record.agent?.draft.orEmpty())
+    } else null
+    fun openHandOff(destination: HandOffDestination) {
+        val target = destination.target
+        if (target != null) {
+            navigator.navigate(ChatRoute(target.machineId, target.sessionId, ConversationKind.Agent))
+        } else {
+            val session = destination.session
+            if (session != null) navigator.navigate(ChatRoute(session.machineId, session.sessionId, ConversationKind.Assistant))
+            else navigator.selectTab(AppTab.Persona)
+        }
+    }
     fun go(target: ChainTarget) {
         val shown = record ?: return
         when (target) {
@@ -79,6 +98,15 @@ fun InboxEventScreen(repository: InboxRepository, route: InboxEventRoute, naviga
                     }
                 })
         },
+        bottomBar = if (record == null || handOff == null) null else ({
+            InboxHandOffBar(
+                repository = repository,
+                model = handOff,
+                enabled = !record.item.isDone,
+                onDraftReply = if (draftComposer != null) ({ drafting = true }) else null,
+                onOpen = ::openHandOff,
+            )
+        }),
     ) {
         if (record == null) {
             item("event-missing") { StatusText(stringResource(R.string.inbox_item_missing)) }
@@ -130,6 +158,9 @@ fun InboxEventScreen(repository: InboxRepository, route: InboxEventRoute, naviga
             }
         }
         item("event-end") { Spacer(Modifier.padding(top = Tokens.Space.xxl)) }
+    }
+    if (drafting && record != null && draftComposer != null) {
+        InboxDraftSheet(repository, record, draftComposer, navigator, onDismiss = { drafting = false })
     }
 }
 
