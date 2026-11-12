@@ -162,7 +162,7 @@ struct FilesPane: View {
         }
         .sheet(item: $info) { t in
             FileInfoSheet(machine: machine, path: t.path, cwd: cwd, entry: t.entry) { real, dir in show(real, dir: dir) }
-                .presentationDetents([.medium, .large])
+                .presentationDetents([.large]) // all of it at once: the permissions under the times (the approved mockup)
         }
         .fileUploadPicker(isPresented: $pickingFiles) { upload($0) }
         .photosPicker(isPresented: $pickingPhotos, selection: $photoPicks, maxSelectionCount: 20, matching: .any(of: [.images, .videos]))
