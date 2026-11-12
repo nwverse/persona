@@ -227,6 +227,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationC
         #endif
         AppModel.shared.start()
         MacAttentionWatcher.shared.start(AppModel.shared)
+        AppIconBadgeWatcher.shared.start(AppModel.shared) // the Dock badge (#5824)
         MacMenuBarState.shared.start(AppModel.shared)
         MacShellState.shared.watchKeyWindow()
         #if DEBUG

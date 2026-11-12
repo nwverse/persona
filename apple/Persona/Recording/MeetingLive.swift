@@ -44,7 +44,8 @@ final class MeetingLive {
         /// The stretch Persona is saying now (`MeetingSpeaker.openSpan`).
         var openSpan: (UUID) -> RecordingSpan?
         var wait: (Duration) async -> Void
-        /// Every `200` of `…/live`: the meeting conversation keeps what it says of the room (`MeetingConversation.applyLive`).
+        /// Every `200` of `…/live`: the meeting conversation keeps what it says of the room (`MeetingConversation.applyLive`)
+        /// and, without the socket, reads the room's topics (`MeetingConversation.liveAccepted`).
         var report: (UUID, Answer) -> Void = { _, _ in }
     }
 
@@ -212,6 +213,8 @@ extension MeetingLive.Deps {
              wait: { try? await Task.sleep(for: $0) },
              report: { id, answer in
                  MeetingConversation.shared.applyLive(id, room: answer.room, privateMark: answer.privateMark, followup: answer.followup)
+                 // The app behind has no `meeting_live`: the room's topics are read after the lines went (#3862 phase 2).
+                 MeetingConversation.shared.liveAccepted(id)
              })
     }
 }

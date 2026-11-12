@@ -292,6 +292,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         #endif
         WatchSync.shared.activate()
         AppModel.shared.start()
+        AppIconBadgeWatcher.shared.start(AppModel.shared)
         LiveActivityController.shared.start()
         if !automation { PushRegistrar.shared.registerIfPossible() }
         return true

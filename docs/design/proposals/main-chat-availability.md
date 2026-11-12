@@ -3,7 +3,7 @@
 Status: built (#4757). The owner took decisions 1 to 5 of section 7 as recommended; decision 6 is open and built as
 recommended. Every step of section 6 is merged: M1 (#4924), F1 (#4925), F2 (#4926), B1 (#4927), Q1 (#4928), R1 (#4929),
 R2 (#4930), B2 on the web, the Apple apps and Android (#5082, #5083, #5084), R3 (#5085) and K1 (#5086). Follow-ups:
-the clients' part of R1 (#5802), R2 (#5803) and R3 (#5804), the tier-down suggestion (#5805), purpose descriptions in
+the clients' part of R1 (#5802), R2 (#5803) and R3 (#5804), the tier-down suggestion (#5805, built), purpose descriptions in
 Model Settings (#5806), and verification on real builds and a live install (#5807). Covers the assistant
 manager and its prompts; the clients change only where a step says so.
 
@@ -199,8 +199,12 @@ As built (R3, #5085; `docs/assistant/assistant.md` "Recommended setup" is author
 there is no weekly briefing, so the block goes with the first briefing with `facts` on that reaches the owner in a
 week. The triage's own switch is never suggested (nothing is recorded about a stopped turn while it is off) and its
 three actions are counted only while it is on; a transient error is continued by `transient_retry` by default, so
-`auto_continue` counts usage-limit stops continued by hand. The tier-down suggestion of section 9c is left out until
-K1's numbers exist. The block is drawn on the Lark card and on the web app's briefing card (the `brief` item's
+`auto_continue` counts usage-limit stops continued by hand. The tier-down suggestion of section 9c is one more line
+of the block (#5805; "A lower tier for the background supervisor" there): named only for the background supervisor's
+own reviews on its current model, with at least 20 settled acceptances in 30 days of which at most 1 in 20 were
+reopened (over `settled`, never over accepted), and only when the provider's own tier models show a tier below that is
+not the smallest; the block does not say what a tier down "would have cost", since tokens are not attributed to tasks
+(9c), and it never suggests a tier up. The block is drawn on the Lark card and on the web app's briefing card (the `brief` item's
 `setup`) and given to the model as facts; the iOS and Android apps do not draw it yet.
 
 ## 5. Measurement
