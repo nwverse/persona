@@ -126,6 +126,7 @@ export const Composer = memo(function Composer({
   leading,
   trailing,
   suggestion,
+  suggestionRisky,
   mention,
   planMode,
   onFocusChange,
@@ -166,6 +167,8 @@ export const Composer = memo(function Composer({
    *  changes, as `footer`. */
   trailing?: React.ReactNode;
   suggestion?: string;
+  /** The suggestion is risky (Session.suggestion_risky): it is only filled in, with no one-tap send. */
+  suggestionRisky?: boolean;
   /** Turns on the @ menu: the chat's files and folder, and other sessions. */
   mention?: MentionSource;
   /** The + / @ panel's Plan mode check row (#5324, PermissionPicker.tsx `usePlanMode`), where the session has modes. */
@@ -685,6 +688,8 @@ export const Composer = memo(function Composer({
     const refs = getContexts(draftKey);
     const q = getQuotes(draftKey).list;
     if (disabled || blocked || loadingDraft || (!text.trim() && !atts.length && !refs.length && !q.length)) return;
+    // Any message spends the suggestion shown: it stays on the hub until the agent starts (#4644).
+    if (suggestion) setSentPill(suggestion);
     // An edit of the last message: the rewind to before the old one first, the box kept as it is (read-only meanwhile).
     // Refused or not possible: nothing changed on the computer, and the edit stays in the box (ChatView says why).
     const edit = editNow.current;
@@ -780,7 +785,7 @@ export const Composer = memo(function Composer({
         </Suspense>
       )}
 
-      {pill && <SuggestionPill text={pill} onFill={() => fillSuggestion(pill)} onSend={() => { setSentPill(pill); void submit(pill); }} />}
+      {pill && <SuggestionPill text={pill} onFill={() => fillSuggestion(pill)} onSend={suggestionRisky ? undefined : () => { setSentPill(pill); void submit(pill); }} />}
 
       <div
         className={cx(
@@ -1228,8 +1233,9 @@ function ExpandedComposer({ value, placeholder, selection, onChange, onCollapse,
   );
 }
 
-/** Claude's suggestion over the box (iOS SuggestionPill): the row fills it in, the arrow sends it as it is. */
-function SuggestionPill({ text, onFill, onSend }: { text: string; onFill: () => void; onSend: () => void }) {
+/** The suggested next message over the box (iOS SuggestionPill): the row fills it in, the arrow sends it as it is; a
+ *  risky one (no onSend) has no arrow (#4644). */
+function SuggestionPill({ text, onFill, onSend }: { text: string; onFill: () => void; onSend?: () => void }) {
   return (
     <div data-testid="composer-suggestion" className="mb-2 flex items-center gap-1 rounded-full bg-surface p-1 pl-1 shadow-card" style={{ animation: `fade-up 200ms ${EASE} both` }}>
       <button
@@ -1244,16 +1250,18 @@ function SuggestionPill({ text, onFill, onSend }: { text: string; onFill: () => 
         <span className="min-w-0 flex-1 truncate text-[12.5px] text-ink-2">{text}</span>
         <span className="shrink-0 whitespace-nowrap text-[12px] font-medium text-accent">{t("chat-composer.suggestion_use")}</span>
       </button>
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={onSend}
-        aria-label={t("chat-composer.suggestion_send")}
-        title={t("chat-composer.suggestion_send")}
-        className="touch-hit flex size-7 shrink-0 items-center justify-center rounded-full text-ink-3 transition-[background-color,color,transform] duration-150 hover:bg-hover hover:text-ink active:scale-[0.94]"
-      >
-        <Icon name="send" size={14} stroke={2} />
-      </button>
+      {onSend && (
+        <button
+          type="button"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={onSend}
+          aria-label={t("chat-composer.suggestion_send")}
+          title={t("chat-composer.suggestion_send")}
+          className="touch-hit flex size-7 shrink-0 items-center justify-center rounded-full text-ink-3 transition-[background-color,color,transform] duration-150 hover:bg-hover hover:text-ink active:scale-[0.94]"
+        >
+          <Icon name="send" size={14} stroke={2} />
+        </button>
+      )}
     </div>
   );
 }

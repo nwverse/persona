@@ -268,7 +268,7 @@ class ConversationHistoryShotsTest {
                 CompositionLocalProvider(LocalHomeDrawer provides true) {
                     Box(Modifier.testTag("shot").width(320.dp).height(760.dp).background(PersonaTheme.palette.background)) {
                         AssistantDrawer("", {}, ConversationGroups(main, emptyList(), listOf(inbox, trip), recent = listOf(inbox, trip)),
-                            active = null, hasMain = true, onEnd = {}, onMain = {}, onOpen = {}, onInfo = {}, onNew = {}, onHome = {},
+                            active = null, hasMain = true, onEnd = {}, onMain = {}, onOpen = {}, onInfo = {}, onNew = {},
                             onSettings = {}, onArchive = {}, onLeader = {}, onRename = {}, onDiagnostics = {},
                             archivedCount = archivedCount, onArchived = {})
                     }
