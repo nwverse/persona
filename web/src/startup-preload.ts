@@ -159,12 +159,12 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * rest of what it adds fits the room main had: lib/background-supervisor.ts, which the sidebar, the conversation menu,
  * the chat's header and its review line read, the store's re-read of the assistant for a supervisor made since, the
  * line's reviewer, and its name and "Built-in"; the switch, the model row and their words are in the lazy Settings
- * page). And 225 B for the work summary's review fixes (#5155: ja counts 594,228 B with them, 594,043 B on main at
- * 4885b1458, +185 B, plus 40 B of room: the duration units back in the catalogs as CLAUDE.md asks of user-facing words,
- * wordless thoughts left out before grouping, rows spinning while the exchange runs; the thought row and its parser
- * stay lazy). Raise it on purpose, in the change that needs it.
+ * page). And 238 B for the work summary's review fixes (#5155: ja counted 594,228 B with them against 594,043 B on main
+ * at 4885b1458, +185 B; 594,241 B merged with main at ebcb0fa62, plus 40 B of room: the duration units back in the
+ * catalogs as CLAUDE.md asks of user-facing words, wordless thoughts left out before grouping, rows spinning while the
+ * exchange runs; the thought row and its parser stay lazy). Raise it on purpose, in the change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 594_268;
+export const FIRST_SCREEN_BUDGET = 594_281;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
