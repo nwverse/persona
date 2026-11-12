@@ -262,14 +262,9 @@ func (r *hubRun) tick(now time.Time) {
 	if r.hubDirty && now.Sub(r.hubPutAt) >= hubSegmentsEvery {
 		r.putHubLocked()
 	}
-	if j := r.job; j != nil {
-		switch {
-		case j.ending && now.Sub(j.endAt) >= audioEndWait:
-			r.dropJobLocked(j)
-		case !j.ending && !r.audioAt.IsZero() && now.Sub(r.audioAt) >= jobIdle:
-			r.s.logf("recording %s: transcription job idle, ended", r.id)
-			r.endJobLocked(j)
-		}
+	if j := r.job; j != nil && !j.ending && !r.audioAt.IsZero() && now.Sub(r.audioAt) >= jobIdle {
+		r.s.logf("recording %s: transcription job idle, ended", r.id)
+		r.endJobLocked(j)
 	}
 	r.fallbackCheckLocked(now)
 }

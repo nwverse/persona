@@ -242,6 +242,8 @@ func TestHubJobReopenedAndIdle(t *testing.T) {
 		_, _, _, ended := jobs[1].snapshot()
 		return ended
 	})
+	p.audio(0.5) // audio again: a job again
+	waitFor(t, "a third job", func() bool { return len(h.tr.jobsOf(extwire.TranscriptionLive)) == 3 })
 	if f := p.of("problem"); len(f) != 0 {
 		t.Fatalf("a drop reopened at once is no problem: %v", f)
 	}

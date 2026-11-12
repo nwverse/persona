@@ -141,3 +141,32 @@ func TestFallbackUpstreamUnavailable(t *testing.T) {
 	waitFor(t, "the fallback", func() bool { return h.transcription(meetingRec)["fallback"] == true })
 	waitFor(t, "the phone's line", func() bool { return len(h.lines(meetingRec)) == 1 })
 }
+
+// A socket down for fallbackAfter: the phone's segments after the hub's last sentence fill the live log, those the
+// hub said already never; back, the hub's sentences go on from the next position and the fallback ends.
+func TestFallbackSocketDown(t *testing.T) {
+	h := newHubFixture(t)
+	h.tr.set(func(f *fakeTranscriber) {
+		f.live = jobScript{lines: []fakeLine{{0.2, 0.8, "Hub before."}, {3.5, 4.0, "Hub after."}}}
+	})
+	h.hubUpload(meetingRec, 1, nil)
+	p, _ := h.open(meetingRec, 0, nil)
+	p.audio(1)
+	p.wait("line", 1)
+	_ = p.c.CloseNow()
+	waitFor(t, "the fallback", func() bool { return h.transcription(meetingRec)["fallback"] == true })
+	h.hubUpload(meetingRec, 2, map[string]any{"segments": phoneSegs(fakeLine{0.2, 0.8, "Phone before."}, fakeLine{1.5, 3, "Phone after."})})
+	if got := lineTexts(h.lines(meetingRec)); !slices.Equal(got, []string{"Hub before.", "Phone after."}) {
+		t.Fatalf("live log %q", got)
+	}
+	back, ready := h.open(meetingRec, 0, nil)
+	if ready["next"] != 2.0 || ready["from"] != 1.0 {
+		t.Fatalf("ready %v", ready)
+	}
+	back.send(map[string]any{"type": "seek", "at": 3.0})
+	back.audio(1.2)
+	if f := back.wait("line", 1); f["n"] != 2.0 || f["text"] != "Hub after." {
+		t.Fatalf("line %v", f)
+	}
+	waitFor(t, "the fallback ended", func() bool { return h.transcription(meetingRec)["fallback"] == nil })
+}

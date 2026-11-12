@@ -144,7 +144,6 @@ type liveJob struct {
 	ackedS     int64 // the extension's last ack
 	ready      bool
 	ending     bool
-	endAt      time.Time
 	behind     bool // audio was skipped: the next frame is a seek
 	flushAsked bool
 	usage      float64 // the job's billed seconds so far (its last usage frame)
@@ -159,11 +158,13 @@ type jobOut struct {
 // jobQueue is how many frames a live job's writer holds (about 50 s of the phone's 100 ms frames).
 const jobQueue = 512
 
-// ensureJobLocked is the run's live job, opened from sample from when there is none and one may be opened now.
+// ensureJobLocked is the run's live job, opened from sample from when there is none (or the one there is was ended
+// for want of audio: it finishes on its own) and one may be opened now.
 func (r *hubRun) ensureJobLocked(from int64) *liveJob {
-	if r.job != nil {
-		return r.job
+	if j := r.job; j != nil && !(j.ending && !r.ended) {
+		return j
 	}
+	r.job = nil
 	if r.stopped || time.Now().Before(r.jobRetryAt) {
 		return nil
 	}
@@ -371,15 +372,21 @@ func (j *liveJob) close() {
 	}
 }
 
-// endJobLocked tells job j there is no more audio: it sends its last sentences and done.
+// endJobLocked tells job j there is no more audio: it sends its last sentences and done, within audioEndWait.
 func (r *hubRun) endJobLocked(j *liveJob) {
 	if j.ending {
 		return
 	}
-	j.ending, j.endAt = true, time.Now()
+	j.ending = true
 	if !j.queueLocked(jobOut{f: &extwire.TranscriptionFrame{Type: extwire.TFEnd}}) {
 		r.dropJobLocked(j)
+		return
 	}
+	time.AfterFunc(audioEndWait, func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		r.dropJobLocked(j)
+	})
 }
 
 // dropJobLocked closes job j and forgets it.
