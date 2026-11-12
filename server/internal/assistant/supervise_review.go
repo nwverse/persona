@@ -41,6 +41,8 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		WhyOwner      string           `json:"why_owner"`
 		Options       []DecisionOption `json:"options"`
 		CostOfWaiting string           `json:"cost_of_waiting"`
+		// needs_user: the decision can wait for the next daily briefing instead of a push now (#4930, decision_wait.go).
+		CanWait bool `json:"can_wait"`
 		// accepted: what was done beyond the brief (#3822, task_brief_result.go).
 		AlsoDone []string `json:"also_done"`
 		// parked (parked.go): until when it waits (a duration or a time; reason says for what), and on what kind of thing.
@@ -75,6 +77,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		}
 		decision, decided = d, true
 	}
+	if a.CanWait && !decided {
+		return "", fmt.Errorf("can_wait applies to needs_user only")
+	}
 	// A parked task says what it waits for, on what kind of thing, and until when, or it is refused (parked.go).
 	var park Parked
 	if a.Verdict == reviewParked {
@@ -107,9 +112,12 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	}
 	// The main conversation may review any supervised task: after the main conversation changes, the old tasks'
 	// supervision messages come to the new one, which has to be able to close them (#4262).
+	// The background supervisor reviews the tasks no leader supervises, whose ledgers name the main conversation
+	// (supervise_background.go); the main conversation may still review them, as it may a leader's.
 	isMain := s.isMain(ctx, self)
+	background := s.backgroundSupervises(ctx, self, t)
 	if t.Origin == "" || t.Origin != self && (t.Supervision == nil || t.Supervision.Supervisor != self && !isMain) {
-		if !s.mayReviewForLeader(ctx, self, t) {
+		if !background && !s.mayReviewForLeader(ctx, self, t) {
 			return "", fmt.Errorf("task %s was not handed out from this conversation", t.ID)
 		}
 	}
@@ -133,7 +141,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	if a.UserCheck && verdict != reviewAccepted {
 		return "", fmt.Errorf("user_check applies to accepted only")
 	}
-	// Only the main conversation supervises (task_plan, quietAgentTask): another conversation's task without a ledger
+	// A conversation supervises what it handed out (task_plan, quietAgentTask): a task without a ledger
 	// gets none here either, or its signals would go into the main conversation's supervision messages (#4262). It can still
 	// be closed; rework, needs_user and parked are what supervision is for.
 	ledger := t.Supervision != nil || isMain
@@ -318,10 +326,25 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		if over { // the note is the rework asked for, written to the agent: not the owner's question
 			conclusion.Note = ""
 		}
-		if !isMain && s.isLeader(ctx, v.Supervisor) { // a leader's: the main conversation hears of it too (supervise_leader.go)
-			s.escalateToMain(t, v.Round, cmp.Or(conclusion.Reason, note), decision.Recommend)
+		// One that can wait is held for the next briefing: no card and no push now (#4930, decision_wait.go).
+		held, notHeld := false, ""
+		escalates := !isMain && (background || s.isLeader(ctx, v.Supervisor)) // the main conversation hears of it too
+		if a.CanWait {
+			held, notHeld = s.decisionWaits(ctx, decision.WhyOwner, deadline, reversible, time.Now())
+			conclusion.ForBriefing = held
+			if held && escalates {
+				conclusion.RaisedBy = self // told when it is pushed, whoever the task's ledger names by then
+			}
 		}
 		carded := s.askConclusion(ctx, t, conclusion)
+		if held && !s.waitsForBriefing(t.ID) { // the ask was not kept as held: nothing would push it later
+			held, notHeld = false, waitNotKept
+		}
+		// A leader's or the background supervisor's: the main conversation hears of it too (supervise_leader.go); of one
+		// that is held, when it is pushed.
+		if !held && escalates {
+			s.escalateToMain(t, v.Round, cmp.Or(conclusion.Reason, note), decision.Recommend)
+		}
 		// A recommendation is also pushed to their phone, whose OK takes it (todo_ask.go), with the bot on or off. The hub
 		// taking the push does not say a device got it, nor that the app shows its OK: without a card the supervisor still
 		// asks, and is told OK may come first.
@@ -338,6 +361,19 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		default:
 			pushed = fmt.Sprintf(" It cannot be undone: at the deadline (%s) the user is only reminded again, nothing is taken.",
 				deadline.In(s.location(ctx)).Format(toolTimeLayout))
+		}
+		if held {
+			was := ""
+			if over {
+				was = fmt.Sprintf(" was sent back %d times already: it now", maxReworkRounds)
+			}
+			return fmt.Sprintf("Task %s%s waits for the user (needs_user), and its decision can wait (can_wait): no push and no card went out. "+
+				"It is in their Needs you now, and the next daily briefing lists it with your recommendation, where they answer it; if no "+
+				"briefing reaches them with it within 24 hours, or by 11 hours before its deadline, the hub pushes it after all. Don't ask "+
+				"them or push it yourself; review it once the agent stops.%s", t.ID, was, pushed), nil
+		}
+		if notHeld != "" {
+			pushed += " can_wait was ignored (" + notHeld + "): it is pushed as usual."
 		}
 		if s.pushDecision(ctx, t.ID) {
 			pushed += " A push with your recommendation also went to their phone; its \"OK\" takes the recommendation and sends it " +
