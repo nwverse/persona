@@ -30,10 +30,12 @@ fun JSidebarHistoryRow(
     menuLabel: String,
     /** The line under the title (a leader conversation's open tasks, #4331); null: one line only. */
     hint: String? = null,
+    /** The title's quiet start ([JRow]'s `titleLead`): a hub title's day and kind. */
+    titleLead: String? = null,
     titleAccessory: (@Composable () -> Unit)? = null,
 ) {
     JRow(title, onClick = onClick, onLongClick = onMenu, selected = selected, chevron = false, subtitle = hint,
-        titleAccessory = titleAccessory, trailing = {
+        titleAccessory = titleAccessory, titleLead = titleLead, trailing = {
             if (status == Status.NeedsYou || status == Status.Working || status == Status.Unread) JStatusDot(status)
             JIconButton(PhIcons.DotsThree, menuLabel, onMenu)
         })

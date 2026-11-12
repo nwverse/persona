@@ -173,6 +173,7 @@ assistant.ask        GET /api/v1/assistant/reporters
 -                    GET /api/v1/extensions/-/ui
 -                    GET /api/v1/extensions/-/upgrades
 -                    GET /api/v1/extensions/-/widgets
+-                    GET /api/v1/extensions/{id}/-/assistant-data
 -                    GET /api/v1/extensions/{id}/-/auth
 -                    GET /api/v1/extensions/{id}/-/dev/logs
 -                    GET /api/v1/extensions/{id}/-/icon
@@ -288,6 +289,7 @@ agents.read          GET /api/v1/sessions/{mid}/{sid}/screen
 -                    GET /api/v1/sessions/{mid}/{sid}/share-preview/{preview_id}
 -                    GET /api/v1/skills
 -                    GET /api/v1/subscriptions
+-                    GET /api/v1/subscriptions/-/graph
 -                    GET /api/v1/subscriptions/catalog
 -                    GET /api/v1/subscriptions/summary
 -                    GET /api/v1/subscriptions/{id}
@@ -407,6 +409,7 @@ assistant.ask        POST /api/v1/assistant/conversations/{id}/stop
 -                    POST /api/v1/extensions/-/install
 -                    POST /api/v1/extensions/-/operations/{op}/retry
 -                    POST /api/v1/extensions/-/preview
+-                    POST /api/v1/extensions/{id}/-/assistant-data/apply
 -                    POST /api/v1/extensions/{id}/-/attach
 -                    POST /api/v1/extensions/{id}/-/auth/logout
 -                    POST /api/v1/extensions/{id}/-/auth/step
