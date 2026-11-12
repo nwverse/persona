@@ -205,7 +205,8 @@ own reviews on its current model, with at least 20 settled acceptances in 30 day
 reopened (over `settled`, never over accepted), and only when the provider's own tier models show a tier below that is
 not the smallest; the block does not say what a tier down "would have cost", since tokens are not attributed to tasks
 (9c), and it never suggests a tier up. The block is drawn on the Lark card and on the web app's briefing card (the `brief` item's
-`setup`) and given to the model as facts; the iOS and Android apps do not draw it yet.
+`setup`) and given to the model as facts; the Android app draws it on its briefing card (#5802), the iOS app does
+not yet.
 
 ## 5. Measurement
 
@@ -335,8 +336,9 @@ As built (K1, #5086; `docs/assistant/model-config.md` "Models for each role" and
 "Supervision by model" are authoritative):
 
 - The table is in `docs/assistant/model-config.md` with the tiers named first and the Claude models as examples. Every
-  built-in purpose carries a one-sentence `description` from the manager in three languages; no app draws it yet (the
-  web keeps its own sentence for the background supervisor), so "in Model Settings" is the hub's half only.
+  built-in purpose carries a one-sentence `description` from the manager in three languages; Android draws it
+  (#5802), the web and Apple do not yet (the web keeps its own sentence for the background supervisor), so "in Model
+  Settings" is the hub's half there.
 - The main chat's rule speaks of tiers, not models, and covers the task-leader row too. It knows tiers only from the
   Agent presets of the model profile in use or from what the owner said; when it cannot tell them apart it leaves the
   tier, the model and the effort empty and what the owner set in Model Settings applies. A preset it picks runs in

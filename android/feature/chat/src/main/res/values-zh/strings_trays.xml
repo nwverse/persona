@@ -23,7 +23,7 @@
     <string name="chat_tray_waiting">等待中</string>
     <string name="chat_tray_background_tasks_running">后台任务 %1$d 个在跑</string>
     <string name="chat_tray_subagents_running">子 Agent %1$d 个在跑</string>
-    <string name="chat_tray_background_running">后台工作在跑</string>
+    <string name="chat_tray_background_running">工作中（后台）</string>
     <string name="chat_tray_background_workflow">后台 workflow</string>
     <string name="chat_tray_workflow_more">还有 %1$d 个</string>
     <string name="chat_tray_expanded">已展开</string>
