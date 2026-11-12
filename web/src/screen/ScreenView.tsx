@@ -209,16 +209,17 @@ export function ScreenView({ target }: { target: ScreenTarget }) {
   }, [fb, reask]);
 
   const offered = useMemo(() => (fb ? layoutDisplays(displays, fb) : []), [displays, fb]);
-  // The menu is a chunk of its own (its words stay off the first screen's catalog), loaded once there is a choice to
-  // offer. One that would not load (offline, the hub redeployed) leaves the page showing every display, and is asked for
-  // again the next time the screen goes live.
   const offering = !target.embedded && phase.kind === "live" && offered.length > 1;
+  // The menu is a chunk of its own (its words stay off the first screen's catalog), fetched while a Mac with several
+  // displays connects, so a kept display is cropped from the first live frame. One that would not load (offline, the hub
+  // redeployed) leaves the page showing every display, and is asked for again as the connection moves on.
+  const multiDisplay = !target.embedded && displays.length > 1;
   const [DisplayMenu, setDisplayMenu] = useState<DisplayMenuView | null>(null);
   // One display only while its menu is there to go back to all of them: a page an app embeds has no bar to choose in,
   // and a menu that would not load leaves none.
   const shown = DisplayMenu ? (offered.find((d) => d.id === choice) ?? null) : null;
   useEffect(() => {
-    if (DisplayMenu || !offering) return;
+    if (DisplayMenu || !multiDisplay) return;
     let gone = false;
     import("./DisplayMenu").then(
       (m) => !gone && setDisplayMenu(() => m.default),
@@ -227,7 +228,7 @@ export function ScreenView({ target }: { target: ScreenTarget }) {
     return () => {
       gone = true;
     };
-  }, [DisplayMenu, offering]);
+  }, [DisplayMenu, multiDisplay, phase.kind]);
   const frame = shown && fb && stage ? framing(stage, fb, shown.frame) : null;
   const cropped = frame !== null;
   useEffect(() => (cropped && clip.current ? keepPointerIn(clip.current) : undefined), [cropped]);
