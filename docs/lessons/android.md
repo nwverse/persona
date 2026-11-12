@@ -164,6 +164,12 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 
 ## UI and Compose
 
+- Composer growth needs a real field-bounds test, not only a formula test (#5648). The old viewport-share rule
+  showed seven lines on a 400 × 640 dp Native JVM Compose render and could shrink to three with the keyboard up.
+  Assistant and Agents now share the fixed six-line `ComposerGrowLines` token. Test short and tall viewports,
+  wrapped text, and large text; a manual swipe's bitmap must stay unchanged across idle cursor-blink frames,
+  while typing and selection movement must restore the visible caret. Native renders do not verify a real IME.
+
 - **A big page must not read a state that changes on every scroll frame** (#4039). `ChatListState.position` holds the
   reading anchor's pixel offset, written each frame; `ChatPage` read `position.expanded`, so a scroll re-ran the whole
   page (about 1,000 lines, chat-length lists rebuilt) once per frame. Read such parts through `derivedStateOf`
