@@ -1,0 +1,106 @@
+{
+  "id": "inbox-handoff",
+  "description": "Exercise the Inbox event hand-off bar, local Undo, IME input, rotation and the existing Draft Reply sheet in one app process.",
+  "requires": {
+    "mockEnv": {
+      "MOCK_INBOX_EVENTS": "1"
+    },
+    "fields": [
+      "pid"
+    ]
+  },
+  "steps": [
+    {
+      "step": "launch",
+      "page": "inbox"
+    },
+    {
+      "step": "tap",
+      "text": "发布群"
+    },
+    {
+      "step": "capture",
+      "name": "01-event-bar"
+    },
+    {
+      "step": "tap",
+      "resource-id": "inbox-handoff-target"
+    },
+    {
+      "step": "capture",
+      "name": "02-target-menu"
+    },
+    {
+      "step": "key",
+      "keycombination": [
+        "BACK"
+      ]
+    },
+    {
+      "step": "tap",
+      "resource-id": "inbox-handoff-chip-summary"
+    },
+    {
+      "step": "capture",
+      "name": "03-queued-undo-view"
+    },
+    {
+      "step": "tap",
+      "text": "Undo"
+    },
+    {
+      "step": "tap",
+      "resource-id": "inbox-handoff-field"
+    },
+    {
+      "step": "text",
+      "text": "Investigate this event and suggest next steps"
+    },
+    {
+      "step": "capture",
+      "name": "04-ime-input"
+    },
+    {
+      "step": "rotate",
+      "orientation": "landscape"
+    },
+    {
+      "step": "assert",
+      "checks": {
+        "pid": "unchanged"
+      }
+    },
+    {
+      "step": "capture",
+      "name": "05-landscape-input"
+    },
+    {
+      "step": "rotate",
+      "orientation": "portrait"
+    },
+    {
+      "step": "tap",
+      "resource-id": "inbox-handoff-send"
+    },
+    {
+      "step": "capture",
+      "name": "06-typed-queued"
+    },
+    {
+      "step": "tap",
+      "text": "Undo"
+    },
+    {
+      "step": "capture",
+      "name": "07-undo-restored"
+    },
+    {
+      "step": "tap",
+      "resource-id": "inbox-handoff-chip-draft"
+    },
+    {
+      "step": "capture",
+      "name": "08-draft-reply"
+    }
+  ]
+}
