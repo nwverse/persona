@@ -58,9 +58,10 @@ func TestFoldWorkFoldsNarrationWithoutCallingItThinking(t *testing.T) {
 		{ID: "note#0", Seq: 1, Role: "assistant", Kind: proto.KindText, Text: "The focused tests pass.", Narration: true},
 		{ID: "call#0", Seq: 2, Role: "assistant", Kind: proto.KindToolUse, ToolUseID: "call", ToolName: "Bash"},
 		{ID: "result#0", Seq: 3, Role: "user", Kind: proto.KindToolResult, ToolUseID: "call", Text: "ok"},
+		{ID: "final#0", Seq: 4, Role: "assistant", Kind: proto.KindText, Text: "All checks passed."},
 	}
 	folded := FoldWork(run)
-	if len(folded) != 1 || folded[0].Fold == nil || folded[0].Fold.Items != 3 {
+	if len(folded) != 2 || folded[0].Fold == nil || folded[0].Fold.Items != 3 {
 		t.Fatalf("commentary stays with its work: %+v", folded)
 	}
 	if fo := folded[0].Fold; fo.Thoughts != 0 || fo.LatestThinking != nil {
