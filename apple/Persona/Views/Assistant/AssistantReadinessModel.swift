@@ -21,7 +21,7 @@ final class AssistantReadinessModel {
     var failure: CodedFailure?
 
     @ObservationIgnored private var at = Date.distantPast
-    @ObservationIgnored private var dismissedHomeCards: Set<String> = []
+    private var dismissedHomeCards: Set<String> = []
     @ObservationIgnored private var asked = 0
     @ObservationIgnored private var answered = 0
     @ObservationIgnored private var latestProbe = 0
@@ -51,7 +51,7 @@ final class AssistantReadinessModel {
     }
 
     private static func homeCardOccurrence(_ step: AssistantReadiness.Step) -> String {
-        [step.id, step.state, step.code ?? "", step.launcher ?? "", step.title ?? "", step.detail ?? ""].joined(separator: "\u{1f}")
+        [step.id, step.state, step.code ?? "", step.launcher ?? "", step.occurrence ?? "", step.title ?? "", step.detail ?? ""].joined(separator: "\u{1f}")
     }
 
     /// An answer from elsewhere (`warm`): kept unless a later ask has answered. A new answer also retires a failed try.

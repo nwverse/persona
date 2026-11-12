@@ -71,6 +71,23 @@ final class ReadinessUITests: XCTestCase {
         return body
     }
 
+    private func readinessReadCount() throws -> Int {
+        let hits = try JSONSerialization.jsonObject(with: mockGET("/mock/hits")) as? [String: Any]
+        return (hits?["hits"] as? [String: Any])?["GET /api/v1/assistant/readiness"] as? Int ?? 0
+    }
+
+    /// Proves a real readiness request happened, then lets its response land before checking the card.
+    private func waitForReadinessRead(after before: Int) throws {
+        var count = before
+        for _ in 0..<35 {
+            count = try readinessReadCount()
+            if count > before { break }
+            sleep(1)
+        }
+        XCTAssertGreaterThan(count, before, "no real readiness refresh arrived")
+        sleep(1)
+    }
+
     @MainActor private func launchMain() throws -> XCUIApplication {
         guard let main = ProcessInfo.processInfo.environment["PERSONA_MAIN"] else {
             throw XCTSkip("needs PERSONA_MAIN")
@@ -110,8 +127,8 @@ final class ReadinessUITests: XCTestCase {
     @MainActor func testUsageLimitDismissalSurvivesPollingAndRecovery() throws {
         guard scenario == "rate_limited" else { throw XCTSkip("needs MOCK_READINESS=rate_limited") }
         let app = try launchMain()
-        let card = app.descendants(matching: .any)["readiness-card"].firstMatch
-        XCTAssertTrue(card.waitForExistence(timeout: 25), "no usage-limit card:\n\(app.debugDescription)")
+        let warning = app.staticTexts["模型用得太快了"].firstMatch
+        XCTAssertTrue(warning.waitForExistence(timeout: 25), "no usage-limit card:\n\(app.debugDescription)")
         shot(app, "readiness-rate-limited")
 
         // The default Claude is limited; this conversation explicitly routes its next message to a Codex model.
@@ -127,7 +144,7 @@ final class ReadinessUITests: XCTestCase {
         let model = app.descendants(matching: .any)["GPT-5.5-Codex"].firstMatch
         XCTAssertTrue(model.waitForExistence(timeout: 10), "no Codex model:\n\(app.debugDescription)")
         model.tap()
-        let scoped = card.descendants(matching: .any).matching(
+        let scoped = app.descendants(matching: .any).matching(
             NSPredicate(format: "label CONTAINS %@", "默认模型连接：claude。当前对话使用 codex。")).firstMatch
         XCTAssertTrue(scoped.waitForExistence(timeout: 5), "the card does not distinguish default and active launchers:\n\(app.debugDescription)")
         shot(app, "readiness-rate-limited-codex")
@@ -157,21 +174,23 @@ final class ReadinessUITests: XCTestCase {
 
         field.tap()
         field.typeText("synthetic draft")
-        let later = card.buttons["以后再说"].firstMatch
+        let later = app.buttons["以后再说"].firstMatch
         XCTAssertTrue(later.waitForExistence(timeout: 5), "no accessible Later control:\n\(app.debugDescription)")
         later.tap()
-        XCTAssertTrue(card.waitForNonExistence(timeout: 5), "Later did not dismiss the card")
-        sleep(7) // ReadinessPoll.first: the same failure arrives again without reviving the card.
-        XCTAssertFalse(card.exists, "an ordinary refresh revived the dismissed occurrence")
+        XCTAssertTrue(scoped.waitForNonExistence(timeout: 5), "Later did not dismiss the usage-limit card")
+        let dismissedAt = try readinessReadCount()
+        try waitForReadinessRead(after: dismissedAt)
+        XCTAssertFalse(scoped.exists, "an ordinary refresh revived the dismissed occurrence")
         XCTAssertEqual(field.value as? String, "synthetic draft")
         shot(app, "readiness-rate-limited-dismissed")
 
         try switchReadiness("full")
-        sleep(10) // Let the recovery land and stop the old failure's polling schedule.
-        XCTAssertFalse(card.exists)
+        let recoveringAt = try readinessReadCount()
+        try waitForReadinessRead(after: recoveringAt)
+        XCTAssertFalse(scoped.exists)
         try switchReadiness("rate_limited")
-        XCTAssertTrue(card.waitForExistence(timeout: 20), "a real failure after recovery did not appear")
-        XCTAssertTrue(scoped.waitForExistence(timeout: 5), "the new card lost the active Codex scope")
+        XCTAssertTrue(warning.waitForExistence(timeout: 20), "a real failure after recovery did not appear:\n\(app.debugDescription)")
+        XCTAssertTrue(scoped.waitForExistence(timeout: 5), "the new card lost the active Codex scope:\n\(app.debugDescription)")
         XCTAssertEqual(field.value as? String, "synthetic draft")
         shot(app, "readiness-rate-limited-new-failure")
     }

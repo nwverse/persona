@@ -86,6 +86,29 @@ struct AssistantReadinessTests {
         #expect(m.homeCardStep == nil)
     }
 
+    @Test func aLaterOccurrenceIsANewFailureWithoutObservedRecovery() throws {
+        let limited = try decode(#"""
+        {"version":1,"mode":"full","ready":true,"launcher":"claude","checked_at":"2026-11-06T09:00:00Z","steps":[
+          {"id":"computer","state":"ok"},{"id":"claude","state":"ok"},
+          {"id":"model","state":"problem","code":"rate_limited","launcher":"claude","title":"Claude is limited","detail":"Same words.","occurrence":"2026-11-06T08:59:00Z"}
+        ]}
+        """#)
+        let m = AssistantReadinessModel()
+        m.reset(limited)
+        m.dismissHomeCard()
+        var refreshed = limited
+        refreshed.checkedAt = "2026-11-06T09:01:00Z"
+        m.land(refreshed) // checked_at advances on every read; the evidence is the same occurrence.
+        #expect(m.homeCardStep == nil)
+        var newer = refreshed
+        newer.checkedAt = "2026-11-06T09:02:00Z"
+        newer.steps[2] = try decode(#"""
+        {"mode":"full","steps":[{"id":"model","state":"problem","code":"rate_limited","launcher":"claude","title":"Claude is limited","detail":"Same words.","occurrence":"2026-11-06T09:02:00Z"}]}
+        """#).steps[0]
+        m.land(newer) // No recovery was observed, but this is genuinely newer evidence with the same words.
+        #expect(m.homeCardStep?.code == "rate_limited")
+    }
+
     @Test func recoveryAllowsANewUsageLimitOccurrenceAndAnotherLauncherDoesNotInheritDismissal() throws {
         let limited = try decode(#"""
         {"version":1,"mode":"full","ready":true,"launcher":"claude","steps":[
