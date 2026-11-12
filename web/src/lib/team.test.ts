@@ -145,6 +145,20 @@ describe("useTeamReveal on the lead's page", () => {
     expect(teamRecord("mac", "lead")).toBe("open");
   });
 
+  it("reads a row that came first without its rollup as an arrival, not a team starting", async () => {
+    recordTeam("mac", "lead", "closed");
+    await render(lead(0));
+    await render(lead(2));
+    expect(getPanel()).toBeNull();
+    // a lead seen with no workers for a while: workers appearing then are a team starting
+    act(() => root.unmount());
+    root = createRoot(host);
+    await render(row("lead", { space_id: "w1", slot_id: "t1", pane_index: 0, title: "solo" }));
+    act(() => void vi.advanceTimersByTime(TEAM_GONE_MS));
+    await render(lead(1));
+    expect(teamPanelOf(getPanel(), "mac", "lead")).toBeTruthy();
+  });
+
   it("does not replace a panel the page brought back on arriving, but a link to a worker does", async () => {
     openPanel({ kind: "files", mid: "mac", sid: "lead", cwd: "/code" });
     await render(lead(2));

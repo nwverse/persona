@@ -138,8 +138,9 @@ export function useTeamReveal(mid: string, sid: string, session: Session | undef
   const asked = useTeamAsk(mid, sid);
   const wide = !useMedia(NARROW);
   const panel = usePanel();
-  // the count the page last saw for this lead: undefined when it just arrived (or the row is not in yet)
-  const seen = useRef<{ lead: string; workers: number } | undefined>(undefined);
+  // the count the page last saw for this lead (undefined: it just arrived, or the row is not in yet), and when the page
+  // arrived at it: a 0 seen in the first moment is no "team not started yet" (a row can come first without its rollup)
+  const seen = useRef<{ lead: string; workers: number; since: number } | undefined>(undefined);
   // the panel this hook closed itself (the team ended): not the user's choice, so not remembered as closed
   const closedItself = useRef(false);
   const gone = useRef(0);
@@ -148,27 +149,30 @@ export function useTeamReveal(mid: string, sid: string, session: Session | undef
     clearTimeout(gone.current);
     if (!known) return;
     const lead = leadKey(mid, sid);
-    const before = seen.current?.lead === lead ? seen.current.workers : undefined;
+    const now = Date.now();
+    const last = seen.current?.lead === lead ? seen.current : undefined;
+    const since = last?.since ?? now;
+    const before = last && !(last.workers === 0 && now - last.since < TEAM_GONE_MS) ? last.workers : undefined;
     if (asked) doneTeamAsk(mid, sid);
     // the last worker gone: the team ends (the panel closes) only once none came back for a moment
     if (workers === 0 && before !== undefined && before > 0) {
       gone.current = window.setTimeout(() => {
-        seen.current = { lead, workers: 0 };
+        seen.current = { lead, workers: 0, since: 0 };
         if (!teamPanelOf(getPanel(), mid, sid)) return;
         closedItself.current = true;
         openPanel(null);
       }, TEAM_GONE_MS);
       return;
     }
-    seen.current = { lead, workers };
+    seen.current = { lead, workers, since };
     if (teamReveal({ workers, before, record: teamRecord(mid, sid), wide, asked: Boolean(asked) }) !== "open") return;
     // after the page's other effects: App keeps the panel of the session being left and may bring back this lead's own
     // (lib/panel-memory.ts), which an arrival's open does not replace; a link or a team starting does
     const arriving = !asked && before === undefined;
     queueMicrotask(() => {
-      const now = getPanel();
-      const open = teamPanelOf(now, mid, sid);
-      if (arriving && now && !open) return;
+      const shown = getPanel();
+      const open = teamPanelOf(shown, mid, sid);
+      if (arriving && shown && !open) return;
       recordTeam(mid, sid, "open");
       if (!open || (asked && open.worker !== asked)) openPanel({ kind: "team", mid, sid, worker: asked ?? open?.worker });
     });
