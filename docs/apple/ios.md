@@ -745,8 +745,10 @@ on every Apple app.
   utility queue (P1) and sends the number again each time the app becomes active: one set before the user allowed
   badges is dropped. The Mac sets `NSApp.dockTile.badgeLabel`. The hub's pushes carry no `badge`, so while the app is
   not running the icon keeps the last number set, and a build without push (no `aps-environment`) works the same.
-- **The user's switch**: iOS shows the number only with badge permission (asked with notifications, `PushRegistrar`)
-  and the system's Badges switch on; the Dock badge always shows.
+- **The user's switch**: the system draws the number only with badge permission (asked with notifications after
+  pairing, `PushRegistrar`) and its Badges switch on (iOS Settings › Notifications; macOS System Settings ›
+  Notifications › Badge application icon). A Mac that never asked (Demo Mode only) has the Dock label set but not
+  drawn (`lsappinfo info -only StatusLabel` shows it).
 - **Tests**: `AppIconBadgeTests` (also in `PersonaMacTests`): the sum, the model's tabs feeding it, nothing while
   signed out, one call per burst, none when a burst ends where it started.
 
