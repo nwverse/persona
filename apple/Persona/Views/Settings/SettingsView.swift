@@ -142,6 +142,16 @@ struct SettingsView: View {
                         .settingsListRow(SettingsPage.connectors)
                         .accessibilityIdentifier("settings.connectors")
                         #if os(iOS)
+                        // Every source of the Inbox, built-in ones and subscriptions, on the manager's pages (#5278).
+                        if model.hubFeatures.contains(SubscriptionsUI.sourcesFeature) {
+                            NavigationLink(value: SettingsPage.inboxSources) {
+                                SettingsRow(title: String(localized: "Inbox Sources"), symbol: Theme.Icon.subscriptions, tint: Theme.accent)
+                            }
+                            .settingsListRow(SettingsPage.inboxSources)
+                            .accessibilityIdentifier("settings-inbox-sources")
+                        }
+                        #endif
+                        #if os(iOS)
                         // What the knowledge base reads and keeps of what the connectors bring (#2217).
                         NavigationLink(value: SettingsPage.knowledgeSelection) {
                             SettingsRow(title: String(localized: "Knowledge Selection"), symbol: Theme.Icon.knowledge, tint: Theme.accent)
@@ -405,6 +415,7 @@ struct SettingsView: View {
         else if d.bool(forKey: "openSentAsYou") { p = SettingsPage.sentPath }
         else if d.bool(forKey: "openConnectors") { p.append(SettingsPage.connectors) }
         else if d.bool(forKey: "openSkills") { p.append(SettingsPage.skills) }
+        else if d.bool(forKey: "openInboxSources") { p.append(SettingsPage.inboxSources) } // Settings › Inbox Sources (#5278)
         else if let scope = str("openSubscriptions") { // the source subscription pages: `all`, or their first state (#2041)
             p.append(SettingsPage.subscriptions(state: scope == "all" ? nil : scope))
         }
@@ -546,6 +557,9 @@ enum SettingsPage: Hashable {
     /// The source subscription pages (#2041, docs/extensions/subscriptions.md "Pages"), drawn by the manager; `state` opens them on
     /// one extension's or one connector's (`SubscriptionsUI.state`), nil on every subscription.
     case subscriptions(state: String? = nil)
+    /// Settings › Inbox Sources (#5278): the same pages unnarrowed, every source of the Inbox, once the manager reports
+    /// `inbox_sources`.
+    case inboxSources
     /// Settings › Extensions › Extension Market, one plugin of a market, and the markets (docs/extensions/extensions.md「Extension marketplace」).
     case pluginMarket
     case marketExtension(market: String, id: String)
@@ -646,6 +660,8 @@ private struct SettingsDestinations: ViewModifier {
         case .pluginPage(let plugin, let ui, let title, let manager): ExtensionPageView(plugin: plugin, ui: ui, title: title, manager: manager)
         case .subscriptions(let state):
             ExtensionPageView(plugin: SubscriptionsUI.id, ui: SubscriptionsUI.page, title: String(localized: "Subscriptions [Source Subscriptions]"), state: state)
+        case .inboxSources:
+            ExtensionPageView(plugin: SubscriptionsUI.id, ui: SubscriptionsUI.page, title: String(localized: "Inbox Sources"))
         case .pluginMarket: ExtensionMarketView()
         case .marketExtension(let market, let id): MarketExtensionDetailView(market: market, id: id)
         case .pluginMarkets: ExtensionMarketsView()
