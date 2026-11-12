@@ -464,7 +464,8 @@ func TestGateLogsTheOwnVoiceItWentBy(t *testing.T) {
 	c.mu.Lock()
 	c.waitGate("delegation dlg1", agent, true, "", func(spoken bool) { went <- spoken })
 	c.mu.Unlock()
-	time.Sleep(100 * time.Millisecond)
+	// waitGate took the voice it goes by as it was called; the caption it waits for is due either way, so this comes
+	// while it waits (gateWait), before its line is written.
 	c.mu.Lock()
 	c.gate.voice = time.Now() // heardOwn: they go on speaking
 	c.pace.voice = c.gate.voice
