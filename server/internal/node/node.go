@@ -1226,7 +1226,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		var opts sendOpts
 		_ = json.Unmarshal(params, &opts)
 		ctx = context.WithValue(ctx, sendTraceKey{}, opts.ClientMsgID)
-		return ok(n.sends.once(opts.ClientMsgID, func() error {
+		ctx, waits := withComputerWait(ctx) // claudebg.go: an outside Claude took it behind a dialog
+		err := n.sends.once(opts.ClientMsgID, func() error {
 			var after int
 			if opts.ClientMsgID != "" {
 				after = n.echoBase(p.SessionID)
@@ -1238,7 +1239,11 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 				}
 				return n.send(ctx, p.SessionID, p.Text, p.Images, opts)
 			})
-		}))
+		})
+		if err == nil && *waits {
+			return map[string]any{"ok": true, "waits_on_computer": true}, nil
+		}
+		return ok(err)
 	case "session.echoes": // what the hub kept of earlier sends (echo.go), after this node started
 		var a struct {
 			Echoes []echoRecord `json:"echoes"`
@@ -1517,6 +1522,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		// Pages counted back from the end fold the agent's work for callers that ask (transcript.FoldWork).
 		fold := func(page []proto.Item) []proto.Item {
 			if p.FoldWork {
+				if p.BeforeSeq == 0 {
+					return transcript.FoldWorkLatest(page)
+				}
 				return transcript.FoldWork(page)
 			}
 			return page

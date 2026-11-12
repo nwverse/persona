@@ -1387,6 +1387,15 @@ if os.environ.get("MOCK_SOURCES"):
              read_only_reason="这个 Claude 没有开放会话之间的消息通道（版本较旧或功能关着）：手机上只能看，回复请在电脑上",
              capabilities={"read": True}, **NO_SPACE),
     ]
+# MOCK_OUTSIDE_DIALOG=1 (#5890): a Claude Code session started in a plain terminal, waiting on a question only the
+# computer can answer; a message to it goes into its queue, and the answer says so (waits_on_computer).
+OUTSIDE_DIALOG = "c1a0de00-0000-4000-8000-000000005890"
+if os.environ.get("MOCK_OUTSIDE_DIALOG"):
+    SESSIONS.append(sess("macbook", OUTSIDE_DIALOG, "整理更新日志", "/Users/me/code/notes", "blocked", "needs_you", "", 0, "", 0, 1,
+                         "要不要把旧版本的条目也一起改？", agent="claude", source_kind="claude_cli", agent_surface="cli",
+                         started_by_persona=False, attention_reason="它在等电脑上的一个问题或权限请求：手机上答不了，请到电脑上处理",
+                         capabilities={"read": True, "send": True, "interrupt": False, "approve": False, "terminal": False,
+                                       "attach": False, "modes": False}, **NO_SPACE))
 if os.environ.get("MOCK_MODE_CAPS"):
     # A runtime that explicitly takes Claude-style modes, and a desktop Claude that explicitly cannot (#1843).
     SESSIONS.append(
@@ -2879,6 +2888,9 @@ RULE_SUGGESTIONS = {
         "scope": {}, "creates": "", "setting": "agents.delegate", "count": 3},
 } if os.environ.get("MOCK_RULE_SUGGESTIONS") == "1" else {}
 RULE_SUGGESTIONS_ANSWERED = set()  # answered with Always or Not now
+RULE_GRANTS = []  # the standing authorizations Always granted, as GET /api/v1/assistant/standing-authorizations lists them
+RULE_GRANTS_REVISION = [1]
+RULE_TRUST_ADDED = set()  # the tasks.trust keys Always added, which /mock/reset takes away again
 RULE_SUGGESTION_ON = {"todo_review": "rs_mock_merge", "ix_tests": "rs_mock_delegate", "plan_mock_3": "rs_mock_start"}
 
 
@@ -2895,7 +2907,20 @@ def suggested_plan(plan):
 
 
 def rule_suggestions_area(h, method, p):
-    """POST /api/v1/assistant/rule-suggestions/{id}/always | not-now (MOCK_RULE_SUGGESTIONS=1)."""
+    """POST /api/v1/assistant/rule-suggestions/{id}/always | not-now (MOCK_RULE_SUGGESTIONS=1), and the standing
+    authorizations Always granted: GET /api/v1/assistant/standing-authorizations lists them, DELETE …/{id} revokes one."""
+    if RULE_SUGGESTIONS and p == "/api/v1/assistant/standing-authorizations" and method == "GET":
+        h.send_json({"revision": RULE_GRANTS_REVISION[0], "authorizations": RULE_GRANTS})
+        return True
+    if RULE_SUGGESTIONS and p.startswith("/api/v1/assistant/standing-authorizations/") and method == "DELETE":
+        kept = [g for g in RULE_GRANTS if g["id"] != unquote(p.rsplit("/", 1)[1])]
+        if len(kept) == len(RULE_GRANTS):
+            h.send_json({"error": "not found", "code": "not_found"}, 404)
+            return True
+        RULE_GRANTS[:] = kept
+        RULE_GRANTS_REVISION[0] += 1
+        h.send_json({"revision": RULE_GRANTS_REVISION[0], "authorizations": RULE_GRANTS})
+        return True
     m = re.fullmatch(r"/api/v1/assistant/rule-suggestions/([^/]+)/(always|not-now)", p)
     if not m or method != "POST":
         return False
@@ -2910,11 +2935,18 @@ def rule_suggestions_area(h, method, p):
         key = "macbook|/Users/me/code/weather|edit"
         if MOCK_TASKS and not any(k["key"] == key for k in TASK_TRUST):
             TASK_TRUST.append({"key": key, "machine": "macbook", "cwd": "/Users/me/code/weather", "readonly": False})
+            RULE_TRUST_ADDED.add(key)
         h.send_json({"ok": True, "kind": sg["kind"], "creates": "tasks.trust", "key": key})
     elif sg["kind"] == "standing_authorization":
-        h.send_json({"ok": True, "kind": sg["kind"], "creates": "standing_authorization", "revision": 2,
-                     "authorization": {"id": "sa_mock_1", "action": "merge", "machine_id": "macbook", "directory": "/Users/me/code/weather",
-                                       "conditions": ["ci_green", "no_conflicts"], "quote": sg["scope"]["quote"]}})
+        grant = {"id": "sa_mock_%d" % (len(RULE_GRANTS) + 1), "action": "merge", "actions": ["merge"], "machine_id": "macbook",
+                 "directory": "/Users/me/code/weather", "conditions": ["ci_green", "no_conflicts"], "quote": sg["scope"]["quote"],
+                 # The hub's own words (server/internal/i18n/locales/en/assistant-rule_suggest.json "source").
+                 "source": "Suggested rule: the same answer 3 times in 14 days, confirmed with Always.",
+                 "granted_at": ago(), "reversible": True}
+        RULE_GRANTS.append(grant)
+        RULE_GRANTS_REVISION[0] += 1
+        h.send_json({"ok": True, "kind": sg["kind"], "creates": "standing_authorization", "revision": RULE_GRANTS_REVISION[0],
+                     "authorization": grant})
     else:
         h.send_json({"ok": True, "kind": sg["kind"], "creates": "", "setting": sg["setting"]})
     push_todos()  # a decision is worded again without the line; a pending card is sent again without it
@@ -14079,7 +14111,9 @@ if os.environ.get("MOCK_CHAT_CONTENT") == "1":
         + tool("AskUserQuestion", {"questions": [{"question": "快照测试放在哪个 target？", "header": "Target", "multiSelect": False,
                                                   "options": [{"label": "WeatherWidgetTests (Recommended)", "description": "和小组件放在一起"},
                                                               {"label": "新建 SnapshotTests", "description": "单独的 target，跑得更快"}]}]},
-               "User answered: WeatherWidgetTests", 28)
+               # Claude Code's own answer shape (#5937)
+               'User has answered your questions: "快照测试放在哪个 target？"="WeatherWidgetTests (Recommended)". '
+               "You can now continue with the user's answers in mind.", 28)
         + tool("Task", {"description": "补齐深色模式的快照测试", "subagent_type": "general-purpose",
                         "prompt": "在 WeatherWidgetTests 里给 WidgetView 补快照测试：\n1. 深色、浅色各一套\n2. 六个城市：上海、北京、Tokyo、"
                                   "Lisbon、Reykjavík、Nairobi\n3. 每张图检查温度文字和背景的对比度，低于 4.5:1 就失败\n4. 跑一遍 "
@@ -21122,6 +21156,11 @@ class H(BaseHTTPRequestHandler):
             wire_reset()
             SEND_FAIL["on"] = False  # a FailedSendPlacementTests run that died before turning it off
             COOKIES_FAILED[0] = False  # MOCK_COOKIES_FAIL: the next read fails again
+            # MOCK_RULE_SUGGESTIONS: every suggestion is offered again, and what Always made is gone (web/e2e/rule-suggestions.mjs)
+            RULE_SUGGESTIONS_ANSWERED.clear(); del RULE_GRANTS[:]; RULE_GRANTS_REVISION[0] = 1
+            if MOCK_TASKS and RULE_TRUST_ADDED:
+                TASK_TRUST[:] = [k for k in TASK_TRUST if k["key"] not in RULE_TRUST_ADDED]
+                RULE_TRUST_ADDED.clear()
             HERDR_STOPPED.clear(); HERDR_STOPPED.update(herdr_env()); HERDR_STARTS.clear()  # the herdr row (#1916)
             HERDR_MODE["start"] = os.environ.get("MOCK_HERDR_START", ""); HERDR_MODE["gen"] += 1
             # A test that died before putting them back: the start-up delay (MOCK_DELAY), no paging.
@@ -21240,6 +21279,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/assistant":
             q = parse_qs(urlparse(self.path).query)
             return self.send_json(assistant_state(q.get("space", [""])[0], q.get("archived", [""])[0] == "1"))
+        if rule_suggestions_area(self, "GET", p): return  # the standing authorizations Always granted
         if p == "/api/v1/model-config": return self.send_json(listed_model_configuration())
         if p == "/api/v1/model-config/purposes/" + SUPERVISE_PURPOSE and (own := supervise_model_purpose()):
             return self.send_json(own)
@@ -26020,6 +26060,21 @@ _plugins_route_without_agent_archives = plugins_route
 
 def plugins_route(handler, p, body):
     return agent_archives_route(handler, p, body) or _plugins_route_without_agent_archives(handler, p, body)
+
+
+_plugins_route_without_outside_dialog = plugins_route
+
+
+def plugins_route(handler, p, body):
+    """MOCK_OUTSIDE_DIALOG: a message to the waiting terminal Claude is delivered into its queue (#5890)."""
+    if (os.environ.get("MOCK_OUTSIDE_DIALOG") and handler.command == "POST"
+            and p == "/api/v1/sessions/macbook/%s/messages" % OUTSIDE_DIALOG):
+        return handler.send_json({"ok": True, "waits_on_computer": True}) or True
+    return _plugins_route_without_outside_dialog(handler, p, body)
+
+
+MOCK_HELP.append("MOCK_OUTSIDE_DIALOG=1  A Claude Code session in a plain terminal on the MacBook waits on a question only the computer "
+                 "can answer (#5890): a message to it answers {ok, waits_on_computer}")
 
 
 _features_without_agent_archives = features

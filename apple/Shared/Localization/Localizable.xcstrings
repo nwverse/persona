@@ -120604,6 +120604,29 @@
       },
       "extractionState" : "manual"
     },
+    "Sent. The Agent will read it after the question on the computer is answered." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sent. The Agent will read it after the question on the computer is answered."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "送信しました。パソコンでの質問に答えたあと、エージェントがこのメッセージを読みます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已发送。电脑上的那个问题答完后，Agent 才会读到这条消息。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Sent /clear. Open the new session from the list once it appears." : {
       "localizations" : {
         "en" : {

@@ -4628,8 +4628,8 @@ struct StartingNote: View {
 }
 
 /// Why a session waits for the user, in its host's words (a botmux attention), with its Feishu topic one tap away.
-/// Under it, the AskUserQuestion it waits on, read-only (#5889): a dialog only its computer can answer still says here
-/// what it asks.
+/// Under it, the AskUserQuestion it waits on, read-only (#5889), when no card can answer it: a dialog only its computer
+/// can answer still says here what it asks.
 struct AttentionNote: View {
     var reason: String
     var link: URL?
@@ -4638,7 +4638,10 @@ struct AttentionNote: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        let questions = key.flatMap { AskUserAnswers.pending(model.chat($0).items) } ?? []
+        // A question a card can answer is listed there, not here too (#5937).
+        let questions = key.flatMap {
+            model.interactions(for: $0).isEmpty ? AskUserAnswers.pending(model.chat($0).items) : nil
+        } ?? []
         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
             ThemedIcon(Theme.Icon.needsYou).font(Theme.Font.labelStrong).foregroundStyle(StatusPalette.needsYou.text)
             VStack(alignment: .leading, spacing: Theme.Space.s) {
