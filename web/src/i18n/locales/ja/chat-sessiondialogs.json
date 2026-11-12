@@ -63,8 +63,6 @@
   "speed_standard": "標準",
   "speed_fast": "Fast",
   "header_mode": "権限モード：{mode}",
-  "mode_unknown": "不明",
   "leave_bypass_confirm": "{mode}に切り替え",
-  "leave_bypass_detail": "このエージェントはフルアクセスで起動していないため、切り替えるとここからは戻せません。",
-  "modes_locked": "実行中ではありません。モードは実行中に変更できます"
+  "leave_bypass_detail": "このエージェントはフルアクセスで起動していないため、切り替えるとここからは戻せません。"
 }

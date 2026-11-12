@@ -69,7 +69,7 @@ async function open(panel: Panel, todo = task(), sessions = [first]) {
   expect(host.querySelector("aside header")).not.toBeNull();
 }
 async function clickMore() {
-  const button = host.querySelector<HTMLButtonElement>(`aside header button[aria-label="${t("chat-chatview.more")}"]`)
+  const button = host.querySelector<HTMLButtonElement>(`aside header button[aria-label="${t("chat-chatview.more_actions")}"]`)
     ?? host.querySelector<HTMLButtonElement>(`aside button[aria-label="${t("assistant-taskpanel.more")}"]`);
   expect(button).not.toBeNull();
   act(() => button!.click());

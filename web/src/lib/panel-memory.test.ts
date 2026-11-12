@@ -43,6 +43,11 @@ describe("the memory", () => {
     expect(r.memory).toEqual({ "m1/a": gitA });
   });
 
+  it("keeps the Background tasks panel at its list, not the run it showed (#5421)", () => {
+    const bg: SessionPanel = { kind: "background", mid: "m1", sid: "a", run: "w1" };
+    expect(leaving({}, "m1/a", bg)["m1/a"]).toEqual({ kind: "background", mid: "m1", sid: "a" });
+  });
+
   it("keeps the last few sessions only", () => {
     let m: PanelMemory = {};
     for (let i = 0; i < KEPT + 5; i++) m = leaving(m, `m1/s${i}`, { ...gitA, sid: `s${i}` });
@@ -56,6 +61,8 @@ describe("the memory", () => {
     expect(belongsTo(gitA, B)).toBe(false);
     expect(belongsTo({ kind: "file", mid: "m1", path: "/work/web/a.ts" }, A)).toBe(true);
     expect(belongsTo({ kind: "link", url: "https://example.com" }, A)).toBe(false);
+    expect(belongsTo({ kind: "background", mid: "m1", sid: "a" }, A)).toBe(true);
+    expect(belongsTo({ kind: "background", mid: "m1", sid: "a" }, B)).toBe(false);
     expect(belongsTo(gitA, null)).toBe(false);
   });
 });
@@ -118,6 +125,15 @@ describe("moving between sessions", () => {
     act(() => openPanel(link));
     show(B);
     expect(getPanel()).toEqual(link);
+  });
+
+  it("closes A's Background tasks panel on going to B and brings it back at its list on A", () => {
+    show(A);
+    act(() => openPanel({ kind: "background", mid: "m1", sid: "a", run: "w1" }));
+    show(B);
+    expect(getPanel()).toBeNull();
+    show(A);
+    expect(getPanel()).toEqual({ kind: "background", mid: "m1", sid: "a" });
   });
 
   it("brings it back through a page that is not a session", () => {

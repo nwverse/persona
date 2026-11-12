@@ -50,6 +50,9 @@ export type Panel =
   /** A lead's Team (#5180, lib/team.ts): its workers' strip and the conversation of `worker` (else the one lib/team.ts
    *  shownWorker picks). `sid` is the lead's: the panel stays while the page shows the lead. */
   | { kind: "team"; mid: string; sid: string; worker?: string }
+  /** An Agent's background work (#5421, cindy's Background tasks tab; lib/background-panel.ts): its /loop, background tasks
+   *  and workflow runs. `run`: a workflow run's task_id to open at (its detail in the panel). */
+  | { kind: "background"; mid: string; sid: string; run?: string }
   /** The session's dev server in a headless browser on its computer (docs/web/preview.md); `port` / `path`: the one to
    *  show (a localhost link of a reply), else the one shown last or the first running one. */
   | { kind: "preview"; mid: string; sid: string; cwd: string; port?: number; path?: string };
