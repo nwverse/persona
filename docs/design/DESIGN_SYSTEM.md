@@ -1884,6 +1884,15 @@ what was decided, and the transcript stays one tap away (principle 2) instead of
   style).
 - Platforms: visionOS keeps the minutes' sections above the transcript; the web and Android have no Summary yet.
 
+## File page (#5827)
+
+Who it serves: people working with their computers' files from the phone or the browser (an Agent's Files tab, a computer's Files). Where it lives and what it does: docs/apple/ios.md "File page", docs/web/web.md "Side panels".
+
+- **Path bar**: Back, Forward and Up as the page's circle buttons (`.themedButton()` clipped to a circle on iOS, `IconButton` on the web), then the path from the home (`Theme.Icon.home`) or `/`, every folder a button, the current one on `Theme.Fill.chip` (web `bg-field`), separated by `Theme.Icon.pathSeparator`. The session's folder carries a compact accent `Chip` "Session"; a folder outside the home ends with a compact `Chip` "Read Only" (`Theme.Icon.locked`). Why not the breadcrumb alone: the page now leaves the session's folder, so the path is the whole one and the history is a browser's.
+- **Find field** under the path bar, beside the page's tool buttons: a capsule of `Theme.Fill.chip` at `Theme.Size.wellS` (the buttons' height) with the search mark and a clear button; the web's `SearchField` `sm`. Results replace the list while there are words in it.
+- **Info**: a sheet with medium and large detents on iOS (a grouped list of `LabeledContent` rows, `.themedRow()`), a `Dialog` on the web, both with Copy Path; permissions in plain words before the code (`rw-r--r-- · 644`), the code in `Theme.Font.code`.
+- **Symlinks**: `Theme.Icon.symlink` on the icon's corner (accent), `Theme.Icon.error` in `Theme.danger` for a broken one, whose second line is the danger color too.
+
 ## Starting from what you already have (#5193)
 
 Where a form sets something up that the user may already have working elsewhere (the web provider wizard's first step),
