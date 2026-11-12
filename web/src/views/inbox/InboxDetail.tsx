@@ -80,9 +80,9 @@ function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
   const time = shortTime(item.updated_at);
   const canPin = Boolean(item.lark) && (!place || ownShown) && (!showEvent || embed);
   const muteRows: MenuItem[] = [
-    ...(item.mutes ?? []).map((m): MenuItem => ({ key: `${m.tag}:${m.value}`, label: muteTitle(m), hint: muteShortName(m), icon: "bellOff", onSelect: () => void muteItem(item, m) })),
+    ...(item.mutes ?? []).map((m): MenuItem => ({ key: `${m.tag}:${m.value}`, label: muteTitle(m), detail: muteShortName(m), icon: "bellOff", onSelect: () => void muteItem(item, m) })),
     // and a rule for each (docs/assistant/inbox.md "Policies"), under a divider
-    ...(item.mutes ?? []).map((m, i): MenuItem => ({ key: `policy:${m.tag}:${m.value}`, label: policyMenuTitle(m), hint: muteShortName(m), icon: "target", divider: i === 0, onSelect: () => openPolicyDialog({ item, option: m, source: item.source }) })),
+    ...(item.mutes ?? []).map((m, i): MenuItem => ({ key: `policy:${m.tag}:${m.value}`, label: policyMenuTitle(m), detail: muteShortName(m), icon: "target", divider: i === 0, onSelect: () => openPolicyDialog({ item, option: m, source: item.source }) })),
   ];
   // the item's own body: the chat, the mail, the document's rows, the post, a connector's thread
   // (a chain entry opens the chat at its message, the mail at its uid)
