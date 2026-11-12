@@ -33,6 +33,15 @@ func (h *herdrHost) PaneSize(ctx context.Context, pane host.PaneRef) (int, int, 
 	return t.c.PaneSize(ctx, t.id)
 }
 
+// TermSize is the size the pane's programs see now (host.TermSizer): its terminal's, not its layout's.
+func (h *herdrHost) TermSize(ctx context.Context, pane host.PaneRef) (int, int, error) {
+	t, err := h.target(ctx, pane.ID)
+	if err != nil {
+		return 0, 0, err
+	}
+	return t.c.TermSize(ctx, t.id)
+}
+
 func (h *herdrHost) Observe(ctx context.Context, pane host.PaneRef, cols, rows int, fn func(host.Frame)) error {
 	t, err := h.target(ctx, pane.ID)
 	if err != nil {

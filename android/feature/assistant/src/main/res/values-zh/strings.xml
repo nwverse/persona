@@ -89,7 +89,7 @@
     <string name="assistant_no_match">没有找到匹配的对话</string>
     <string name="assistant_no_match_detail">换个关键词再试试。</string>
     <string name="assistant_more">更多</string>
-    <string name="assistant_home">返回首页</string>
+    <string name="assistant_back_to_main">回到主对话</string>
     <string name="assistant_todos">待办</string>
     <string name="assistant_open_settings">设置</string>
     <string name="assistant_make_leader">设为常驻</string>

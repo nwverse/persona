@@ -22,6 +22,7 @@ completed) and pushes the session. Prints one line per check and a verdict; exit
 import argparse
 import json
 import os
+import re
 import sys
 import urllib.request
 
@@ -167,7 +168,7 @@ def run(browser, base, hub, token, size, theme, shots, reduce):
     started = page.evaluate("""async () => { const r = await fetch('/api/v1/sessions', { headers: { Authorization: 'Bearer ' + (localStorage.getItem('persona.token') || 'mock') } });
       const all = (await r.json()).sessions; const s = all.find((x) => x.session_id === '%s');
       return (Date.now() - Date.parse(s.workflows[0].started_at)) / 60000; }""" % CHAT.split("/")[-1])
-    minutes = int(elapsed.split(" 分")[0]) if " 分" in elapsed else -1
+    minutes = int(m.group(1)) if (m := re.match(r"(\d+)m ", elapsed)) else -1
     if abs(minutes - int(started)) > 1:
         fail(f"{tag}: the running bar should count from the run's start ({started:.1f} min): {elapsed}")
     ok(f"{tag}: the running bar says the background workflow, its phase and count, from the run's start")
