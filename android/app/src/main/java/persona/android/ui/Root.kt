@@ -594,13 +594,10 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         val currentOthersWaiting = rememberUpdatedState(othersWaiting)
         val currentHinges = rememberUpdatedState(paneHinges)
         val currentConnection = rememberUpdatedState(connection)
-        // Regular Assistant entries keep their page slot while only the top entry owns the column's saveable key.
+        // Every Assistant entry keeps this frame across window policies; only its sidebar argument changes.
         val besideAssistant: @Composable (Boolean, @Composable () -> Unit) -> Unit = { showSidebar, page ->
-            BoxWithConstraints(Modifier.fillMaxSize()) {
-                val split = sidebarSplit(maxWidth.value, currentHinges.value)
-                JSidebarColumn(if (currentRegular.value && showSidebar) ({ currentSidebar.value("shared-sidebar-column") }) else null,
-                    width = split.sidebar.dp, pageStart = split.page.dp, shown = sidebarColumnShown.value) { page() }
-            }
+            AssistantPaneFrame(currentRegular.value, showSidebar, sidebarColumnShown.value,
+                sidebar = { currentSidebar.value("shared-sidebar-column") }, hinges = currentHinges.value, content = page)
         }
         // Only primary roots carry the shared top switcher. Secondary pages keep their own Back control.
         val chrome = remember(style, items, selected) {
@@ -641,7 +638,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                 }
                 val assistantEntry = entry.metadata[AssistantEntryMetadata] == true
                 val assistantTop = entry.contentKey == currentAssistantTopKey.value
-                if (assistantEntry && currentAssistantPolicy.value.keepSharedSidebar) besideAssistant(assistantTop, page) else page()
+                if (assistantEntry) besideAssistant(assistantTop && currentAssistantPolicy.value.keepSharedSidebar, page) else page()
             }
         }
         // A chat's terminal cover reads its machine's own hub group, as the terminal page does (`routed`).
