@@ -66,6 +66,18 @@ nonisolated struct ManagerRoster: Equatable, Sendable {
 }
 
 extension ManagerRoster {
+    /// A merged settings list belongs to the current assistant only. Before the roster arrives,
+    /// a saved non-default pick still filters by its stamp; a legacy default list stays intact.
+    nonisolated static func settingsItems<T>(_ items: [T], roster: ManagerRoster?, manager: String?,
+                                             stamped: (T) -> String?) -> [T] {
+        if let roster {
+            let owner = roster.owner(manager)
+            return items.filter { roster.owner(stamped($0)) == owner }
+        }
+        guard let manager else { return items }
+        return items.filter { stamped($0) == manager }
+    }
+
     /// The name of manager `id`, for the page of one of its things to say whose it is; nil for the default's page
     /// (`id` nil), or when the roster can't be read or lacks it.
     static func name(of id: String?, _ api: APIClient?) async -> String? {

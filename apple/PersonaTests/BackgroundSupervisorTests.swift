@@ -125,7 +125,7 @@ struct BackgroundSupervisorTests {
         #expect(split.auto.map(\.sessionID) == ["bg-1"])
         #expect(split.bySource(tasks: tasks).map { "\($0.source.id):\($0.sessions.map(\.sessionID))" } == [#"task:["bg-1"]"#])
         let main = SessionKey(machineID: "box", sessionID: "main-1")
-        #expect(AssistantSidebarGroups.recent(all, leaders: ["lead"], main: main, tasks: tasks, hubSays: true).map(\.sessionID) == ["mine"])
+        #expect(AssistantSidebarGroups.recent(all, leaders: ["lead"], main: main, background: "bg-1").map(\.sessionID) == ["mine"])
         #expect(AssistantSidebarGroups.directions(all, leaders: ["lead"], main: main).map(\.sessionID) == ["lead"])
     }
 
@@ -252,7 +252,7 @@ struct BackgroundSupervisorTests {
         #expect(review.verdict == "accepted" && review.round == nil && review.note == "已合并，测试补了" && review.title == "补测试")
         let lines = ChatLines.mergeFeed([], res.items)
         #expect(lines.count == 1)
-        guard case .feed(let drawn)? = lines.first else {
+        guard case .feed(let drawn)? = lines.first?.content else {
             Issue.record("the review is not a feed line")
             return
         }

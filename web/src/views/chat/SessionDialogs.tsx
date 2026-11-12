@@ -1,18 +1,17 @@
-// The chat's ⋯ menu dialogs: session info, rename (the agent / its space), delete, close, and the run-mode chips under the composer.
+// The chat's ⋯ menu dialogs: session info, rename (the agent / its space), delete, close, and the header's permission mode.
 import { useEffect, useRef, useState } from "react";
 import { api, enc, errorText, sessionPath } from "../../lib/api";
 import { ago, externalLink, resumeCommand, sessionCan, sessionTitle, shortPath, tabLabel } from "../../lib/format";
 import { openLink } from "../../lib/links";
-import { BYPASS_MODE, BYPASS_WARNING, effortTitle, modeTitle, renameBody } from "../../lib/session-actions";
-import { headerIcon, headerTone, modeMenuItems, modesChangeable, type ModeTone } from "../../lib/header-mode";
+import { effortTitle, modeTitle, renameBody } from "../../lib/session-actions";
 import { sessionLauncher } from "../../lib/model-switch";
 import { href, navigate, parse, showsSession } from "../../lib/router";
 import { stripBase } from "../../lib/base";
 import { dropSession, getSession, refresh, refreshAssistant, upsertSession } from "../../lib/store";
 import type { Session } from "../../lib/types";
-import { Button, copyText, cx, Dialog, Loading, Menu, Spinner, Switch, toast, useMenu } from "../../ui/atoms";
+import { Button, copyText, cx, Dialog, Loading, Switch, toast } from "../../ui/atoms";
 import { removeAgentWorktree, worktreeLoss, worktreeStatus, type WorktreeStatus } from "../../lib/worktree";
-import { Icon, type IconName } from "../../ui/icons";
+import { Icon } from "../../ui/icons";
 import { t } from "../../i18n";
 import { AlwaysPermissions } from "./AlwaysPermissions";
 import { DelegatedHistory } from "./Delegated";
@@ -121,6 +120,27 @@ export function SessionInfoDialog({ session, machineName, open, onClose }: { ses
 }
 
 // "Rename": the herdr tab and the session's name (Claude's /rename), each only when changed (iOS RenameSessionAlert).
+/** Saves a new title from the header's in-place rename (#5421, cindy's double-click on the title, which updates at once and
+ *  puts the old title back if the save fails): only the title, the tab keeps its name. False when nothing changed or it
+ *  failed (the error toasted). */
+export async function renameTitle(session: Session, title: string): Promise<boolean> {
+  const body = renameBody(session, "", title);
+  if (!body?.title) return false;
+  // the header and the list show the new name at once; the hub's push confirms it
+  upsertSession({ ...session, title: body.title });
+  try {
+    await api(`${sessionPath(session.machine_id, session.session_id)}/rename`, { method: "POST", json: { title: body.title } });
+    if (session.assistant) void refreshAssistant().catch(() => {});
+    return true;
+  } catch (e) {
+    // back to the old title, unless something renamed it meanwhile
+    const now = getSession(session.machine_id, session.session_id);
+    if (!now || now.title === body.title) upsertSession({ ...(now ?? session), title: session.title });
+    toast(t("chat-sessiondialogs.change_failed", { error: errorText(e) }), "error");
+    return false;
+  }
+}
+
 export function RenameDialog({ session, open, onClose }: { session: Session; open: boolean; onClose: () => void }) {
   const [tab, setTab] = useState("");
   const [title, setTitle] = useState("");
@@ -253,62 +273,36 @@ function Field({ label, value, onChange, autoFocus }: { label: string; value: st
   );
 }
 
-// The chip under the composer, like Claude Code's bottom bar: the permission mode (POST …/modes). The model and the
-// thinking effort are the composer's model pill (ModelPill.tsx: an Agent's, #5032; a Persona conversation's, #5033). A
-// Persona conversation may also switch to "Allow everything" (#2416).
-export function ModeChips({ session, assistant }: { session: Session; assistant?: boolean }) {
-  const modeMenu = useMenu();
-  const { set } = useModeSet(session);
-  const mode = session.permission_mode;
-  const danger = mode === BYPASS_MODE;
-  return (
-    // It keeps its width on a wide screen, where the line beside it truncates first; at phone width (the line hidden) it
-    // may shrink, its label truncating, so the ⓘ after it never slides under the composer's model pill, stop or send
-    // button (#3575).
-    <span className="flex shrink-0 items-center gap-1 max-sm:min-w-0 max-sm:shrink">
-      <Chip label={mode ? modeTitle(mode) : t("chat-sessiondialogs.permission_default")} narrow={{ icon: "shield", label: modeShort(mode) }} danger={danger} onClick={modeMenu.open} active={Boolean(modeMenu.anchor)} title={danger ? BYPASS_WARNING : t("chat-sessiondialogs.permission_mode")} />
-      {modeMenu.anchor && (
-        <Menu
-          anchor={modeMenu.anchor}
-          onClose={modeMenu.close}
-          side="top"
-          width={300}
-          header={t("chat-sessiondialogs.permission_mode")}
-          // the header's rows (#3956): into "Allow all" in red and asked again (#1379), out of it asked where it can't come back
-          items={modeMenuItems(session, (m) => void set({ permission_mode: m }), { assistant })}
-        />
-      )}
-    </span>
-  );
+/** POST …/modes with a patch, drawn at once and put back if it fails (the error toasted). `latest` is the session as it is
+ *  now: a pick applies the model and then the effort, and the second must build on the session the first changed. */
+export async function applyModes(latest: () => Session, patch: { permission_mode?: string; effort?: string; model?: string }): Promise<boolean> {
+  const base = latest();
+  const before = { permission_mode: base.permission_mode, effort: base.effort, model: base.model };
+  upsertSession({ ...base, ...patch });
+  try {
+    await api(`${sessionPath(base.machine_id, base.session_id)}/modes`, { method: "POST", json: patch });
+    return true;
+  } catch (e) {
+    upsertSession({ ...latest(), ...Object.fromEntries(Object.keys(patch).map((k) => [k, before[k as keyof typeof before]])) });
+    toast(t("chat-sessiondialogs.change_failed", { error: errorText(e) }), "error");
+    return false;
+  }
 }
 
-/** POST …/modes with a patch, drawn at once and put back if it fails (the error toasted): the composer's chips and model
- *  pill, the header's mode. `latest`: a pick applies the model and then the effort, and the second must build on the
- *  session the first changed. */
+/** applyModes for one session: the composer's permission picker and model pill, the header's mode. */
 export function useModeSet(session: Session) {
   const latest = useRef(session);
   latest.current = session;
-  const set = async (patch: { permission_mode?: string; effort?: string; model?: string }): Promise<boolean> => {
-    const base = latest.current;
-    const before = { permission_mode: base.permission_mode, effort: base.effort, model: base.model };
-    upsertSession({ ...base, ...patch });
-    try {
-      await api(`${sessionPath(base.machine_id, base.session_id)}/modes`, { method: "POST", json: patch });
-      return true;
-    } catch (e) {
-      upsertSession({ ...latest.current, ...Object.fromEntries(Object.keys(patch).map((k) => [k, before[k as keyof typeof before]])) });
-      toast(t("chat-sessiondialogs.change_failed", { error: errorText(e) }), "error");
-      return false;
-    }
-  };
+  const set = (patch: { permission_mode?: string; effort?: string; model?: string }): Promise<boolean> => applyModes(() => latest.current, patch);
   /** POST …/modes {launcher, from, model?, effort?} (#5035): another launcher records a switch that the user's next
    *  message carries out, the session's own drops one; `from` is the launcher the pick was made against, so one made on
    *  a session that switched meanwhile is refused (`switch_stale`). The pending switch shows at once (the pill's clock)
-   *  and goes back to what it was if the hub says no, with its words. */
-  const switchLauncher = async (step: { launcher: string; from?: string; model?: string; effort?: string }): Promise<boolean> => {
+   *  and goes back to what it was if the hub says no, with its words. `agent`: the engine a launcher of the other engine
+   *  runs (#5054), drawn as the node will record it (`pending_switch.agent`); it is not sent. */
+  const switchLauncher = async (step: { launcher: string; from?: string; model?: string; effort?: string }, agent?: string): Promise<boolean> => {
     const base = latest.current;
     const before = base.pending_switch;
-    const pending = { launcher: step.launcher, model: step.model, effort: step.effort, at: new Date().toISOString() };
+    const pending = { launcher: step.launcher, model: step.model, effort: step.effort, ...(agent ? { agent } : {}), at: new Date().toISOString() };
     const next: Session = { ...base, pending_switch: step.launcher === sessionLauncher(base) ? undefined : pending };
     upsertSession(next);
     latest.current = next; // a step after this one builds on it before the push draws it
@@ -334,99 +328,6 @@ export async function setServiceTier(s: Session, tier: string): Promise<boolean>
     toast(t("chat-sessiondialogs.change_failed", { error: errorText(e) }), "error");
     return false;
   }
-}
-
-const MODE_LOOK: Record<ModeTone, string> = {
-  asks: "bg-field text-ink-3",
-  unknown: "bg-field text-ink-3",
-  plans: "bg-mode-plans-tint text-mode-plans",
-  acts: "bg-mode-acts-tint text-mode-acts",
-  allows: "bg-mode-allows-tint text-mode-allows",
-};
-
-/** The permission mode at the end of an Agent's header (#3956, iOS `HeaderModeButton` from #3719): the mode's symbol in its
- *  tone, no words (they are its accessible name, its tooltip and its menu). Ask First is never hidden, so the control stays
- *  in one place. Its menu is the composer chip's (`modeMenuItems`); a spinner stands in for the symbol while a change is on
- *  its way. */
-export function HeaderModeButton({ session }: { session: Session }) {
-  const menu = useMenu();
-  const { set } = useModeSet(session);
-  const [changing, setChanging] = useState(false);
-  const mode = session.permission_mode;
-  const tone = headerTone(mode);
-  const words = t("chat-sessiondialogs.header_mode", { mode: mode ? modeTitle(mode) : t("chat-sessiondialogs.mode_unknown") });
-  const locked = !modesChangeable(session);
-  const pick = async (to: string) => {
-    setChanging(true);
-    try { await set({ permission_mode: to }); } finally { setChanging(false); }
-  };
-  const items = modeMenuItems(session, (to) => void pick(to), { locked });
-  return (
-    <>
-      <button
-        type="button"
-        onClick={menu.open}
-        disabled={changing}
-        aria-label={words}
-        aria-haspopup="menu"
-        aria-expanded={Boolean(menu.anchor)}
-        title={words}
-        data-mode-tone={tone}
-        data-testid="header-mode"
-        className={cx("touch-hit flex h-7 min-w-9 shrink-0 items-center justify-center rounded-full px-2.5 transition-colors hover:brightness-95 dark:hover:brightness-110", MODE_LOOK[tone])}
-      >
-        {changing ? <Spinner size={13} /> : <Icon name={headerIcon(mode)} size={15} stroke={2} />}
-      </button>
-      {menu.anchor && (
-        <Menu
-          anchor={menu.anchor}
-          onClose={menu.close}
-          align="right"
-          width={300}
-          header={words}
-          items={locked ? [{ key: "locked", label: t("chat-sessiondialogs.modes_locked"), note: true, onSelect: () => {} }, ...items] : items}
-        />
-      )}
-    </>
-  );
-}
-
-// The permission chip's word below 340 px (#4316): enough to tell whether the agent asks first.
-const MODE_SHORT: Record<string, string> = {
-  default: "chat-sessiondialogs.mode_short_default",
-  acceptEdits: "chat-sessiondialogs.mode_short_accept_edits",
-  plan: "chat-sessiondialogs.mode_short_plan",
-  auto: "chat-sessiondialogs.mode_short_auto",
-  [BYPASS_MODE]: "chat-sessiondialogs.mode_short_bypass",
-};
-
-export function modeShort(mode?: string): string {
-  if (!mode) return t("chat-sessiondialogs.short_default");
-  return MODE_SHORT[mode] ? t(MODE_SHORT[mode]) : modeTitle(mode);
-}
-
-/** `narrow`: below 340 px (a 320 px phone, #4316) the label gives way to this icon and short word, which still say the
- *  setting (the chevron goes, for room); the full label stays for screen readers. From 340 px up the chip is as before. */
-export function Chip({ label, onClick, active, danger, title, narrow }: { label: string; onClick: (e: React.MouseEvent<HTMLElement>) => void; active?: boolean; danger?: boolean; title: string; narrow?: { icon: IconName; label: string } }) {
-  return (
-    <button
-      type="button"
-      title={title}
-      aria-haspopup="menu"
-      onClick={onClick}
-      className={cx(
-        // min-w-0 / max-w-full: on a phone the row has less room than the labels; the label truncates and the chevron
-        // stays inside the box, clear of the send button (#3575)
-        "touch-hit flex h-5.5 min-w-0 max-w-full items-center gap-0.5 whitespace-nowrap rounded-full px-2 text-[11px] font-medium transition-colors",
-        danger ? "bg-red-tint text-red" : active ? "bg-hover text-ink" : "bg-field text-ink-2 hover:bg-hover hover:text-ink",
-      )}
-    >
-      {narrow && <Icon name={narrow.icon} size={12} className="shrink-0 xs:hidden" />}
-      {narrow && <span aria-hidden className="min-w-0 truncate xs:hidden">{narrow.label}</span>}
-      <span className={cx("min-w-0 truncate", narrow && "max-xs:sr-only")}>{label}</span>
-      <Icon name="chevron" size={9} stroke={2.4} className={cx("shrink-0", narrow && "max-xs:hidden")} />
-    </button>
-  );
 }
 
 // "Delete chat" (issue #801): the hub takes it out of every app's list; the transcript stays on the computer and the

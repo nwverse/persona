@@ -38,6 +38,7 @@ import (
 type Node struct {
 	Version string
 	updater *nodeupdate.Manager // resident-owned, shared across attach connections
+	reload  *ResidentReload     // admission/draining while the attach transport stays available
 
 	// dataDirOnce finds the data folder the path guard refuses the credentials of (pathguard.go dataDirs).
 	dataDirOnce sync.Once
@@ -211,6 +212,11 @@ type Node struct {
 
 	// codexStarting: panes a Codex start is opening (codex_start.go): no thread is guessed for them meanwhile.
 	codexStarting map[string]bool
+	// codexWaiting: Codex panes opened with no first message, by pane, until their thread is known (codex_waiting.go);
+	// codexAttached: such a row's id → the thread it became; codexWaitLooking: the look for their threads runs.
+	codexWaiting     map[string]*codexWait
+	codexAttached    map[string]codexAttach
+	codexWaitLooking bool
 	// codexAbandoned: failed starts whose pane could not be closed; a retry must close it before opening another.
 	codexAbandoned map[string][]codexAbandonedStart
 	// keptStarts: the tabs of failed starts kept open for a while, by pane (shellsettle.go keepStartTab); n.mu.
@@ -357,9 +363,17 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 		w = &updateResponseWriter{Writer: w, responseWritten: n.updater.ResponseWritten}
 	}
 	n.peer = rpc.New("n", w)
+	n.peer.TrackReplies = n.reload != nil
+	n.reload.peer(n.peer, func() {
+		cancel()
+		if closer, ok := r.(io.Closer); ok {
+			_ = closer.Close()
+		}
+	})
+	defer n.reload.peer(n.peer, nil)
 	// A tool call whose caller went away (the assistant's turn stopped, a hook killed) ends on the hub too: an
 	// approval it was waiting on is withdrawn, not left to run the call when allowed later (#2597).
-	n.peer.Cancels = map[string]bool{"mcp.call": true}
+	n.peer.Cancels = map[string]bool{"mcp.call": true, "state.load": true}
 	n.peer.OnRequest = n.handle
 	n.streams = streams.New(n.peer.Notify)
 	defer n.streams.CloseAll()
@@ -558,6 +572,15 @@ func (n *Node) writeClaudeConfig() error { return writeGeneratedConfig(n.dir, n.
 func (n *Node) hubSupportsPersonaContracts() bool { return n.hubPersonaContracts.Load() }
 
 func (n *Node) handle(ctx context.Context, method string, params json.RawMessage) (any, error) {
+	if n.reload != nil {
+		done, err := n.reload.enter()
+		if err != nil {
+			return nil, err // explicitly not started: the manager can retry on the replacement
+		}
+		if !rpc.AfterReply(ctx, done) {
+			defer done()
+		}
+	}
 	if strings.HasPrefix(method, "node.update.") {
 		return n.handleUpdate(ctx, method, params)
 	}
@@ -572,6 +595,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.secretRun(ctx, params)
 	case proto.MethodSecretStage: // a hand-off's values, kept for its start's ticket (secretenv.go); the same
 		return n.secretStageCall(params)
+	case proto.MethodModelHTTP: // an API connection's request sent through this computer (modelhttp.go); the same
+		return modelHTTP(ctx, params)
 	}
 	if strings.HasPrefix(method, "plugin.node.") { // plugins' programs on this computer (plugins.go)
 		return n.handlePlugins(ctx, method, params)
@@ -663,6 +688,20 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("bad params: %w", err)
+		}
+	}
+	if isCodexWaitID(p.SessionID) && (strings.HasPrefix(method, "session.") || strings.HasPrefix(method, "terminal.")) {
+		// A Codex opened with no first message (codex_waiting.go): the thread it became since the client looked, or
+		// what its row answers while it waits.
+		if t := n.codexAttachedThread(p.SessionID); t != "" {
+			p.SessionID, params = t, withSessionID(params, t)
+		} else if w := n.codexWaitByID(p.SessionID); w != nil {
+			if method == "session.send" {
+				return n.sendFirstCodexCall(ctx, w, params, p.Text, p.Images)
+			}
+			if r, err, handled := n.codexWaitCalls(method, p.SessionID); handled {
+				return r, err
+			}
 		}
 	}
 	if strings.HasPrefix(method, "session.") && p.SessionID != "" {
@@ -1083,8 +1122,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		if p.ResumeSessionID != "" {
 			// A message carrying out a launcher switch quits the agent and starts it again in its terminal
 			// (launcher_switch.go): the Resume waits for it, then finds the agent running, or resumes it as it is.
-			n.awaitSwitch(ctx, p.ResumeSessionID)
-			r = n.fillResume(p.ResumeSessionID, r) // what it ran with, for what the start leaves out (retire.go)
+			defer n.resumeTurn(ctx, p.ResumeSessionID)() // and a switch to the other engine does not resume it beside this
+			r = n.fillResume(p.ResumeSessionID, r)       // what it ran with, for what the start leaves out (retire.go)
 			// The user's Resume (the only way a stopped agent runs again, #4754): in the shell it left when that is
 			// still there (stopped.go).
 			ctx = n.inKeptTerminal(ctx, p.ResumeSessionID, r.cwd)
@@ -1129,11 +1168,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			}
 			sctx = withGuestKind(sctx, p.Guest.Tools, p.Guest.Kind)
 		}
+		var opts sendOpts
+		_ = json.Unmarshal(params, &opts)
+		sctx = withClientMsgID(sctx, opts.ClientMsgID) // a runtime's message goes under it (assistant_runtime.go)
 		send := func() (string, error) {
 			return n.assistantSend(sctx, p.SessionID, p.Cwd, p.Launcher, p.Text, p.Images, p.PermissionMode, p.Effort, modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: assistantRuntimeOf(p.Runtime), IsMain: p.IsMain, ConfigDir: p.ConfigDir, Interject: p.Interject})
 		}
-		var opts sendOpts
-		_ = json.Unmarshal(params, &opts)
 		if p.NewSessionID == "" && p.SessionID == "" && opts.ClientMsgID != "" {
 			// A new conversation's first message with its client_msg_id (one a person's own app opened, the manager's
 			// start.go humanStart): the conversation's id, the warm spare's or a new one, is known once it started, so
@@ -1190,7 +1230,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			}
 			return n.sendEchoed(p.SessionID, opts.ClientMsgID, p.Text, len(p.Images), after, func() error { // echo.go
 				if n.isAssistantSession(p.SessionID) {
-					_, err := n.assistantSend(ctx, p.SessionID, "", p.Launcher, p.Text, p.Images, "", "", modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: n.sessionRuntime(p.SessionID, p.Runtime, p.ModelFingerprint != ""), IsMain: p.IsMain, ConfigDir: p.ConfigDir, Interject: p.Interject})
+					_, err := n.assistantSend(withClientMsgID(ctx, opts.ClientMsgID), p.SessionID, "", p.Launcher, p.Text, p.Images, "", "", modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: n.sessionRuntime(p.SessionID, p.Runtime, p.ModelFingerprint != ""), IsMain: p.IsMain, ConfigDir: p.ConfigDir, Interject: p.Interject})
 					return err
 				}
 				return n.send(ctx, p.SessionID, p.Text, p.Images, opts)
@@ -1743,8 +1783,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		}
 		_ = json.Unmarshal(params, &closeParams)
 		if closeParams.Force {
-			a, ok := n.agent(p.SessionID)
-			if !ok || a.AgentStatus != proto.StatusBlocked || n.isAssistantSession(p.SessionID) || n.runtimeAssistant(p.SessionID) {
+			if n.isAssistantSession(p.SessionID) || n.runtimeAssistant(p.SessionID) || !n.waitsOnUser(ctx, p.SessionID) {
 				return nil, refusal("agent_busy", "the Agent is no longer waiting for confirmation", nil)
 			}
 		}

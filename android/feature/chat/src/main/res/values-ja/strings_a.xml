@@ -285,7 +285,7 @@
     </plurals>
     <string name="chat_tasks_plan_single">こう始めます</string>
     <string name="chat_tasks_default_model">デフォルトモデル</string>
-    <string name="chat_tasks_read_only">読み取り専用</string>
+    <string name="chat_tasks_read_only">読み取り専用を要求</string>
     <string name="chat_tasks_plan_remember">次回からこの種類は直接開始</string>
     <plurals name="chat_tasks_plan_start_count">
         <item quantity="other">%1$d件を開始</item>
@@ -309,7 +309,7 @@
     <string name="chat_tasks_say">メッセージ</string>
     <string name="chat_tasks_restarting">「%1$s」を再開始しています</string>
     <string name="chat_tasks_restarted">「%1$s」は再試行で開始しました</string>
-    <string name="chat_tasks_receipt_failed_title">%1$sを開始できませんでした</string>
+    <string name="chat_tasks_receipt_failed_title">%1$sを起動できませんでした</string>
     <string name="chat_tasks_receipt_done_title">%1$sが完了しました</string>
     <string name="chat_tasks_receipt_stopped_title">%1$sは止まりました（未完了）</string>
     <string name="chat_tasks_look">見る</string>
@@ -361,8 +361,8 @@
     <string name="chat_today_review_prompt">Larkで私がメンションされたメッセージを確認してください：返信が必要なものを挙げ、下書きできるものは先に下書きしてください</string>
     <string name="chat_today_title">今日知っておくこと</string>
     <string name="chat_today_empty">対応待ちはなく、予定も空いています。</string>
-    <string name="chat_tasks_message_replied">あなたの名前で返信しました</string>
-    <string name="chat_tasks_message_drafted">タスクの進捗から下書きした返信</string>
+    <string name="chat_tasks_message_replied">あなたとして返信しました</string>
+    <string name="chat_tasks_message_drafted">タスクの進捗をもとに作成した返信</string>
     <string name="chat_tasks_message_blank">下書きに未入力の「%1$s」があります。修正するか削除してから送信してください</string>
     <string name="chat_tasks_send">送信</string>
     <string name="chat_tasks_later">後で</string>
