@@ -18255,6 +18255,19 @@ def browser_now(machine):
 # Sign-ins in ego (#1304): the sites with cookies on MacBook, as browser.cookies.list gives them (no names, no values).
 MOCK_COOKIE_SITES = {"github.com": [4, "2027-05-12T08:00:00Z"], "notion.so": [7, "2026-12-30T10:00:00Z"], "example.com": [2, None]}
 
+# MOCK_COOKIE_SITES=<n> (#5821): n made-up sites under the reserved .example name instead, for a long list (the folded
+# section and its list page): two expired, every 17th one ending with the browser, the rest expiring over two years.
+_COOKIE_WORDS = ("acme alder amber apex arbor aspen atlas aurora beacon birch bramble brook cedar cinder clover cobalt comet "
+                 "coral cove crest delta dune echo ember fern fjord flint garnet glade harbor hazel heron indigo iris juniper "
+                 "kestrel lagoon lark linden lumen maple meadow mesa nimbus onyx orchid pebble quartz raven ridge sage slate").split()
+if os.environ.get("MOCK_COOKIE_SITES", "").isdigit():
+    _day = datetime.now(timezone.utc).replace(hour=8, minute=0, second=0, microsecond=0)
+    MOCK_COOKIE_SITES = {}
+    for _i in range(int(os.environ["MOCK_COOKIE_SITES"])):
+        _w = _COOKIE_WORDS[_i % len(_COOKIE_WORDS)] + ("" if _i < len(_COOKIE_WORDS) else str(_i // len(_COOKIE_WORDS) + 1))
+        _e = None if _i % 17 == 5 else _day - timedelta(days=3 + _i) if _i in (7, 30) else _day + timedelta(days=12 + _i * 37 % 700)
+        MOCK_COOKIE_SITES[f"{_w}.example"] = [_i * 7 % 9 + 1, _e.strftime("%Y-%m-%dT%H:%M:%SZ") if _e else None]
+
 
 def cookie_sites():
     return {"sites": [{"domain": d, "count": c, **({"expires": e} if e else {})} for d, (c, e) in sorted(MOCK_COOKIE_SITES.items())]}
