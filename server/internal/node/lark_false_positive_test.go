@@ -79,6 +79,10 @@ func TestLarkLiteralCommandVariable(t *testing.T) {
 	}{
 		{"literal", `A=/usr/bin/ab; timeout 30 $A scroll`, 0},
 		{"braced literal", `A=/usr/bin/ab; timeout 30 ${A} scroll`, 0},
+		{"literal after harmless command", `A=/usr/bin/ab; echo ok; timeout 30 $A scroll`, 0},
+		{"literal after external command", `A=/usr/bin/ab; ls /tmp; timeout 30 $A scroll`, 0},
+		{"dynamic argument can assign", `A=/usr/bin/ab; echo ${A:=/x/lark-cli}; timeout 30 $A scroll`, 1},
+		{"unset value", `A=/usr/bin/ab; unset A; timeout 30 $A scroll`, 1},
 		{"substitution", `A=$(which x); $A`, 1},
 		{"unassigned", `$A`, 1},
 		{"dynamic value", `A=$B; $A`, 1},

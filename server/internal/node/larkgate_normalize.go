@@ -59,9 +59,19 @@ func normalizeLarkCommand(cmd string) string {
 				}
 			}
 		}
-		// Even a shell builtin may change variables, so only assignments directly
-		// preceding this command are used.
-		clear(vars)
+		// Preserve assignments only across simple commands known not to change
+		// shell state. Expansions can themselves assign variables.
+		name := words[0]
+		unchanged := map[string]bool{"echo": true, ":": true, "true": true, "false": true, "ls": true, "git": true, "go": true, "pwd": true, "date": true, "sleep": true, "cat": true, "head": true, "grep": true, "jq": true}[name]
+		for _, arg := range call.Args {
+			_, dynamic := executionWord(arg)
+			if dynamic {
+				unchanged = false
+			}
+		}
+		if len(call.Assigns) != 0 || len(stmt.Redirs) != 0 || !unchanged {
+			clear(vars)
+		}
 	}
 
 	// A heredoc fed only to a file writer is data, except when a later command
