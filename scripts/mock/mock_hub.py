@@ -11047,8 +11047,8 @@ def auto_named(b):
 
 def machine_launchers(mid=""):
     """GET /api/v1/machines/{mid}/launchers's launchers: claude, sonnetcc and codex ("Create from the phone"; not on the
-    Mac Studio under MOCK_NEW_AGENT_PANEL), and under MOCK_PROVIDERS the managed providers Agents can start, each with its
-    display name."""
+    Mac Studio under MOCK_NEW_AGENT_PANEL), under MOCK_PROVIDERS the managed providers Agents can start, each with its
+    display name, and under MOCK_DESKTOP_APPS the MacBook's claude-desktop."""
     out = [{"name": "claude", "model": "opus"}, {"name": "sonnetcc", "model": "sonnet"}, codex_launcher()]
     if os.environ.get("MOCK_MODEL_PANEL_USAGE"):
         out += [{"name": "cc_main", "model": "opus"}, {"name": "cc_team", "model": "example-pro"}]
@@ -11057,6 +11057,10 @@ def machine_launchers(mid=""):
     if MOCK_PROVIDERS:
         out += [{k: l[k] for k in ("name", "display_name", "base_url", "model", "source") if l.get(k)}
                 for l in LAUNCHERS if l["source"] == "persona" and l.get("kind") != "api"]
+    if os.environ.get("MOCK_DESKTOP_APPS") and mid == "macbook":
+        # The MacBook's Claude desktop app keeps Claude Code sessions: its launcher starts one there (#5480,
+        # docs/integrations/claude-integration.md "New sessions in the desktop app").
+        out.append({"name": "claude-desktop", "model": "", "source": "claude_desktop", "agent": "claude", "agent_type": "claude"})
     return launcher_health_list(out)
 
 

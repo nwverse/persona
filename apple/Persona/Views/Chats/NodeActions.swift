@@ -254,8 +254,9 @@ nonisolated enum NodeMenu {
         return tab.isEmpty ? detail : "\(tab) · \(detail)"
     }
 
-    /// Only the agents a launcher starts without a first message: Claude Code (a Codex start needs one).
-    static func launchableHere(_ l: Launcher) -> Bool { (l.agent ?? "").isEmpty || l.agent == "claude" }
+    /// Only the agents a launcher starts without a first message: Claude Code (a Codex start needs one), in this terminal
+    /// (not the one that starts the session in Claude's desktop app, #5480).
+    static func launchableHere(_ l: Launcher) -> Bool { ((l.agent ?? "").isEmpty || l.agent == "claude") && !l.startsInDesktopApp }
 
     /// The chat of the agent Run Agent Here started on `machine`, from what `panes/agent` answered: it opens the way New
     /// Session opens the one it starts (#3287). nil when the answer names no session: the list stays in front.

@@ -385,6 +385,10 @@ extension Theme {
         static let parentFolder = "arrow.turn.left.up"
         /// A folder that is a git repository (the new chat's directory browser).
         static let gitRepository = "folder.badge.gearshape"
+        /// A new folder, made when the session starts (the new chat's directory browser, a start in Claude's desktop app, #5480).
+        static let newFolder = "folder.badge.plus"
+        /// A temporary session: one in Claude's desktop app's scratch folder (New Agent, #5480).
+        static let temporarySession = "tray"
         static let photo = "photo"
         static let photos = "photo.on.rectangle"
         static let camera = "camera"
