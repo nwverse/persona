@@ -227,8 +227,10 @@ class ConversationHistoryTest {
     // The history says when as iOS does (`Fmt.relative`): minutes ago, not the date and time (#4339 C12).
     @Test fun theHistorySaysWhenAsIOSDoes() {
         show(HistoryHub(main, dated))
+        // The row's time line says it, and then the menu's preview does too.
+        rule.onAllNodesWithText("7 分钟前").assertCountEquals(1)
         rule.onNode(hasText(dated.title) and hasClickAction()).performTouchInput { longClick() }
-        rule.onNodeWithText("7 分钟前").assertExists()
+        rule.onAllNodesWithText("7 分钟前").assertCountEquals(2)
         rule.onAllNodesWithText("11月", substring = true).assertCountEquals(0)
     }
 

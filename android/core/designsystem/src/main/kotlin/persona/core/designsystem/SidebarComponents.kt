@@ -30,9 +30,9 @@ fun JSidebarHistoryRow(
     menuLabel: String,
     /** The line under the title (a leader conversation's open tasks, #4331); null: one line only. */
     hint: String? = null,
-    titleAccessory: (@Composable () -> Unit)? = null,
     /** The title's quiet start ([JRow]'s `titleLead`): a hub title's day and kind. */
     titleLead: String? = null,
+    titleAccessory: (@Composable () -> Unit)? = null,
 ) {
     JRow(title, onClick = onClick, onLongClick = onMenu, selected = selected, chevron = false, subtitle = hint,
         titleAccessory = titleAccessory, titleLead = titleLead, trailing = {
