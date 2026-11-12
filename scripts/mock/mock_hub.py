@@ -11681,6 +11681,28 @@ LIFT_KEY = "a1f3c2d4-0000-4000-8000-0000000c1e0c"
 # lifted and selected, the quote stays folded (or open, as it was in the chat) and its hidden lines are not selected.
 LIFT_FOLD = "a1f3c2d4-0000-4000-8000-0000000c1e0d"
 LIFT_ASK_KEY = "b2e4d6f8-0000-4000-8000-0000000c1e0c"
+# An answer long enough to be drawn in parts (#4970, `AnswerParts`: 95 lines, three parts): a long press on its middle
+# part lifts, copies and selects all of it (#5221). Its first and last sentences are in its first and last parts.
+LIFT_SPLIT = "a1f3c2d4-0000-4000-8000-0000000c1e0e"
+
+
+def lift_split_answer():
+    topics = [("范围", "这次只迁移订单、库存和结算三张表，用户表和日志表留在旧库，下个季度再动。"),
+              ("步骤", "先双写一周，再把读切到新库，最后停掉旧库的写入；每一步都有开关，可以单独回退。"),
+              ("风险", "最大的风险是结算表的历史数据里有重复的流水号，迁移脚本遇到会停下来，等人工确认。"),
+              ("验证", "每天对一次账：两边的行数、金额合计和最近一小时的流水逐条比对，差异写进日报。"),
+              ("回滚", "回滚只需要把读开关切回旧库，双写期间两边的数据一致，不需要再搬数据。"),
+              ("后续", "旧库保留三十天只读，确认没有人再查之后再下线，下线前会再提醒一次。")]
+    sections = []
+    for n, (name, lead) in enumerate(topics, 1):
+        sections.append(f"### {n}. {name}\n\n第 {n} 节的说明：{lead}"
+                        "这一节的细节都写在迁移手册里，下面只列要点，方便你快速核对。The steps keep the old reader working until every client moved.")
+        sections.append("\n".join(f"- 要点 {n}.{k}：检查第 {k} 项，结果记在 `notes/migration-{n}-{k}.md` 里，有异常就停下来。" for k in range(1, 4)))
+        sections.append(f"```sh\nscripts/migrate.sh --step {n} --dry-run\nscripts/migrate.sh --step {n} --verify\n```")
+        sections.append(f"第 {n} 节小结：这一步预计半天，做完在群里说一声，我再接着做下一节。"
+                        "如果中间有任何一项对不上，就先停在这一步，不要往下走，等我们一起看过日志再决定。")
+    return ("## 迁移总结\n\n开头第一句：这份总结按六个部分说明这次迁移，先说范围，再说步骤、风险、验证、回滚和后续。\n\n"
+            + "\n\n".join(sections) + "\n\n以上是这次迁移的全部总结，有问题随时找我。")
 LIFT_KEY_MINE = "你先把管理密钥存到本机文件，我跑命令读一下。放在 ~/.config/example-gateway/management.key，权限设成 600，别打印到日志里。"
 LIFT_KEY_ANSWER = ("管理 Key 已经存到本机（hub）了：\n`/home/me/.config/example-gateway/management.key`\n\n"
                    "- 文件权限 600，内容 64 位，没有换行，以 `cb3b` 开头、`047f` 结尾。\n"
@@ -11759,6 +11781,8 @@ def mock_message_lift():
     ITEMS[LIFT_ASK_KEY] = [it("user", "text", 6, text=LIFT_KEY_MINE), it("assistant", "text", 5, text=LIFT_KEY_ANSWER)]
     ASSISTANT.append(assistant_sess(LIFT_ASK_KEY, "保存管理密钥", 5, "存好之后要删掉这个文件就跟我说一声。"))
     SESSIONS.append(sess("macbook", LIFT_MIX, "定时核对", repo, "done", "done", "shop-app", 17, "lift", 3, 7, "下一次核对在整点之后五分钟。"))
+    ITEMS[LIFT_SPLIT] = [it("user", "text", 6, text="把这次数据迁移的安排整理成一份总结"), it("assistant", "text", 4, text=lift_split_answer())]
+    SESSIONS.append(sess("macbook", LIFT_SPLIT, "迁移总结", repo, "done", "done", "shop-app", 17, "lift", 6, 4, "以上是这次迁移的全部总结，有问题随时找我。"))
 
 
 if os.environ.get("MOCK_MESSAGE_LIFT") == "1":
