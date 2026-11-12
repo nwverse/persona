@@ -59,7 +59,14 @@ The two complement each other and have separate switches.
   person becomes the owner, and the bot greets them by `open_id`, which gives the private chat's `chat_id`; the assistant is told `feishu.owner {paired, greeted}` and starts the chat without a second greeting.
   The registration under way (its device code sealed with `secret.key`) is kept in `bots.feishu.registration`, so a restart between polls loses nothing; a confirmed one whose finishing failed is finished on the next poll, never registered again.
   A tenant on the other cloud (`tenant_brand`) is polled there; an expired or declined authorization starts another one and says so; when the accounts site cannot be reached, or the deployment is private, the step is the credentials form.
-  Typing the App ID and App Secret of an existing app stays available on the Lark bot's settings page.
+  Typing the App ID and App Secret of an existing app stays available on the Lark bot's settings page, folded under Advanced.
+  The web Lark bot page starts the same registration itself when there is no app (#5818): its first group is **Create the bot**, one
+  **Scan to create with Lark** button that sends the channel's bind step (`POST /api/v1/channels/feishu/bind`) and draws the QR step
+  Settings › Channels draws, so both places run one flow. The credentials form and the manual steps sit under a folded
+  **Already have a Lark app?** (no app) or **Advanced: use another Lark app** (an app bound); with credentials from `manager.json` there is no
+  create step. When the dialog also shows reading Lark as you (`larkcli`) and lark-cli follows the bot's app with none of its own,
+  that section says to create the app above first instead of offering an authorization that cannot work; once the scan is
+  confirmed, the authorization starts by itself and shows its own QR code, so setting up both is two scans on one page.
 - Pairing (an app whose credentials were typed in): tap **Pair** in the App to get a 6-digit code (valid for 10 minutes) and send it to the bot in Lark; whoever sends it becomes the owner (its open_id and the DM's chat_id are recorded).
   When not paired, DMing it returns instructions on how to pair; 5 wrong guesses void the code, and you have to get a new one. Changing the App ID means pairing again (it's a different bot).
 - Names: reading contacts needs `contact:user.base:readonly`; without that permission the owner is called by `assistant.owner` in the manager's `manager.json`, and others "someone".
