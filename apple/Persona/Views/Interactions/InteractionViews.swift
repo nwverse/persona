@@ -1033,10 +1033,13 @@ struct ScreenForm: View {
         if let chat = d.options.first(where: { $0.kind == .chat }) {
             Button { send(chat.key, answer(chat)) } label: {
                 Label("Reply in Chat Instead", systemImage: "bubble.left").lineLimit(1).minimumScaleFactor(0.8)
+                    .tapTargetOutset() // hit like a finger-sized row, laid out as a line (#5392)
             }
         }
         if stepping, d.review, holding == nil, let cancel = d.options.dropFirst().first {
-            Button { send(cancel.key, answer(cancel)) } label: { Text("Cancel").lineLimit(1).minimumScaleFactor(0.8) }
+            Button { send(cancel.key, answer(cancel)) } label: {
+                Text("Cancel").lineLimit(1).minimumScaleFactor(0.8).tapTargetOutset()
+            }
                 .accessibilityIdentifier("screen-review-cancel")
         }
     }
@@ -1045,6 +1048,7 @@ struct ScreenForm: View {
     private var viewTerminal: some View {
         Button { Haptics.tap(); showTerminal = true } label: {
             Label("View Terminal", systemImage: Theme.Icon.terminal).lineLimit(1).minimumScaleFactor(0.8)
+                .tapTargetOutset()
         }
         .accessibilityIdentifier("screen-card-terminal")
     }
@@ -2026,10 +2030,13 @@ struct BUIScreenForm: View {
         if let chat = d.options.first(where: { $0.kind == .chat }) {
             Button { send(chat.key, answer(chat)) } label: {
                 Label("Reply in Chat Instead", systemImage: "bubble.left").lineLimit(1).minimumScaleFactor(0.8)
+                    .tapTargetOutset() // hit like a finger-sized row, laid out as a line (#5392)
             }
         }
         if stepping, d.review, holding == nil, let cancel = d.options.dropFirst().first {
-            Button { send(cancel.key, answer(cancel)) } label: { Text("Cancel").lineLimit(1).minimumScaleFactor(0.8) }
+            Button { send(cancel.key, answer(cancel)) } label: {
+                Text("Cancel").lineLimit(1).minimumScaleFactor(0.8).tapTargetOutset()
+            }
                 .accessibilityIdentifier("screen-review-cancel")
         }
     }
@@ -2038,6 +2045,7 @@ struct BUIScreenForm: View {
     private var viewTerminal: some View {
         Button { Haptics.tap(); showTerminal = true } label: {
             Label("View Terminal", systemImage: Theme.Icon.terminal).lineLimit(1).minimumScaleFactor(0.8)
+                .tapTargetOutset()
         }
         .accessibilityIdentifier("screen-card-terminal")
     }

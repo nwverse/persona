@@ -176,6 +176,19 @@
         <item quantity="one">%1$d more idle</item>
         <item quantity="other">%1$d more idle</item>
     </plurals>
+    <!-- By Repository's idle line (iOS RepoIdleLine, #4338 A8): "2 idle · review · research", then "Hide 2 Idle" -->
+    <plurals name="designsystem_idle_count">
+        <item quantity="one">%1$d idle</item>
+        <item quantity="other">%1$d idle</item>
+    </plurals>
+    <plurals name="designsystem_idle_hide">
+        <item quantity="one">Hide %1$d Idle</item>
+        <item quantity="other">Hide %1$d Idle</item>
+    </plurals>
+    <plurals name="designsystem_idle_show">
+        <item quantity="one">Show %1$d idle agent</item>
+        <item quantity="other">Show %1$d idle agents</item>
+    </plurals>
     <string name="designsystem_folded">Collapsed</string>
     <!-- Attachments, brands -->
     <string name="designsystem_attachment_uploading">uploading</string>

@@ -289,10 +289,10 @@ describe("tap areas", () => {
   afterEach(() => vi.unstubAllGlobals());
   const hit = (html: string, label: string) => new RegExp(`<button[^>]*aria-label="${label}"[^>]*class="touch-hit `).test(html) || new RegExp(`<button[^>]*class="touch-hit [^"]*"[^>]*aria-label="${label}"`).test(html);
 
-  it("covers the composer's row: + @ / and send", () => {
+  it("covers the composer's row: + and send", () => {
     vi.stubGlobal("localStorage", { getItem: () => null });
     const html = renderToStaticMarkup(<Composer draftKey="t" placeholder="…" machineId="m" mention={{ self: "t", files: () => [] }} onSend={async () => true} />);
-    for (const label of ["添加图片或文件", "引用文件或会话", "命令", "发送"]) expect(hit(html, label), label).toBe(true);
+    for (const label of ["添加文件、图片等", "发送"]) expect(hit(html, label), label).toBe(true);
   });
 
   it("covers a card's hand back, a question's options and its arrows", () => {

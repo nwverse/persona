@@ -28,12 +28,6 @@
   "suggestion_use_hint": "填入输入框（Tab）",
   "suggestion_send": "直接发送",
   "message": "消息",
-  "add_image_or_file": "添加图片或文件",
-  "add_image": "添加图片",
-  "add_hint": "图片作为附件；其他文件传到会话所在的电脑",
-  "mention": "引用文件或会话",
-  "mention_hint": "引用文件或会话（@）",
-  "commands": "命令",
   "interrupt": "中断",
   "interrupt_hint": "中断（Esc）",
   "stopping": "正在中断…",
@@ -41,5 +35,9 @@
   "send_hint": "发送（Enter）· 换行（Shift+Enter）",
   "blocked_hint": "还没发出去：{label}。写的字会留在这里。",
   "expand": "展开输入框",
-  "collapse": "收起输入框"
+  "collapse": "收起输入框",
+  "more_actions": "更多操作",
+  "add_more": "添加文件、图片等",
+  "queue": "排队发送",
+  "queue_hint": "排队发送：等 Agent 做完再发（Enter）"
 }

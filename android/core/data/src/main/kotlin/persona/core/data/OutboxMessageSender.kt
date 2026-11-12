@@ -75,9 +75,13 @@ class OutboxMessageSender(
     /** Whether a session is at work (connectActivity): its turn may write a delivered message only when it ends. */
     @Volatile private var busy: (SessionKey) -> Boolean = { false }
 
+    override val writtenAt = store.entries.map { entries ->
+        entries.associate { it.clientMessageId to it.createdAt }
+    }.stateIn(scope, SharingStarted.Eagerly, emptyMap())
+
     override val outbox = store.entries.map { entries ->
         entries.filter { it.state !in hidden }.map {
-            OutboxMessage(it.clientMessageId, it.session, it.text, it.state.delivery, it.error, it.mainTarget)
+            OutboxMessage(it.clientMessageId, it.session, it.text, it.state.delivery, it.error, it.mainTarget, it.createdAt)
         }
     }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 

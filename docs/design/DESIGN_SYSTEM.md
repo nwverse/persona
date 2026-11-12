@@ -232,7 +232,7 @@ Outside the scale: composer 32 (`Shell.composerRadius`, `apple/Shared/Design/The
 
 `Theme.Size` (`apple/Shared/Design/Theme.swift:457-570`) always goes through `scaledFrame`.
 
-- Hit target: `tapTarget` 44 (`:507`), drawn through `tapTargetFrame()` (a square for a small control) or `tapTargetHeight()` (a row or a heading that is a button and draws less, as wide as it is; #3753). Same number under other names: `searchField`, `switchHeight`, `Watch.minRowHeight`, `Sidebar.row` (iOS), `voiceThreadRoom`. Android uses 48 as its platform floor (`Tokens.MinTouch`).
+- Hit target: `tapTarget` 44 (`:507`), drawn through `tapTargetFrame()` (a square for a small control) or `tapTargetHeight()` (a row or a heading that is a button and draws less, as wide as it is; #3753). A line of text that is a link in a row under a card, where a taller row would push the card's buttons under the composer, uses `tapTargetOutset()`: its touch area grows `Space.l` above and below, its layout does not (#5392). Same number under other names: `searchField`, `switchHeight`, `Watch.minRowHeight`, `Sidebar.row` (iOS), `voiceThreadRoom`. Android uses 48 as its platform floor (`Tokens.MinTouch`).
 - Dots 6-10, marks 12-18, icons 20-26, wells 28-38, avatars 40-48. Neighbors differ by 1 to 2 pt (DS-10).
 - Named by value: `box50` to `box380` (DS-10). Android's generated tokens carry only the sizes it draws with, under the same names (`spec/tokens/dimension.json`, checked against `Theme.Size`); the space page's cards added `hairline`, `line`, `dotL` and `box150`.
 - The Mac's pointer over its picture in the app's VNC: at least `pointer` 22 tall, about macOS's own size (`VNCPointerArt`, #3075).
@@ -333,10 +333,27 @@ For every component: use the design-system one, not a lookalike. Counts are appr
 - Accessibility: every control labelled; hold-to-talk has a hint and a tap action (`apple/Persona/DesignSystem/ComposerHoldMic.swift:105-110`). Reduce Motion read in the bar.
 - Source: `apple/Persona/DesignSystem/ShellComposerBar.swift:11`, `apple/Persona/DesignSystem/ComposerButtons.swift`.
 - Platforms: web composer (14 px radius, 28 px buttons, `web/src/views/chat/Composer.tsx:648`); Android `ComposerFrame` (radius 32 in Glass).
-- Web bottom row (#5032): `[+][@][/] [permission chip · source · folder] … [model pill][voice][stop/send]`. The model pill
-  sits in the composer's `trailing` slot, right before voice / Stop / Send, in an Agent chat and in a Persona chat
-  (#5033; the new-chat page too), where the permission chip is the only chip on the left. The card is the `composer`
-  container whose width sets the pill's modes ("Model pill and unified model panel" in 3.8).
+- Web bottom row (#5324, cindy's toolbar at the owner's request; cindy wins over this section's earlier rules for it):
+  `[+][permission picker] … [model pill][Stop][voice][send / queue / stop]`. The + and the picker are bare 30 px round
+  controls that show the model pill's frame (`line-strong` border, `hover` fill) on hover or while open; the action is one
+  dark 28 px circle (`ink` fill, `surface` icon, 40% when it can't be pressed): a filled plane for Send (**Queue message**
+  while the Agent works or needs you), a 10 px square for Stop (never red), round voice in an idle empty box, the main
+  conversation's not-ready button as a pill in the same fill. With something typed while the Agent works, a second Stop
+  sits left of voice. No @ or / button: typing them opens their menus. The model pill is the `trailing` slot and the
+  picker the `leading` one, in an Agent chat and in a Persona chat (#5033; the new-chat page has no picker). The card is the
+  `composer` container whose width sets the pill's and the picker's modes ("Model pill and unified model panel" in 3.8).
+- Web + / @ panel (#5324, `ComposerPanel.tsx`): one panel for both entries, 480 px and never wider than the composer
+  (full width on phones), 12 px corners, `line` border, raised shadow, at most 400 px tall. From the + it covers the box
+  from its bottom left with a pill search box on top; from a typed @ it sits above the box. Rows: a 24 px **Add** header
+  (12 px medium, `ink-3`), action rows (14 px icon and words, a check on a checked one), 44 px resource rows (16 px
+  icon, 14 px name that truncates, 12 px `ink-3` meta at the right, up to 240 px); the slash menu's glide fill marks the
+  active row. Empty: three 44 px pulsing rows while reading, "No matching items" for a query with nothing.
+- Web permission picker (#5324, `PermissionPicker.tsx`): the mode's symbol (14 px), its name (13 px, truncates) and a
+  chevron; Full access tints the words `red`, Auto-review `mode-acts`; under a 300 px composer (a 320 px phone) only
+  the symbol. Its menu is the shared `Menu` (300 px) with each mode's symbol, name and check; descriptions are tooltips
+  (`MenuItem.tip`), except a disabled row's reason and a row asking again, which stay under the name.
+- Web under the box (#5324): the source and folder line at the left (12 px `ink-3`, a folder mark, truncating, full
+  values on hover; an ⓘ menu at phone width), the context meter at the right.
 - Web `/` palette (#5325, `web/src/views/chat/SlashPalette.tsx`; cindy's slash command palette, followed at the owner's
   request, 2026-11-12): a 320 px panel anchored at the composer's left edge above it (`rounded-xl`, `bg-surface`,
   `shadow-overlay`, 6 px padding, at most 400 px or half the visible height, scrolling), 36 px rows (44 on touch) with
@@ -360,6 +377,37 @@ For every component: use the design-system one, not a lookalike. Counts are appr
   with a chevron under a `line` divider. On a phone on its side the queue is one "N queued" line beside the run's status
   that opens the same rows. Spec: `docs/web/web.md` ("Queued messages").
 - Duplicates: four composer implementations exist (DS-19).
+
+**Run status bar** (web, #5312; the owner asked on 2026-11-12 that it follow cindy's `RunningStatusBar` and
+`RunningTokenRatePopover`, and cindy wins over what this document said before; `web/src/views/chat/RunningStatusBar.tsx`,
+`docs/web/web.md` "Live status and streaming"). One row above the composer while a turn runs, 13 px medium, 8 px side and
+6 px vertical padding, its two sides 12 px apart:
+- Left: a 14 px mark and a short state in `--status-accent`, truncating. The sparkle (layers while compacting, activity for
+  background subtasks, a 2.5-stroke check for **Done**). An Agent session says what the turn does in cindy's words
+  ("Thinking…", "Generating…", "Editing files…", "Searching the web…", "Spawning a subagent…", "Bash running…",
+  "Compacting context…", "Working…"); a Persona conversation says it in cindy's plain phases ("Thinking…", "Replying…",
+  "Reading files…", "Updating files…", "Searching files…", "Searching the web…", "Reading web pages…", "Organizing the
+  conversation…", "Working…") and never names a tool (super rules 0 and 4, section 5.6).
+- Right, in `--ink-3`, tabular figures: the time in the work summary's format (`0s`, `1m 0s`, `1m 5s`, `1h 0m`; section 4.7),
+  then in an Agent session either `· 42 tok/s` or `· ↓ 1.2k tok` (a 13 px arrow mark), never both, and no speed or tokens
+  before there is a measurement (principle 5). The time and speed together are a 24 px round button with `hover:bg-hover`
+  (a 44 px touch target, `touch-hit`).
+- Speed card: 320 px wide (the screen less 16 px each side), 8 px above the button and right-aligned with it, a `rounded-xl`
+  `bg-surface` card with the hairline border and `shadow-overlay`, 16 × 12 px padding. "Latest speed" (12 px `--ink-2`, the
+  activity mark), the number 28 px medium with "tok/s" 12 px `--ink-2`; beside it a 128 × 48 sparkline in `--ink` (a 12 %
+  baseline, an 8 % area, a 1.5 px line and a 2.5 px dot at the latest sample); below, three 12 px columns, label in
+  `--ink-2` over a medium value: Turn average, Output, Peak ("—" until measured). Hover shows it after 500 ms as a
+  tooltip; a click pins it with a 24 px round ✕ in its top right corner (44 px to a finger); ✕, Esc and a second click
+  close it, a click outside does not. While pointed at, focused or pinned the button stays when the speed goes. It opens
+  with the cards' `pop-in` and goes with their fade.
+- Done: when the turn finished (not waiting on you, stopped or cut off by an error, which keep their last words), the
+  linger second shows the check and **Done** with a 0.4 s pop (scale 0.85 → 1.08 → 1, transform only, none with
+  reduced motion); then both sides fade out over 0.4 s, except a pinned card's button. The row breathes once (opacity to
+  0.45 and back over 1.5 s) when its words or count move.
+- Kept from Persona where cindy differs: the background workflow line ("Background workflow · Verify · 169/185+", timed
+  from the run's start, the workflow mark in `--ai`), the still waiting line (#6045) and **Disconnected ·** in front of the
+  last state. Left out: cindy's **Stop all** for background subtasks (#5044) and its host-measured speed (Persona measures
+  from the status line's count instead, `web/src/lib/token-rate.ts`). New mark: `activity` (Lucide's activity, as cindy's).
 
 ### 3.2 Message bubbles
 
@@ -488,10 +536,10 @@ The Agents list, the Inbox's Agent section, the Assistant home and history show 
 - Leading: one source mark, the Agent's brand or a contact's avatar. The row's one state sits on its corner, chosen by the order in section 5.6. iOS (`AgentAvatar`) and Android's Glass row put the mark in a round well with the state's dot on its corner, rimmed apart from the well.
 - Line 1: the session's title, with the time on the right, localized ("6 min ago").
 - Line 2: when the session needs the user, what it waits for (the plan's title, the command, or the question itself); otherwise its latest line, in the secondary color. For a failed run, what failed, in red.
-- Line 3, optional: computer · project, leaving out what the grouping already shows, then the model's short name. iOS's Avatar row and Android's Glass row (#4338 A9) draw it as the source tag, the tab (space › tab outside the tree), the computer only while the list mixes computers, the model, the to-do as an outlined chip and the muted mark; Android's words come from `rowContent` in core/domain.
+- Line 3, optional: computer · project, leaving out what the grouping already shows, then the model's short name. iOS's Avatar row and Android's Glass row (#4338 A9) draw it as the source tag, the tab (space › tab outside the tree), the computer only while the list mixes computers, the model, the to-do as an outlined chip and the muted mark; Android's words come from `rowContent` in core/domain, its model's short name from `modelShortName` (the web's `modelChipLabel`; iOS's row still shows the raw string).
 - Never in a row: raw model IDs, session IDs or engine badges. At most one count badge.
 - Answers in the row: a question's choices, and a tool approval whose full command is shown and whose action is low-risk (Deny, Allow Once). Plans, high-risk actions and Always Allow for This Session open the session, where the context is.
-- Views grouped by location draw these rows too (#3753): By Repository's computer, repository and worktree are lines of their own, each worktree's sessions in these rows under its line. The Mac's By Repository cards (frozen) keep their rows (`WorkspaceAgentRow`). On iOS and on Android's Glass style each repository is a card: its header has the folder, the bold name and the chevron, no counts, with its actions in its long press (`RepoCardHeader`, Android `AgentRepoHeader`); a worktree's line has its mark, its name, a Primary chip on the main checkout, the branch when the name is not it or Detached HEAD as a caution, "N agents" or Idle at the end, dimmed while its computer is offline (`RepoWorktreeLine`, Android `AgentWorktreeLine`, #4338 A7).
+- Views grouped by location draw these rows too (#3753): By Repository's computer, repository and worktree are lines of their own, each worktree's sessions in these rows under its line. The Mac's By Repository cards (frozen) keep their rows (`WorkspaceAgentRow`). On iOS and on Android's Glass style each repository is a card: its header has the folder, the bold name and the chevron, no counts, with its actions in its long press (`RepoCardHeader`, Android `AgentRepoHeader`); a worktree's line has its mark, its name, a Primary chip on the main checkout, the branch when the name is not it or Detached HEAD as a caution, "N agents" or Idle at the end, dimmed while its computer is offline (`RepoWorktreeLine`, Android `AgentWorktreeLine`, #4338 A7). A computer's repositories with nothing going on follow its busy ones under Idle Repositories with their count, one card with a row each: the folder, the name, "N agents · tab names", when it last moved and a chevron, a tap opening its agents under it (`QuietSpaceRow`, Android `AgentIdleRepoRow`). A busy worktree's idle agents fold behind one line, "2 idle · review · research", and once opened "Hide N Idle" after them folds them again (`RepoIdleLine`, Android `AgentRepoIdleLine`, #4338 A8).
 
 #### List controls
 
@@ -601,7 +649,9 @@ and the pointer tooltip. Going into Allow Everything asks first; so does leaving
 read nor changed shows none. The folded bar shows no marks on its right, so its capsule stays centered. Why a new
 pattern: Claude Code keeps the mode in its footer at all times; the composer's chips (`ModeChip`) are a level down on
 the phone. Android (#3957) and the web (#3956) do the same; their headers are one row, so the button sits left of `⋯`, at
-every width on the web, and neither has a folded bar.
+every width on the web, and neither has a folded bar. On the web the header draws the composer picker's symbol for each
+mode (#5324, cindy's: a raised hand, code, a list, sparkles, a warning triangle; `pickerIcon`), one symbol per mode
+across the web; iOS and Android keep theirs until they follow (#5378).
 
 Conversations an extension opened (#3758, `origin` `lark_agent` or `extension`) carry a source mark beside their title wherever they are a row, in the slot and size of the channel mark (iOS `ConversationSourceMark` / `ExternalSourceMark` in `ConversationChannelMark`'s place, web `OriginMark` in `ChannelMark`'s; Android has not caught up yet, #4203): Lark's `BrandMark` for Lark /agent, the extensions symbol in the secondary color for any other extension. A row has one source mark: the origin's replaces the channel's. No text tag: the row's accessible name carries "From Lark /agent" / "From an extension" instead. The message that opened the conversation gets the "From …" line channel messages already have (iOS `ExternalSourceLine` beside `ChannelSourceLine`, web the channel line in `SegmentView`), on that first message only and only once the page has loaded back to it; the chat's header stays as it is. Why not a new badge or a pinned line: the owner chose the existing channel patterns so the same place says the same thing for a channel's message and an extension's conversation.
 
@@ -926,6 +976,31 @@ for VoiceOver, as section 4.8.1 keeps red for what is still wrong; one that time
 page cut, the result shows the output's end (End of output), where a build or test run says why it failed, before View
 full text. Without an outcome (an older node) a row draws as before.
 
+### 4.7.1 Opening and closing in a chat keeps the tapped row in place
+
+Anything that opens or closes inside a chat, in Persona's conversations and Agent chats alike (work lines, tool steps,
+thoughts, notes, task cards, long quotes, a report's Expand, and so on), keeps what was tapped where it was on screen,
+so the conversation reads on without a jump (#3757). The reference point is the tapped row's top edge, or the tapped
+control when it sits lower in the row.
+
+- **In the middle of a conversation**: the tapped row stays at the same screen position, within a point or two, from
+  the tap until everything it opens has arrived, including steps fetched from the hub a moment later. What opens grows
+  downward under it; what closes takes its space with it at once.
+- **At the newest end, following**: the list stays at the newest end and what opens grows upward, the tapped row rising
+  with it, until the row's top reaches just under the top bar. There the list stops following and ↓ shows, so the opened
+  row is never pushed off the screen. Closing there brings the newest end back: the row comes down by what closed,
+  gliding, not in one frame.
+- **At the oldest end**: what opens grows downward and nothing moves above it.
+- **Afterwards**: the list holds still while the conversation goes on (new steps, the answer, the next turn, a strip
+  appearing under the list), until the user scrolls, taps ↓ or sends (section 4.7). A row opened at the newest end
+  takes what comes in next the same way it took what opened: it rises until it is under the top bar, then stays.
+- **One mechanism**: rows report their top (`chatPinned`, `WorkHeadReport`) and change through `toggleInPlace` or
+  `toggleWork`; `ChatPin` keeps the tapped row in place, waiting for what comes from the hub (`ChatPin.awaiting`), and
+  `ChatFollow.toggledRow` decides how it is held. A new expander uses these; it never animates its own height or
+  scrolls the list itself.
+- **Tested** by `KeepTappedRowTests`: in the middle, at the newest end and at the oldest end, one open and one close
+  each, in both chats, asserting the tapped row's screen position frame by frame.
+
 ### 4.8 Pending requests
 
 Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and waiting for a reply.
@@ -1106,11 +1181,12 @@ your permission" (section 5, "Notifications"); moving them to the card's words i
 - Text uses `Theme.Font` levels only. Shapes use `scaledFrame`.
 - Rows with name plus chips stack at accessibility sizes (`NameWithChips`). Use `firstFittingText` when several candidate labels exist.
 - Caps are allowed for glyphs in fixed-size buttons and for top bars that must fit a small iPhone. They must be named, and the control must keep a 44 pt hit area.
+- A bar of fixed items (the message long-press bar, `MessageActionBar`) keeps its items at the default text size (`barTypeSize`), as the system's tab bars and toolbars do, so every word that fits there fits up to the accessibility sizes; each item has the Large Content Viewer (`accessibilityShowsLargeContentViewer`), so a long press shows its name large. Its words are short enough for their items at that size in every language (rule 3 (a) in section 1.2; Japanese 「文字選択」 for Select Text). At the accessibility sizes the actions become a list, one a row with its icon and whole name, growing up to `listTypeSize` (xxxLarge), and the lifted message is placed by the list's measured size (rule 3 (c)); never "…", never an icon left alone (#5019).
 - Never shrink to hide truncation of body text. For button labels `minimumScaleFactor` is a last resort only; follow rule 3 in section 1.2 (shorten the copy, reconsider the control, stack the group at accessibility sizes).
 
 ### 6.3 Accessibility baseline (the contract every component meets)
 
-1. Hit area at least 44 x 44 pt (Android 48 dp), including icon buttons whose visual is smaller. Use `tapTargetFrame`, or `tapTargetHeight` for a row or a heading that is a button. This is Persona's rule and is stricter than Apple's: the HIG gives 44 x 44 pt as the iOS default and 28 x 28 pt as the absolute minimum. Persona uses the default as its floor.
+1. Hit area at least 44 x 44 pt (Android 48 dp), including icon buttons whose visual is smaller. Use `tapTargetFrame`, or `tapTargetHeight` for a row or a heading that is a button, or `tapTargetOutset` for a text link that must keep a line's height. This is Persona's rule and is stricter than Apple's: the HIG gives 44 x 44 pt as the iOS default and 28 x 28 pt as the absolute minimum. Persona uses the default as its floor.
 2. Every control has a spoken label; icon-only buttons never rely on the symbol name. Decorative marks are hidden when adjacent text says the same.
 3. Selected, expanded and busy state is exposed with traits or values, not only color or shape.
 4. State never rides on color alone: pair with text or a symbol.
@@ -1217,6 +1293,7 @@ done, not applicable, or deviated (with the reason). It is short on purpose. The
 - [ ] Hit areas at least 44 x 44 pt (Android 48 dp); every control has a spoken label; gesture-only actions also have a visible control or an accessibility action (section 6.3).
 - [ ] Destructive actions: confirmed if irreversible, offer Undo if reversible (section 4.4).
 - [ ] Motion respects Reduce Motion; new loops are listed in `apple/PersonaTests/ContinuousMotionTests.swift` (sections 2.7, 6.3).
+- [ ] Anything that opens or closes in a chat keeps the tapped row where it was, at the newest end and the oldest too (section 4.7.1).
 - [ ] New copy follows section 5 and ships in `en`, `zh-Hans` and `ja`.
 - [ ] Screenshots of each changed screen in light and dark, at the default and at the largest accessibility text size, are attached or linked (iOS, plus watch, Android and web when touched).
 - [ ] No new problem of a kind listed in `docs/design/HIG_AUDIT.md`. A PR that fixes a listed finding names its ID.
@@ -1241,6 +1318,15 @@ Advanced (principle 2). Reason: a default the product can work out should not wa
 1), and an automatic value the user cannot tell from their own, or one that changes after they set it, would take
 control away from them (principle 3). This reuses the wizard's field, pill and status-line styles and adds no setting,
 style or motion.
+
+A value the product measures rather than reads follows the same rule with a line instead of a pill: the wizard's sign-in
+method (#5329). On **Automatic**, the default under **More options**, the Connect step's own check finds whether the
+gateway takes Bearer or x-api-key, and one quiet line in the check box names it (`--ink-2`, no icon, after the test
+result and before the model count), with **Change** (the status line's action) opening More options and focusing the
+choice; the `Segmented` there offers Automatic, Bearer and x-api-key. A saved provider's line names its stored method the
+same way. Before the check has found anything the line is absent rather than a guess. Reason: a question with a right
+answer the product can measure should not be asked (principle 1), and the line keeps the answer visible and one tap from
+changing (principle 3).
 
 ## Codex speed controls (#3865)
 
@@ -1367,8 +1453,8 @@ page the user watches during the meeting is the page they keep writing in after 
 - **Photos and haptics**: adding a photo (camera or library) and deleting one play no haptic: the new row, its state
   words and the confirmation are the feedback, and the microphone is open (the Haptics line below keeps them to send,
   Pause and Bookmark).
-- **A cited photo in the minutes** (the recording page's minutes, `RecordingMinutesSections`; iPhone only, visionOS
-  shows the item alone): an item that cites a photo (`"photo": 3`) shows that photo's thumbnail under its words, the
+- **A cited photo in the minutes** (the recording page's minutes: on iPhone the Summary's cards, `RecordingMinutesSummary`
+  ("Minutes cards (#5026)" below), else `RecordingMinutesSections`; iPhone only, visionOS shows the item alone): an item that cites a photo (`"photo": 3`) shows that photo's thumbnail under its words, the
   same thumbnail as the thread's, a tap opens the viewer; **Photo removed** in caption secondary once the hub's list
   was read and no longer has it (a trimmed recording's deleted photo); the thumbnail's place while the list isn't read
   yet (offline), which is not a delete. Copy and Share end such an item with "(photo 3)", as the hub's Markdown does.
@@ -1482,6 +1568,55 @@ effort fields are gone. What the panel gained for it, each part optional and abs
 Reason: one place to choose a model for chats and new Agents (principle 4), the engine visible without a field of its
 own (principle 2), the default as one row that can always be gone back to (principles 1 and 3). The deviations from
 Cindy are listed in `docs/web/web.md` "New Agent's model choice (#5104)"; iOS and Android follow in #5117.
+
+## Minutes cards (#5026)
+
+A recording's page on iPhone, once its minutes are ready (`docs/apple/recording.md`, "Minutes"): a segmented
+**Summary | Transcript** switch right under the page's header, Summary by default, the choice kept while the page is open
+(no setting). Before the minutes are ready the page has no switch and is as it was. Reason: a meeting's page is opened for
+what was decided, and the transcript stays one tap away (principle 2) instead of being scrolled through line by line.
+
+- **Summary** (`RecordingMinutesSummary`, `apple/Persona/Recording/RecordingMinutesSummary.swift`): cards that are
+  sections of the page's inset grouped List, one row each with `Theme.Space.l` insets, so they have the page's other
+  sections' background and corners in every style. Not `.surface` cards: a surface's shadow drawn in a List row is cut
+  off square by the row's edges. First a header card (the minutes' title
+  when it differs from the recording's, in `Theme.Font.heading`; when · where and the attendees as secondary lines with
+  `ThemedIcon`), then one card per group with something in it: Key Points (`Theme.Icon.keyPoint`), Decisions
+  (`Theme.Icon.decision`), Open Questions (`Theme.Icon.openQuestion`), Action Items (`Theme.Icon.todo`). A card's header
+  is its icon in the accent, its title in `Theme.Font.heading` and its count as a neutral `Chip`, read as one heading. Its
+  items follow with a hairline between them: the words in `Theme.Font.body`, for an action "who · by" in
+  `Theme.Font.caption`, secondary.
+- **A cited photo** (#3862 phase 3): an item that cites a meeting photo shows it under its words as in the minutes'
+  sections ("A cited photo in the minutes" above): the same `MinutesPhoto` thumbnail, a tap opens the viewer, **Photo
+  removed** once the hub's list no longer has it. Copy and Share keep "(photo 3)".
+- **To-dos and Regenerate** (#4062): each item of the Action Items card has **Add to To-Dos** (a `.themedButton`, one
+  line) or the positive **Added** chip under its words; the card ends on **Add All** while more than one is left. The
+  header card carries what is happening to the minutes (`RecordingMinutesUpdates`): "Updating the minutes…" with a
+  spinner, a failed rewrite in `Theme.danger`, an expired transcript, and **Regenerate** as a `.themedButton` (in a card
+  every control is its own button, never a row that takes the tap).
+- **An item's time** is the compact accent `Chip` (`RecordingFormat.clock`) inside a 44 pt hit area: a tap switches to
+  Transcript, scrolls to that line and lights it (the page's existing jump), read as "Show at m:ss in the transcript".
+- **An item's disclosure**, the chevron beside the time (`Theme.Icon.expand` / `collapse`, 44 pt), opens the transcript
+  lines around its time in place, on an inset well (`Theme.Fill.well`, `Theme.Radius.control`) as the meeting thread's
+  opened lines: the line `RecordingMinutes.sentenceIndex` picks in the primary color and the stronger weight, with
+  `Theme.Recording.contextBefore` (1) line before it and `Theme.Recording.contextAfter` (2) after it in the secondary color.
+  They fade in on `Theme.Motion.reveal` and out on `Theme.Motion.conceal`, at once with Reduce Motion. VoiceOver hears
+  "Transcript around m:ss" with Expanded / Collapsed.
+- At the accessibility sizes an item's time and disclosure go under its words, and an opened line's time goes above it.
+- **Transcript** is the transcript as it was; the minutes' sections are not repeated above it. The minutes' **Copy** and
+  **Share** sit under the switch on the page's canvas, the same in both views; at the accessibility sizes they stack, so
+  neither is cut to "…".
+- What the Summary shows (which cards, their items, an item's lines, the default view) is `RecordingMinutesCards`
+  (`apple/Shared/Recording/RecordingMinutes.swift`), worked out when the minutes or the transcript change, never in `body`.
+- Identifiers: `recording-view-switch` (the switch; its segments `recording-view-summary` / `recording-view-transcript`
+  where the system carries them, else by position), `minutes-card-header`, `minutes-card-points`,
+  `minutes-card-decisions`, `minutes-card-open`, `minutes-card-actions`, `minutes-time`, `minutes-item-context` (the
+  disclosure), `minutes-item-lines` (the opened lines); `minutes-copy`, `minutes-share`, `minutes-when`, `minutes-photo`,
+  `minutes-photo-removed`, `minutes-add`, `minutes-added`, `minutes-add-all`, `minutes-updating`, `minutes-regenerate`,
+  `recording-sentence` and `recording-sentence-lit` keep their names. UI tests: `MinutesCardsUITests` (light and dark,
+  the default and the largest text size, a cited photo) and `MeetingRecordingUITests` (to-dos, Regenerate, the date
+  style).
+- Platforms: visionOS keeps the minutes' sections above the transcript; the web and Android have no Summary yet.
 
 ## Starting from what you already have (#5193)
 
