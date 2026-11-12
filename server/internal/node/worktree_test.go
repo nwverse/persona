@@ -753,6 +753,62 @@ func TestSpaceHoldingPaneCandidates(t *testing.T) {
 	if got, err := spaceHolding(t.Context(), h, child); err != nil || got != "w3" {
 		t.Fatalf("metadata: %q, %v", got, err)
 	}
+	if got, err := spaceHolding(t.Context(), h, w.repo); err != nil || got != "w3" {
+		t.Fatalf("a parent workspace holds its repository: %q, %v", got, err)
+	}
+	w.f.reply("workspace.list", map[string]any{"workspaces": []any{map[string]any{"workspace_id": "w3", "worktree": map[string]any{"repo_root": w.repo, "checkout_path": child, "is_linked_worktree": true}}}})
+	if got, err := spaceHolding(t.Context(), h, w.repo); got != "" || !errors.Is(err, errNoHoldingSpace) {
+		t.Fatalf("a linked checkout must not hold its main repository: %q, %v", got, err)
+	}
+	if got, err := spaceHolding(t.Context(), h, child); err != nil || got != "w3" {
+		t.Fatalf("a linked workspace still holds its own checkout: %q, %v", got, err)
+	}
+}
+
+func TestWorktreeWithOnlyLinkedWorkspaceUsesGit(t *testing.T) {
+	for _, automatic := range []bool{false, true} {
+		t.Run(map[bool]string{false: "explicit", true: "automatic"}[automatic], func(t *testing.T) {
+			w := worktreeNode(t)
+			linked := filepath.Join(w.home, "linked")
+			runPullGit(t, w.repo, "worktree", "add", "-b", "feature/linked", linked)
+			w.f.reply("workspace.list", map[string]any{"workspaces": []any{
+				map[string]any{"workspace_id": "w2", "worktree": map[string]any{
+					"repo_root": w.repo, "checkout_path": linked, "is_linked_worktree": true,
+				}},
+			}})
+			w.f.reply("pane.list", map[string]any{"panes": []any{
+				map[string]any{"workspace_id": "w2", "pane_id": "w2:p1", "cwd": linked},
+			}})
+			// herdr refuses a linked workspace as the source even when its repo_root matches.
+			w.f.reply("worktree.create", herdrFail{Code: "linked_worktree_source", Message: "start from the repo parent workspace"})
+			w.f.reset()
+			prep, err := request(t, w.n, "worktree.prepare", map[string]any{"cwd": w.repo})
+			if err != nil || prep["root"] != resolved(t, w.repo) {
+				t.Fatalf("prepare the main repository: %v, %v", prep, err)
+			}
+			args := map[string]any{"cwd": w.repo, "branch": "feature/requested", "path": filepath.Join(w.home, "requested-checkout")}
+			if automatic {
+				args = map[string]any{"cwd": w.repo, "auto_name": true}
+			}
+			res, err := request(t, w.n, "worktree.create", args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := str(res["path"])
+			if got, want := runPullGit(t, path, "rev-parse", "HEAD"), runPullGit(t, w.repo, "rev-parse", "HEAD"); got != want {
+				t.Fatalf("created HEAD %q, want %q", got, want)
+			}
+			if b, err := os.ReadFile(filepath.Join(path, "app.txt")); err != nil || string(b) != "one\n" {
+				t.Fatalf("main repository contents: %q, %v", b, err)
+			}
+			if len(w.f.trace("worktree.create")) != 0 || len(w.f.trace("workspace.create")) != 1 {
+				t.Fatal("a main repository with only a linked workspace must use Git and open a plain workspace")
+			}
+			if branchOf(t, w.repo) != "main" || branchOf(t, linked) != "feature/linked" {
+				t.Fatal("changed a source checkout")
+			}
+		})
+	}
 }
 
 func TestSpaceHoldingNamedSessionDirectories(t *testing.T) {

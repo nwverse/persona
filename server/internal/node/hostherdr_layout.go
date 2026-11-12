@@ -239,8 +239,10 @@ func (h *herdrHost) directorySpaces(ctx context.Context) ([]spaceDirectory, erro
 			}
 			if w.Worktree != nil {
 				add(w.Worktree.CheckoutPath)
-				add(w.Worktree.RepoRoot)
-				if w.Worktree.CheckoutPath != "" || w.Worktree.RepoRoot != "" {
+				if !w.Worktree.IsLinkedWorktree {
+					add(w.Worktree.RepoRoot)
+				}
+				if w.Worktree.IsLinkedWorktree || w.Worktree.CheckoutPath != "" || w.Worktree.RepoRoot != "" {
 					continue
 				}
 			}

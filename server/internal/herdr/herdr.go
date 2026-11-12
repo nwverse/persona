@@ -506,8 +506,9 @@ type Workspace struct {
 	Branch   string `json:"branch,omitempty"`
 	Focused  bool   `json:"focused,omitempty"`
 	Worktree *struct {
-		RepoRoot     string `json:"repo_root"`
-		CheckoutPath string `json:"checkout_path"`
+		RepoRoot         string `json:"repo_root"`
+		CheckoutPath     string `json:"checkout_path"`
+		IsLinkedWorktree bool   `json:"is_linked_worktree"`
 	} `json:"worktree,omitempty"`
 }
 
