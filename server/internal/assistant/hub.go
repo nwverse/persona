@@ -176,6 +176,8 @@ const (
 	AppPlugins               = assistantwire.AppPlugins
 	PluginsAssistant         = assistantwire.PluginsAssistant
 	PluginsSkillsNeed        = assistantwire.PluginsSkillsNeed
+	PluginsProjectContext    = assistantwire.PluginsProjectContext
+	PluginsInboxContext      = assistantwire.PluginsInboxContext
 	SettingsList             = assistantwire.SettingsList
 	AppConnectors            = assistantwire.AppConnectors
 	ConnectorsSnapshots      = assistantwire.ConnectorsSnapshots

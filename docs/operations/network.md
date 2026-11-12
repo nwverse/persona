@@ -450,6 +450,7 @@ TUN proxy automatic routes may send public-connection responses into the proxy, 
 | `403 master_token_local_only` | Use temporary pairing or device tokens publicly |
 | `429 rate_limited` | Wait `Retry-After`, stop repeated reconnects with invalid tokens |
 | Public-key mismatch | Changed key, wrong hub, TLS-terminating proxy; re-pair through a trusted channel, never skip pinning |
+| Public-key mismatch only away from home | A LAN address the hub advertised (`public_url` or `advertise_lan`) is another device on that network. Android treats such a private address as unreachable and keeps trying the others; to stop handing it out, set `public_url` to a name and `public.advertise_lan` to `false` |
 | `hub pair` cannot connect locally | Hub running, HTTP supports IPv4 loopback, command configuration matches running instance |
 | TLS inaccessible after enabling `security.proxy_protocol` | `proxy protocol: refused …` logs: upstream not sending headers, or direct bypass ([PROXY protocol](#proxy-protocol)) |
 

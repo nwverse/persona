@@ -39,6 +39,32 @@ type AssistantDataItem struct {
 	NextAdoptAt string `json:"next_adopt_at,omitempty"`
 	// Skills are the data skills sent (kind skills).
 	Skills []string `json:"skills,omitempty"`
+	// Files are the projects with a file (kind project_context, by slug); Truncated says some content is used cut at
+	// its limit (Detail names which); NeverQuote is how many sentences drafts are checked against (inbox_context).
+	Files      []string `json:"files,omitempty"`
+	Truncated  bool     `json:"truncated,omitempty"`
+	NeverQuote int      `json:"never_quote,omitempty"`
+}
+
+// ProjectContextParams are plugins.project_context's: the projects' slugs.
+type ProjectContextParams struct {
+	Projects []string `json:"projects"`
+}
+
+// ExtensionContextBlock is one extension's text for a prompt the manager builds: Name is the extension's name,
+// Project the project's slug (project context only).
+type ExtensionContextBlock struct {
+	Extension string `json:"extension"`
+	Name      string `json:"name"`
+	Project   string `json:"project,omitempty"`
+	Text      string `json:"text"`
+}
+
+// ExtensionContextResult is plugins.project_context's and plugins.inbox_context's answer; NeverQuote (Inbox only) are
+// the sentences a draft must not repeat word for word, never put in a prompt.
+type ExtensionContextResult struct {
+	Blocks     []ExtensionContextBlock `json:"blocks"`
+	NeverQuote []string                `json:"never_quote,omitempty"`
 }
 
 // FormatDataTime is a time as AssistantDataItem has it: RFC 3339 in UTC.

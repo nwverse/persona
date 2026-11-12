@@ -29,6 +29,12 @@ type SkillItem struct {
 const (
 	PromptInstructions = "instructions" // a .md of the package (or of the data directory) added to the assistant's CLAUDE.md
 	PromptQuick        = "quick"        // a template the apps offer in the message box
+	// PromptProjectContext: a directory of the data directory with "<project slug>.md" files, each added to the
+	// project background a new Agent in that project gets.
+	PromptProjectContext = "project_context"
+	// PromptInboxContext: a .md of the data directory added to the Inbox's triage and draft prompts, with an optional
+	// never_quote file of sentences a draft must not repeat word for word.
+	PromptInboxContext = "inbox_context"
 )
 
 // Where a skill's or a prompt's files are: the package (SourcePackage, also when left out) or the extension's data
@@ -40,16 +46,21 @@ const (
 
 // PromptItem is a contribution to prompts.
 type PromptItem struct {
-	ID     string `json:"id"`
-	Kind   string `json:"kind"`
-	Source string `json:"source,omitempty"` // instructions: package (default) or data
-	File   string `json:"file,omitempty"`   // instructions
-	Title  string `json:"title,omitempty"`  // quick
-	Text   string `json:"text,omitempty"`   // quick
+	ID         string `json:"id"`
+	Kind       string `json:"kind"`
+	Source     string `json:"source,omitempty"`      // instructions: package (default) or data; project_context, inbox_context: data
+	File       string `json:"file,omitempty"`        // instructions, inbox_context
+	Dir        string `json:"dir,omitempty"`         // project_context
+	NeverQuote string `json:"never_quote,omitempty"` // inbox_context
+	Title      string `json:"title,omitempty"`       // quick
+	Text       string `json:"text,omitempty"`        // quick
 }
 
-// FromData says whether the files are in the extension's data directory rather than its package.
-func (p PromptItem) FromData() bool { return p.Source == SourceData }
+// FromData says whether the files are in the extension's data directory rather than its package: project and Inbox
+// context always are.
+func (p PromptItem) FromData() bool {
+	return p.Source == SourceData || p.Kind == PromptProjectContext || p.Kind == PromptInboxContext
+}
 
 // FromData says whether the skills are in the extension's data directory rather than its package.
 func (s SkillItem) FromData() bool { return s.Source == SourceData }
@@ -114,10 +125,32 @@ func init() {
 		if err := checkSource(p.Source); err != nil {
 			return p.ID, fmt.Errorf("prompt %s: %v", p.ID, err)
 		}
+		if p.Kind != PromptProjectContext && p.Dir != "" || p.Kind != PromptInboxContext && p.NeverQuote != "" {
+			return p.ID, fmt.Errorf("prompt %s: dir is for project_context, never_quote for inbox_context", p.ID)
+		}
 		switch p.Kind {
 		case PromptInstructions:
 			if err := checkPackagePath(p.File); err != nil || !strings.HasSuffix(p.File, ".md") || p.Title != "" || p.Text != "" {
 				return p.ID, fmt.Errorf("prompt %s: instructions is a .md file inside the package or the data directory (file), nothing else", p.ID)
+			}
+		case PromptProjectContext:
+			if p.Source == SourcePackage {
+				return p.ID, fmt.Errorf("prompt %s: project_context is in the data directory (source data)", p.ID)
+			}
+			if err := checkPackagePath(p.Dir); err != nil || p.File != "" || p.Title != "" || p.Text != "" {
+				return p.ID, fmt.Errorf("prompt %s: project_context is a directory of the data directory (dir), nothing else", p.ID)
+			}
+		case PromptInboxContext:
+			if p.Source == SourcePackage {
+				return p.ID, fmt.Errorf("prompt %s: inbox_context is in the data directory (source data)", p.ID)
+			}
+			if err := checkPackagePath(p.File); err != nil || !strings.HasSuffix(p.File, ".md") || p.Title != "" || p.Text != "" {
+				return p.ID, fmt.Errorf("prompt %s: inbox_context is a .md file of the data directory (file)", p.ID)
+			}
+			if p.NeverQuote != "" {
+				if err := checkPackagePath(p.NeverQuote); err != nil {
+					return p.ID, fmt.Errorf("prompt %s: never_quote: %v", p.ID, err)
+				}
 			}
 		case PromptQuick:
 			if p.Source != "" {
@@ -130,7 +163,7 @@ func init() {
 				return p.ID, fmt.Errorf("prompt %s: text: 1 to 4000 characters", p.ID)
 			}
 		default:
-			return p.ID, fmt.Errorf("prompt %s: kind %q: instructions or quick", p.ID, p.Kind)
+			return p.ID, fmt.Errorf("prompt %s: kind %q: instructions, quick, project_context or inbox_context", p.ID, p.Kind)
 		}
 		return p.ID, nil
 	}}

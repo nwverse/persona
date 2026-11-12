@@ -12,6 +12,7 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -95,6 +96,19 @@ class MachineSpacesShotsTest {
             .use { assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }
     }
 
+    /**
+     * How much lighter (0 to 255) the summary card is than the page around it, read from the drawn picture on the line of the
+     * computer's status word: left of the computer's tile, inside the card's padding, against the page's own margin.
+     */
+    private fun cardLift(): Int {
+        val bitmap = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
+        val density = rule.density.density
+        val word = rule.onNodeWithText("Online").getUnclippedBoundsInRoot()
+        val y = ((word.top.value + word.bottom.value) / 2 * density).toInt()
+        fun luma(x: Float): Int = bitmap.getPixel((x * density).toInt(), y).let { (android.graphics.Color.red(it) + android.graphics.Color.green(it) + android.graphics.Color.blue(it)) / 3 }
+        return luma(24f) - luma(2f)
+    }
+
     private fun show(rows: List<AgentSession> = this.rows) = rule.setContent {
         PersonaTheme(style = style, darkTheme = dark, reduceMotion = true) {
             Box(Modifier.testTag("shot").size(400.dp, 1100.dp).background(PersonaTheme.palette.background)) {
@@ -124,6 +138,9 @@ class MachineSpacesShotsTest {
             rule.onNodeWithText("Run the migration on the staging database?", substring = true).assertIsDisplayed()
             // An idle one: how many agents and its tabs.
             rule.onNodeWithText("2 agents · draft · images").assertIsDisplayed()
+            // Dark: the cards are the system's lighter gray on the black page (translucent, they were near-invisible beside their
+            // edge highlight, which hung over nothing). Light keeps its own fill, a shade off the white page.
+            if (nextDark) assertTrue("the dark card is lighter than the page (${cardLift()})", cardLift() >= 20)
             capture("machine-projects")
         }
     }

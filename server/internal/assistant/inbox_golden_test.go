@@ -132,6 +132,26 @@ func TestGoldenInboxDraft(t *testing.T) {
 	}
 }
 
+// A draft uses About me as the user edited it in the app, not the config file's notes it replaced (#5769).
+func TestInboxDraftUsesEditedAboutMe(t *testing.T) {
+	ctx := context.Background()
+	h := goldenInbox(t)
+	model, calls := captureModel(t, "好的")
+	h.in.models[purposeDraft] = model
+	h.f.hello.OwnerNotes = "config file notes"
+	edited := "  notes edited in the app  "
+	setSettings(t, h.Service, func(v *Settings) { v.Notes = &edited })
+	it := goldenItems(t)["dm"]
+	h.inbox.items[it.ID] = it
+	if _, err := h.draftReply(ctx, it.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	system := onlyCall(t, calls()).System
+	if !strings.Contains(system, "notes edited in the app") || strings.Contains(system, "config file notes") {
+		t.Fatalf("the draft should know About me as edited in the app:\n%s", system)
+	}
+}
+
 func TestGoldenInboxJudge(t *testing.T) {
 	ctx := context.Background()
 	items := goldenItems(t)

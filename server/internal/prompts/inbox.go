@@ -19,6 +19,8 @@ type InboxTriage struct {
 	Rules string // the user's own rules, trimmed: the item's source's (InboxThing.Rules), else inbox.rules
 	// Language is the summary's language by its own name ("English", "Japanese" written in Japanese); "" is Chinese, as before i18n.
 	Language string
+	// Context is what extensions wrote for the Inbox (contributes.prompts inbox_context; inbox/extension_context).
+	Context []ExtensionContext
 }
 
 func RenderInboxTriage(t InboxTriage) string { return render("inbox/triage", t) }
@@ -62,6 +64,10 @@ type InboxDraft struct {
 	// Language is the user's language by its own name ("English", "Japanese" in Japanese), for a WeChat reply when the other side's
 	// is unclear; "" keeps WeChat replies in Chinese, as before i18n.
 	Language string
+	// Context is what extensions wrote for the Inbox (inbox/extension_context); Rewrite asks again after a draft
+	// repeated a sentence an extension marked never to quote.
+	Context []ExtensionContext
+	Rewrite bool
 }
 
 func RenderInboxDraft(d InboxDraft) string { return render("inbox/draft", d) }

@@ -47,7 +47,7 @@ internal fun MachineSpacesScreen(
         actions = { JIconButton(PersonaIcons.info, stringResource(R.string.agents_projects_details), onDetails) },
     ) {
         if (machine != null) item("summary", contentType = "summary") {
-            JGroupItem(GroupPosition.Single, Modifier.padding(top = Tokens.Space.s)) {
+            JGroupItem(GroupPosition.Single, Modifier.padding(top = Tokens.Space.s), grouped = true) {
                 AgentMachineSummary(machine.deviceIcon, machine.online, machine.hostname?.takeIf(String::isNotBlank), summary,
                     shown.tally.counts, waiting = shown.tally.waiting)
             }
@@ -84,7 +84,7 @@ private fun LazyListScope.projectSection(
         if (project.outsideSpace) project.space.members.map { ProjectLine.Agent(project, it) } else listOf(ProjectLine.Project(project))
     }
     itemsIndexed(lines, key = { _, line -> "$id:${line.key}" }, contentType = { _, line -> if (line is ProjectLine.Agent) "agent" else "project" }) { index, line ->
-        JGroupItem(GroupPosition.of(index, lines.size)) {
+        JGroupItem(GroupPosition.of(index, lines.size), grouped = true) {
             when (line) {
                 is ProjectLine.Agent -> Box(Modifier.padding(horizontal = rowPadding)) {
                     // As iOS: the agent's row, no menu, a tap opens it.

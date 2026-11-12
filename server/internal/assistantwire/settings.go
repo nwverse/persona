@@ -160,6 +160,12 @@ const (
 	// PluginsSkillsNeed: {machine_id, names} → {}: the machine's node lacks these skills (its assistant.prepare said
 	// plugin_skills_need): their files go next time.
 	PluginsSkillsNeed = "plugins.skills_need"
+	// PluginsProjectContext: ProjectContextParams → ExtensionContextResult: what the extensions wrote for these
+	// projects' background (assistant_data.go).
+	PluginsProjectContext = "plugins.project_context"
+	// PluginsInboxContext: {} → ExtensionContextResult: what the extensions wrote for the Inbox's triage and drafts,
+	// and the sentences a draft must not repeat.
+	PluginsInboxContext = "plugins.inbox_context"
 
 	// SettingsList: {} → {settings: [Setting]}: the hub's own settings persona_settings offers; app.tool persona_settings
 	// runs get / set / add / remove on them (a change waits for the user's approval on the phone).
