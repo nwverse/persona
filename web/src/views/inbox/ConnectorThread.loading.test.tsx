@@ -431,33 +431,44 @@ describe("an item with no conversation of its own", () => {
     id: "sub_example1:t1", source: "sub_example1", kind: "sub_update", account: "sub_example1", account_name: "Example mail",
     title: "Example notice", preview: "", count: 1, connector: { thread: "sub:sub_example1:t1", label: "Example mail" },
   } as InboxItem;
-  const problem = (error: string) => t("inbox-connectorthread.thread_failed", { error });
+  const notes = ["read_unsupported", "read_unavailable", "read_rate_limited", "read_failed"].map((k) => t(`inbox-connectorthread.${k}`));
+  const retry = () => [...host.querySelectorAll("button")].some((b) => b.textContent?.includes(t("inbox-connectorthread.retry_conversation")));
+  const quiet = () => {
+    expect(host.textContent).toContain("Synthetic fallback content");
+    for (const note of notes) expect(host.textContent).not.toContain(note);
+    expect(retry()).toBe(false);
+  };
 
   it("shows a subscription item's content when the hub answers a page that is none", async () => {
     await render(subscription);
     await resolve(0, { chat: { id: "sub:sub_example1:t1", name: "", kind: "none" }, messages: [] });
     await flush();
-    expect(host.textContent).toContain("Synthetic fallback content");
-    expect(host.textContent).not.toContain(problem(""));
+    quiet();
     expect(host.querySelector("textarea")).toBeNull();
   });
 
-  it.each([
-    [404, { error: 'no connector "sub_example1"' }],
-    [409, { error: "Example has no conversations to open" }],
-  ])("falls back quietly on an older manager's %s", async (status, body) => {
+  it("falls back quietly on an older manager's 404 no connector", async () => {
     await render(subscription);
-    await reject(0, new ApiError(status, body.error, body));
+    await reject(0, new ApiError(404, 'no connector "sub_example1"', { error: 'no connector "sub_example1"' }));
+    await flush();
+    quiet();
+    expect(host.textContent).not.toContain("no connector");
+  });
+
+  it("notes, with no Retry, an older manager's 409 for a source without conversations", async () => {
+    await render(subscription);
+    await reject(0, new ApiError(409, "Example has no conversations to open", { error: "Example has no conversations to open" }));
     await flush();
     expect(host.textContent).toContain("Synthetic fallback content");
-    expect(host.textContent).not.toContain(body.error);
+    expect(host.textContent).toContain(t("inbox-connectorthread.read_unsupported"));
+    expect(retry()).toBe(false);
   });
 
   it("still says a connector is signed out", async () => {
     await render(item);
     await reject(0, new ApiError(409, "Example: not signed in", { error: "Example: not signed in", code: "unavailable" }));
     await flush();
-    expect(host.textContent).toContain("Example: not signed in");
+    expect(host.textContent).toContain(t("inbox-connectorthread.read_unavailable"));
     expect(host.textContent).toContain("Synthetic fallback content");
   });
 });

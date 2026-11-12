@@ -369,7 +369,8 @@ internal fun AgentsScreen(
                 val shown = AgentQuickFilter.shown(page.settings.quick, quickCounts)
                 HomeAgentFilters(shown.map { filter ->
                     Bay(filter.label, if (filter == AgentQuickFilter.All) page.allCount else quickCounts[filter] ?: 0, filter.state?.designStatus,
-                        icon = PersonaIcons.backgroundWaiting.takeIf { filter == AgentQuickFilter.BackgroundWaiting })
+                        icon = PersonaIcons.backgroundWaiting.takeIf { filter == AgentQuickFilter.BackgroundWaiting },
+                        waiting = filter == AgentQuickFilter.BackgroundWaiting)
                 }, shown.indexOf(page.settings.quick), { model.filter(shown[it]) }, Modifier.padding(vertical = Tokens.Space.s))
             }
             // The computer the list is narrowed to (iOS's "Only <computer>", #1659): with the shared home chrome the computer
@@ -574,7 +575,7 @@ internal fun AgentsScreen(
                                 actionLabel = stringResource(R.string.agents_view_todo))
                         } else AgentTreeHeader(groupTitle, group.folded, { model.fold(group) }, first = entry.first,
                             icon = PhIcons.PushPin.takeIf { group.id == "pinned" } ?: PersonaIcons.backgroundWaiting.takeIf { group.id == "state/background" },
-                            counts = group.stateSectionCounts ?: group.todoLooseCounts ?: group.headingCounts)
+                            counts = group.stateSectionCounts ?: group.todoLooseCounts ?: group.headingCounts, waitsInBackground = group.id == "state/background")
                     }
                     is TreeRowEntry -> item(entry.key, contentType = "session") {
                         val row = entry.row

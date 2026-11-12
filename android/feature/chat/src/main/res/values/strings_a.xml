@@ -393,7 +393,7 @@
     <string name="chat_tasks_message_filed_title">Handled elsewhere, draft not sent</string>
     <string name="chat_tasks_dock_waiting">%1$s · Needs you</string>
     <string name="chat_tasks_dock_interrupted">%1$s · Interrupted</string>
-    <string name="chat_tasks_route_chip">To “%1$s” ×</string>
+    <string name="chat_tasks_route_chip">Message “%1$s”</string>
     <string name="chat_tool_details">Tool details</string>
     <string name="chat_tool_view_file">View file</string>
     <string name="chat_tool_plan_title">Plan</string>

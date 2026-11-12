@@ -19,7 +19,7 @@ import (
 
 const (
 	inboxWindow   = 7 * 24 * time.Hour // older unread chats / mail are history, not inbox
-	inboxKeepDone = 3 * 24 * time.Hour // done items stay listed (for undo) this long
+	inboxKeepDone = 3 * 24 * time.Hour // done items are the list's (for undo) this long, the newest inboxListDone of them
 	inboxForget   = 8 * 24 * time.Hour // and are held in memory (so old unread messages don't come back) this long
 	// inboxListDone: of those, a list carries the newest this many (inbox_list_done.go); Done pages the rest from the
 	// history.

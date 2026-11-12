@@ -499,6 +499,8 @@ nonisolated enum Theme {
         static let barWide: CGFloat = 4
         /// A share bar's thickness (the assistant's stacked-bar card).
         static let meter: CGFloat = 12
+        /// An Agent chat's header folded into its slim bar (Android `Tokens.Size.slimBar`).
+        static let slimBar: CGFloat = 40
         /// How far a sideways strip fades out at an end with more to scroll to (`.edgeFade()`): a cut-off chip reads as
         /// "more", not as a broken row.
         static let fadeEdge: CGFloat = 24
@@ -556,6 +558,8 @@ nonisolated enum Theme {
         /// The height of the map in a saved place's editor: the reminder's circle with the streets around it, and room to
         /// pan the map and tap where the place is (#4248).
         static let placeMap: CGFloat = 220
+        /// An Agent chat's header folded into its slim bar (`ChatChrome.compactHeight`; Android's `Tokens.Size.slimBar`).
+        static let slimBar: CGFloat = 40
         static let box110: CGFloat = 110
         static let box120: CGFloat = 120
         /// The longest a tab's name gets in the chat header's strip of the space's tabs: one long name cannot push the
