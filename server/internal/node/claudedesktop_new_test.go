@@ -221,6 +221,23 @@ func TestNewAgentWithTheDesktopLauncherStartsTheSessionInTheApp(t *testing.T) {
 	}
 }
 
+// A folder that is not there yet, in one that is, is made (New Agent's new folder), and the session runs in it.
+func TestADesktopStartMakesANewFolder(t *testing.T) {
+	n, home := testNode(t)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	app := newFakeDesktopApp(t, home)
+	fakeClaudeOnPath(t)
+	shellLaunchers(t)
+	dir := filepath.Join(t.TempDir(), "新项目")
+	s, err := startDesktop(t, n, map[string]any{"cwd": dir, "launcher": "claude-desktop"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, err := os.Stat(dir); err != nil || !st.IsDir() || s.Cwd != dir || len(app.seeded()) != 1 || app.seeded()[0].dir != dir {
+		t.Fatalf("folder %v, session %+v, seeded %v", err, s, app.seeded())
+	}
+}
+
 // A computer with no terminal engine starts one in the app too: the launcher is not a terminal's.
 func TestTheDesktopLauncherNeedsNoTerminalEngine(t *testing.T) {
 	n, home := testNode(t)
@@ -337,19 +354,27 @@ func TestADesktopStartRefusesWhatTheAppCannotRun(t *testing.T) {
 	fakeClaudeOnPath(t)
 	shellLaunchers(t)
 	dir := t.TempDir()
+	file := filepath.Join(dir, "notes.txt")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove("relative-new") }) // where a relative folder would be made: the test's own
 	for _, c := range []struct {
 		params map[string]any
 		code   string
+		says   string
 	}{
-		{map[string]any{"cwd": dir, "launcher": "claude-desktop", "permission_mode": "plan", "prompt": "look"}, "readonly_unsupported"},
-		{map[string]any{"cwd": dir, "launcher": "claude-desktop", "prompt": " /compact"}, peerCommand},
-		{map[string]any{"cwd": filepath.Join(dir, "missing"), "launcher": "claude-desktop", "prompt": "hi"}, ""},
-		{map[string]any{"cwd": dir, "launcher": "claude-desktop", "prompt": "hi", "secret_ticket": strings.Repeat("a", 64)}, secretEnvAgentCode},
+		{map[string]any{"cwd": dir, "launcher": "claude-desktop", "permission_mode": "plan", "prompt": "look"}, "readonly_unsupported", ""},
+		{map[string]any{"cwd": dir, "launcher": "claude-desktop", "prompt": " /compact"}, peerCommand, ""},
+		{map[string]any{"cwd": filepath.Join(dir, "missing", "new"), "launcher": "claude-desktop", "prompt": "hi"}, "", "does not exist"},
+		{map[string]any{"cwd": "relative-new", "launcher": "claude-desktop", "prompt": "hi"}, "", "does not exist"},
+		{map[string]any{"cwd": file, "launcher": "claude-desktop", "prompt": "hi"}, "", "is not a directory"},
+		{map[string]any{"cwd": dir, "launcher": "claude-desktop", "prompt": "hi", "secret_ticket": strings.Repeat("a", 64)}, secretEnvAgentCode, ""},
 	} {
 		_, err := startDesktop(t, n, c.params)
 		var re *rpc.Error
-		if err == nil || c.code != "" && (!errors.As(err, &re) || re.Code != c.code) {
-			t.Errorf("%v: %v, want %q", c.params, err, c.code)
+		if err == nil || c.code != "" && (!errors.As(err, &re) || re.Code != c.code) || !strings.Contains(err.Error(), c.says) {
+			t.Errorf("%v: %v, want %q %q", c.params, err, c.code, c.says)
 		}
 	}
 	if len(app.seeded()) != 0 || len(app.opened()) != 0 {

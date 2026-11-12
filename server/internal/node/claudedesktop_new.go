@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"os/exec"
@@ -197,8 +198,9 @@ func (n *Node) firstDesktopMessage(id, text string) {
 	log.Printf("new desktop session %s: the first message went in", id)
 }
 
-// desktopStartDir is where a new session of the app runs: dir (~ expanded) when it is a folder; with none, the scratch
-// folder beside the app's sessions (desktopScratchDir), made when it is not there yet.
+// desktopStartDir is where a new session of the app runs: dir (~ expanded), made when it is not there yet but the folder
+// it goes in is (New Agent's new folder); with none, the scratch folder beside the app's sessions (desktopScratchDir),
+// made when it is not there yet.
 func (n *Node) desktopStartDir(dir string) (string, error) {
 	if strings.TrimSpace(dir) == "" {
 		scratch := n.desktopScratchDir()
@@ -207,9 +209,21 @@ func (n *Node) desktopStartDir(dir string) (string, error) {
 		}
 		return scratch, nil
 	}
-	dir = proto.ExpandHome(dir, n.home)
-	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+	dir = filepath.Clean(proto.ExpandHome(dir, n.home))
+	if st, err := os.Stat(dir); err == nil {
+		if !st.IsDir() {
+			return "", fmt.Errorf("%s is not a directory", dir)
+		}
+		return dir, nil
+	}
+	if !filepath.IsAbs(dir) { // made relative to the node's own folder otherwise
 		return "", fmt.Errorf("directory %s does not exist", dir)
+	}
+	switch err := os.Mkdir(dir, 0o755); {
+	case errors.Is(err, fs.ErrNotExist): // the folder it goes in is not there either
+		return "", fmt.Errorf("directory %s does not exist", dir)
+	case err != nil && !errors.Is(err, fs.ErrExist):
+		return "", fmt.Errorf("建不了文件夹 %s：%v", dir, err)
 	}
 	return dir, nil
 }
