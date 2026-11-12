@@ -82,7 +82,7 @@ final class ModelFallbackUITests: XCTestCase {
                 // the screenshot.
                 let (backTitle, newTitle) = scheme == "large-en"
                     ? ("Back to Configured Model", "New Main Chat") : ("設定済みのモデルに戻す", "新しいメインチャット")
-                let card = app.descendants(matching: .any)["readiness-card"].firstMatch
+                let card = app.descendants(matching: .any)["model-fallback-card"].firstMatch
                 let backHere = card.buttons[backTitle].firstMatch
                 XCTAssertTrue(backHere.waitForExistence(timeout: 20), app.debugDescription)
                 if !before {
@@ -103,7 +103,8 @@ final class ModelFallbackUITests: XCTestCase {
             // At the largest size the line may be above the screen in the lazy list: the card only, its buttons one
             // under another (side by side each was cut to a letter), and the shot.
             if large {
-                let card = app.descendants(matching: .any)["readiness-card"].firstMatch
+                let card = app.descendants(matching: .any)["model-fallback-card"].firstMatch
+                XCTAssertTrue(card.buttons["回到配置的模型"].firstMatch.exists, "the card's buttons")
                 XCTAssertGreaterThanOrEqual(card.buttons["新建主对话"].firstMatch.frame.minY, card.buttons["回到配置的模型"].firstMatch.frame.maxY - 1,
                                             "the buttons stack at the largest size")
                 shot(app, "main-\(scheme)")
@@ -122,7 +123,7 @@ final class ModelFallbackUITests: XCTestCase {
             shot(app, "main-details-\(scheme)")
             toggle.tap()
             // The card's own Details: the models and the error since.
-            let cardDetails = app.descendants(matching: .any)["readiness-card"].firstMatch.buttons["详情"].firstMatch
+            let cardDetails = app.descendants(matching: .any)["model-fallback-card"].firstMatch.buttons["详情"].firstMatch
             XCTAssertTrue(cardDetails.exists, "the card's Details")
             cardDetails.tap()
             XCTAssertTrue(labeled(app, "回退模型：Sonnet 5.5").waitForExistence(timeout: 5), "the card's Details opens to the record")
