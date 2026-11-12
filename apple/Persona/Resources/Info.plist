@@ -36,13 +36,13 @@
 	<false/>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.productivity</string>
+	<key>NSAlarmKitUsageDescription</key>
+	<string>Persona sets alarms and timers only when you ask and approve it on your iPhone, for example to wake you at 6:40 or to start a 25-minute focus timer.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
-	<key>NSAlarmKitUsageDescription</key>
-	<string>Persona sets alarms and timers only when you ask and approve it on your iPhone, for example to wake you at 6:40 or to start a 25-minute focus timer.</string>
 	<key>NSAppleMusicUsageDescription</key>
 	<string>Persona plays Apple Music when you ask, for example a playlist for focused work, and can pause or skip what the Music app is playing.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
@@ -50,7 +50,7 @@
 	<key>NSCalendarsWriteOnlyAccessUsageDescription</key>
 	<string>Persona adds events to your calendar when you ask Claude to, for example to save a meeting it scheduled for you.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Persona uses the camera to scan the pairing QR code printed by `personad hub pair`, for example when you first connect to your hub.</string>
+	<string>Persona uses the camera to scan the pairing QR code printed by `personad hub pair`, and to take a photo you add to a chat or a meeting, for example a whiteboard during a meeting.</string>
 	<key>NSContactsUsageDescription</key>
 	<string>Persona lets Claude look up your contacts when you ask, for example to find a colleague's phone number or email before drafting a message.</string>
 	<key>NSFaceIDUsageDescription</key>
