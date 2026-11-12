@@ -88,7 +88,7 @@ describe("ChildSessionCard: the two lines", () => {
     upsertSession(kid({ state: "unread", status: "idle" }));
     const h = html();
     expect(h).toContain("已完成");
-    expect(h).toContain(">1 分 5 秒<");
+    expect(h).toContain(">1m 5s<");
     expect(h).not.toContain("已运行");
   });
 
@@ -120,7 +120,7 @@ describe("ChildSessionCard: the two lines", () => {
     expect(childModelChip({ effort: "low" })).toBe("低");
     expect(childModelChip({ model: "", effort: "turbo" })).toBe("");
     expect(childMeta(kid({ model: undefined, effort: undefined, started_at: undefined }), false)).toEqual({});
-    expect(childMeta(kid({ state: "idle", status: "idle" }), true)).toEqual({ harness: "Codex", model: "GPT-5.5 · 高", took: "1 分 5 秒" });
+    expect(childMeta(kid({ state: "idle", status: "idle" }), true)).toEqual({ harness: "Codex", model: "GPT-5.5 · 高", took: "1m 5s" });
     expect(childMeta(kid(), true)).toEqual({ harness: "Codex", model: "GPT-5.5 · 高", since: T0 });
   });
 
