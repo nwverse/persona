@@ -81,3 +81,17 @@ func TestEchoRuleIsOneFunction(t *testing.T) {
 		}
 	}
 }
+
+// A timeline closes an open span with a span that begins at or before it and ends after it; one that only touches it
+// (ends where it began) or begins after it does not.
+func TestEchoSpanClosed(t *testing.T) {
+	tl := Timeline{Speaking: [][2]float64{{1.0, 1.65}, {1.65, 1.7}, {3, 4}}}
+	for _, c := range []struct {
+		from, to float64
+		ok       bool
+	}{{1.65, 1.7, true}, {1.2, 1.65, true}, {3, 4, true}, {1.7, 0, false}, {2, 0, false}, {5, 0, false}} {
+		if to, ok := EchoSpanClosed(tl, c.from); ok != c.ok || to != c.to {
+			t.Errorf("open from %v: %v %v", c.from, to, ok)
+		}
+	}
+}

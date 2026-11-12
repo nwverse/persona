@@ -63,3 +63,16 @@ func EchoOf(s EchoSentence, spans []EchoSpan) EchoVerdict {
 func EchoHeld(s EchoSentence, openFrom float64) bool {
 	return s.End > openFrom-EchoMargin
 }
+
+// EchoSpanClosed is the end of the timeline's speaking span that closes a span open since openFrom: one that begins at
+// or before it (to a sample) and ends after it (the speaking off a dropped socket lost, repaired by a socket's
+// start.timeline or an upload's timeline; a span still open is never in them). False when the timeline has none.
+func EchoSpanClosed(t Timeline, openFrom float64) (to float64, ok bool) {
+	const slack = 1.0 / AudioRate // times are rounded to a sample
+	for _, sp := range t.Speaking {
+		if sp[0] <= openFrom+slack && sp[1] > openFrom+slack {
+			return sp[1], true
+		}
+	}
+	return 0, false
+}

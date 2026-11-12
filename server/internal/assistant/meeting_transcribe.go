@@ -453,19 +453,14 @@ func (r *hubRun) expireSpanLocked(from, to float64) {
 
 // reconcileOpenLocked closes the open speaking span once the timeline has it closed: the speaking off a dropped
 // socket lost comes back in the next socket's start.timeline or an upload's timeline (a span still open when a socket
-// starts is not in its start, the phone sends speaking on after it). The timeline's span that closes it begins at or
-// before the open one and ends after it.
+// starts is not in its start, the phone sends speaking on after it): kb.EchoSpanClosed.
 func (r *hubRun) reconcileOpenLocked() {
 	if r.openFrom == nil {
 		return
 	}
 	from := *r.openFrom
-	const slack = 1.0 / kb.AudioRate // times are rounded to a sample
-	for _, sp := range r.timeline.Speaking {
-		if sp[0] <= from+slack && sp[1] > from+slack {
-			r.closeSpanLocked(from, sp[1])
-			return
-		}
+	if to, ok := kb.EchoSpanClosed(r.timeline, from); ok {
+		r.closeSpanLocked(from, to)
 	}
 }
 
