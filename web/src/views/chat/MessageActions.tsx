@@ -138,7 +138,7 @@ export function MessageActions({
   className,
 }: {
   text: string;
-  /** Explicit selections kept when editing; Copy, Quote and Forward still use visible words only. */
+  /** Explicit selections kept when editing or rewinding; Copy, Quote and Forward use visible words only. */
   editText?: string;
   isUser?: boolean;
   ts?: string;
@@ -170,7 +170,7 @@ export function MessageActions({
   const rewindBlock = useWhileOpen(rewind?.block, Boolean(anchor || moreAnchor), "");
   const extras = [
     ...moreActions(itemId, chat?.fork, chat?.assistant),
-    ...rewindActions(messageId, text, rewind && { block: rewindBlock, run: rewind.run }),
+    ...rewindActions(messageId, editText ?? text, rewind && { block: rewindBlock, run: rewind.run }),
     ...deleteActions(onDelete),
   ];
   const contextActions = side ? actions.filter((a) => a.key === "forward" || a.key === "context") : [];

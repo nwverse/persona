@@ -136,6 +136,21 @@ describe("message context actions", () => {
 });
 
 describe("message context interaction paths", () => {
+  it("restores the explicit skill identity when rewinding a selected message", async () => {
+    const selected = '<persona-context kind="skill" ref="exact-source">review</persona-context>\n\nOriginal message';
+    const run = vi.fn(async () => {});
+    act(() => root.render(
+      <ChatActionsContext.Provider value={{ ...chat, rewind: { block: liveValue(""), run } }}>
+        <MessageActions text="Original message" editText={selected} isUser side messageId="u1#0"><p>Original message</p></MessageActions>
+      </ChatActionsContext.Provider>,
+    ));
+    const item = (label: string) => [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((el) => el.textContent?.trim() === label)!;
+    act(() => host.querySelector<HTMLButtonElement>('button[aria-label="更多"]')!.click());
+    act(() => item("回退到这里").click());
+    await act(async () => item("只回退对话").click());
+    expect(run).toHaveBeenCalledExactlyOnceWith("u1#0", selected, "conversation");
+  });
+
   it("keeps explicit skill identity for Edit while Forward uses only the visible words", async () => {
     const selected = '<persona-context kind="skill" ref="exact-source">review</persona-context>\n\nOriginal message';
     const received = vi.fn();
