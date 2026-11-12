@@ -154,6 +154,7 @@ struct FileViewer: View {
         let id = UUID()
         let model: FileEditModel
     }
+    @State private var saver = FileSaveModel()
     #endif
 
     var body: some View {
@@ -172,12 +173,35 @@ struct FileViewer: View {
                                 .accessibilityIdentifier("file-close")
                         }
                     }
+                    #if os(iOS)
+                    if page?.kind != .directory {
+                        ToolbarItem(placement: .primaryAction) { download }
+                    }
+                    #endif
                     ToolbarItem(placement: .primaryAction) { menu }
                 }
                 #if os(iOS)
                 .fullScreenCover(item: $editing) { target in
                     FileEditSheet(edit: target.model) { Task { await open() } }
                 }
+                .safeAreaInset(edge: .bottom) {
+                    if let p = saver.progress {
+                        AttachmentRow(symbol: Theme.Icon.save, name: p.name, status: "\(p.done.storageText) / \(p.total.storageText)",
+                                      progress: p.total > 0 ? Double(min(p.done, p.total)) / Double(p.total) : 0,
+                                      removeLabel: String(localized: "Cancel download of \(p.name)")) { saver.cancel() }
+                            .padding(.horizontal, Theme.Space.l)
+                            .padding(.bottom, Theme.Space.s)
+                            .accessibilityIdentifier("file-download-progress")
+                    }
+                }
+                .fileMover(isPresented: Binding(get: { saver.exporting != nil }, set: { if !$0 { saver.exported(nil, model: model) } }),
+                           file: saver.exporting) { saver.exported($0, model: model) }
+                .sheet(item: $saver.sharing) { shared in
+                    FileShareSheet(url: shared.url) { [saver] in saver.shared() }
+                        .presentationDetents([.medium, .large])
+                        .ignoresSafeArea()
+                }
+                .onDisappear { saver.cancel() }
                 #endif
                 .task(id: ref) { await open() }
                 .onAppear { FrameMeter.shared.start((ref.path as NSString).lastPathComponent) }
@@ -319,6 +343,37 @@ struct FileViewer: View {
                 .accessibilityIdentifier("file-edit")
             }
         }
+    }
+
+    /// Download (#5826): a tap saves a picture or a video to Photos and anything else through Save to Files; a long
+    /// press offers the other ways. The bytes the viewer already holds are used when it has them.
+    private var download: some View {
+        let name = page?.file?.name ?? (ref.path as NSString).lastPathComponent
+        return Menu {
+            if FileSaveKind.photosResource(name) != nil {
+                Button { save(.photos) } label: { Label("Save to Photos", systemImage: Theme.Icon.photos) }
+            }
+            Button { save(.files) } label: { Label("Save to Files", systemImage: Theme.Icon.save) }
+            Button { save(.share) } label: { Label("Share", systemImage: Theme.Icon.share) }
+        } label: {
+            ThemedIcon(Theme.Icon.save)
+        } primaryAction: {
+            save(FileSaveKind.defaultTarget(name))
+        }
+        .arrowlessMenu()
+        .disabled(saver.busy)
+        .accessibilityLabel("Download")
+        .accessibilityHint("Touch and hold for more ways to save")
+        .accessibilityIdentifier("file-download")
+    }
+
+    private func save(_ target: FileSaveTarget) {
+        let file = page?.file
+        let name = file?.name ?? (ref.path as NSString).lastPathComponent
+        // A picture already shown is saved from its bytes; a played video or a QuickLook copy from its file.
+        Haptics.tap()
+        saver.save(target, ref: ref, name: name, size: file?.size ?? 0, local: page?.localFile,
+                   base64: page?.kind == .image ? file?.data : nil, model: model)
     }
     #endif
 

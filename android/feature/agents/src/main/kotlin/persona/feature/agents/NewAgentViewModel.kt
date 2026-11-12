@@ -103,6 +103,9 @@ internal data class NewAgentState(
         else launchers.firstOrNull { it.name == selection.launcher }?.agentType ?: "claude"
     /** The launcher that will run, whose models the "Model" row lists: the one picked, or the configuration's. */
     val modelLauncher: String get() = if (following) configuredLauncher?.name.orEmpty() else selection.launcher
+    /** Older computers still require Codex's first message, including when following model configuration. */
+    val promptRequired: Boolean get() = agentType == "codex" &&
+        launchers.firstOrNull { it.name == modelLauncher }?.promptOptional != true
     /** [modelLauncher]'s models, once there are some to show. */
     val modelList: LauncherModels? get() = models.list?.takeIf {
         it.models.isNotEmpty() && models.machineId == machineId && models.launcher == modelLauncher
@@ -153,6 +156,8 @@ internal class NewAgentViewModel(
     private val now: () -> Instant = Instant::now,
     /** The subscription use of the hub a computer belongs to, for ultracode's quota line (#582); null: none drawn. */
     internal val usage: (suspend (machineId: String) -> List<persona.core.contracts.api.UsageAccount>)? = null,
+    /** The hub took an Agent this form started afresh (not a resume): the GitHub star card counts it (#5761). */
+    private val launched: () -> Unit = {},
 ) : ViewModel() {
     private val mutable = MutableStateFlow(NewAgentState())
     val state = mutable.asStateFlow()
@@ -401,7 +406,8 @@ internal class NewAgentViewModel(
         val agentType = current.agentType
         if (previous == null && (current.selection.cwd.isBlank() || (current.selection.launcher.isBlank() && !current.following) ||
                 machines.value.none { it.id == current.machineId && it.online } ||
-                (current.space != null && current.space.machineId != current.machineId))) return
+                (current.space != null && current.space.machineId != current.machineId) ||
+                (current.promptRequired && current.prompt.isBlank()))) return
         mutable.update { it.copy(starting = true, error = null) }
         viewModelScope.launch {
             try {
@@ -459,6 +465,9 @@ internal class NewAgentViewModel(
                 val request = operation.folder?.let { operation.request.copy(cwd = it) } ?: operation.request
                 val session = result.session
                 try { adopt(session) } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+                // The GitHub star card's count (#5761), once the hub takes it, as on the web: only a start sent now, never
+                // a resume, and never a start checked again (it may have counted before the answer went missing).
+                if (fresh && operation.request.resumeSessionId == null) launched()
                 val first = operation.firstMessage
                 val firstId = operation.firstMessageId
                 if (first != null && firstId != null) {

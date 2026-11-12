@@ -16,6 +16,7 @@ vi.mock("./store", () => {
   };
 });
 vi.mock("./router", () => ({ navigate: vi.fn() }));
+vi.mock("../ui/atoms", async (actual) => ({ ...(await actual<typeof import("../ui/atoms")>()), toast: vi.fn() }));
 
 import { acceptOutgoing, arrived, forgetOutgoing, askPersona, discardOutbox, inSendOrder, keepFailed, keepOutgoing, noteSent, noteWritten, outboxMessage, placeFailed, queueToSession, resetOutboxClaimsForTests, resetRestoredForTests, restoreOutbox, retryOutbox, sendToSession, settle, settleOutbox, SENT_GRACE_MS, type OutboxEntry } from "./outbox";
 import { messageFeedback, resetMessageFeedback } from "./message-send";
@@ -24,6 +25,7 @@ import { ApiError } from "./api";
 import { pickLauncher } from "./assistant-chat";
 import { navigate } from "./router";
 import { getState } from "./store";
+import { toast } from "../ui/atoms";
 
 function response(body: unknown, status = 200) {
   return { ok: status < 400, status, text: async () => JSON.stringify(body) };
@@ -128,6 +130,16 @@ describe("sending from another page", () => {
     expect(outbox()["m/s"][0].state).toBe("sent");
     settleOutbox("m", "s", [{ text: "看一下", images: [] }]);
     expect(outbox()["m/s"]).toBeUndefined();
+  });
+
+  it("says when the Agent reads it only after the question on the computer is answered (#5890)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(response({ ok: true, waits_on_computer: true })).mockResolvedValueOnce(response({ ok: true })));
+    expect(await sendToSession("m", "s", { text: "为什么没得点" })).toBe(true);
+    expect(outbox()["m/s"][0].state).toBe("sent");
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining("电脑上的那个问题答完后"), "info");
+    vi.mocked(toast).mockClear();
+    expect(await sendToSession("m", "s", { text: "还有一条" })).toBe(true);
+    expect(toast).not.toHaveBeenCalled();
   });
 
   it("keeps a failure with why, retries as another operation (the hub keeps its answer for the id), and can drop it", async () => {

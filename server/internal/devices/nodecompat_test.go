@@ -234,26 +234,63 @@ func TestNodeInfoHandshakeIsOptionalOnTheWire(t *testing.T) {
 	}
 }
 
-// model.http goes only to a node that announces model_http: an older one would answer "unknown method", and the API
-// connection sending through it is told to update the node instead.
+// model.http and model.run go only to a node that announces model_http / model_run: an older one would answer "unknown
+// method", and the API purpose using it is told to update the node instead.
 func TestMachineCallGatesModelHTTP(t *testing.T) {
 	d := newTestDevices(t)
 	m := newMachine(d, MachineConfig{ID: "box", Name: "Box", Kind: "ssh", SSHHost: "box.invalid"})
+	for method, capability := range map[string]string{proto.MethodModelHTTP: nodeproto.ModelHTTP, proto.MethodModelRun: nodeproto.ModelRun} {
+		without := current("old")
+		without.Capabilities = slices.DeleteFunc(slices.Clone(without.Capabilities), func(c string) bool { return c == capability })
+		for _, tc := range []struct {
+			info proto.NodeInfo
+			want bool
+		}{{current("new"), false}, {without, true}, {proto.NodeInfo{Version: "pre-handshake", ModelConfiguration: true}, true}} {
+			m.mu.Lock()
+			m.info, m.online = tc.info, true
+			m.mu.Unlock()
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			var re *rpc.Error
+			err := m.call(ctx, method, map[string]any{"url": "https://example.invalid"}, nil)
+			if refused := errors.As(err, &re) && re.Code == proto.CodeNodeOutdated; refused != tc.want {
+				t.Fatalf("%s %s: refused=%v want=%v: %v", method, tc.info.Version, refused, tc.want, err)
+			}
+		}
+	}
+}
+
+// session.send with switch_now (the assistant's agent_switch) goes only to a node that announces launcher_switch_now:
+// an older one would type the message on the launcher the agent runs on and leave the switch waiting. Without
+// switch_now the send goes as before.
+func TestMachineCallGatesSwitchNow(t *testing.T) {
+	d := newTestDevices(t)
+	m := newMachine(d, MachineConfig{ID: "box", Name: "Box", Kind: "ssh", SSHHost: "box.invalid"})
 	without := current("old")
-	without.Capabilities = slices.DeleteFunc(slices.Clone(without.Capabilities), func(c string) bool { return c == nodeproto.ModelHTTP })
+	without.Capabilities = slices.DeleteFunc(slices.Clone(without.Capabilities), func(c string) bool { return c == nodeproto.LauncherSwitchNow })
 	for _, tc := range []struct {
-		info proto.NodeInfo
-		want bool
-	}{{current("new"), false}, {without, true}, {proto.NodeInfo{Version: "pre-handshake", ModelConfiguration: true}, true}} {
+		info      proto.NodeInfo
+		switchNow bool
+		want      bool
+	}{
+		{current("new"), true, false},
+		{without, true, true},
+		{proto.NodeInfo{Version: "pre-handshake", ModelConfiguration: true}, true, true},
+		{without, false, false},
+	} {
 		m.mu.Lock()
 		m.info, m.online = tc.info, true
 		m.mu.Unlock()
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
+		params := map[string]any{"session_id": "s1", "text": "go on", "apply_switch": true}
+		if tc.switchNow {
+			params["switch_now"] = true
+		}
 		var re *rpc.Error
-		err := m.call(ctx, proto.MethodModelHTTP, map[string]any{"url": "https://example.invalid"}, nil)
+		err := m.call(ctx, "session.send", params, nil)
 		if refused := errors.As(err, &re) && re.Code == proto.CodeNodeOutdated; refused != tc.want {
-			t.Fatalf("%s: refused=%v want=%v: %v", tc.info.Version, refused, tc.want, err)
+			t.Fatalf("%s switch_now=%v: refused=%v want=%v: %v", tc.info.Version, tc.switchNow, refused, tc.want, err)
 		}
 	}
 }
