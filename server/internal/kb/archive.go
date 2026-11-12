@@ -75,7 +75,8 @@ type Engine struct {
 	// earlier meetings: only those marked not private (meeting.go, "The private mark"). The manager turns it on.
 	EarlierMeetingsInAnswers bool
 	// MeetingChanged is told of recording id's meeting parts that changed (PartRoom, PartAsks, PartPrivate,
-	// PartFollowup, PartPhotos): the manager's meeting_live event. Called outside the store's locks; optional.
+	// PartFollowup, PartPhotos, PartLines, PartTopics): the manager's meeting_live event. Called outside the store's
+	// locks; optional.
 	MeetingChanged func(id string, parts []string)
 	// MinutesWritten is told when a recording's minutes for its current revision are written (minutes.go): the
 	// assistant pushes them. Not for minutes made again only because a photo was added or deleted. Called from the
