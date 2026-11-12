@@ -123,6 +123,25 @@ nonisolated enum VoiceTimbre {
     }
 }
 
+/// Only Send What I Just Said (docs/assistant/voice.md 6.7, #5904): whether the extension's user-speech gate holds back what
+/// the voice hands over when the user was not heard asking for it just before, remembered on this device per group and
+/// extension. On unless the user turned it off; the call's `start` says which (`speech_gate`).
+nonisolated enum VoiceSpeechGate {
+    static func key(group: String, extensionID: String) -> String {
+        "voice.speechGate." + (group.isEmpty ? "-" : group) + "." + extensionID
+    }
+
+    static func isOn(group: String, extensionID: String) -> Bool {
+        UserDefaults.standard.object(forKey: key(group: group, extensionID: extensionID)) as? Bool ?? true
+    }
+
+    /// On is the default: kept as no value.
+    static func set(_ on: Bool, group: String, extensionID: String) {
+        let k = key(group: group, extensionID: extensionID)
+        if on { UserDefaults.standard.removeObject(forKey: k) } else { UserDefaults.standard.set(false, forKey: k) }
+    }
+}
+
 /// What a call needs from the rest of the app; the tests hand in fakes (`FakeVoiceSocket`, `FakeVoiceAudio`, a clock
 /// they move by hand).
 struct VoiceDeps {
@@ -139,6 +158,9 @@ struct VoiceDeps {
     var session: (SessionKey) -> Session?
     /// The voice picked on this device for the group's extension.
     var voice: (_ group: String, _ extensionID: String) -> String?
+    /// Whether the user-speech gate is on for the group's extension on this device (`VoiceSpeechGate`; the tests set
+    /// its preference under their own group).
+    var speechGate: (_ group: String, _ extensionID: String) -> Bool = VoiceSpeechGate.isOn(group:extensionID:)
 
     static func live(group: String) -> VoiceDeps {
         VoiceDeps(api: { AppModel.shared.api(group) },
@@ -152,7 +174,8 @@ struct VoiceDeps {
                   },
                   mic: SystemMicPermission(), microphone: .shared, idleTimer: SystemIdleTimer(), clock: SystemVoiceClock(),
                   session: { AppModel.shared.latest($0) },
-                  voice: { VoiceTimbre.chosen(group: $0, extensionID: $1) })
+                  voice: { VoiceTimbre.chosen(group: $0, extensionID: $1) },
+                  speechGate: { VoiceSpeechGate.isOn(group: $0, extensionID: $1) })
     }
 }
 
@@ -183,6 +206,8 @@ struct VoiceDeps {
     private(set) var tools: [VoiceTool] = []
     private(set) var model: String?
     private(set) var voice: String?
+    /// The user-speech gate as this device has it for the call (Only Send What I Just Said), said in `start`.
+    private(set) var speechGate = true
     /// Instructions that did not go whose line the user put away (Never Mind): the bar no longer offers anything for them.
     private(set) var dismissed: Set<String> = []
     /// The microphone sends silence while muted; the voice still speaks.
@@ -294,6 +319,7 @@ struct VoiceDeps {
             voice = deps.voice(key.group, extensionID)
             resolved = true
         }
+        speechGate = deps.speechGate(key.group, extensionID)
         watchIdle(epoch)
         connect()
     }
@@ -355,16 +381,22 @@ struct VoiceDeps {
         lastActivity = deps.clock.now
     }
 
-    /// Whether Resend / Clear and Send can go for a run: refused, and reported by the connection that is up now. A reconnect
-    /// rebuilds only the open runs (`resume`), so after one the extension no longer knows a refused run and the bar
-    /// offers no button for it (docs/assistant/voice.md 3.2).
+    /// Whether Resend / Clear and Send / Send Anyway can go for a run: refused, and reported by the connection that is up
+    /// now. A reconnect rebuilds only the open runs (`resume`), so after one the extension no longer knows a refused run
+    /// and the bar offers no button for it (docs/assistant/voice.md 3.2). One the user-speech gate held back (`unprompted`)
+    /// only with an extension that keeps it (`speech_gate`, #5904), and only with a task: the extension keeps none
+    /// without one, and an older extension none at all, so a resend would do nothing.
     func canResend(_ runID: String) -> Bool {
         guard ready, socket != nil, let run = runs.first(where: { $0.id == runID }) else { return false }
+        if run.code == "unprompted", !run.resendable || !features.contains(VoiceInfo.speechGateFeature)
+            || run.task.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return false
+        }
         return run.state == .refused && runSeen[runID] == generation
     }
 
-    /// Resend / Clear and Send a run a 409 refused: the same id; `clearingDraft` sends the hub's `clearable` text for the node
-    /// to clear first. Clear and Send is offered only when the run has one (`run.clearable`).
+    /// Resend / Clear and Send / Send Anyway a refused run: the same id; `clearingDraft` sends the hub's `clearable` text
+    /// for the node to clear first. Clear and Send is offered only when the run has one (`run.clearable`).
     @discardableResult func resend(_ runID: String, clearingDraft: Bool = false) -> Bool {
         guard canResend(runID), let socket, let run = runs.first(where: { $0.id == runID }) else { return false }
         if clearingDraft, run.clearable == nil { return false }
@@ -377,6 +409,14 @@ struct VoiceDeps {
     func change(voice: String?) {
         guard voice != self.voice else { return }
         self.voice = voice
+        reopen()
+    }
+
+    /// Only Send What I Just Said turned on or off on the settings page while the call ran: a new connection that
+    /// picks the call up with it (the gate is the extension's, set by `start`).
+    func change(speechGate: Bool) {
+        guard speechGate != self.speechGate else { return }
+        self.speechGate = speechGate
         reopen()
     }
 
@@ -403,11 +443,12 @@ struct VoiceDeps {
 
     // MARK: Socket
 
-    /// What `start` says now: the target, the conversation's last turns, whether the microphone cancels echo, and when
+    /// What `start` says now: the target, the conversation's last turns, whether the microphone cancels echo, the
+    /// user-speech gate on or off (always said: it also tells the extension this app has Send Anyway, #5904), and when
     /// it picks up again the captions so far and the runs not over yet, each as last reported.
     var startFrame: VoiceStart {
         VoiceStart(model: model, voice: voice, target: VoiceTarget(key), recent: recent, history: history,
-                   resume: runs.filter { $0.state.isOpen }, echoCancellation: audio?.cancelsEcho)
+                   resume: runs.filter { $0.state.isOpen }, echoCancellation: audio?.cancelsEcho, speechGate: speechGate)
     }
 
     var history: [VoiceLine] {
