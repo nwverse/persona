@@ -82,7 +82,7 @@ internal fun InboxHandOffBar(
     val memory by repository.handOffMemory.collectAsStateWithLifecycle(initialValue = null)
     val targetsReady by remember(repository) {
         repository.snapshot.map { it.targetsReady }.distinctUntilChanged()
-    }.collectAsStateWithLifecycle(initialValue = repository.snapshot.value.targetsReady)
+    }.collectAsStateWithLifecycle(initialValue = false)
     val resources = LocalResources.current
     val haptics = rememberHaptics()
     val toast = rememberToastState()
