@@ -47,13 +47,23 @@ struct DispatchHandoffCard: View {
         if let lead, let todo {
             let at = lead.activityAt ?? lead.updatedAt
             let state = store.state(todo)
-            let limit = state != .needsYou && todo.doneAt == nil && lead.isUsageLimited()
+            let limit = Self.limited(state: state, closed: todo.doneAt != nil, lead: lead)
             return .agent(at: at.flatMap { $0.isMeaningful ? $0 : nil }, state: state, limit: limit)
         }
-        if let failure = failure(todo) { return failedReceipt(todo) ? .failedBelow : .failed(failure) }
+        if let failure = failure(todo) { return Self.failedMeta(failure, receiptBelow: failedReceipt(todo)) }
         if todo?.doneAt != nil { return .closedEarly }
         if todo == nil, entry.todoID != nil, !store.todos.isEmpty { return .gone }
         return .starting
+    }
+
+    /// A failed start is said once: the failed receipt below the card carries the reason, so the card only says it did not.
+    nonisolated static func failedMeta(_ failure: String, receiptBelow: Bool) -> Meta {
+        receiptBelow ? .failedBelow : .failed(failure)
+    }
+
+    /// The Agent is waiting out a usage limit: not when it needs you, not once the task is closed.
+    static func limited(state: TaskState, closed: Bool, lead: Session, now: Date = .now) -> Bool {
+        state != .needsYou && !closed && lead.isUsageLimited(now: now)
     }
 
     /// The conversation has a failed receipt for the task (the web's `useFailedReceipts`): it says why, so the card need not.

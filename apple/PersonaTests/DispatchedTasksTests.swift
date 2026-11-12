@@ -96,6 +96,7 @@ struct DispatchedTasksTests {
 }
 
 /// A failed start says why once, on the receipt when the conversation has one for the task (the web's `withFailureBelow`).
+@MainActor
 struct DispatchHandoffFailureTests {
     private func feed(_ json: String) throws -> FeedItem { try JSON.decoder.decode(FeedItem.self, from: Data(json.utf8)) }
 
@@ -105,5 +106,17 @@ struct DispatchHandoffFailureTests {
         #expect(DispatchHandoffCard.hasFailedReceipt([failed, done], todo: "t1"))
         #expect(!DispatchHandoffCard.hasFailedReceipt([failed, done], todo: "t2"))
         #expect(!DispatchHandoffCard.hasFailedReceipt([], todo: "t1"))
+    }
+
+    @Test func aFailedStartWithAReceiptBelowIsOnlyDidntStart() {
+        #expect(DispatchHandoffCard.failedMeta("boom", receiptBelow: true) == .failedBelow)
+        #expect(DispatchHandoffCard.failedMeta("boom", receiptBelow: false) == .failed("boom"))
+    }
+
+    @Test func theUsageLimitBranchNeedsAStoppedAgentAndAnOpenTaskThatDoesNotNeedYou() throws {
+        let limited = try JSON.decoder.decode(Session.self, from: Data(#"{"machine_id":"mac","session_id":"s","title":"s","cwd":"/p","state":"idle","status":"idle","updated_at":"2026-11-13T09:00:00Z","turn_error":"You've hit your usage limit.","turn_error_kind":"usage_limit"}"#.utf8))
+        #expect(DispatchHandoffCard.limited(state: .working, closed: false, lead: limited))
+        #expect(!DispatchHandoffCard.limited(state: .needsYou, closed: false, lead: limited))
+        #expect(!DispatchHandoffCard.limited(state: .working, closed: true, lead: limited))
     }
 }
