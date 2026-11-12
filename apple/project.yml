@@ -488,8 +488,10 @@ targets:
       - path: PersonaShare
         excludes: ["*.plist", "*.entitlements"]
       # The app's hub client, models and design system, as the watch has them (HubStore, APIClient, Theme), with the
-      # String Catalog and interface language (docs/apple/ios.md「Interface language」).
+      # String Catalog and interface language (docs/apple/ios.md「Interface language」). Not the Home Screen widgets: they
+      # draw from the App Group with the Live Activity's files, which this extension does not build.
       - path: Shared
+        excludes: ["HomeWidgets/**", "Design/HomeWidgetTokens.swift"]
     entitlements:
       path: PersonaShare/PersonaShare.entitlements
       properties:
