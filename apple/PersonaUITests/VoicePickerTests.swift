@@ -195,6 +195,9 @@ final class VoicePickerTests: XCTestCase {
         XCTAssertTrue(voiceItem(app, "音色").exists, "the menu closed when the line changed:\n\(app.debugDescription)")
         shot(app, "menu-line-after")
         closeMenu(app)
+        // The menu is drawn over the line: it must not cover the line's own buttons, and VoiceOver and taps still reach it.
+        XCTAssertTrue(clear.isHittable, "Clear and Send is covered")
+        XCTAssertTrue(app.buttons["voice-more"].isHittable, "⋯ cannot be tapped after the line changed")
         element(app, "voice-end").tap()
         app.terminate()
     }
