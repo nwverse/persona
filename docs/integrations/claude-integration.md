@@ -777,6 +777,11 @@ failure rather than a configuration error.
   unavailable-model chain, recommending a new conversation or `/model` in a Claude Code terminal. Readiness does not
   point at model settings or block creating a new conversation because of this session-only problem. Automatic work
   continuation and scheduled-run retries do not resend this failed turn.
+- Clients (web #4487, iOS #4489, Android #4488) show the refusal as a line of its own after the exchange and a card above
+  the composer while the fallback is active. In a Persona conversation, which is for everyday people, both say one plain
+  sentence naming the model by its short name ("The upstream refused this request, so it switched to Sonnet 5.5"); the
+  models as recorded, the category, the explanation, the refusal's own words and the error since sit under a closed
+  Details (#5202, web and iOS). Agents conversations show everything.
 - No configuration is required. Claude Code's own session-scoped fallback and the headless assistant's bounded recovery in [Headless assistant](#headless-assistant-chat-tab) are separate mechanisms. The latter handles a final safeguards / 429 / 5xx turn error without rewriting the request; it never replays this section's `model_fallback_unavailable` 404 and does not change Claude Code's own fallback policy.
 
 Client follow-up remains necessary for dedicated cards, an always-visible notice, an actual-model/Fell Back marker,
