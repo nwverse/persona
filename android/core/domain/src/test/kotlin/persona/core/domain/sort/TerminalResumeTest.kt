@@ -70,9 +70,7 @@ class TerminalResumeTest {
     @Test fun aStoppedAgentIsOffered() {
         val herdr = machine(listOf("herdr"))
         assertEquals(TerminalResume.Available, terminalResume(stopped(), herdr))
-        // interrupted is accepted the same way as offline (web); WireEnum also maps it to unknown
         assertEquals(TerminalResume.Available, terminalResume(stopped(status = "interrupted"), herdr))
-        assertEquals(TerminalResume.Available, terminalResume(stopped(status = "unknown"), herdr))
         val codex = stopped(agent = "codex", sourceKind = "codex_history")
         assertTrue("a Codex thread nothing has open is a stopped Agent too", codex.isStoppedAgent)
         assertEquals(TerminalResume.Available, terminalResume(codex, herdr))
@@ -82,6 +80,12 @@ class TerminalResumeTest {
             terminalResume(stopped(), machine(null)),
         )
         assertEquals(TerminalResume.Available, terminalResume(stopped(), null))
+    }
+
+    @Test fun unknownStatusIsHidden() {
+        val herdr = machine(listOf("herdr"))
+        assertEquals(TerminalResume.Hidden, terminalResume(stopped(status = "unknown"), herdr))
+        assertFalse(stopped(status = "unknown").isStoppedAgent)
     }
 
     @Test fun noTerminalEngineDisablesItSayingWhy() {

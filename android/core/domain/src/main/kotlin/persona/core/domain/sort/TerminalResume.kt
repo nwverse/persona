@@ -23,12 +23,12 @@ enum class TerminalResume {
 /**
  * A stopped Agent (#4754): its conversation and terminal stay, it takes no messages; Resume on its terminal page runs it
  * again. A Codex thread nothing has open is marked the same way (#5521), though its row keeps its Codex history source.
- * Same as web `isStoppedAgent` / iOS `Session.isStopped` (interrupted status reads as unknown on the wire).
+ * Same as web `isStoppedAgent` (status `offline` or `interrupted` only; Android keeps the raw wire status).
  */
 val Session.isStoppedAgent: Boolean
     get() {
         if (assistant || (!sourceKind.isNullOrEmpty() && sourceKind != "codex_history")) return false
-        if (status !in setOf("offline", "unknown", "interrupted")) return false
+        if (status != "offline" && status != "interrupted") return false
         val c = capabilities ?: return false
         return c.read && c.terminal && !c.send
     }
@@ -36,7 +36,7 @@ val Session.isStoppedAgent: Boolean
 /** Whether the chat's ⋯ offers to bring [session] back in a terminal on [machine]. */
 fun terminalResume(session: Session?, machine: Machine?): TerminalResume {
     if (session == null || session.assistant || session.starting) return TerminalResume.Hidden
-    if (session.status !in setOf("offline", "unknown", "interrupted")) return TerminalResume.Hidden
+    if (session.status != "offline" && session.status != "interrupted") return TerminalResume.Hidden
     val agentRow = (session.sourceKind.isNullOrEmpty() || session.sourceKind == "codex_history") &&
         (session.agent.isNullOrEmpty() || session.agent == "claude" || session.agent == "codex" || session.agent == "traex")
     if (agentRow && session.agentSurface != "desktop" && machine?.engineHosts?.isEmpty() == true) return TerminalResume.NoEngine

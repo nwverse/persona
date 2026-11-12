@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -81,7 +82,9 @@ internal fun TerminalPage(
     var paste by remember { mutableStateOf<String?>(null) }
     var selecting by remember { mutableStateOf<String?>(null) }
     var display by remember { mutableStateOf(false) }
-    var resumedOnOpen by remember(model) { mutableStateOf(false) }
+    // Keyed by the session and whether this open asked to resume: a rotation after a failed resume keeps the flag and
+    // does not fire again; closing (resumeOnOpen false) or a later Resume in Terminal starts a fresh attempt.
+    var resumedOnOpen by rememberSaveable(model.key.machineId, model.key.sessionId, resumeOnOpen) { mutableStateOf(false) }
     val active = state.driving
     // Keys work whenever the hub is reachable: straight into the stream while driving, through /keys while watching.
     val typing = state.online

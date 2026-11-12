@@ -35,14 +35,8 @@ internal class SessionTerminalResumer(
 
     override suspend fun resume(key: SessionKey) {
         val session = checkNotNull(sessions().firstOrNull { it.key == key })
-        val request = AgentStartRequest(
-            key.machineId,
-            session.cwd,
-            session.launcher.orEmpty(),
-            permissionMode = session.permissionMode,
-            effort = session.effort,
-            resumeSessionId = key.sessionId,
-        )
+        val request = AgentStartRequest(key.machineId, session.cwd, session.launcher.orEmpty(),
+            permissionMode = session.permissionMode, effort = session.effort, resumeSessionId = key.sessionId)
         when (val result = checkNotNull(creation()).start(request, UUID.randomUUID().toString())) {
             is AgentStartResult.Created -> Unit
             is AgentStartResult.Rejected -> throw TerminalResumeFailed(result.message.shown)
