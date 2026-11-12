@@ -61,6 +61,9 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 		}
 	}
 	p.State = planStarted
+	for i := range p.Tasks {
+		p.Tasks[i].OwnerStarted = ownerStarts(ctx)
+	}
 	ok, err := s.movePlan(ctx, p, planOpen)
 	if err != nil {
 		return nil, err
@@ -106,7 +109,7 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			if t.Supervisor != "" && s.isLeader(ctx, t.Supervisor) {
 				sup = t.Supervisor
 				if t.ReuseTodo == "" {
-					s.taskCard(ctx, sup, todo.ID) // the leader sees its task's card too; the plan's stays where it was made
+					s.taskCard(ctx, sup, todo.ID, "") // the leader sees its task's card too; the plan's stays where it was made
 				}
 			}
 			s.superviseTodo(ctx, todo.ID, sup, t.DoneWhen, t.ExpectMinutes)
@@ -114,7 +117,7 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			// Any other conversation's task is its own to supervise: its signals go to the conversation that planned it,
 			// which also sees its card and reviews it. No second card when that is the planning conversation itself.
 			if t.ReuseTodo == "" && sup != p.Conversation {
-				s.taskCard(ctx, sup, todo.ID)
+				s.taskCard(ctx, sup, todo.ID, "")
 			}
 			s.superviseTodo(ctx, todo.ID, sup, t.DoneWhen, t.ExpectMinutes)
 		}
@@ -268,7 +271,7 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 	defer s.releaseTaskWorkspace(t.TodoID)
 	ctx, cancel := context.WithTimeout(context.Background(), taskStartTimeout)
 	defer cancel()
-	placed, placedWhy := t.Machine, t.Why
+	placed, placedWhy, placedPermission := t.Machine, t.Why, t.Permission
 	if t.Role == roleLeader { // its tools are listed once it is linked: a list asked for meanwhile waits (task_leader.go)
 		s.leaderStarts.Add(1)
 		defer s.leaderStarts.Add(-1)
@@ -291,7 +294,7 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 			}
 		}
 	}
-	if t.Machine != placed || t.Why != placedWhy { // workspace admission already persisted the actual checkout
+	if t.Machine != placed || t.Why != placedWhy || t.Permission != placedPermission { // workspace admission already persisted the actual checkout
 		s.updatePlanTask(ctx, planID, i, t)
 	}
 	if err == nil {

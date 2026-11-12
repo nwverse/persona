@@ -128,9 +128,8 @@ func (a assistantRemote) SendParams(ctx context.Context, machine, session string
 		Params       map[string]any `json:"params"`
 		LauncherNote string         `json:"launcher_note"` // the main chat ran on another launcher, and why (#4659)
 	}
-	who := principalOf(ctx) // a person's own app: a full device's credential (secret_handoff.go)
 	err := a.call(ctx, assistantwire.MethodSendParams, assistantwire.SendParams{MachineID: machine, SessionID: session, Params: params,
-		Lang: string(a.h.contextLang(ctx)), Human: who.Role == roleFull && who.ID != ""}, &res)
+		Lang: string(a.h.contextLang(ctx)), Human: personSent(ctx)}, &res)
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +230,12 @@ func (h *Hub) renameSession(w http.ResponseWriter, r *http.Request, m *Machine) 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	out := json.RawMessage(`{"ok":true}`)
-	if s, _ := m.session(sid); m.isAssistant(s) {
+	owner := h.sessionOwner(m.cfg.ID, sid)
+	sess, _ := m.session(sid)
+	// Ordinary extension calls keep the existing node authorization boundary.
+	// Older managers cannot record ordinary Agent titles; preserve their native path.
+	recordAgent := principalOf(r.Context()).Role != roleExtension && h.archiveManagerHas(owner, assistantwire.CapabilityAgentNaming) == http.StatusOK
+	if (p["title"] != nil || p["tab_name"] != nil) && (m.isAssistant(sess) || recordAgent) {
 		ext := ""
 		if pr := principalOf(r.Context()); pr.Role == roleExtension {
 			ext = pr.Extension
