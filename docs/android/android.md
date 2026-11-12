@@ -176,10 +176,10 @@ Where the built-in background supervisor shows (what it is:
   once and comes back on a failure), with one sentence under it. Shown when the hub sends the field.
 - **Model**: the same section has **Background supervisor model**, which opens
   `ModelPurposeRoute("assistant.supervise")` (`BackgroundSupervisor.PURPOSE`); the row is there whichever way the
-  switch is, as the use is in Model configuration, and the value is on the page it opens. The hub's catalog leaves
-  that use out, so Settings › Model configuration asks for it by its ID after the catalog (`ModelCatalogModel`,
-  `modelPurposesWith`) and lists it after the last use of its group; a hub without it, or one that fails that one
-  request, lists the catalog as it is.
+  switch is, as the use is in Model configuration, and the value is on the page it opens. A hub before #5806 leaves
+  that use out of its catalog, so Settings › Model configuration asks for it by its ID after the catalog
+  (`ModelCatalogModel`, `modelPurposesWith`) and lists it after the last use of its group; a hub without it, or one
+  that fails that one request, lists the catalog as it is, and a hub that lists the use (#5806 on) is not asked.
 - **Its reviews in the conversation**: a review it writes takes no turn of the conversation that handed the task
   out, so the hub marks the `review` feed entry `by: "background"` and the app draws exactly those entries in the
   conversation as the existing one-line `ReviewLine` (task · verdict · note), instead of leaving them in the

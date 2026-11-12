@@ -34,6 +34,10 @@ class Conversation(Hub):
     def items(self, sid):
         return self.call("GET", f"/api/v1/sessions/server/{sid}/items")[1]["items"]
 
+    def last_text(self, sid):
+        """A conversation's latest text item: with live view the room's meeting_topics_set call follows a batch."""
+        return [x for x in self.items(sid) if x["kind"] == "text"][-1]
+
     def ready_room(self, rid, role="participant", **fields):
         status, out = self.upload(rid, room={"attendance": role}, **fields)
         self.assertEqual((status, out["attendance"], out["room"]["state"]), (200, role, "none"))
@@ -147,7 +151,7 @@ class MeetingConversationMockTests(Conversation, unittest.TestCase):
         self.assertNotIn("revs", out)
         self.assertNotIn("attending_session", out)
         live = self.live(rid)
-        self.assertEqual(set(live["revs"]), {"asks", "room", "private"})
+        self.assertEqual(set(live["revs"]), {"asks", "room", "private", "lines", "topics"})  # lines and topics: live view
         self.assertEqual(live["revs"]["asks"], 0)
         only = self.live(rid, "?parts=room,asks,photos")
         self.assertEqual(set(only), {"room", "asks", "revs"})
@@ -157,8 +161,9 @@ class MeetingConversationMockTests(Conversation, unittest.TestCase):
         items = self.items(live["room"]["session_id"])
         self.assertEqual(items[0]["client_msg_id"], f"meeting-{rid}")
         self.assertIn('"kind": "meeting"', items[0]["text"])
-        self.assertIn("[0:05] Ada: Today we look at the export flow.", items[-1]["text"])
-        self.assertEqual(items[-1]["source"]["kind"], "meeting")
+        batch = self.last_text(live["room"]["session_id"])
+        self.assertIn("[0:05] Ada: Today we look at the export flow.", batch["text"])
+        self.assertEqual(batch["source"]["kind"], "meeting")
         row = next(s for s in self.call("GET", "/api/v1/sessions")[1]["sessions"] if s["session_id"] == live["room"]["session_id"])
         self.assertEqual((row["origin"], row["origin_ref"]), ("meeting", rid))
         self.assertRegex(row["title"], r"^\d{4} \| .+ \| Design review$")
@@ -183,7 +188,7 @@ class MeetingConversationMockTests(Conversation, unittest.TestCase):
         self.assertEqual(sent[f"ask-{typed}-1"]["text"], "What did we decide last time?")
         self.assertIn("What was just said (30:10)", sent[f"ask-{heard_id}-1"]["text"])
         self.assertIn("[30:00] Bo: Who owns the regression test?", sent[f"ask-{heard_id}-1"]["text"])
-        self.assertEqual(sum(1 for x in items if x["role"] == "assistant"), 3)
+        self.assertEqual(sum(1 for x in items if x["role"] == "assistant" and x["kind"] == "text"), 3)
         self.assertEqual(self.live(rid)["revs"]["asks"], 3)
 
     def test_a_room_that_cannot_start_answers_from_the_material(self):
@@ -227,12 +232,12 @@ class MeetingConversationMockTests(Conversation, unittest.TestCase):
         self.call("POST", "/mock/meeting_conversation", {"room": "ok"})
         self.upload(rid, room={"attendance": "listener"}, segments=LINES[:1])
         room = self.wait(lambda: (r := self.live(rid).get("room")) and r["state"] == "ready" and r, "the room")
-        so_far = self.items(room["session_id"])[-1]["text"]
+        so_far = self.last_text(room["session_id"])["text"]
         self.assertIn("[0:05] Ada: Today we look at the export flow.", so_far)
         self.assertIn("Q: Who owns the test?", so_far)
         # Told once: the next batch has only its new lines.
         self.call("POST", f"/api/v1/recordings/{rid}/live", {"from": 1, "segments": LINES[1:]})
-        latest = self.items(room["session_id"])[-1]["text"]
+        latest = self.last_text(room["session_id"])["text"]
         self.assertIn("Bo: Who owns the regression test?", latest)
         self.assertNotIn("Q: Who owns the test?", latest)
 

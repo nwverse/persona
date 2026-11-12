@@ -367,6 +367,20 @@ the only line between tool calls was English to a Chinese owner. The node now al
 (`midTurn`), asking for one sentence in the user's language before the next tool call, and the CLAUDE.md asks for the
 user's language in process text too.
 
+## Disable ToolSearch per server, not for the whole assistant process (#5838)
+
+Setting `ENABLE_TOOL_SEARCH=false` for Persona's assistant also forced every claude.ai connector's tools into each request (one connector alone was hundreds of tools and most of the context), causing repeated compaction. `personad mcp` now marks only Persona tools with `_meta: {"anthropic/alwaysLoad": true}` when `PERSONA_ASSISTANT=1`, and the assistant no longer disables ToolSearch globally. Keep other servers on Claude Code's normal deferred loading. A regression test checks both the metadata and the process environment.
+## A leader writes to an owner who has seen nothing else (#5842)
+
+Leaders spend most of their turns with the main chat, other leaders, scheduled runs and supervision messages (on one
+hub, 20 of the 70 messages a leader got in a day were the owner's), and they compact often. Their replies to the owner
+then carried that world along: plan item codes from their own files, shorthand from a compaction summary, "as we
+aligned today" about something settled in another conversation, and "approve it?" for a change the owner had not been
+shown. The owner could not follow and stopped trusting the replies. The CLAUDE.md now opens its interaction section
+with the rule that everything written for the owner (replies, cards, `notify_user`, `leader_progress`) assumes they
+have seen nothing else: plain names instead of codes, one sentence on where an unseen thing came from, and an approval
+only for something they were shown, with a link.
+
 ## A leader's split must be somewhere the owner can see (#5846)
 
 Owners lost track of their directions because a leader kept its breakdown in its own files and turns: the direction tree
