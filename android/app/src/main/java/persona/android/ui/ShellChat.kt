@@ -141,7 +141,7 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
  * them): a chat that has just answered its last card offers the first one of another chat (#4325).
  */
 @Composable
-private fun rememberWaitingRequests(session: ShellSession, sessions: List<persona.core.contracts.Session>): List<WaitingRequest> {
+internal fun rememberWaitingRequests(session: ShellSession, sessions: List<persona.core.contracts.Session>): List<WaitingRequest> {
     val pending by session.interactions.pending.collectAsStateWithLifecycle()
     val assistant by session.assistant.assistant.collectAsStateWithLifecycle()
     // `snapshots` builds a new flow on each read: keep one, or the collection restarts on every recomposition.

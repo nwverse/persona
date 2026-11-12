@@ -466,7 +466,10 @@ private fun ChatPage(
     val glass = PersonaTheme.style == AppStyle.Glass
     val agentChat = renderStyle != ChatRenderStyle.Assistant
     val errorLine = snapshot.error?.takeIf { glass && agentChat }
-    val readyLine = if (readOnly || !agentChat) null else gettingReady(res, session, messages, liveWork = liveWorkLines.isNotEmpty())
+    // Persona's conversation says it too, by Persona's name (#4339 C18): a new conversation's first message waits there.
+    val personaName = persona.core.designsystem.LocalPersonaName.current
+    val readyLine = if (readOnly) null else gettingReady(res, session, messages, liveWork = liveWorkLines.isNotEmpty(),
+        name = if (agentChat) chatAgentName(session) else personaName)
     val tailRows = listOfNotNull(ERROR_ROW.takeIf { errorLine != null }, READY_ROW.takeIf { readyLine != null })
     // Rows before the lines in the list: the tail rows and the unsent messages.
     // The newest "while you were away" recap open as the last line until tapped or typing starts (Glass, an Agent's chat).
@@ -754,6 +757,8 @@ private fun ChatPage(
                         result.submission.haptic?.let(haptics)
                         taps = taps.answered(interaction.id, result.card)
                         if (!result.withdraw) notice = result.notice(res, interaction, resolution)
+                        // An approval from the tray answers a card here too: the next one waiting elsewhere is offered.
+                        else if (result.offersNext(resolution)) answeredHere++
                     } finally { taps = taps.idle() }
                 }
             } finally { trayApproving = false }
@@ -1014,8 +1019,7 @@ private fun ChatPage(
                             // This agent has nothing left for you, others have (#4325): one tap to the next, no jump.
                             val openRequest = chrome.onOpenRequest
                             val keyboard = WindowInsets.ime.getBottom(LocalDensity.current) > 0
-                            if (showsNextWaiting(offerNext, requests.size, readOnly, renderStyle == ChatRenderStyle.Assistant,
-                                    canOpen = openRequest != null, keyboard = keyboard))
+                            if (showsNextWaiting(offerNext, requests.size, readOnly, canOpen = openRequest != null, keyboard = keyboard))
                                 nextWaiting(chrome.waiting, key)?.let { next ->
                                     NextWaitingRow(next, { offerNext = false; openRequest?.invoke(next.request.session, next.request.requestId) })
                                 }
@@ -1116,7 +1120,8 @@ private fun ChatPage(
                                     extraContent = linkContexts.isNotEmpty(), visible = composerShown(panel, requestCollapsed),
                                     enabled = canSend, placeholder = when {
                                         !canSend -> READ_ONLY.text()
-                                        !agentChat -> stringResource(R.string.chat_screen_placeholder)
+                                        // "Ask Persona…", as the assistant's blank page and iOS say (#4339 C18).
+                                        !agentChat -> stringResource(R.string.chat_placeholder_ask, persona.core.designsystem.LocalPersonaName.current)
                                         else -> agentPlaceholder(res, session)
                                     },
                                     // Permission mode and effort for Claude's sessions, Persona's included; the model for Claude in a pane;
