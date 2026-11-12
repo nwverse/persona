@@ -368,7 +368,7 @@ func (s *Service) linkTaskFor(ctx context.Context, it *InboxItem, tasks []prompt
 func (s *Service) judgeInboxTask(ctx context.Context, it *InboxItem, tasks []prompts.InboxTask) (string, error) {
 	b := &s.inbox
 	b.mu.Lock()
-	input := prompts.RenderInboxJudgeInput(prompts.InboxJudgeInput{Summary: it.Summary, Item: b.promptItem(it), Tasks: tasks})
+	input := prompts.RenderInboxJudgeInput(prompts.InboxJudgeInput{Summary: it.Summary, Recap: clip(it.Recap, 1600), Item: b.promptItem(it), Tasks: tasks})
 	b.mu.Unlock()
 	system := prompts.RenderInboxJudge(prompts.InboxJudge{Owner: s.owner(ctx), Rules: s.inboxConfig(ctx).AgentRules})
 	var out struct {

@@ -676,6 +676,8 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   Judge candidates do not inherit the assistant briefing's item limit or age window; closed/cancelled tasks are excluded.
   Each candidate includes up to 1200 characters of its original request as subject context. The judge compares the
   actual requested work, not names or messages merely quoted as examples in another task's notes.
+  An existing event also supplies up to 1600 characters of its investigation recap, marked as possibly stale subject
+  context rather than an instruction or confirmed reply; the current message takes precedence.
   It requires the AI twin to be enabled and preserves existing links. It answers `{status, method?, item}`: `linked`
   or `unmatched` (with `method: "judge"` when the model ran), or `existing`; `409` distinguishes `disabled`, `closed`,
   `changed` and `task_closed`. Model failures answer `502`, storage failures `503`, and a missing event `404`.

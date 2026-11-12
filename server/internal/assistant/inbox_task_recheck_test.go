@@ -30,6 +30,7 @@ func taskRecheckHub(t *testing.T) (*inboxHub, Todo, *InboxItem) {
 	it.Agent = &InboxAgent{State: AgentDrafted, MachineID: "box", SessionID: "processing", Of: it.Last,
 		Draft: "The fix is being checked.", Note: "Keep this draft."}
 	it.Handling = &InboxHandling{State: HandlingDone}
+	it.Recap = "The investigation traced the crash to screen rotation."
 	it.Suggestion = &InboxSuggestion{Kind: SuggestReply, Text: it.Agent.Draft, Version: 3}
 	h.inbox.mu.Lock()
 	h.inbox.items[it.ID] = it
@@ -54,7 +55,7 @@ func TestInboxTaskRecheckDraft(t *testing.T) {
 	if string(rawJSON(before)) != string(rawJSON(after)) || !it.open() || it.Handling.State != HandlingDone || it.Suggestion.Version != 3 {
 		t.Fatalf("processing changed: %+v / %+v / %+v", it.Agent, it.Handling, it.Suggestion)
 	}
-	if c := onlyCall(t, calls()); !strings.Contains(c.User, todo.ID) || !strings.Contains(c.User, todo.Notes) {
+	if c := onlyCall(t, calls()); !strings.Contains(c.User, todo.ID) || !strings.Contains(c.User, todo.Notes) || !strings.Contains(c.User, it.Recap) {
 		t.Fatalf("the judge did not see the task: %s", c.User)
 	}
 	waitFor(t, "the supervisor's Inbox notice", func() bool {
