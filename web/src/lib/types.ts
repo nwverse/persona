@@ -712,6 +712,16 @@ export interface ScreenDialog {
   steps?: { label: string; done: boolean }[];
   review?: boolean;
   incomplete?: boolean;
+  /** A shell command's permission prompt (#5266): the command, the agent's words for it, the boxed warning as Claude
+   *  Code words it and what it is about (risk "delete"), the countdown sentence, what it does when it runs out
+   *  (deadline_action "deny" / "allow") and when (deadline_at, RFC 3339, the hub's clock). A hub before #5265 sends none. */
+  command?: string;
+  description?: string;
+  warning?: string;
+  risk?: string;
+  deadline?: string;
+  deadline_action?: string;
+  deadline_at?: string;
 }
 
 /** What an MCP server asks for: a form (`requested_schema`, a JSON Schema subset) or a link to open (`url`). */

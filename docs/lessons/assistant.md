@@ -1,5 +1,12 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- Proven `prompt` source can describe either a terminal tool label or a first-message fallback (#5269).
+  Ordinary Claude inventory falls back to the first message for a bare tool label but not its spinner-prefixed
+  form, so spinner normalization alone still lets a generated name disappear. Accept recognizable bad fallback
+  changes only with explicit Claude runtime and prompt provenance; reject other tool/runtime names, meaningful
+  titles, manual/custom titles and unknown sources. Apply this comparison at display and late-result boundaries,
+  and test both directions plus service reconstruction without a new model call or counter reset.
+
 - Terminal spinner frames are presentation, not native-title changes (#5254). Comparing a saved `raw_title`
   byte for byte with a later inventory hid a successful automatic name while leaving its one-shot count spent.
   Use the same leading-spinner/whitespace comparison for display decoration and the model-result recheck.
