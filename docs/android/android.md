@@ -294,6 +294,14 @@ order, assistant switching, real-page phone home/search/empty states in every st
 Advanced folding and owner-aware selection. Captures produced by these tests are **Native JVM Compose renders**,
 not emulator/handset screenshots, and do not prove system dialogs, background survival or live hub transport.
 
+### Large-window Settings presentation and hardware keys
+
+On regular and expanded windows, Settings keeps the same `settingsSheetStack`, entries, ViewModel stores and root Close / child Back behavior, but `JSettingsSheet` presents them inside a centered page-sized card. The card uses `SettingsPageSizing` (maximum width and height aliasing `ReadingWidth`, minimum margin `Tokens.Space.xl`) and the actual safe drawing bounds. The existing list-detail directive still decides when to show one pane. Compact and wide-phone windows retain the original full-window sheet. A fixed-key `SaveableStateHolder` carries saveable drafts and list state when the outer presentation changes.
+
+Large windows also own a `HardwareShortcutHost`. Transient surfaces register their existing dismiss callbacks in LIFO order: sheets, dialogs, `FullTextReader`, `MessageSharePage` and `ChatSearchScreen`. The host uses `onKeyEvent`, not a preview listener, so focused text fields, the expanded composer, pointer menus and terminal views consume their own keys first. Escape closes only the top registration; with an empty stack it is consumed without navigation, App exit or Agent interruption. Ctrl+/ opens the localized shortcut-help dialog above the current layer, and the first Escape closes that help before the layer below. Compact windows do not register this behavior.
+
+`SettingsPresentationTest`, `PageSizedSettingsSheetTest`, `HardwareShortcutControllerTest` and `HardwareShortcutHostTest` cover sizing, saveable state, registration ownership, layered dismissal, terminal-style consumption and compact behavior. `SettingsPresentationShotsTest` and `KeyboardShortcutsShotsTest` render the three styles in light/dark, and the latter covers English, Simplified Chinese and Japanese at default and large text. The live scenes are `settings-page-card.json` and `hardware-shortcuts.json`. They require the adaptive scene runner and large-window provider; real IME composition, Meta keys, physical keyboard focus, genuine message-menu reader/share entry and Settings-stack probe fields remain integration checks, not claims established by source-only tests.
+
 ## Notifications (no push service)
 
 Android shares the hub WebSocket through the foreground service in `:platform:notify` and does not depend on FCM or vendor push. Notification channels, restore on boot, network reconnects, keep-alive scheduling and the setup checklist for Chinese-vendor ROMs are implemented.

@@ -258,8 +258,8 @@ and the Duo's inner screen; a phone, folded or not, is narrower than 600dp uprig
   Agents' "computer → space → session" tree | chat (terminal takeover also in the right pane); Inbox list | Lark conversation / email; settings categories | settings subpage (all settings subpages therefore use navigation).
   Persona's main chat does not split. An unselected right pane shows a placeholder. A detail with no list under it (Computers or an extension page opened from the sidebar over the Assistant page)
   is a page of its own: the scene finds one pane to show and leaves it to the single-pane scene.
-- **Settings** opens in its sheet (`JSettingsSheet`, which fills the window), and in a regular window the sheet holds its own list-detail scene:
-  the list of settings with Close on the left, the opened page on the right, its row marked; the divider can be dragged but is not kept. On a phone it is one stack, as before.
+- **Settings** opens in its sheet: compact and wide-phone windows keep the full-window sheet, while a regular window presents a centered page-sized card.
+  The card holds the same list-detail scene: the list of settings with Close on the left, the opened page on the right, its row marked; the divider can be dragged but is not kept. On a phone it is one stack, as before, and the existing directive also falls back to one pane when the card cannot fit two readable panes.
 - Agents and Inbox split in every regular window, from 600dp, where they used to wait for 760dp (an open foldable upright was one pane). A phone on its side at least 760dp wide keeps its two panes.
 - Panes share the shell's single background layer (section 3), without separate backing panels.
   Only an 8dp gap (`horizontalPartitionSpacerSize`) separates panes, with no divider line or second backing layer; right-pane placeholders draw the same background.
@@ -275,10 +275,18 @@ and the Duo's inner screen; a phone, folded or not, is narrower than 600dp uprig
   the sidebar column ends at the fold and the Assistant page starts past it (`sidebarSplit`), as the half-folded Duo keeps both columns clear of its crease.
 - Tabletop posture (horizontal half-fold): pages with bottom overlays (chat, terminal) place content above the hinge and the input field / key bar below (`PageFrame`); the sidebar column runs the full height.
 - Not taken from iOS, because Android has no matching system behavior: the Duo's vertical side bars and the shell's side rail (`ShellSideRail`; the system moves iOS bars to the screen's edge on the outer screen and inner landscape,
-  Android never does), the cross-fade between pages under those bars, and the iPad's page-sized Settings card (`presentationSizing(.page)`): Android's sheet spans the window like the Duo's.
+  Android never does) and the cross-fade between pages under those bars.
   The Agents page gets no sidebar column: the Duo's Agents tab has none either, and on an open foldable a third column would take the room the Agents list and its chat need.
 - Keyboard, mouse, trackpad: session, message and settings-row long-press menus also respond to right-click; hover has feedback; lists support the wheel; the software keyboard does not open by itself on launch.
 - Glass blurs a larger area on large screens (each pane's top bar and scroll edges); performance has not been measured.
+
+### 3.2 Page-sized Settings and hardware shortcuts
+
+`JSettingsSheet` reads only `LocalLargeWindowInput`; it does not duplicate the window breakpoints. On a large window `JPageSizedSettingsSheet` centers a card within the safe drawing area. `SettingsPageSizing` names its maximum width and height (both aliases of `ReadingWidth`) and minimum window margin (`Tokens.Space.xl`), so expanded windows retain visible margins and a minimum regular window can be nearly full. The card keeps the same Settings stack and a fixed-key saveable holder across presentation changes. Root Close and child Back keep their existing meanings, and the existing list-detail directive degrades to one pane when necessary.
+
+`HardwareShortcutHost` is attached to the large-window shell and the Settings dialog. Sheets, dialogs, full-text reading, message sharing and chat search register their existing close actions in LIFO order. Escape reaches these listeners only after the focused child declines it, closes at most one layer, and is a no-op when nothing transient is open. It never exits the App or stops an Agent. Expanded composer and pointer menus keep their own Escape handling; a focused terminal keeps its consumed control, navigation and Escape keys.
+
+Ctrl+/ opens a centered, scrollable shortcut-help dialog above the current layer. The help lists only working send/newline, close, help and terminal keys in English, Simplified Chinese and Japanese. It leaves drafts, selection and terminal state alone, and Close stays on one line. Compact and wide-phone windows neither create this host nor register the new behavior.
 
 ## 4. Screenshots and verification
 
