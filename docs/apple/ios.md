@@ -191,7 +191,8 @@ Chat page:
   Space-top machine button ("Work computer ›") opens `MachineSpacesView`: online/state counts, active projects with newest sentence of most urgent Agent,
   idle projects opening spaces; Agents outside herdr spaces listed directly; top-right ⓘ machine details.
   DEBUG `-tab dev -openMachinePage <machine id>`.
-- Terminals (#4754, `TerminalsView.swift`, `docs/integrations/terminal.md` ("Not implemented")): Agents menu › Terminals, and Terminals on a computer's page. Every pane of each computer: the Agents' under their titles, plain ones as Terminal with the program in front and the folder, a stopped Agent's left behind as "Finished: <title>". A tap opens the terminal cover (a plain pane by its `pane:` address); the computer's header menu has New Terminal per workspace and Close Finished Terminals; a plain pane closes after a confirmation. A stopped Agent's chat shows one line over its disabled composer with Terminal, and its terminal page offers Resume Session. DEBUG `-tab dev -openTerminalsPage all|<machine id>`.
+- Terminals (#4754, `TerminalsView.swift`, `docs/integrations/terminal.md` ("Not implemented")): Agents menu › Terminals, and Terminals on a computer's page. Every pane of each computer: the Agents' under their titles, plain ones as Terminal with the program in front and the folder, a stopped Agent's left behind as "Finished: <title>". A tap opens the terminal cover (a plain pane by its `pane:` address); the computer's header menu has New Terminal per workspace and Close Finished Terminals; a plain pane closes after a confirmation. A stopped Agent's chat shows one line where its composer was, with Terminal and Resume Session (#5521: it opens the terminal and resumes there), and its terminal page offers Resume Session. DEBUG `-tab dev -openTerminalsPage all|<machine id>`.
+- Resume in Terminal (#5521, `Session.terminalResume(on:)` in `Shared/Models.swift`, `docs/integrations/engines.md` "Agents run in a terminal"): the chat's ⋯ has it under Terminal for a stopped Agent, a Codex thread nothing has open included (`Session.isStopped`); it brings the terminal up over the page (`TerminalCover` with `resumeOnOpen`), where the resume shows its progress and the Agent comes up. Where the computer enables no terminal engine (`engine_hosts: []`) it is disabled with "No terminal engine on <computer>" under it, and the terminal page says the same instead of offering Resume. Not there while the session runs, here or in a terminal of its own, while it starts, for the assistant's chats, the desktop apps' sessions or rows of older nodes. Not on the frozen Mac app. UI test `ResumeInTerminalTests` (mock `MOCK_RESUME_TERMINAL=1 MOCK_TERMINAL_STREAM=1`).
 - Machines (`docs/server/machines.md` ("App")): all machines in one page, each card online/system/Agent counts (Needs you / Working / Idle), current CPU/memory/network,
   1-hour mini charts, alerts, Redeploy on version mismatch, urgent first. Details show Agents above (open chats), then charts
   (1 / 6 / 24 hours, press to scrub), system info, launchers. Below Engine: What this computer can do (#3018, node self-check by capability, expandable checks; stale generated files offer confirmed Repair, `docs/server/machines.md` ("Doctor: what this computer can do")); entries drawer Machines, Settings › Machines, Agents menu Machines (old Machine monitoring merged).
@@ -330,7 +331,7 @@ Chat page:
   Repeated identical errors separated only by Continue-like retries merge with count (`ChatView.foldAPIErrors`). Retry (sends "继续", "Continue") only when last item, idle Agent and transient.
   Currently text parsing; Claude Code also provides `apiErrorStatus`, `error`, `requestId` fields, preferred once hub reads them. DEBUG `-showErrorDetails YES` opens by default.
   Screenshots mock `MOCK_API_ERRORS=1`, assistant main and review chats.
-- Refusal fallback (#4489, the iOS half of #2528; web #4487, Android #4488): a notice with `model_refusal` is a line of its own after the exchange (`RefusalNotice`; `ChatStore` puts it with the turn's trailing rows, never in the work row): the upstream refused, which model Claude Code switched from and to (or that no switch is recorded), "later turns may keep using it" for scope `session`, the category, the explanation and the refusal's own words. Models go by their short names (`SessionModes.modelName`), where the web shows ids. While the session has `model_fallback`, a card above the composer (`ModelFallbackCard`, a `ReadinessCard`) names both models and the error since: a terminal session gets only the "type /model in Claude Code" step; a Persona conversation gets **Back to Configured Model** (`POST …/restore-model`, refusals said in words by `ModelFallbackText.restoreError`), and the main conversation also **New Main Chat**. While `model_restore` is pending the card says only that the next start uses the configured model, and names it. The API error card offers no Retry while `turn_error_code` is `model_fallback_unavailable`. Items keep the refusal's words as their text, never an older hub's whole record line (`Item.publicRefusal`); `ChatCache` went to `chats-v17` so notices cached without `model_refusal` are dropped. Tests: `ModelFallbackTests`, `ModelFallbackUITests` (mock `MOCK_MODEL_FALLBACK=1 MOCK_MAIN_ACTIONS=1`).
+- Refusal fallback (#4489, the iOS half of #2528; web #4487, Android #4488): a notice with `model_refusal` is a line of its own after the exchange (`RefusalNotice`; `ChatStore` puts it with the turn's trailing rows, never in the work row): the upstream refused, which model Claude Code switched from and to (or that no switch is recorded), "later turns may keep using it" for scope `session`, the category, the explanation and the refusal's own words. Models go by their short names (`SessionModes.modelName`), where the web shows ids. While the session has `model_fallback`, a card above the composer (`ModelFallbackCard`, a `ReadinessCard`) names both models and the error since: a terminal session gets only the "type /model in Claude Code" step; a Persona conversation gets **Switch Back** (zh-Hans 回到配置的模型, ja 元に戻す; `POST …/restore-model`, refusals said in words by `ModelFallbackText.restoreError`), and the main conversation also **New Main Chat** (the card's own key, ja 新しいチャット: at the largest text size, stacked, the longer Japanese and English words still ended in "…", `docs/design/DESIGN_SYSTEM.md` 1.2 rule 3 (a), #5202). While `model_restore` is pending the card says only that the next start uses the configured model, and names it. The API error card offers no Retry while `turn_error_code` is `model_fallback_unavailable`. Items keep the refusal's words as their text, never an older hub's whole record line (`Item.publicRefusal`); `ChatCache` went to `chats-v17` so notices cached without `model_refusal` are dropped. In a Persona conversation (`plainRefusals`, set by `ChatView` from `session.assistant`; #5202) the line is one sentence with the model's short name and the record under a closed Details, and the card's title says which model answers now, with the configured model while pending; the rest goes under `ReadinessCard`'s Details. Tests: `ModelFallbackTests`, `ModelFallbackUITests` (mock `MOCK_MODEL_FALLBACK=1 MOCK_MAIN_ACTIONS=1`).
 - Claude suggestions (`SuggestionPill`): session `suggestion`, not working, empty input shows "✦ Suggestion … Use" above (AI purple, not accent), also placeholder;
   tap fills editable input, long-press Send now. Typing hides it. Headless assistant has no TUI/suggestions; mock `MOCK_SUGGESTION=1`, review session.
 - Sending clears input immediately and displays Sending bubble (`ChatStore.pending`), request background; same text in transcript
@@ -1314,7 +1315,8 @@ With hub feature `assistant_readiness`, the App reads `GET /api/v1/assistant/rea
 state in `AppModel.readiness`, `AssistantReadinessModel`), using the same presentation as the web (`../web/web.md` ("What the main chat still needs")):
 
 - Query while Persona is foregrounded (`.tabActiveTask`), when machines change, from `warm` responses, after chat creation is refused, and after saving a provider (`readinessChanged()`). Old hubs (no feature or 404) show nothing.
-- Above the new-chat input (old `AssistantHome`, new-shell `ShellHome`), a `ReadinessCard` (design-system component, BeautifulUI list rows):
+- Above the new-chat input (old `AssistantHome`, new-shell `ShellHome`), a `ReadinessCard` (design-system component, BeautifulUI list rows;
+  at the accessibility text sizes its buttons and Details stack, the main one first, each on one line, `docs/design/DESIGN_SYSTEM.md` 1.2 rule 3, #5202):
   `setup` shows the first missing step; `rate_limited` shows only a card without blocking Send. In `setup`, a nonempty draft replaces Send with `SendGate` ("Connect a model first", "Add a computer first"…); tap opens that step, retaining the draft without queuing it.
 - Actions (`ReadinessRoute`): add / confirm computer first opens Machines (switches to Add Computer after M3 lands); connect model opens provider wizard, replace key opens that provider;
   install / log in to Claude Code, wake computer and `local` sample questions open local instructions (`ReadinessHelpView`, not sent to a model); Try a message queries `?probe=1`. Unknown `action` shows text only.
@@ -1439,8 +1441,9 @@ and can wait and in progress when there are any.
   | --- | --- |
   | `triage_decide`, `triage_auto_continue`, `triage_wake` | Settings › Session Triage (`SettingsPage.triage`) |
   | `supervisor_tier` | Settings › Models › the background supervisor's use (`ModelPurposeRoute`) |
-  | `task_trust` | Auto-Start Tasks (`TaskTrustView`), in a sheet over the chat: it has no place in Settings |
-  | `standing_authorizations`, `leaders`, `review_sample`, `delegate`, `independent_review`, a newer one | no button: the app has no page for it, and the line itself says where it is turned on |
+  | `task_trust` | no button: a kind of task is remembered with a plan card's own checkbox, as the line says; Auto-Start Tasks only lists and removes them |
+  | `standing_authorizations` | no button: the line names a page of Settings that only the web app has, so the row adds "That page is in the web app's settings for Persona." (`BriefBody.Setup.isOnTheWebOnly`) |
+  | `leaders`, `review_sample`, `delegate`, `independent_review`, a newer one | no button: the app has no page for it, and the line itself says where it is turned on |
 
   The hub's `link` is the web app's page and is not used. A hub from before sends no `setup` and the card is as it was.
 - **Not drawn**: the watch reads only assistant view cards from the feed, so it gets nothing.
@@ -1448,7 +1451,9 @@ and can wait and in progress when there are any.
   the buttons can get, with `FakeHub`; the setup lines, their pages and a briefing with them as one feed line) and
   `BriefCardUITests` against the mock's `brief` item (`MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1`; `TEST_RUNNER_PERSONA_SHOTS` /
   `TEST_RUNNER_PERSONA_SHOTS_APPEARANCE` save it folded, unfolded and answered). `MOCK_BRIEF_SETUP=1` adds the setup
-  lines to the mock's briefing.
+  lines to the mock's briefing, in the hub's own words; `AvailabilityFollowupsUITests` (with `MOCK_RULE_SUGGESTIONS=1`
+  too) checks which lines have Open Settings and the line under the open plan, and saves both
+  (`availability-<appearance>-…png`).
 
 ## Quiet supervision rounds (#2092)
 
@@ -1551,19 +1556,30 @@ question a supervisor passed up. `RuleSuggestionLine` draws it as one quiet line
 - **What it says**: the hub's `text` (what was noticed), then a sentence the app words from the fields, saying exactly
   what Always creates and for what (`RuleSuggestion.createsText`): the entry in Auto-Start Tasks for that directory and
   computer; a standing authorization for the action, directory and computer, with its conditions and the words it
-  would keep as the owner's (`scope.quote`); or, for `delegate`, that nothing is stored and which setting is named.
+  would keep as the owner's (`scope.quote`); or, for `delegate`, that Always stores no rule and turns nothing on and
+  only puts the suggestion away for 30 days. That sentence names no key and no place: the hub's own line above it
+  already says what the setting does.
   A condition or an action the build does not know is shown as the hub's word.
 - **Two buttons**, single-line: **Not Now** and **Always**
   (`POST /api/v1/assistant/rule-suggestions/{id}/not-now` / `always`). While one is out, neither takes a tap.
 - **After Always** the line becomes what was made and where it is listed and removed: Auto-Start Tasks in the
   assistant's profile; for a standing authorization, the web app's settings for Persona (the Apple apps have no list
-  of them); for `delegate`, that nothing was stored and the key to set in the assistant's configuration file. The
-  result is kept by card (`RuleSuggestions.made`), so it stays when the hub sends the card again without the line.
+  of them); for `delegate`, that nothing was stored or turned on and that it is turned on in the assistant's
+  configuration file on the hub's computer, with the key in brackets, as the hub's recommended-setup line for the
+  same mechanism words it. (The hub's suggestion line for `delegate` ends "You can turn this on in Settings", which
+  no app can do yet; the app does not repeat it.) The result is kept by card with the suggestion it answered
+  (`RuleSuggestions.made`), so it stays when the hub sends the card again without the line. A to-do's card is its
+  decision round (the to-do's id with the ask's `asked_at`): the result is not drawn under the to-do's next
+  decision, and another suggestion on the same card is offered in the result's place.
 - **Answered or stale**: Not Now takes the line away. A 404 (the answers no longer earn it, or it was answered on
   another device) clears it without a message. An answered suggestion is also hidden on every other card that still
-  carries it, for an hour (`RuleSuggestions.quietFor`): a plan and a card keep the copy they were read with until
-  they are read again, and the hub itself keeps it quiet for 30 days. After an answer the to-dos or the plan's feed
-  are read again. A 409 (the standing authorizations changed meanwhile) and any other failure (403 for a device
+  carries it, for an hour (`RuleSuggestions.quietFor`), which bridges the time until the app's copies are without
+  it; the hub itself keeps it quiet for 30 days. After an answer the to-dos are read again (the hub words a decision
+  on every read) and a pending card comes again without the line. For a plan the hub sends no event, and a feed read
+  asks only for what came since the newest item, so the app takes the answered suggestion off every plan it holds
+  itself (`TasksStore.ruleSuggestionSettled`); otherwise the line would come back after the hour. A 404 on Always
+  after an Always whose answer was lost on the way is cleared like any other 404, without saying a rule was made
+  (the app cannot tell the two apart). A 409 (the standing authorizations changed meanwhile) and any other failure (403 for a device
   without full access, 503) say so in a toast and leave the line.
 - **Not offered**: a suggestion without an id or words, or whose `creates` this build does not know. It cannot say
   what the tap would make, so it draws nothing and the card is as before; the card itself is never dropped
@@ -1583,11 +1599,9 @@ and with `MOCK_TASKS=1` the open plan; the two routes answer once, then 404) and
 `MOCK_TODO_ASKS=1`, the PR check's decision is held); `python3 -I scripts/mock/test_availability_followups_mock.py`
 checks them. Tests: `RuleSuggestionTests` (reading from each card, a hub from before, odd shapes, the wording, and every
 answer the two buttons can get with `FakeHub`) and `TodoDecisionCompletionTests.aDecisionHeldForTheBriefingSaysSo`.
-Not built for iOS, watchOS or the Mac app: this change was written on a machine without Xcode. With the command-line
-Swift 6.4 toolchain, for macOS and against stand-ins for the rest of the app, `Shared/`, `RuleSuggestions`,
-`BriefActions`, `BriefCard` and `ModelConfigurationModel` type-check and the unit tests named here pass, except the
-feed-line test (`ChatLines` needs the app). No simulator build, UI test or light / dark screenshot exists yet, and
-Swift 6.2 is not verified (#5807).
+`AvailabilityFollowupsUITests` runs against the mock with `MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1 MOCK_BRIEF_SETUP=1
+MOCK_RULE_SUGGESTIONS=1` (the plan's line and Not Now; it skips against a mock without them). The to-do's decision, the
+question card and the held mark have unit tests only.
 
 ## Source mentions in the assistant conversation (#2130)
 

@@ -124,7 +124,7 @@ class AvailabilityFollowupsMockTests(unittest.TestCase):
         base = self.serve(MOCK_BRIEF_SETUP="1", MOCK_TASKS="1")
         brief = next(i for i in feed(base)["items"] if i["kind"] == "brief")
         setup = brief["body"]["setup"]
-        self.assertEqual([x["id"] for x in setup], ["triage_wake", "supervisor_tier", "task_trust", "delegate"])
+        self.assertEqual([x["id"] for x in setup], ["triage_wake", "supervisor_tier", "task_trust", "standing_authorizations", "delegate"])
         self.assertTrue(all(x["text"] and isinstance(x["count"], int) and x["setting"] for x in setup))
 
     def test_the_catalog_lists_the_background_supervisor_with_descriptions(self):

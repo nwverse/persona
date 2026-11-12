@@ -58,7 +58,7 @@ nonisolated struct RuleSuggestion: Codable, Hashable, Sendable {
         /// A `tasks.trust` entry, as Start These Directly makes.
         case taskTrust
         case standingAuthorization
-        /// Nothing: the suggestion names a setting to turn on instead (`agents.delegate`).
+        /// Nothing: the suggestion names a setting to turn on instead (`agents.delegate`). Always turns nothing on.
         case setting(String)
     }
 
@@ -128,8 +128,10 @@ nonisolated struct RuleSuggestion: Codable, Hashable, Sendable {
             return String(localized: "Always adds a rule to Auto-Start Tasks: tasks that change files in \(directory) on \(place) start without asking first.")
         case .standingAuthorization:
             return [Self.grant(scope), Self.conditions(scope), Self.quote(scope)].compactMap { $0 }.joined(separator: " ")
-        case .setting(let name):
-            return String(localized: "Always stores no rule: it names the setting \(name), which lets the assistant answer such questions for you.")
+        case .setting:
+            // No key and no place here: the hub's own line above says what the setting does, and the result after
+            // Always says where it is turned on.
+            return String(localized: "Always stores no rule and turns nothing on. It only puts this suggestion away for 30 days.")
         }
     }
 
@@ -198,7 +200,9 @@ nonisolated struct RuleSuggestionMade: Decodable, Hashable, Sendable {
         default:
             let name = setting ?? asked.setting ?? ""
             if name.isEmpty { return String(localized: "Done. Nothing was stored.") }
-            return String(localized: "Nothing was stored. To let the assistant answer such questions, turn on \(name) in its configuration file; no app has a switch for it.")
+            // The place in the words of the hub's own recommended-setup line for the same mechanism
+            // (assistant-setup_suggest.json "delegate").
+            return String(localized: "Nothing was stored and nothing was turned on. The apps have no switch for this yet: it is turned on in the assistant's configuration file on the hub's computer (\(name)).")
         }
     }
 }

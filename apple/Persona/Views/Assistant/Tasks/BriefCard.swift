@@ -164,8 +164,6 @@ struct BriefCard: View {
 /// turned on from here.
 private struct BriefSetupSection: View {
     var lines: [BriefBody.Setup]
-    /// Auto-Start Tasks has no place in Settings: it opens over the chat.
-    @State private var showsTaskTrust = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
@@ -177,27 +175,13 @@ private struct BriefSetupSection: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("brief.setup")
-        .sheet(isPresented: $showsTaskTrust) {
-            NavigationStack {
-                TaskTrustView().macSheetDone { showsTaskTrust = false }
-            }
-            #if os(macOS)
-            .macSheet()
-            #endif
-        }
     }
 
-    /// Open Settings for a line whose mechanism has a page in this app; nil otherwise, and the line has no button.
+    /// Open Settings for a line whose mechanism is turned on at a page of this app; nil otherwise, and the line has
+    /// no button.
     private func action(_ line: BriefBody.Setup) -> (() -> Void)? {
         guard let page = line.page else { return nil }
-        return { open(page) }
-    }
-
-    private func open(_ page: BriefBody.Setup.Page) {
-        switch page {
-        case .taskTrust: showsTaskTrust = true
-        case .triage, .superviseModel: BriefSetupPages.open(page)
-        }
+        return { BriefSetupPages.open(page) }
     }
 }
 
@@ -208,10 +192,17 @@ private struct BriefSetupRow: View {
 
     var body: some View {
         HStack(spacing: Theme.Space.m) {
-            Text(line.text)
-                .font(Theme.Font.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                Text(line.text).font(Theme.Font.secondary)
+                if line.isOnTheWebOnly {
+                    Text("That page is in the web app's settings for Persona.")
+                        .font(Theme.Font.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("brief.setup.web.\(line.id)")
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
             if let open {
                 Button(action: open) { Text("Open Settings [Brief Setup]").lineLimit(1) }
                     .font(Theme.Font.captionStrong)
@@ -360,7 +351,7 @@ struct BriefAcceptRow: View {
                     }
                 }
                 .padding(.top, Theme.Space.xs)
-                RuleSuggestionLine(suggestion: row.suggestion, card: .todo(row.id), group: group)
+                RuleSuggestionLine(suggestion: row.suggestion, card: .todo(row.id, round: row.askedAt ?? ""), group: group)
             }
             .padding(.vertical, Theme.Space.xs)
         }

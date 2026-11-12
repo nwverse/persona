@@ -54,6 +54,13 @@ nonisolated struct TaskPlan: Codable, Hashable, Identifiable, Sendable {
         case id, conversation, tasks, state, suggestion
         case createdAt = "created_at", updatedAt = "updated_at"
     }
+
+    /// The plan with no rule suggested on it: once the suggestion was answered or is gone.
+    var withoutSuggestion: TaskPlan {
+        var plan = self
+        plan.suggestion = nil
+        return plan
+    }
 }
 
 /// How an interrupted receipt's task was dealt with, as the hub worked it out (#3834; docs/protocol/protocol.md

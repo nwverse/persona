@@ -556,12 +556,16 @@ object ExtensionContentSource {
 object ExtensionPromptKind {
     const val INSTRUCTIONS = "instructions"
     const val QUICK = "quick"
-    val ALL = listOf("instructions", "quick")
+    const val PROJECT_CONTEXT = "project_context"
+    const val INBOX_CONTEXT = "inbox_context"
+    val ALL = listOf("instructions", "quick", "project_context", "inbox_context")
 }
 
 /**
  * A prompt: instructions (a .md of the package, or with source data of the data directory, added to the assistant's
- * CLAUDE.md) or quick (a template the apps offer in the message box).
+ * CLAUDE.md), quick (a template the apps offer in the message box), project_context (a directory of the data
+ * directory whose <project slug>.md files go into a new Agent's project background) or inbox_context (a .md of the
+ * data directory added to the Inbox's triage and draft prompts).
  */
 @Serializable
 data class ExtensionPromptItem(
@@ -569,9 +573,19 @@ data class ExtensionPromptItem(
     val kind: String = "",
     val source: String? = null,
     /**
-     * instructions: the .md file (with source data: at most 6 KB, adopted at most once a day).
+     * instructions: the .md file (with source data: at most 6 KB, adopted at most once a day); inbox_context: the .md
+     * file (1 KB used).
      */
     val file: String? = null,
+    /**
+     * project_context: the directory of <project slug>.md files (1.5 KB of each used).
+     */
+    val dir: String? = null,
+    /**
+     * inbox_context: a text file of sentences, one a line, a draft must not repeat word for word (64 KB used); only
+     * checked, never in a prompt.
+     */
+    @SerialName("never_quote") val neverQuote: String? = null,
     /**
      * quick: what the apps show.
      */

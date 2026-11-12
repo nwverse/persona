@@ -130,18 +130,22 @@ struct BriefCardTests {
     @Test func eachMechanismOpensItsOwnPage() {
         func page(_ id: String) -> BriefBody.Setup.Page? { BriefBody.Setup(id: id, text: "x").page }
         #expect(["triage_decide", "triage_auto_continue", "triage_wake"].map(page) == [.triage, .triage, .triage])
-        #expect(page("supervisor_tier") == .superviseModel && page("task_trust") == .taskTrust)
-        // No page in this app: standing authorizations (the web app's), leader conversations (Pin in a chat's menu),
-        // the spot-check share (asked of Persona) and the two the assistant's configuration file holds.
-        #expect(["standing_authorizations", "leaders", "review_sample", "delegate", "independent_review", ""].allSatisfy { page($0) == nil })
-        // Settings opens on the mechanism's page; Auto-Start Tasks is not in Settings (the card shows it in a sheet).
+        #expect(page("supervisor_tier") == .superviseModel)
+        // Not turned on at a page of this app: a remembered kind of task (a plan card's own checkbox; Auto-Start Tasks
+        // only lists and removes them), standing authorizations (the web app's), leader conversations (Pin in a chat's
+        // menu), the spot-check share (asked of Persona) and the two the assistant's configuration file holds.
+        let none = ["task_trust", "standing_authorizations", "leaders", "review_sample", "delegate", "independent_review", ""]
+        #expect(none.allSatisfy { page($0) == nil })
+        // Only the line whose page the hub names in Settings, and that only the web app has, says so.
+        let onTheWeb = (none + ["triage_wake", "supervisor_tier"]).filter { BriefBody.Setup(id: $0, text: "x").isOnTheWebOnly }
+        #expect(onTheWeb == ["standing_authorizations"])
+        // Settings opens on the mechanism's page.
         var triage = NavigationPath()
         triage.append(SettingsPage.triage)
         var model = NavigationPath()
         model.append(SettingsPage.modelConfiguration)
         model.append(ModelPurposeRoute(id: "assistant.supervise"))
         #expect(BriefSetupPages.path(.triage) == triage && BriefSetupPages.path(.superviseModel) == model)
-        #expect(BriefSetupPages.path(.taskTrust) == nil)
     }
 
     /// A briefing with the block is still one line of its conversation, where its time puts it.
@@ -156,7 +160,7 @@ struct BriefCardTests {
             Issue.record("the briefing is not a feed line")
             return
         }
-        #expect(drawn.brief?.setup.map(\.id) == ["task_trust"] && drawn.brief?.setup.first?.page == .taskTrust)
+        #expect(drawn.brief?.setup.map(\.id) == ["task_trust"] && drawn.brief?.setup.first?.page == nil)
     }
 
     @Test func aRowOpensTheChatItCameFrom() {

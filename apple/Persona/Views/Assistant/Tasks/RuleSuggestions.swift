@@ -8,14 +8,16 @@ import SwiftUI
     /// The card a suggestion is drawn under: where its result stays, and whose manager the answer goes to.
     enum Card: Hashable, Sendable {
         case plan(id: String, conversation: String)
-        case todo(String)
+        /// `round`: the decision's `asked_at`. A to-do's next decision is another card, so what Always made on one
+        /// decision is never drawn under the next.
+        case todo(String, round: String)
         /// `manager`: the one that reported the card (`Interaction.manager`).
         case interaction(uid: String, manager: String?)
 
         var key: String {
             switch self {
             case .plan(let id, _): "plan|" + id
-            case .todo(let id): "todo|" + id
+            case .todo(let id, let round): "todo|" + id + "|" + round
             case .interaction(let uid, _): "card|" + uid
             }
         }
@@ -32,6 +34,12 @@ import SwiftUI
         case made(String)
     }
 
+    /// What Always made on a card: the words, and the suggestion they answer.
+    struct Made: Equatable, Sendable {
+        var suggestion: String
+        var text: String
+    }
+
     static let shared = RuleSuggestions()
 
     /// How long an answered suggestion stays off the cards whatever their copy says: a plan and a card keep the copy
@@ -41,14 +49,15 @@ import SwiftUI
     private(set) var sending: [String: Answer] = [:]
     /// When each suggestion (by group and id) was answered here, or found gone.
     private(set) var settled: [String: Date] = [:]
-    /// What Always made, by group and card.
-    private(set) var made: [String: String] = [:]
+    /// What Always made, by group and card, and the suggestion it answered.
+    private(set) var made: [String: Made] = [:]
     /// What Always would create, worded once per suggestion (`RuleSuggestion.createsText`), not on every redraw.
     @ObservationIgnored private var details: [RuleSuggestion: String] = [:]
     @ObservationIgnored private let api: (String) -> APIClient?
     @ObservationIgnored private let failed: (String) -> Void
-    /// After an answer or a stale suggestion: the hub's copies changed, so what the card was read from is read again.
-    @ObservationIgnored private let changed: (Card) -> Void
+    /// After an answer or a stale suggestion (its id): the hub's copies changed, so the app's copies drop it and what
+    /// the card was read from is read again.
+    @ObservationIgnored private let changed: (Card, String) -> Void
     /// The manager a to-do's requests name (`TodoStore.named`) and a conversation's (`AppModel.feedManager`).
     @ObservationIgnored private let named: (String) -> String?
     @ObservationIgnored private let feedManager: (String, String) -> String?
@@ -56,7 +65,7 @@ import SwiftUI
 
     init(api: @escaping (String) -> APIClient? = { AppModel.shared.api($0) },
          failed: @escaping (String) -> Void = { AppModel.shared.toast = Toast($0, style: .error) },
-         changed: @escaping (Card) -> Void = { RuleSuggestions.reread($0) },
+         changed: @escaping (Card, String) -> Void = { RuleSuggestions.reread($0, answered: $1) },
          named: @escaping (String) -> String? = { TodoStore.shared.named($0) },
          feedManager: @escaping (String, String) -> String? = { AppModel.shared.feedManager(of: $0, group: $1) },
          now: @escaping () -> Date = { .now }) {
@@ -68,11 +77,15 @@ import SwiftUI
         self.now = now
     }
 
-    /// The live `changed`: a to-do's decision is worded each time the to-dos are read, a plan each time its feed is.
-    static func reread(_ card: Card) {
+    /// The live `changed`. The hub words a to-do's decision each time the to-dos are read and sends a pending card
+    /// again without the line, but it sends no event for a plan, and a feed read only asks for what came since the
+    /// newest item: the plans the app holds would keep their copy, and the line would come back once `quietFor` is
+    /// over. So the store drops the answered suggestion from its plans itself (`TasksStore.ruleSuggestionSettled`).
+    static func reread(_ card: Card, answered suggestion: String, tasks: TasksStore = .shared) {
+        tasks.ruleSuggestionSettled(suggestion)
         switch card {
-        case .plan(_, let conversation): TasksStore.shared.load(conversation)
-        case .todo: TasksStore.shared.reloadTodos()
+        case .plan(_, let conversation): tasks.load(conversation)
+        case .todo: tasks.reloadTodos()
         case .interaction: break // the hub sends the card again without the line
         }
     }
@@ -83,10 +96,14 @@ import SwiftUI
     /// The line under `card`: what Always made there, else the suggestion it carries while it is still to answer.
     /// Nil: nothing is drawn (no suggestion, one this build can't describe, or one answered already).
     func line(_ suggestion: RuleSuggestion?, card: Card, group: String) -> Line? {
-        if let text = made[Self.key(card, group)] { return .made(text) }
-        guard let suggestion, suggestion.offered else { return nil }
+        let result = made[Self.key(card, group)]
+        guard let suggestion, suggestion.offered else { return result.map { Line.made($0.text) } }
         let key = Self.key(suggestion, group)
-        if quiet(key) { return nil }
+        // The result stays while the card carries nothing else to answer: its own suggestion (the hub's copy has not
+        // caught up) or one answered a moment ago. Another suggestion on the same card is offered in its place.
+        let answered = quiet(key)
+        if let result, result.suggestion == suggestion.id || answered { return .made(result.text) }
+        if answered { return nil }
         if let answer = sending[key] { return .sending(suggestion, answer) }
         return .offered(suggestion)
     }
@@ -137,14 +154,14 @@ import SwiftUI
             switch answer {
             case .always:
                 let result = try await api.ruleSuggestionAlways(suggestion.id)
-                made[Self.key(card, group)] = result.text(asked: suggestion)
+                made[Self.key(card, group)] = Made(suggestion: suggestion.id, text: result.text(asked: suggestion))
             case .notNow:
                 try await api.ruleSuggestionNotNow(suggestion.id)
             }
-            settle(key, card)
+            settle(key, card, suggestion.id)
         } catch let e as APIError where e.status == 404 {
             // Stale: the answers don't earn it any more, or it was answered elsewhere. The line goes.
-            settle(key, card)
+            settle(key, card, suggestion.id)
         } catch let e as APIError where e.status == 409 {
             failed(String(localized: "The standing authorizations changed meanwhile. Try again."))
         } catch {
@@ -152,11 +169,11 @@ import SwiftUI
         }
     }
 
-    private func settle(_ key: String, _ card: Card) {
+    private func settle(_ key: String, _ card: Card, _ suggestion: String) {
         let at = now()
         settled = settled.filter { at.timeIntervalSince($0.value) < Self.quietFor }
         settled[key] = at
-        changed(card)
+        changed(card, suggestion)
     }
 }
 

@@ -50,6 +50,8 @@ object PersonaIcons {
     val collapse: PhIcon get() = PhIcons.CaretUp
     /** SF Symbol `arrow.up.right.and.arrow.down.left`. */
     val collapseMessage: PhIcon get() = PhIcons.ArrowsInSimple
+    /** SF Symbol `arrow.down.and.line.horizontal.and.arrow.up`. */
+    val compactContext: PhIcon get() = PhIcons.ArrowsInLineVertical
     /** SF Symbol `square.and.pencil`. */
     val compose: PhIcon get() = PhIcons.NotePencil
     /** SF Symbol `gauge.with.dots.needle.33percent`. */
@@ -168,6 +170,8 @@ object PersonaIcons {
     val keyPoint: PhIcon get() = PhIcons.ChatTeardropText
     /** SF Symbol `keyboard`. */
     val keyboard: PhIcon get() = PhIcons.Keyboard
+    /** SF Symbol `books.vertical`. */
+    val knowledge: PhIcon get() = PhIcons.BookOpen
     /** SF Symbol `laptopcomputer`. */
     val laptop: PhIcon get() = PhIcons.Laptop
     /** SF Symbol `sun.max`. */
@@ -202,6 +206,8 @@ object PersonaIcons {
     val moreMenu: PhIcon get() = PhIcons.DotsThree
     /** SF Symbol `music.note`. */
     val music: PhIcon get() = PhIcons.MusicNote
+    /** SF Symbol `plus.bubble`. */
+    val newConversation: PhIcon get() = PhIcons.ChatCircleDots
     /** SF Symbol `minus`. */
     val notChecked: PhIcon get() = PhIcons.Minus
     /** SF Symbol `bell.fill`. */
@@ -336,6 +342,8 @@ object PersonaIcons {
     val video: PhIcon get() = PhIcons.VideoCamera
     /** SF Symbol `eye`. */
     val view: PhIcon get() = PhIcons.Eye
+    /** SF Symbol `waveform.and.mic`. */
+    val voiceChannel: PhIcon get() = PhIcons.Waveform
     /** SF Symbol `antenna.radiowaves.left.and.right`. */
     val voiceConnecting: PhIcon get() = PhIcons.Broadcast
     /** SF Symbol `phone.down.fill`. */

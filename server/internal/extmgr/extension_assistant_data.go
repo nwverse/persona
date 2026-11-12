@@ -110,16 +110,35 @@ func readRootFile(fsys fs.FS, rel string, most int64) ([]byte, error) {
 		return nil, &dataFileError{code: dataNotRegular}
 	}
 	if fi.Size() > most {
-		return nil, &dataFileError{dataTooLarge, fmt.Errorf("%d bytes, at most %d", fi.Size(), most)}
+		return nil, &dataFileError{dataTooLarge, &dataSize{size: fi.Size(), most: most}}
 	}
 	b, err := io.ReadAll(io.LimitReader(f, most+1))
 	if err != nil {
 		return nil, &dataFileError{dataUnreadable, err}
 	}
-	if int64(len(b)) > most {
-		return nil, &dataFileError{dataTooLarge, fmt.Errorf("more than %d bytes", most)}
+	if int64(len(b)) > most { // it grew since its size was read: what it has now, at least what was read
+		size := int64(len(b))
+		if fi, err := f.Stat(); err == nil {
+			size = max(size, fi.Size())
+		}
+		return nil, &dataFileError{dataTooLarge, &dataSize{size: size, most: most}}
 	}
 	return b, nil
+}
+
+// dataSize is why a file is too large (dataTooLarge): what it weighs and the most it may.
+type dataSize struct{ size, most int64 }
+
+func (e *dataSize) Error() string { return fmt.Sprintf("%d bytes, at most %d", e.size, e.most) }
+
+// tooLargeSize is what a file refused as too large weighs (err from readRootFile); false for any other error.
+func tooLargeSize(err error) (int64, bool) {
+	var de *dataFileError
+	var ds *dataSize
+	if errors.As(err, &de) && de.code == dataTooLarge && errors.As(de.err, &ds) {
+		return ds.size, true
+	}
+	return 0, false
 }
 
 // invisibleMark: a byte order mark, an embedding or isolate mark (they reorder text on screen), a line or paragraph
@@ -266,6 +285,9 @@ func (ps *extensions) dataInstructionsOf(p *extension.Extension, st *assistantDa
 		v := AssistantDataView{Contribution: it.ID, Kind: extension.PromptInstructions, Path: it.File, Limit: dataInstructionsMost}
 		raw, err := readDataFile(dir, it.File, dataInstructionsMost)
 		v.Bytes = len(raw)
+		if size, ok := tooLargeSize(err); ok { // refused unread: what the file weighs, not the 0 bytes read
+			v.Bytes = int(size)
+		}
 		var cur string
 		if err == nil {
 			cur, err = cleanDataText(raw)
@@ -410,7 +432,24 @@ func (ps *extensions) assistantDataStatus(ctx context.Context, id string, force 
 		}
 		skills = append(skills, off(AssistantDataView{Contribution: it.ID, Kind: "skills", Path: it.Dir, Limit: dataSkillsMost}))
 	}
-	return append(instr, skills...)
+	// Project and Inbox context (extension_prompt_context.go): read when a prompt is built, nothing to adopt.
+	var contexts []AssistantDataView
+	if on {
+		contexts = ps.contextViews(p)
+	}
+	for _, kind := range []string{extension.PromptProjectContext, extension.PromptInboxContext} {
+		for _, it := range p.Full.DataPrompts(kind) {
+			if on && slices.ContainsFunc(contexts, func(v AssistantDataView) bool { return v.Contribution == it.ID }) {
+				continue
+			}
+			v := AssistantDataView{Contribution: it.ID, Kind: kind, Path: it.File, Limit: inboxContextMost}
+			if kind == extension.PromptProjectContext {
+				v.Path, v.Limit = it.Dir, projectContextMost
+			}
+			contexts = append(contexts, off(v))
+		}
+	}
+	return append(append(instr, skills...), contexts...)
 }
 
 // assistantDataRoutes: GET /api/v1/extensions/{id}/-/assistant-data is the status of its data contributions;
@@ -533,6 +572,9 @@ func readDataSkills(fsys fs.FS, dir string, most int) ([]ExtensionSkill, int, er
 			}
 			b, err := readRootFile(fsys, p, int64(most-size))
 			if err != nil {
+				if n, ok := tooLargeSize(err); ok {
+					size += int(n) // counted as it weighs, so the status says what is there
+				}
 				return err
 			}
 			if !utf8.Valid(b) {

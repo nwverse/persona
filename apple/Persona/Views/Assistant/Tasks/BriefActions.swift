@@ -111,8 +111,8 @@ import SwiftUI
 
 /// Where a recommended-setup line's Open Settings goes (#5804): the Settings page its mechanism is turned on at.
 @MainActor enum BriefSetupPages {
-    /// The Settings pages to show, in order; nil for a page that is not in Settings (Auto-Start Tasks, a sheet of the card).
-    static func path(_ page: BriefBody.Setup.Page) -> NavigationPath? {
+    /// The Settings pages to show, in order.
+    static func path(_ page: BriefBody.Setup.Page) -> NavigationPath {
         var path = NavigationPath()
         switch page {
         case .triage:
@@ -120,15 +120,12 @@ import SwiftUI
         case .superviseModel:
             path.append(SettingsPage.modelConfiguration)
             path.append(ModelPurposeRoute(id: ModelConfigurationModel.supervise))
-        case .taskTrust:
-            return nil
         }
         return path
     }
 
     static func open(_ page: BriefBody.Setup.Page, in model: AppModel = .shared) {
-        guard let path = path(page) else { return }
-        model.settingsPath = path
+        model.settingsPath = path(page)
         model.showSettings()
     }
 }

@@ -139,25 +139,25 @@
         }
       }
     },
-    "Always stores no rule: it names the setting %@, which lets the assistant answer such questions for you." : {
+    "Always stores no rule and turns nothing on. It only puts this suggestion away for 30 days." : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Always stores no rule: it names the setting %1$@, which lets the assistant answer such questions for you."
+            "value" : "Always stores no rule and turns nothing on. It only puts this suggestion away for 30 days."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "「常に」を選んでもルールは保存されません。設定項目 %1$@ を案内するだけです。オンにすると、アシスタントがこの種の質問に代わりに答えます。"
+            "value" : "「常に」を選んでもルールは保存されず、何もオンになりません。この提案が 30 日間表示されなくなるだけです。"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "点「始终」不会保存任何规则，只会告诉你设置项 %1$@：开启后助手会替你回答这类问题。"
+            "value" : "点「始终」不会保存任何规则，也不会开启任何设置，只是 30 天内不再提这条建议。"
           }
         }
       }
@@ -323,25 +323,25 @@
         }
       }
     },
-    "Nothing was stored. To let the assistant answer such questions, turn on %@ in its configuration file; no app has a switch for it." : {
+    "Nothing was stored and nothing was turned on. The apps have no switch for this yet: it is turned on in the assistant's configuration file on the hub's computer (%@)." : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Nothing was stored. To let the assistant answer such questions, turn on %1$@ in its configuration file; no app has a switch for it."
+            "value" : "Nothing was stored and nothing was turned on. The apps have no switch for this yet: it is turned on in the assistant's configuration file on the hub's computer (%1$@)."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "何も保存されていません。アシスタントにこの種の質問を任せるには、設定ファイルで %1$@ をオンにしてください。どのアプリにもこのスイッチはありません。"
+            "value" : "何も保存されず、何もオンになっていません。このスイッチはまだアプリにありません。ハブのコンピュータにあるアシスタントの設定ファイル（%1$@）でオンにします。"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "没有保存任何规则。要让助手回答这类问题，请在它的配置文件里开启 %1$@；目前各个 App 里都没有这个开关。"
+            "value" : "没有保存任何规则，也没有开启任何设置。App 里暂时还没有这个开关：要在 hub 所在机器上助手的配置文件里开启（%1$@）。"
           }
         }
       }
@@ -526,6 +526,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "打开设置"
+          }
+        }
+      }
+    },
+    "That page is in the web app's settings for Persona." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "That page is in the web app's settings for Persona."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このページは Web 版の Persona の設定にあります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这一页在网页版「设置」的 Persona 页里。"
           }
         }
       }
@@ -1864,6 +1887,77 @@
         }
       }
     },
+    "No terminal engine on %@" : {
+      "comment" : "Why Resume in Terminal is off: the computer enables no terminal engine",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No terminal engine on %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ ではターミナルエンジンが有効になっていません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 没有启用终端引擎"
+          }
+        }
+      }
+    },
+    "Resume in Terminal" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Resume in Terminal"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ターミナルで再開"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在终端里恢复"
+          }
+        }
+      }
+    },
+    "This session isn't running, and %@ has no terminal engine to resume it in." : {
+      "comment" : "The terminal of a session that isn't running, on a computer that enables no terminal engine",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This session isn't running, and %1$@ has no terminal engine to resume it in."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このセッションは実行されておらず、%1$@ ではターミナルエンジンが有効になっていないため、ターミナルで再開できません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个会话没在运行，%1$@ 也没有启用终端引擎，没法在终端里恢复。"
+          }
+        }
+      }
+    },
     "Time's up: Claude Code allows it" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -2577,6 +2671,29 @@
         }
       }
     },
+    "After an upstream refusal, this conversation answers with %@." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "After an upstream refusal, this conversation answers with %1$@."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上流で拒否されたため、この会話は %1$@ で応答しています。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上游拒绝了一次请求，这个对话现在用 %1$@ 回复。"
+          }
+        }
+      }
+    },
     "The app asks every address at once and uses the first in this order that answers; a later one when the earlier ones don't answer quickly. The paired address always comes first." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -2665,6 +2782,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "ハブ自身"
+          }
+        }
+      }
+    },
+    "The upstream refused this request, so it switched to %@." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The upstream refused this request, so it switched to %1$@."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上流がこのリクエストを拒否したため、%1$@ に切り替えました。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上游拒绝了这次请求，已改用 %1$@。"
           }
         }
       }
@@ -2784,19 +2924,19 @@
         }
       }
     },
-    "Back to Configured Model" : {
+    "Switch Back [Model Fallback Card]" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Back to Configured Model"
+            "value" : "Switch Back"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "設定済みのモデルに戻す"
+            "value" : "元に戻す"
           }
         },
         "zh-Hans" : {
@@ -82819,6 +82959,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "New Main Chat [Model Fallback Card]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New Main Chat"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新しいチャット"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新建主对话"
+          }
+        }
+      }
     },
     "New Main Chat?" : {
       "localizations" : {
