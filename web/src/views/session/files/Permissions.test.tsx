@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setToken } from "../../../lib/api";
@@ -43,6 +43,20 @@ describe("PermissionsDialog", () => {
     await act(async () => confirm.click()); await flush();
     expect(sent).toEqual([{ path: "~/run.sh", cwd: "/w", mode: 0o755 }]);
     expect(changed).toEqual([0o755]);
+  });
+
+  it("shows no error when its first read is cancelled (React mounting it twice in development)", async () => {
+    act(() => root.unmount());
+    vi.stubGlobal("fetch", vi.fn((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("signal is aborted without reason", "AbortError")));
+      setTimeout(() => resolve(Response.json({ stats: [{ path: "~/run.sh", kind: "file", mode: 0o644, owner: "me", group: "staff" }] })), 0);
+    })));
+    root = createRoot(host);
+    await act(async () => root.render(<StrictMode><PermissionsDialog mid="m1" cwd="/w" path="~/run.sh" onClose={() => {}} onChanged={() => {}} /></StrictMode>));
+    await act(async () => { await new Promise((r) => setTimeout(r, 10)); }); await flush();
+    expect(document.body.textContent).toContain("rw-r--r-- · 644");
+    expect(document.body.textContent).not.toContain("aborted");
+    expect(document.querySelector('[role="alert"]')).toBeNull();
   });
 
   it("words a change for whom it is", () => {

@@ -3,7 +3,7 @@
 // where the computer takes no changes. docs/protocol/protocol.md "Changing files" (`files/chmod`).
 import { useEffect, useState } from "react";
 import { t } from "../../../i18n";
-import { api, enc, errorText } from "../../../lib/api";
+import { api, enc, errorText, isAbort } from "../../../lib/api";
 import { opErrorText } from "../../../lib/file-ops";
 import { fileName, type FileInfo } from "../../../lib/files";
 import { modeOctal, modeSymbolic } from "../../../lib/files-nav";
@@ -47,7 +47,8 @@ export function PermissionsDialog({ mid, cwd, path, mode, onClose, onChanged }: 
           setBits(info.mode & 0o777);
         }
       })
-      .catch((e) => old === null && setError(errorText(e)));
+      // An abort is this effect cleaning up (a closed dialog, or React mounting it twice in development): not an error.
+      .catch((e) => !isAbort(e) && old === null && setError(errorText(e)));
     return () => ac.abort();
     // read once per path
     // eslint-disable-next-line react-hooks/exhaustive-deps
