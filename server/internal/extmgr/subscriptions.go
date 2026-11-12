@@ -33,6 +33,10 @@ const subscriptionPushFeature = "subscription_push"
 // row only with it; an older manager's pages list subscriptions alone.
 const inboxSourcesFeature = "inbox_sources"
 
+// inboxSourcesGraphFeature says GET /api/v1/subscriptions/-/graph answers (#5741): the apps offer Inbox Sources'
+// relationship view only with it.
+const inboxSourcesGraphFeature = "inbox_sources_graph"
+
 // subscriptionsShown says whether the report carries subscriptionsFeature.
 func (h *Manager) subscriptionsShown() bool { return h.subs != nil && h.subs.Features().Deliver }
 
@@ -285,6 +289,7 @@ func (h *Manager) subscriptionRoutes(mux *http.ServeMux) {
 	})
 	// The pages (#2041): every device may draw them; the actions they carry check full access themselves.
 	api.HandleFunc("POST /api/v1/subscriptions/-/ui", h.subscriptionUI)
+	api.HandleFunc("GET /api/v1/subscriptions/-/graph", h.subscriptionGraph)
 	api.HandleFunc("POST /api/v1/subscriptions/-/dry-run", h.subscriptionChange(func(w http.ResponseWriter, r *http.Request, _ subscriptions.Actor) {
 		var in subscriptions.DryRunRequest
 		if !readSubscriptionJSON(w, r, &in) {

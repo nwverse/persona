@@ -75,6 +75,19 @@ var ErrReadOnly = errors.New("read_only_device")
 
 // Handle draws the page the state names, or does the action and answers what the app shows next.
 func Handle(ctx context.Context, svc Service, env Env, req Request) (wire.ActionResult, error) {
+	p := &pages{ctx: ctx, svc: svc, env: prepared(env), st: parseState(req.State)}
+	if req.Action != "" {
+		if !env.CanEdit {
+			return wire.ActionResult{}, ErrReadOnly
+		}
+		return p.act(req.Action, req.Values)
+	}
+	v := p.draw()
+	return wire.ActionResult{View: &v}, nil
+}
+
+// prepared is env with what the manager left out filled in.
+func prepared(env Env) Env {
 	if env.Loc == nil {
 		env.Loc = time.UTC // the manager passes the user's; never the machine's
 	}
@@ -90,15 +103,7 @@ func Handle(ctx context.Context, svc Service, env Env, req Request) (wire.Action
 	if env.Native == nil {
 		env.Native = func(string) string { return "" }
 	}
-	p := &pages{ctx: ctx, svc: svc, env: env, st: parseState(req.State)}
-	if req.Action != "" {
-		if !env.CanEdit {
-			return wire.ActionResult{}, ErrReadOnly
-		}
-		return p.act(req.Action, req.Values)
-	}
-	v := p.draw()
-	return wire.ActionResult{View: &v}, nil
+	return env
 }
 
 // state is a page: P names it ("" the list), the rest says which subscription, connector, source or tool.
