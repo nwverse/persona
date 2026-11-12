@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -85,10 +86,76 @@ func TestForceCloseDialogHerdrCallsIdle(t *testing.T) {
 			if err != nil {
 				t.Fatalf("first forced close: %v", err)
 			}
-			if !strings.Contains(strings.Join(got, "\n"), "tab.close") {
-				t.Fatalf("terminal stayed open: %v", got)
+			all := strings.Join(got, "\n")
+			cancels := 0
+			for _, call := range got {
+				if call == sendKeys("w1:p1", "ctrl+c") {
+					cancels++
+				}
+			}
+			if cancels != 2 || !strings.Contains(all, "tab.close") {
+				t.Fatalf("terminal stayed open or was not cancelled twice: %v", got)
+			}
+			if strings.Contains(all, "enter") {
+				t.Fatalf("a forced close pressed Enter into the dialog: %v", got)
 			}
 		})
+	}
+}
+
+// A host may still say working after an allow its Claude did not take, or after a first prompt a dialog
+// kept out. The row is already blocked; the first forced close uses the dialog on the current screen and
+// never sends Enter. With the dialog gone, it is refused.
+func TestForceCloseDialogAfterUnacceptedAllowOrLostPrompt(t *testing.T) {
+	for name, setup := range map[string]func(*Node){
+		"unaccepted allow": func(n *Node) {
+			n.allowed.m = map[string]*allowWatch{sidA: {head: "Permissions"}}
+		},
+		"lost first prompt": func(n *Node) {
+			n.lostFirst.set(sidA, lostDialog, time.Now())
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			n, f, _ := herdrNode(t)
+			f.reply("session.snapshot", snapshot(nil, nil, []any{claudeAgent(sidA, proto.StatusWorking, "w1:p1", "w1:t1", "w1", "/tmp", "")}, nil))
+			f.setScreen("w1:p1", permissionsPicker)
+			listSessions(t, n)
+			setup(n)
+			f.reset()
+			_, err := request(t, n, "session.close", map[string]any{"session_id": sidA, "force": true})
+			if err != nil {
+				t.Fatalf("first forced close: %v", err)
+			}
+			got := withoutAgentReports(f.trace())
+			all := strings.Join(got, "\n")
+			cancels := 0
+			for _, call := range got {
+				if call == sendKeys("w1:p1", "ctrl+c") {
+					cancels++
+				}
+			}
+			if cancels != 2 || !strings.Contains(all, "tab.close") || strings.Contains(all, "enter") {
+				t.Fatalf("forced close did not cancel twice and close without Enter: %v", got)
+			}
+		})
+	}
+}
+
+// The cached allow or lost-first reason is not enough: if the dialog is gone from the screen now, the
+// forced close is still refused.
+func TestForceCloseStaleAllowNeedsCurrentDialog(t *testing.T) {
+	n, f, _ := herdrNode(t)
+	f.reply("session.snapshot", snapshot(nil, nil, []any{claudeAgent(sidA, proto.StatusWorking, "w1:p1", "w1:t1", "w1", "/tmp", "")}, nil))
+	f.setScreen("w1:p1", screenFixture(t, "claude-2.1.312-empty-162.txt"))
+	listSessions(t, n)
+	n.allowed.m = map[string]*allowWatch{sidA: {head: "Permissions"}}
+	f.reset()
+	_, err := request(t, n, "session.close", map[string]any{"session_id": sidA, "force": true})
+	if code, _ := refusalOf(t, err); code != "agent_busy" {
+		t.Fatalf("stale allow close: %v", err)
+	}
+	if got := strings.Join(f.trace(), "\n"); strings.Contains(got, "send_keys") || strings.Contains(got, "tab.close") {
+		t.Fatalf("stale allow touched the terminal: %s", got)
 	}
 }
 

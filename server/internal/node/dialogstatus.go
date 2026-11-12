@@ -117,9 +117,28 @@ func (n *Node) waitsOnUser(ctx context.Context, id string) bool {
 	n.mu.Lock()
 	onList := n.onAgentsList[id]
 	n.mu.Unlock()
-	if !restingClaude(a, a.AgentStatus) || onList || n.isDriving(id) {
+	driving := n.isDriving(id)
+	// A host that still calls an unaccepted allow or a lost first prompt working can leave a dialog
+	// holding the terminal. Those rows are blocked (sessions.go), so close may act only when the
+	// current screen still shows that dialog; a plain working Agent is never read.
+	if !onList && !driving && (n.allowDialog(id) != "" || n.lostFirstPromptDialog(id)) {
+		return n.dialogShown(ctx, a.PaneID)
+	}
+	if !restingClaude(a, a.AgentStatus) || onList || driving {
 		return false
 	}
-	text, err := n.dialogScreen(ctx, a.PaneID)
+	return n.dialogShown(ctx, a.PaneID)
+}
+
+// dialogShown reads the pane now: a forced close must not act on a dialog already gone.
+func (n *Node) dialogShown(ctx context.Context, pane string) bool {
+	text, err := n.dialogScreen(ctx, pane)
 	return err == nil && screen.DialogHead(text) != ""
+}
+
+// lostFirstPromptDialog: the first message was kept out by a dialog, even when the host or a transcript in
+// progress has since called the Agent working. Other lost-first reasons are not dialogs and stay closed.
+func (n *Node) lostFirstPromptDialog(id string) bool {
+	p, ok := n.lostFirst.get(id)
+	return ok && p.why == lostDialog
 }
