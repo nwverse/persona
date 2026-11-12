@@ -72,6 +72,21 @@ struct SettingsResourceScopeTests {
         #expect(page.connectors.map(\.name) == ["Personal Notes"])
     }
 
+    @Test func mailSetupReadsAddsAndDeletesKeepTheirCapturedAssistant() async throws {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/mail/accounts", json: #"{"accounts":[]}"#)
+        hub.on("GET", "/api/v1/mail/oauth/google/config", json: #"{"configured":false}"#)
+        hub.on("POST", "/api/v1/mail/accounts", json: #"{"account":{"id":"example","email":"me@example.com"}}"#)
+        hub.on("DELETE", "/api/v1/mail/accounts/example", json: "{}")
+        let captured = hub.client.showing("work").currentAssistantSettings()
+        _ = try await captured.mailAccounts()
+        _ = try await captured.googleConfig()
+        _ = try await captured.addMailAccount(.init(email: "me@example.com"))
+        try await captured.deleteMailAccount("example")
+        #expect(hub.requests.count == 4)
+        #expect(hub.requests.allSatisfy { $0.headers[Self.header] == "work" })
+    }
+
     @Test func channelDetailsAndBindingKeepTheirExplicitAssistant() async throws {
         let hub = FakeHub()
         let base = "/api/v1/channels/chat"

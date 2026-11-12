@@ -4,6 +4,7 @@ extension SettingsPage {
     var belongsToCurrentAssistant: Bool {
         switch self {
         case .models, .agents, .assistant, .claude, .codex, .modelConfiguration, .triage, .connectors, .plugins, .channels,
+             .mail, .feishu, .feishuBot, .sent, .skills,
              .knowledgeSelection, .pluginMarket, .marketExtension, .pluginMarkets, .subscriptions, .computers:
             true
         case .connector(_, let manager), .plugin(_, let manager), .pluginPage(_, _, _, let manager), .channel(_, let manager):

@@ -220,7 +220,7 @@ struct SettingsView: View {
             SettingsHeading(String(localized: "Hub"))
                 .accessibilityIdentifier("settings-group-hub")
         } footer: {
-            Text("Hub settings are shared by all assistants and devices.")
+            Text("These settings stay the same when you switch assistants.")
         }
     }
 

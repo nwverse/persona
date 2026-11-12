@@ -406,8 +406,7 @@ struct ConnectorsSection: View {
     var body: some View {
         Section {
             Group {
-                #if os(iOS) || os(visionOS)
-                // A Mac is a desktop, not the phone: the hub never calls its tools (AppModel.registration).
+                #if os(visionOS)
                 NavigationLink(value: SettingsPage.phoneData) {
                     ConnectorRowLabel(title: ConnectorText.device, symbol: Theme.Icon.thisDevice, value: ConnectorText.deviceSummary())
                 }
