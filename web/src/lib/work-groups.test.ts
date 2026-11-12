@@ -236,6 +236,41 @@ describe("history gaps", () => {
   });
 });
 
+describe("a work line's time carries on from its running clock (#5119)", () => {
+  const S = 1000;
+  // the mock's tool_turn flow (#3005): a call, its result at 8m 12s, a pause, the answer at 8m 17s
+  const running = () => [user("u1", 0), ...tool("a", "Bash", 2 * S, 492 * S)];
+  const answer = () => say("done", "It was closed by the merge.", 497 * S);
+
+  it("the finished time is never shorter than the running clock showed", () => {
+    const shown: number[] = [];
+    // each tick until the answer is in, then the tick it lands on while the agent is still at work (WorkGroup's Elapsed)
+    for (let tick = 490; tick <= 497; tick++) {
+      const [g] = groups(blocks(running(), true));
+      expect(g.live).toBe(true);
+      shown.push(T0 + tick * S - g.startedAt!);
+    }
+    const [still] = groups(blocks([...running(), answer()], true));
+    expect(still.live).toBe(true);
+    shown.push(T0 + 497 * S - still.startedAt!);
+    const [done] = groups(blocks([...running(), answer()]));
+    expect(done.live).toBe(false);
+    expect(done.durationMs).toBe(497 * S);
+    expect(shown.every((ms) => ms <= done.durationMs!)).toBe(true);
+    expect(workDuration(done.durationMs!)).toBe(workDuration(shown.at(-1)!));
+  });
+
+  it("an exchange stopped before its answer ends at the interrupt", () => {
+    const [g] = groups(blocks([...running(), mk("system", "notice", 495 * S, { id: "stop", text: "已中断" })]));
+    expect(g.durationMs).toBe(495 * S);
+  });
+
+  it("compacted while idle an hour later: the compaction is not part of the time", () => {
+    const b = blocks([...running(), answer(), mk("system", "notice", 3600 * S, { id: "idle", text: "上下文已压缩", compact: { trigger: "idle" } })]);
+    expect(groups(b)[0].durationMs).toBe(497 * S);
+  });
+});
+
 describe("titles and plans", () => {
   it("a group that only read and searched says so", () => {
     const b = blocks([user("u1", 0), ...tool("r1", "Read", 1000, undefined, { file_path: "/a.ts" }), ...tool("r2", "Read", 2000, undefined, { file_path: "/b.ts" }), ...tool("r3", "Read", 2500, undefined, { file_path: "/a.ts" }), ...tool("g", "Grep", 3000, undefined, { pattern: "x" }), say("a", "看完了。", 65_000)]);

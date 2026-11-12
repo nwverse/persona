@@ -136,7 +136,9 @@ function groupTurn(items: Step[], turnStart: number | null, live: boolean, strea
   const answer = latest >= 0 ? items[latest] : undefined;
   const group = work.length ? createGroup(work, answer, live, turnStart) : undefined;
   if (group && identity) group.id = `work-turn-${identity}`;
-  // A text before the last tool result is still the newest text, not the group's duration endpoint.
+  // The time runs to the latest end of every step of the exchange, its answer included (#5119): the span the live
+  // clock was counting, so it carries on from what that showed (iOS ChatLines.workEnd counts the same). A text written
+  // before the last tool result is still the newest text, not where the time stops.
   if (group && group.startedAt !== undefined) {
     const end = items.reduce((latest, s) => Math.max(latest, stepEnd(s) ?? latest), group.startedAt);
     group.durationMs = Math.max(0, end - group.startedAt);
