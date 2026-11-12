@@ -198,6 +198,7 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.MeetingTranscriptionExtension != nil {
 			v.MeetingTranscriptionExtension = in.MeetingTranscriptionExtension
+			v.MeetingTranscriptionInstall = in.MeetingTranscriptionInstall // readMeetingTranscriptionSettings's, never the body's
 		}
 		if in.IdleCloseHours != nil {
 			v.IdleCloseHours = in.IdleCloseHours

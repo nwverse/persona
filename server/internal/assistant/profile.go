@@ -89,6 +89,10 @@ type Settings struct {
 	MeetingTranscriptionDefault   *string   `json:"meeting_transcription_default,omitempty"`
 	MeetingGlossary               *[]string `json:"meeting_glossary,omitempty"`
 	MeetingTranscriptionExtension *string   `json:"meeting_transcription_extension,omitempty"`
+	// MeetingTranscriptionInstall pins MeetingTranscriptionExtension to the installation the owner named
+	// (transcribers.TranscriptionInstall): set with it on every PUT, never by the apps, never shown. Nil for the
+	// built-in contribution (or a choice stored before pins were kept).
+	MeetingTranscriptionInstall *string `json:"meeting_transcription_install,omitempty"`
 	// DoneNeedsDelivery: a finished task closes only once its work is live and checked; stopped at a PR, merged or
 	// off by default it stays open with where it is held, and its agent is told so with its prompt (#3306,
 	// delivery.go). nil is off (the default).
@@ -520,6 +524,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		sp = space[0]
 	}
 	v := s.settings(ctx)
+	v.MeetingTranscriptionInstall = nil // the hub's own, never shown
 	if sp == "" {
 		v.MainMachineID = s.confirmedMainMachine(ctx, v)
 	}

@@ -863,9 +863,25 @@ const (
 	glossaryTermMost = 80
 )
 
-// transcriptionRef is the contribution that transcribes (meeting_transcription_extension: "" the built-in one).
-func (s *Service) transcriptionRef(ctx context.Context) string {
-	return meetingTranscriptionExtensionOf(s.settings(ctx))
+// transcriptionJobsCheck ends the live jobs of a contribution no longer chosen (meeting_transcription_extension
+// changed, or the extension named was uninstalled): no more of the meeting's audio goes to it, and the next audio opens
+// a job of the contribution chosen now, or none when it is not ready (upstream_unavailable, the phone's text fills).
+func (s *Service) transcriptionJobsCheck(ctx context.Context) {
+	_, choice, err := s.transcriptionTarget(ctx)
+	s.hubTr.mu.Lock()
+	runs := make([]*hubRun, 0, len(s.hubTr.by))
+	for _, r := range s.hubTr.by {
+		runs = append(runs, r)
+	}
+	s.hubTr.mu.Unlock()
+	for _, r := range runs {
+		r.mu.Lock()
+		if j := r.job; j != nil && !j.ending && j.choice != "" && (j.choice != choice || err != nil) {
+			r.s.logf("recording %s: transcription job of a contribution no longer chosen, ended", r.id)
+			r.endJobLocked(j)
+		}
+		r.mu.Unlock()
+	}
 }
 
 // recordingLanguage is the recording's language tag: the job's hint, never a lock (every word is written in the

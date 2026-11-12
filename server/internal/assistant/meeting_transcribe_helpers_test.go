@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -112,6 +113,8 @@ type fakeTranscriber struct {
 	infoErr  error
 	infoHook func() // runs in each /info, outside the lock (a slow probe)
 	dialErr  error
+	install  string   // the installation of "acme/tx", the one other extension contributing (default acme@1)
+	dials    []string // the refs jobs were dialed for
 	live     jobScript
 	replay   jobScript
 	jobs     []*fakeJob
@@ -140,6 +143,7 @@ func (f *fakeTranscriber) TranscriptionInfo(ctx context.Context, ref string) (ex
 func (f *fakeTranscriber) TranscriptionDial(ctx context.Context, ref string) (*websocket.Conn, func(), error) {
 	f.mu.Lock()
 	err := f.dialErr
+	f.dials = append(f.dials, ref)
 	f.mu.Unlock()
 	if err != nil {
 		return nil, nil, err
@@ -152,7 +156,25 @@ func (f *fakeTranscriber) TranscriptionDial(ctx context.Context, ref string) (*w
 	return c, func() {}, nil
 }
 
-func (f *fakeTranscriber) IsTranscriptionContribution(ref string) bool { return ref == "" }
+func (f *fakeTranscriber) IsTranscriptionContribution(ref string) bool {
+	return ref == "" || ref == "acme/tx"
+}
+
+func (f *fakeTranscriber) TranscriptionInstall(ref string) string {
+	if ref != "acme/tx" {
+		return ""
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return cmp.Or(f.install, "acme@1")
+}
+
+// dialed are the refs jobs were dialed for so far.
+func (f *fakeTranscriber) dialed() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.dials)
+}
 
 func (f *fakeTranscriber) set(fn func(f *fakeTranscriber)) {
 	f.mu.Lock()

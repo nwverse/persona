@@ -115,6 +115,17 @@ func TestTranscriptionContributions(t *testing.T) {
 		}
 	}
 
+	// The installation a choice is pinned to: the extension's, stable while it stays installed; none for a ref that
+	// names no transcription contribution.
+	if got := h.TranscriptionInstall("tx/tx"); !strings.HasPrefix(got, "tx@") || got != h.TranscriptionInstall("tx/tx") {
+		t.Errorf("TranscriptionInstall(tx/tx) = %q", got)
+	}
+	for _, ref := range []string{"tx/nope", "other/other", "nope/x", "bad"} {
+		if got := h.TranscriptionInstall(ref); got != "" {
+			t.Errorf("TranscriptionInstall(%q) = %q", ref, got)
+		}
+	}
+
 	for _, ref := range []string{"", "talk/gpt-live", "tx/tx"} {
 		info, err := h.TranscriptionInfo(ctx, ref)
 		if err != nil || info.Protocol != extwire.TranscriptionProtocol || !slices.Equal(info.Features, []string{"live", "replay"}) || info.Setup != "" {

@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"sync"
@@ -91,15 +92,46 @@ func (s *Service) readMeetingTranscriptionSettings(v *Settings, mode, glossary, 
 		if err := json.Unmarshal(extension, &v.MeetingTranscriptionExtension); err != nil || v.MeetingTranscriptionExtension == nil {
 			return "bad_transcription_extension"
 		}
+		v.MeetingTranscriptionInstall = nil // the body's never counts
 		if ref := *v.MeetingTranscriptionExtension; ref != "" {
 			parts := strings.Split(ref, "/")
 			if len(parts) != 2 || parts[0] == "" || parts[1] == "" || strings.TrimSpace(ref) != ref ||
 				s.trans == nil || !s.trans.IsTranscriptionContribution(ref) {
 				return "bad_transcription_extension"
 			}
+			// The installation named now: one uninstalled and installed again, or another extension installed with its
+			// id, is not chosen until the owner names it again (transcriptionRefOf).
+			install := s.trans.TranscriptionInstall(ref)
+			v.MeetingTranscriptionInstall = &install
 		}
 	}
 	return ""
+}
+
+// transcriptionRefOf is the contribution v chooses (meeting_transcription_extension: "" the built-in one) and whether
+// it may transcribe: another extension's only while it is the installation the owner named (a choice stored before
+// installations were pinned is taken as it is).
+func (s *Service) transcriptionRefOf(v Settings) (ref string, ok bool) {
+	ref = meetingTranscriptionExtensionOf(v)
+	if ref == "" || v.MeetingTranscriptionInstall == nil {
+		return ref, true
+	}
+	return ref, s.trans != nil && s.trans.TranscriptionInstall(ref) == *v.MeetingTranscriptionInstall
+}
+
+// errNotChosen: the extension the owner named was uninstalled (and another installed with its id): it is not
+// chosen until the owner names it again.
+var errNotChosen = errors.New("the transcription extension the owner named is not installed as it was named")
+
+// transcriptionTarget is the contribution a job dials now (transcriptionRefOf with the settings in effect) and the
+// choice it is (transcriptionChoice); errNotChosen when it may not transcribe.
+func (s *Service) transcriptionTarget(ctx context.Context) (ref, choice string, err error) {
+	v := s.settings(ctx)
+	ref, ok := s.transcriptionRefOf(v)
+	if !ok {
+		return ref, s.transcriptionChoice(v), errNotChosen
+	}
+	return ref, s.transcriptionChoice(v), nil
 }
 
 // transcriptionReadiness caches whether the chosen contribution can transcribe (meeting_transcription_ready), never
@@ -119,16 +151,29 @@ type transcriptionReadiness struct {
 	published chan struct{} // closed when an answer is published
 }
 
-// transcriptionChoice is what a readiness answer is for: the contribution v chooses.
-func (s *Service) transcriptionChoice(v Settings) string { return meetingTranscriptionExtensionOf(v) }
+// transcriptionChoice is what a readiness answer, and a live job, is for: the contribution v chooses, with the
+// installation it is pinned to.
+func (s *Service) transcriptionChoice(v Settings) string {
+	choice := meetingTranscriptionExtensionOf(v) + "|"
+	if v.MeetingTranscriptionInstall != nil {
+		choice += *v.MeetingTranscriptionInstall
+	}
+	return choice
+}
 
-// transcriptionReadinessChanged: the extensions' registry changed: the answer is probed again (and stands meanwhile).
+// transcriptionReadinessChanged: the extensions' registry changed: the answer is probed again (and stands meanwhile),
+// and a live job of an extension no longer installed as the owner named it is ended.
 func (s *Service) transcriptionReadinessChanged() {
 	c := &s.transcriptionReady
 	c.mu.Lock()
 	c.stale = true
 	c.wakeLocked()
 	c.mu.Unlock()
+	s.hubTr.wg.Add(1)
+	go func() { // never under the registry's callback
+		defer s.hubTr.wg.Done()
+		s.transcriptionJobsCheck(s.runCtx())
+	}()
 }
 
 // transcriptionReadinessReset: the transcribers changed (SetExtensions): no answer stands until one is probed.
@@ -152,6 +197,7 @@ func (s *Service) transcriptionSettingsChanged(ctx context.Context) {
 		c.resetLocked(choice)
 	}
 	c.mu.Unlock()
+	s.transcriptionJobsCheck(ctx)
 }
 
 // resetLocked drops the answer: none stands for choice until a probe publishes one (an older probe never does).
@@ -226,10 +272,12 @@ func (s *Service) refreshTranscriptionReady(ctx context.Context) {
 			v, ok := s.settingsLastGood(probeCtx)
 			if ok {
 				choice = s.transcriptionChoice(v)
-				info, err := s.trans.TranscriptionInfo(probeCtx, meetingTranscriptionExtensionOf(v))
-				// meeting-minutes.md "Which one transcribes": protocol 1 with live and no setup.
-				ready = err == nil && info.Protocol == extwire.TranscriptionProtocol && info.Setup == "" &&
-					slices.Contains(info.Features, extwire.TranscriptionLive)
+				if ref, chosen := s.transcriptionRefOf(v); chosen {
+					info, err := s.trans.TranscriptionInfo(probeCtx, ref)
+					// meeting-minutes.md "Which one transcribes": protocol 1 with live and no setup.
+					ready = err == nil && info.Protocol == extwire.TranscriptionProtocol && info.Setup == "" &&
+						slices.Contains(info.Features, extwire.TranscriptionLive)
+				}
 			}
 			cancel()
 		}

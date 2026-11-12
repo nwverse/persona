@@ -308,7 +308,10 @@ func (s *Service) replay(ctx context.Context, e *kb.Engine, id string, held [][2
 	if s.trans == nil {
 		return errNoTranscribers
 	}
-	ref := s.transcriptionRef(ctx)
+	ref, _, err := s.transcriptionTarget(ctx)
+	if err != nil {
+		return err
+	}
 	ictx, cancel := context.WithTimeout(ctx, jobReadyWait)
 	info, err := s.trans.TranscriptionInfo(ictx, ref)
 	cancel()

@@ -17,6 +17,9 @@ type transcribers interface {
 	// TranscriptionDial opens one job socket; done ends the extension's open request (host.Proc.BeginHTTP).
 	TranscriptionDial(ctx context.Context, ref string) (conn *websocket.Conn, done func(), err error)
 	IsTranscriptionContribution(ref string) bool
+	// TranscriptionInstall is the installation of the extension ref names ("" when it names none): it changes when the
+	// extension is uninstalled and installed again (or another one is installed with its id), never on an upgrade.
+	TranscriptionInstall(ref string) string
 }
 
 // The extensions in this process are the manager's transcribers.

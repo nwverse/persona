@@ -110,6 +110,23 @@ func (h *Manager) IsTranscriptionContribution(ref string) bool {
 	return slices.Contains(p.Full.Items(transcriptionPoint), cid)
 }
 
+// TranscriptionInstall is the installation of the extension ref names, "" when it names no installed extension's
+// transcription contribution: its id and when it was installed, kept across upgrades and rollbacks, new when it is
+// uninstalled and installed again (or another extension is installed with its id). The assistant pins the owner's
+// choice to it, so installing an extension never sends it meeting audio.
+func (h *Manager) TranscriptionInstall(ref string) string {
+	ps := h.extensions
+	if ps == nil || !h.IsTranscriptionContribution(ref) {
+		return ""
+	}
+	id, _, _ := ps.transcriptionRef(ref)
+	p := ps.reg.Snapshot(id)
+	if p == nil {
+		return ""
+	}
+	return p.Record.ID + "@" + p.Record.InstalledAt.UTC().Format(time.RFC3339Nano)
+}
+
 // transcriptionRef is the extension and contribution ref names: "" the built-in voice extension's
 // (voice.TranscriptionContribution), else "<extension id>/<contribution id>".
 func (ps *extensions) transcriptionRef(ref string) (id, cid string, ok bool) {

@@ -77,6 +77,8 @@ func (a adapterTranscribers) TranscriptionDial(ctx context.Context, ref string) 
 
 func (a adapterTranscribers) IsTranscriptionContribution(ref string) bool { return ref == "" }
 
+func (a adapterTranscribers) TranscriptionInstall(string) string { return "" }
+
 // lockedBuf is a log both sides write into.
 type lockedBuf struct {
 	mu sync.Mutex

@@ -139,9 +139,10 @@ type liveJob struct {
 	jc     *jobConn // under jmu; set once dialed
 	closed bool     // under jmu
 
-	startS     int64 // the start's at, in samples
-	sentS      int64 // the end of the audio queued
-	ackedS     int64 // the extension's last ack
+	choice     string // the contribution it was dialed for (transcriptionChoice), "" until then
+	startS     int64  // the start's at, in samples
+	sentS      int64  // the end of the audio queued
+	ackedS     int64  // the extension's last ack
 	ready      bool
 	ending     bool
 	behind     bool      // audio was skipped: the next frame is a seek
@@ -197,7 +198,15 @@ func (r *hubRun) runJob(j *liveJob) {
 		Glossary: s.transcriptionGlossary(ctx, rec), At: extwire.F(float64(j.startS) / kb.AudioRate)}
 	rctx, cancel := context.WithTimeout(j.ctx, jobReadyWait)
 	defer cancel()
-	jc, err := s.dialJob(rctx, s.transcriptionRef(ctx))
+	ref, choice, err := s.transcriptionTarget(ctx)
+	if err != nil {
+		r.jobFailed(j, extwire.TEUpstreamUnavailable, err)
+		return
+	}
+	r.mu.Lock()
+	j.choice = choice
+	r.mu.Unlock()
+	jc, err := s.dialJob(rctx, ref)
 	if err != nil {
 		r.jobFailed(j, extwire.TEUpstreamUnavailable, err)
 		return
@@ -222,6 +231,7 @@ func (r *hubRun) runJob(j *liveJob) {
 	cancel()
 	r.jobReady(j, ready.Features)
 	go j.writeLoop()
+	s.transcriptionJobsCheck(ctx) // the choice may have changed while it was dialed
 	for {
 		f, err := jc.read(j.ctx)
 		if err != nil {

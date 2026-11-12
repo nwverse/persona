@@ -464,3 +464,76 @@ func TestHubModeChosenWhileReadinessIsProbed(t *testing.T) {
 		t.Fatalf("with no answer standing: %v", out)
 	}
 }
+
+// putTranscriptionExtension names the contribution that transcribes, as the owner's settings do.
+func (h *hubFixture) putTranscriptionExtension(ref string) {
+	h.t.Helper()
+	transcriptionSettingsRequest(h.t, h.s, "PUT", "", `{"meeting_transcription_extension":"`+ref+`"}`, 200)
+}
+
+// liveAudio is how much audio live job n (from 0) got so far.
+func (h *hubFixture) liveAudio(n int) int64 {
+	_, audio, _, _ := h.tr.jobsOf(extwire.TranscriptionLive)[n].snapshot()
+	return audio
+}
+
+// Changing meeting_transcription_extension mid-meeting ends the running live job: the rest of the audio goes to the
+// contribution chosen now, none of it to the one the owner stopped choosing.
+func TestHubJobFollowsTheChosenContribution(t *testing.T) {
+	h := newHubFixture(t)
+	h.putTranscriptionExtension("acme/tx")
+	h.hubUpload(meetingRec, 1, nil)
+	p, _ := h.open(meetingRec, 0, nil)
+	p.audio(1)
+	waitFor(t, "acme's job", func() bool { return len(h.tr.jobsOf(extwire.TranscriptionLive)) == 1 && h.liveAudio(0) == kb.AudioRate })
+	h.putTranscriptionExtension("")
+	waitFor(t, "acme's job ended", func() bool {
+		_, _, _, ended := h.tr.jobsOf(extwire.TranscriptionLive)[0].snapshot()
+		return ended
+	})
+	p.audio(1)
+	waitFor(t, "the built-in one's job", func() bool { return len(h.tr.jobsOf(extwire.TranscriptionLive)) == 2 && h.liveAudio(1) > 0 })
+	if got := h.liveAudio(0); got != kb.AudioRate {
+		t.Fatalf("acme got %d samples after it was no longer chosen", got-kb.AudioRate)
+	}
+	if got := h.tr.dialed(); !slices.Equal(got, []string{"acme/tx", ""}) {
+		t.Fatalf("dialed %q", got)
+	}
+}
+
+// The choice is pinned to the installation the owner named: the extension uninstalled and installed again (or another
+// installed with its id) is not ready, its running job ends and no new one is dialed, until the owner names it again.
+func TestHubChoicePinnedToTheInstallation(t *testing.T) {
+	h := newHubFixture(t)
+	h.putTranscriptionExtension("acme/tx")
+	if !h.s.transcriptionReadyNow() {
+		t.Fatal("not ready")
+	}
+	h.hubUpload(meetingRec, 1, nil)
+	p, _ := h.open(meetingRec, 0, nil)
+	p.audio(1)
+	waitFor(t, "acme's job", func() bool { return len(h.tr.jobsOf(extwire.TranscriptionLive)) == 1 })
+	h.tr.set(func(f *fakeTranscriber) { f.install = "acme@2" })
+	h.s.transcriptionReadinessChanged() // the registry's news
+	if h.s.transcriptionReadyNow() {
+		t.Fatal("ready with another installation")
+	}
+	waitFor(t, "acme's job ended", func() bool {
+		_, _, _, ended := h.tr.jobsOf(extwire.TranscriptionLive)[0].snapshot()
+		return ended
+	})
+	p.audio(1)
+	if f := p.wait("problem", 1); f["code"] != problemUpstreamUnavailable {
+		t.Fatalf("problem %v", f)
+	}
+	if got := h.tr.dialed(); !slices.Equal(got, []string{"acme/tx"}) {
+		t.Fatalf("dialed %q", got)
+	}
+	if out := h.hubUpload(meetingOther, 1, nil); out["transcription"] != "device" || out["transcription_problem"] != "unavailable" {
+		t.Fatalf("a new meeting: %v", out)
+	}
+	h.putTranscriptionExtension("acme/tx")
+	if !h.s.transcriptionReadyNow() {
+		t.Fatal("not ready once named again")
+	}
+}

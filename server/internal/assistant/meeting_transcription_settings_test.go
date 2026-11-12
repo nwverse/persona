@@ -160,6 +160,13 @@ func (*settingsTranscribers) IsTranscriptionContribution(ref string) bool {
 	return ref == "example/text"
 }
 
+func (*settingsTranscribers) TranscriptionInstall(ref string) string {
+	if ref == "example/text" {
+		return "example@1"
+	}
+	return ""
+}
+
 func (f *settingsTranscribers) set(info extwire.TranscriptionInfo, err error) {
 	f.mu.Lock()
 	f.info, f.err = info, err
