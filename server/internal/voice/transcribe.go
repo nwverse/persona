@@ -85,10 +85,15 @@ func (pl *Plugin) serveTranscriptionWS(w http.ResponseWriter, r *http.Request) {
 	}
 	c.SetReadLimit(1 << 20) // a reference frame, or a start with the whole glossary
 	ctx, cancel := context.WithCancel(context.WithoutCancel(r.Context()))
-	j := &trJob{pl: pl, id: trJobs.Add(1), c: c, ctx: ctx, cancel: cancel, began: time.Now(),
-		uiLang: i18n.Resolve(r.Header.Get(extwire.HeaderLang)),
-		in:     make(chan trIn, 64), ups: make(chan trUp, 8), reads: make(chan trRead, 256)}
-	j.run()
+	newTrJob(pl, c, ctx, cancel, i18n.Resolve(r.Header.Get(extwire.HeaderLang))).run()
+}
+
+// newTrJob is a job on socket c. Its sessions' dial outcomes (ups) go to the loop unbuffered: once the loop is gone
+// only the job's end can take one, and the session's socket is closed (a buffered one could hand a started session
+// to nobody, its socket open and billed until the service drops it).
+func newTrJob(pl *Plugin, c *websocket.Conn, ctx context.Context, cancel context.CancelFunc, uiLang i18n.Lang) *trJob {
+	return &trJob{pl: pl, id: trJobs.Add(1), c: c, ctx: ctx, cancel: cancel, began: time.Now(), uiLang: uiLang,
+		in: make(chan trIn, 64), ups: make(chan trUp), reads: make(chan trRead, 256)}
 }
 
 // usableForTranscription: a provider meeting transcription can use, GPT-Live-compatible (or the fake dialect).

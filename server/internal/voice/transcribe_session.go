@@ -223,6 +223,9 @@ func newTrSession(j *trJob, kind string, slot *trSlot, window int, why string) *
 	return s
 }
 
+// trStartedHook, when set (tests), runs once a session started, before it is handed to the job loop.
+var trStartedHook func()
+
 // trUp is a session's dial outcome, for the job loop.
 type trUp struct {
 	s        *trSession
@@ -252,9 +255,18 @@ func (s *trSession) connect(ctx context.Context, instructions string) {
 		}
 		if err == nil {
 			s.began = began
+			if trStartedHook != nil {
+				trStartedHook()
+			}
+		}
+		if j.ctx.Err() != nil { // the job is over: nobody takes the session
+			if up != nil {
+				_ = up.CloseNow()
+			}
+			return
 		}
 		select {
-		case j.ups <- trUp{s: s, up: up, captions: granted, err: err}:
+		case j.ups <- trUp{s: s, up: up, captions: granted, err: err}: // unbuffered: taken by the loop
 		case <-j.ctx.Done():
 			if up != nil {
 				_ = up.CloseNow()

@@ -695,3 +695,27 @@ func TestTranscriptionFakeDialect(t *testing.T) {
 		t.Fatalf("built-in sentences %q", got)
 	}
 }
+
+// A session that starts as its job ends is closed, never handed to a loop that is gone (its socket would stay open,
+// billed, until the service dropped it).
+func TestTranscriptionSessionStartedAsTheJobEndsIsClosed(t *testing.T) {
+	trFast(t)
+	pl, _, _, live := trLive(t, voicetest.Script{Sentences: trScript})
+	ctx, cancel := context.WithCancel(context.Background())
+	j := newTrJob(pl, nil, ctx, cancel, "")
+	p, model, err := pl.transcriber(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.p, j.model = p, model
+	started, ended := make(chan struct{}), make(chan struct{})
+	setVar(t, &trStartedHook, func() {
+		close(started)
+		<-ended // the job ends while the session is on its way to the loop
+	})
+	newTrSession(j, trVerbatim, nil, 0, "first").connect(j.ctx, j.instructions(trVerbatim, nil))
+	<-started
+	cancel() // the loop is gone: nothing takes the session
+	close(ended)
+	waitFor(t, "the session closed", func() bool { return live.Open() == 0 })
+}
