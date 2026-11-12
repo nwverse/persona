@@ -140,9 +140,10 @@ export function stepsToItems(steps, opts = {}) {
     switch (step.type) {
       case 'USER_INPUT': {
         if (step.source && step.source !== 'USER_EXPLICIT') break
+        // A new prompt answers the previous reply. Only assistant words can ask the user for a response.
+        lastText = ''
         const text = cleanUserText(step.content)
         if (!text) break
-        lastText = snippet(text)
         const item = { id: `${seq}#0`, seq, role: 'user', kind: 'text', text, ts }
         items.push(opts.full ? item : light(item))
         break
