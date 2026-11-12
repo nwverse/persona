@@ -181,8 +181,10 @@ and keys go directly into the terminal. Settings › Terminal Size can switch ba
 - `herdr terminal session control <pane> --cols C --rows R`: pipes for stdin/stdout, no PTY; **shares the slot with `terminal attach`**.
   Immediately resizes the pane to C × R (`viewport_rows` in `pane get` and Claude separator width both change). stdout is the same `terminal.frame` as observe.
   One JSON per stdin line: `{"type":"terminal.input","text":"…"}` (or base64 `bytes`), `{"type":"terminal.resize","cols":C,"rows":R}`, `{"type":"terminal.release"}`.
-- **All disconnects automatically restore size**: stdin EOF, `kill -TERM`, `kill -9`, `release` all restore the original dimensions (172×45), with Claude redrawing at computer width.
-  Thus a crashed node or hub (node is its child, so stdin closes too) never leaves the pane stuck at phone width.
+- **Disconnects restore the size only while a herdr client is attached**: stdin EOF, `kill -TERM`, `kill -9`, `release` all restore the original dimensions (172×45), with Claude redrawing at computer width,
+  when the computer's herdr window (or any other herdr client) is attached. **With no client attached, herdr leaves the pane at the controller's size** (measured in a throwaway herdr 0.9.3 session:
+  123×44 → 57×41 under control → still 57×41 after release; with a client attached, back to 123×44), until a client attaches and lays every pane out again (#5339).
+  `pane.layout` does not say what to go back to then: with no client it reports herdr's headless default (120×40) while the pane keeps the last client's size.
 - Slot occupied (Ovis, another herdr client): without `--takeover`, immediately returns `{"type":"terminal.closed","reason":"terminal attach failed: … already has an attached client; retry with --takeover"}`;
   with `--takeover`, claims the slot and the old client exits after `terminal attach taken over`. We receive the same reason if someone takes it from us.
 - A resize gives a full frame after about 6 ms; **same-size resize also gives a full frame**, with no SIGWINCH to the program (dimensions unchanged). The node uses this to obtain a fresh full frame when deltas exceed 256 KB,
@@ -206,7 +208,14 @@ App ◀──terminal (frames, same as mirror), terminal_control {state}── h
 - Size: terminal view computes columns × rows from font size (`onGrid`), uses the first immediately (subscription waits for it), then debounces keyboard changes, rotation and font pinching 250 ms before sending (`terminal_input` with `control`).
 - One driving device per terminal: latest control subscription takes over; previous device gets `taken` and becomes view-only. Other devices can still watch (phone-sized frames).
 - Hub serializes watch/unwatch per session (`callLock`), asking the node for the currently desired state each time; the final call leaves the hub's desired result.
-- Release: App leaves Terminal tab / backgrounds / is killed → `terminal_unsubscribe` or WebSocket closes → no driver at the hub: switch to mirroring if viewers remain, otherwise `terminal.unwatch` → node closes stdin → herdr restores.
+- Release: App leaves Terminal tab / backgrounds / is killed → `terminal_unsubscribe` or WebSocket closes → no driver at the hub: switch to mirroring if viewers remain, otherwise `terminal.unwatch` → node resizes the pane back, then closes stdin.
+- **Size after release** (#5339): before taking the pane the node reads the size its programs see from the pane's tty (`herdr.Client.TermSize`: `pane.process_info`'s shell → its terminal's window size;
+  `pane.layout` when that fails). Letting go (unwatch, a watch that replaces the control, the lease, the hub connection ending) first sends `terminal.resize` to that size, then closes stdin (`Control.CloseAt`); frames after that are not forwarded.
+  - **A herdr client attached** (the computer's window, a web Full view): herdr then lays the pane out at that client's size, as before; if several are attached, the most recently active one's (section 24).
+  - **No client attached**: the pane keeps the size it had before the phone took it, not the phone's.
+  - **Phone to phone** (the same phone subscribing again, another phone taking over): the next control inherits the first recorded size and the first lets go without resizing, so Claude is not redrawn at computer width in between.
+  - **Taken over by another client** (Ovis, `terminal attach`) or ended by herdr: nothing is resized; the client holding the slot owns the size.
+  - Only a node killed outright (stdin closed with no resize first) still leaves the phone's size, until a herdr client attaches.
   Phone disappearing without TCP close is detected by hub WebSocket ping (every 20 s, 15 s timeout). Node also has a lease: hub sends `terminal.keepalive` every 20 s; 75 s without it releases control.
 - Slot occupied: node returns `attach_busy`; hub sends `busy` to App and mirrors first. App dialog "Another program on the computer is using this terminal" → Take Over resubscribes with `takeover`; View Only mirrors.
   Control taken away: node sends `terminal.end {control, taken}`, hub tells App `taken` and switches to mirror; App shows View Only · Take Over to reclaim it.
