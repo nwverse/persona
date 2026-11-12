@@ -1,7 +1,10 @@
 package persona.feature.settings
 
+import android.app.Activity
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
+import androidx.core.app.RemoteInput
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -12,6 +15,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import persona.core.contracts.GroupKeys
 import persona.core.contracts.api.AgentLauncher
+import persona.core.contracts.api.EXTENSION_NOTIFICATION_REMOTE_INPUT
+import persona.core.contracts.api.ExtensionNotificationActionRecord
+import persona.core.contracts.api.ExtensionNotificationActionStore
+import persona.core.contracts.api.ExtensionNotificationClaim
+import persona.core.contracts.api.ExtensionNotificationInspectionStatus
 import persona.core.contracts.api.MachineManagement
 import persona.core.contracts.api.ExtensionManagement
 import persona.core.contracts.api.ExtensionUiContext
@@ -23,6 +31,7 @@ import persona.core.designsystem.icons.PhIcons
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import persona.core.contracts.api.SUBSCRIPTIONS_UI
+import persona.core.contracts.generated.ExtensionNotifyAction
 
 // The places an extension's View is drawn (docs/extensions/extensions.md "Declarative UI"): a page of its own (extension_page, from the
 // extension's page in Settings › Extensions; nav_page, from the "Extensions" section of the settings home) and a section on a launcher's
@@ -38,17 +47,84 @@ val LocalExtensionPageVisible = compositionLocalOf { true }
 internal fun nativePageBinding(owner: persona.core.contracts.api.ExtensionStreamBinding?, manager: String?): persona.core.contracts.api.ExtensionStreamBinding? =
     owner?.let { binding -> manager?.takeIf { it.isNotBlank() }?.let { binding.copy(manager = it) } ?: binding }
 
+internal data class ExtensionNotificationPageExecution(val action: ExtensionNotifyAction, val values: Map<String, String>)
+internal enum class ExtensionNotificationPageError { Expired, WrongScope, Invalid }
+internal data class ExtensionNotificationPageResolution(
+    val record: ExtensionNotificationActionRecord? = null,
+    val execution: ExtensionNotificationPageExecution? = null,
+    val error: ExtensionNotificationPageError? = null,
+) {
+    val requiresHttp: Boolean get() = record?.action != null
+}
+
+/** A route is only navigation; the process-local record is what proves which declared action, if any, may run. */
+internal fun resolveExtensionNotificationPage(
+    token: String,
+    extensionId: String,
+    uiId: String,
+    manager: String?,
+    inputText: String?,
+    store: ExtensionNotificationActionStore,
+): ExtensionNotificationPageResolution {
+    val inspection = store.inspect(token) ?: return ExtensionNotificationPageResolution()
+    val record = inspection.record
+    if (record.extension != extensionId || record.ui != uiId || manager != null && manager != record.scope.manager) {
+        return ExtensionNotificationPageResolution(record, error = ExtensionNotificationPageError.Invalid)
+    }
+    when (inspection.status) {
+        ExtensionNotificationInspectionStatus.Expired -> return ExtensionNotificationPageResolution(record, error = ExtensionNotificationPageError.Expired)
+        ExtensionNotificationInspectionStatus.WrongScope -> return ExtensionNotificationPageResolution(record, error = ExtensionNotificationPageError.WrongScope)
+        ExtensionNotificationInspectionStatus.Current -> Unit
+    }
+    val action = record.action ?: return ExtensionNotificationPageResolution(record)
+    val values = if (action.input == null) emptyMap() else mapOf("text" to inputText.orEmpty())
+    return when (val claim = store.claim(token, action.id, values)) {
+        is ExtensionNotificationClaim.Claimed -> ExtensionNotificationPageResolution(record,
+            ExtensionNotificationPageExecution(action, claim.values))
+        is ExtensionNotificationClaim.AlreadyHandled -> ExtensionNotificationPageResolution(record)
+        is ExtensionNotificationClaim.Expired -> ExtensionNotificationPageResolution(record, error = ExtensionNotificationPageError.Expired)
+        is ExtensionNotificationClaim.WrongScope -> ExtensionNotificationPageResolution(record, error = ExtensionNotificationPageError.WrongScope)
+        is ExtensionNotificationClaim.Invalid -> ExtensionNotificationPageResolution(record, error = ExtensionNotificationPageError.Invalid)
+        ExtensionNotificationClaim.Missing -> ExtensionNotificationPageResolution()
+    }
+}
+
 @Composable
 fun ExtensionUiPage(extensions: ExtensionManagement?, extensionId: String, uiId: String, title: String, onBack: () -> Unit,
                     initialState: String? = null, depth: Int = 0, shown: Boolean = true, availableAdapter: NativeExtensionStreamAdapter? = null,
-                    onPush: (ExtensionUiRoute) -> Unit = {}, manager: String? = null) {
-    // The source subscription pages (#2041) are the manager's, drawn over HTTP only.
-    val defaultBinding = extensions?.nativeStream?.collectAsState(initial = null)?.value?.takeUnless { extensionId == SUBSCRIPTIONS_UI }
-    val binding = remember(defaultBinding, manager) { nativePageBinding(defaultBinding, manager) }
-    val owned = if (availableAdapter == null && binding != null) androidx.lifecycle.viewmodel.compose.viewModel(
+                    onPush: (ExtensionUiRoute) -> Unit = {}, manager: String? = null, notificationActionToken: String? = null) {
+    val notification = if (notificationActionToken == null) null else {
+        val activity = LocalContext.current as? Activity
+        produceState<ExtensionNotificationPageResolution?>(initialValue = null, notificationActionToken, activity?.intent) {
+            val text = activity?.intent?.let { RemoteInput.getResultsFromIntent(it) }
+                ?.getCharSequence(EXTENSION_NOTIFICATION_REMOTE_INPUT)?.toString()
+            value = resolveExtensionNotificationPage(notificationActionToken, extensionId, uiId, manager, text,
+                ExtensionNotificationActionStore.shared)
+        }.value
+    }
+    if (notificationActionToken != null && notification == null) {
+        JListPage(title = title, onBack = onBack) { item { JLoading() } }
+        return
+    }
+    notification?.error?.let { error ->
+        val message = when (error) {
+            ExtensionNotificationPageError.WrongScope -> R.string.settings_ext_notification_wrong_scope
+            else -> R.string.settings_ext_notification_expired
+        }
+        JListPage(title = title, onBack = onBack) { item { JNotice(stringResource(message)) } }
+        return
+    }
+    val pageManager = notification?.record?.scope?.manager ?: manager
+    val pageState = notification?.record?.state ?: initialState
+    val requiresHttp = notification?.requiresHttp == true
+    // The source subscription pages (#2041) and foreground notification actions are drawn over HTTP only.
+    val defaultBinding = extensions?.nativeStream?.collectAsState(initial = null)?.value
+        ?.takeUnless { extensionId == SUBSCRIPTIONS_UI || requiresHttp }
+    val binding = remember(defaultBinding, pageManager) { nativePageBinding(defaultBinding, pageManager) }
+    val owned = if (availableAdapter == null && binding != null && !requiresHttp) androidx.lifecycle.viewmodel.compose.viewModel(
         key = "native-extension:${binding.group}:${binding.owner}:${binding.manager}:${System.identityHashCode(binding.connection)}:$extensionId:$uiId:$depth",
-        initializer = { ExtensionUIStreamController(binding, extensionId, uiId, initialState.orEmpty()) }) else null
-    val adapter = availableAdapter ?: owned?.adapter
+        initializer = { ExtensionUIStreamController(binding, extensionId, uiId, pageState.orEmpty()) }) else null
+    val adapter = if (requiresHttp) null else availableAdapter ?: owned?.adapter
     if (owned != null) SideEffect { owned.adapter.shown = shown }
     val nativeState = adapter?.session?.state?.collectAsState()?.value
     val nativeNotice = nativeState?.unsupported?.isNotEmpty() == true
@@ -62,7 +138,7 @@ fun ExtensionUiPage(extensions: ExtensionManagement?, extensionId: String, uiId:
     if (adapter != null && !nativeUnsupported) {
         require(adapter.session.identity.extension == extensionId && adapter.session.identity.contribution == uiId)
         NativeExtensionStreamPage(adapter, title, onBack, onPush = { push ->
-            ExtensionViewText.pushed(extensionId, uiId, title, depth, push, binding?.manager ?: manager)?.let(onPush)
+            ExtensionViewText.pushed(extensionId, uiId, title, depth, push, binding?.manager ?: pageManager)?.let(onPush)
         }, presentations = owned?.presentations)
         return
     }
@@ -70,16 +146,19 @@ fun ExtensionUiPage(extensions: ExtensionManagement?, extensionId: String, uiId:
         JListPage(title = title, onBack = onBack) { item { JNotice(stringResource(if (nativeUnsupported) R.string.settings_ext_native_unsupported else R.string.settings_ext_demo_none)) } }
         return
     }
-    val api = rememberPinned(extensions, extensionPrefixes(extensionId), manager)
-    val model = remember(api, extensionId, uiId, initialState) {
-        ExtensionViewModel(api, extensionId, uiId, initialState = initialState)
+    val api = rememberPinned(extensions, extensionPrefixes(extensionId), pageManager)
+    val model = remember(api, extensionId, uiId, pageState) {
+        ExtensionViewModel(api, extensionId, uiId, initialState = pageState)
     }
     val state by model.state.collectAsState()
     val scope = rememberCoroutineScope()
     val handle = rememberExtensionView(model, onPush = { push ->
-        ExtensionViewText.pushed(extensionId, uiId, title, depth, push, manager)?.let { model.covered(); onPush(it) }
+        ExtensionViewText.pushed(extensionId, uiId, title, depth, push, pageManager)?.let { model.covered(); onPush(it) }
     }, onPop = onBack)
-    LaunchedEffect(model) { model.load() }
+    LaunchedEffect(model, notification) {
+        val execution = notification?.execution
+        if (execution == null) model.load() else handle.act(persona.core.contracts.api.ExtensionViewAction(execution.action.id), execution.values)
+    }
     // A view with refresh_after is drawn again while this page is on screen (docs/extensions/extensions.md "UI slots" "Refresh"),
     // one the extension invalidated (ui.invalidate) at once or when it shows again, and one back from a page pushed on it.
     KeepFresh(model, extensions.uiEvents)
