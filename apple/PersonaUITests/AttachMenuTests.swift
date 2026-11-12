@@ -105,9 +105,12 @@ final class AttachMenuTests: XCTestCase {
                 let modes = app.buttons["shell-composer-modes"].firstMatch
                 XCTAssertTrue(modes.waitForExistence(timeout: 10), "no model button on Health's page:\n\(app.debugDescription)")
                 modes.tap()
-                for title in ["思考强度", "权限模式"] {
-                    let row = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch
-                    XCTAssertTrue(row.waitForExistence(timeout: 5), "no \(title) in Health's model menu:\n\(app.debugDescription)")
+                // UIKit's menu drops the section titles (Model, Thinking Effort): the rows stand for them. The mock hub's
+                // launchers, an effort level, and the permission mode's submenu.
+                for (what, format, title) in [("the launchers", "label BEGINSWITH %@", "claude"), ("the effort", "label == %@", "中"),
+                                              ("the permission mode", "label BEGINSWITH %@", "权限模式")] {
+                    let row = app.descendants(matching: .any).matching(NSPredicate(format: format, title)).firstMatch
+                    XCTAssertTrue(row.waitForExistence(timeout: 5), "no \(what) in Health's model menu:\n\(app.debugDescription)")
                 }
                 shot("health-model-menu", scheme, style)
                 // The page keeps its draft: it goes again, or the next screenshots show it.
