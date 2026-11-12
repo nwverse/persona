@@ -152,7 +152,7 @@ class TabletopPageTest {
             PersonaTheme(darkTheme = false, reduceMotion = true, style = style) {
                 CompositionLocalProvider(LocalWindowLayout provides window) {
                     JPage("Page", onBack = { backs++ }, topBar = topBar) {
-                        remember { contentCreations += 1 }
+                        remember { contentCreations++ }
                         LaunchedEffect(Unit) { focus.requestFocus() }
                         BasicTextField(draft, { draft = it }, Modifier.testTag("draft").focusRequester(focus))
                     }
