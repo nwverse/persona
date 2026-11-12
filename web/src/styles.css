@@ -206,6 +206,7 @@
   --color-orange-tint: var(--orange-tint);
   --color-red: var(--red);
   --color-red-tint: var(--red-tint);
+  --color-danger-wash: var(--danger-wash);
   --color-attention: var(--attention);
   --color-danger-fill: var(--danger-fill);
   --color-ai: var(--ai);
@@ -431,6 +432,7 @@ button:disabled { cursor: default; }
 /* A permission mode's tone (#3956; iOS Theme.ModeTone, Android ModeTone, docs/design/DESIGN_SYSTEM.md): how much a
  * mode lets an agent do without asking, on the header's mode button. None is an agent state's color (blue, orange, green).
  * Ask First (and a mode not reported yet) is the quiet ink on the chip fill; the others wash their capsule at 12%. */
+:root { --danger-wash: color-mix(in srgb, var(--red) 12%, transparent); } /* iOS Theme.danger at 12%: the failed and interrupted conclusion cards and the failed Needs you row (#5569). Reds are 4.78:1 on the tray's surface and 4.31:1 on the light canvas, so every word on the wash is --ink (12:1 and up) and --red only colours icons (theme-contrast.test.ts). --red-tint stays neutral (selection and error fills of the other pages). */
 :root { --mode-plans: #0e7c86; --mode-acts: var(--hue-purple); --mode-allows: var(--red); }
 .dark { --mode-plans: #4fd1c5; }
 :root { --mode-plans-tint: color-mix(in srgb, var(--mode-plans) 12%, transparent); --mode-acts-tint: color-mix(in srgb, var(--mode-acts) 12%, transparent); --mode-allows-tint: color-mix(in srgb, var(--mode-allows) 12%, transparent); }
