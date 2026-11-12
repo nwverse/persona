@@ -184,6 +184,17 @@ describe("thought rows (cindy's ThinkingActivityRow, #5155)", () => {
     expect(html).toContain(">先看测试 再看实现<");
   });
 
+  it("reads **strong** and backtick code as cindy does, on the row and opened, and nothing else", () => {
+    const html = renderToStaticMarkup(<ThinkingRow item={thought("**Inspecting files** with `git status` and [docs](https://example.com)")} />);
+    expect(html).toMatch(/<span class="font-medium" data-thinking-markup="strong">Inspecting files<\/span>/);
+    expect(html).toMatch(/<code class="font-mono not-italic" data-thinking-markup="code">git status<\/code>/);
+    expect(html).not.toContain("**");
+    expect(html).not.toContain("<a ");
+    expect(html).toContain("[docs](https://example.com)");
+    // the hover text is the words without the markers
+    expect(html).toContain('title="Inspecting files with git status and [docs](https://example.com)"');
+  });
+
   it("live: Thinking with three dots and a clock", () => {
     const html = renderToStaticMarkup(<LiveThinking />);
     expect(html).toContain(">正在思考<");

@@ -35,7 +35,7 @@ const thought = (n: number, text: string): Step => {
 };
 const seg = (steps: Step[]): Segment => ({ id: "seg", steps, tools: steps.length, thoughts: 0, replies: 0, folds: [], start: at(0) });
 // a thought without words, one with, a run, the narration, a second run with a long thought, the answer
-const finished = [thought(1, ""), thought(2, "Read the config first."), tool(3), words(5, "Found the setting."), tool(6), thought(8, "Line one\nline two"), tool(9), words(12, "Final result.")];
+const finished = [thought(1, ""), thought(2, "Read the config first."), tool(3), words(5, "Found the setting."), tool(6), thought(8, "Line one\nline `two`"), tool(9), words(12, "Final result.")];
 const running = [...finished.slice(0, -1), words(12, "Checking once more."), tool(13, false)];
 
 let host: HTMLDivElement;
@@ -80,6 +80,8 @@ describe.each(["agents", "assistant"] as const)("%s: the timeline", (style) => {
     expect(detail.indexOf("Found the setting.")).toBeLessThan(detail.indexOf("echo 6"));
     // a thought without words is no row; one with words is
     expect(thoughtRows().map((r) => r.textContent)).toEqual(["Read the config first.", "Line one line two"]);
+    // backtick code reads as code on the row too, without its backticks
+    expect(thoughtRows()[1].querySelector('[data-thinking-markup="code"]')?.textContent).toBe("two");
     expect(host.textContent).not.toContain("思考");
   });
 
@@ -106,6 +108,7 @@ describe.each(["agents", "assistant"] as const)("%s: the timeline", (style) => {
     tap(long);
     expect(thoughtRows()[1].getAttribute("aria-expanded")).toBe("true");
     expect(thoughtRows()[1].textContent).toBe("Line one\nline two");
+    expect(thoughtRows()[1].querySelector('[data-thinking-markup="code"]')?.textContent).toBe("two");
     expect(thoughtRows()[1].className).toContain("items-start");
     act(() => root.unmount());
     root = createRoot(host);

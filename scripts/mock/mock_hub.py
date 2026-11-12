@@ -11959,7 +11959,7 @@ def mock_work_timeline():
     _w.append(it("assistant", "text", 11, text="Fixed: the widget now schedules its next refresh 15 minutes from now, so a quiet night no longer "
                                                "pushes the morning refresh late. All 48 tests pass."))
     _w.append(it("user", "text", 1.5, text="Also make the fetch timeout a setting."))
-    _w.append(it("assistant", "thinking", 1.45, text="The timeout is a literal in Fetcher; a setting means WidgetSettings."))
+    _w.append(it("assistant", "thinking", 1.45, text="**Moving the timeout** — it is a literal in `Fetcher`; a setting means `WidgetSettings`."))
     _w += tool("Grep", {"pattern": "timeout", "path": "Widget"}, "Widget/Fetcher.swift:8: let timeout = 10", 1.4)
     _w.append(it("assistant", "text", 1.2, text="The timeout is hard-coded in `Fetcher.swift`. Moving it into `WidgetSettings`."))
     _w += tool("Edit", {"file_path": "/Users/me/code/weather/Widget/Fetcher.swift", "old_string": "let timeout = 10",
@@ -11972,7 +11972,7 @@ def mock_work_timeline():
                          "timeline", 12, 0, "Now running the tests again.", state_since=ago(minutes=1.5)))
 
     _a = [it("user", "text", 20, text="Plan a weekend at the coast for the two of us.")]
-    _a.append(it("assistant", "thinking", 19.95, text="Two people, one weekend: check the weather first, then trains, then somewhere to stay near the beach."))
+    _a.append(it("assistant", "thinking", 19.95, text="**Two people, one weekend:** check the weather first, then trains, then somewhere to stay near the beach."))
     _a += tool("WebSearch", {"query": "coast weather this weekend"}, "Saturday sunny 24°, Sunday cloudy 21°", 19.9)
     _a.append(it("assistant", "text", 19.8, text="Saturday looks sunny, Sunday cloudier. Looking at trains for Saturday morning."))
     _a.append(it("assistant", "thinking", 19.75, text=""))
