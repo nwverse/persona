@@ -309,7 +309,7 @@ func TestAskUserNoWaitAnswerIsNotHeldForTheOwnersPresence(t *testing.T) {
 		t.Fatalf("delivered %q", got)
 	}
 	e.mustEnd(closed.ID, `{"dismiss":true}`)
-	time.Sleep(50 * time.Millisecond)
+	waitFor(t, "the closed card held for the owner", func() bool { return e.s.queuedFor("c1x1x1") == 2 })
 	if q, sent := e.s.queuedFor("c1x1x1"), len(e.told("c1x1x1")); q != 2 || sent != 1 {
 		t.Fatalf("after the answer: %d queued (want the other chat's message and the closed card), %d sent", q, sent)
 	}

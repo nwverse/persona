@@ -16,10 +16,24 @@ extension AppModel {
         guard let api = api(group) else { return }
         let read = managerRosterReads[group, default: 0] + 1
         managerRosterReads[group] = read
-        let roster = await ManagerRoster.read(api, keeping: managerRosters[group])
-        guard read == managerRosterReads[group], managerRosters[group] != roster else { return }
-        let was = managerRosters[group].map { shownOwner($0, group: group) }
+        let roster: ManagerRoster?
+        let unsupported: Bool
+        do {
+            roster = ManagerRoster(try await api.managers())
+            unsupported = false
+        } catch let error as APIError where error.status == 404 && error.code == nil {
+            roster = nil
+            unsupported = true
+        } catch {
+            roster = managerRosters[group]
+            unsupported = managerRosterUnsupported.contains(group)
+        }
+        guard read == managerRosterReads[group] else { return }
         let wasPick = assistantPick(in: group)
+        if unsupported { managerRosterUnsupported.insert(group) }
+        else { managerRosterUnsupported.remove(group) }
+        guard managerRosters[group] != roster || assistantPick(in: group) != wasPick else { return }
+        let was = managerRosters[group].map { shownOwner($0, group: group) }
         let wasOffline = group == hub?.group && assistantManagerOffline != nil
         let defaultMoved = managerRosters[group] != nil && roster != nil && managerRosters[group]?.defaultID != roster?.defaultID
         if defaultMoved {
@@ -82,7 +96,9 @@ extension AppModel {
 
     /// `assistantManagerID` for group's Persona page.
     func assistantPick(in group: String) -> String? {
-        guard let roster = managerRosters[group], roster.isMulti, let pick = assistantPicks[group] else { return nil }
+        guard let pick = assistantPicks[group], !managerRosterUnsupported.contains(group) else { return nil }
+        guard let roster = managerRosters[group] else { return pick }
+        guard roster.isMulti else { return nil }
         return roster.named(pick)
     }
 

@@ -99,6 +99,7 @@ struct AssistantSwitcherHeader: View {
     var manager: HubManager
     var nameFont: Font
     var compact = false
+    var showsSwitchLabel = false
     /// Opens Settings on the page `AppModel.settingsPath` names.
     var openSettings: () -> Void
 
@@ -132,6 +133,10 @@ struct AssistantSwitcherHeader: View {
                         Text(AssistantSwitcherText.line(manager, now: .now)).font(Theme.Font.label).foregroundStyle(.secondary)
                             .lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
                     }
+                }
+                if showsSwitchLabel {
+                    Spacer(minLength: Theme.Space.s)
+                    Text("Switch").font(Theme.Font.labelStrong).lineLimit(1)
                 }
             }
             // A finger's target at least (the Mac's one line keeps its title row's height).

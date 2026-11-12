@@ -138,6 +138,13 @@ extension Theme {
         static let dictating = "mic.fill"
         /// A long recording as context, distinct from the composer's dictation.
         static let recording = "waveform.circle"
+        /// All-Day Recording (docs/assistant/day-recap.md): the mode, its switch on the phone, its button and page on the
+        /// watch, and its state while it records. A record mark, not `recording`'s waveform: that is one recording, this
+        /// the mode that keeps recording all day.
+        static let allDay = "record.circle"
+        /// All-day recording paused by the system or a failure, waiting for a tap to continue: a state, beside its words,
+        /// not the Pause control (`pause`).
+        static let allDayPaused = "pause.circle"
         static let pause = "pause.fill"
         /// Back and ahead 15 seconds in something that plays (an audio file).
         static let skipBack = "gobackward.15"
@@ -478,6 +485,8 @@ extension Theme {
         /// The assistant operating an iPhone through a Mac (the extension iphone): its section, its tools.
         static let phoneControl = "iphone.radiowaves.left.and.right"
         static let watch = "applewatch"
+        static let storage = "internaldrive"
+        static let scanCode = "qrcode.viewfinder"
         static let handoff = "iphone.and.arrow.forward"
         /// The default web browser (open a link outside the app).
         static let safari = "safari"
@@ -647,6 +656,12 @@ extension Theme {
         /// Just Me (#3862): a question asked during a meeting that only its asker sees, answered in the main chat and
         /// never said aloud.
         static let justMe = "person.crop.circle.badge.questionmark"
+        /// A meeting marked inside an all-day recording (the watch's Mark Meeting, the day's timeline): a meeting, so the
+        /// same symbol.
+        static let meetingMark = meeting
+        /// The hub's recap of a recorded day (docs/assistant/day-recap.md): the Day Recap section and the Today row. Its own
+        /// symbol rather than `minutes`: a recap covers a whole day, a meeting's minutes one meeting.
+        static let dayRecap = "text.book.closed"
         /// People in the knowledge base.
         static let people = "person.3"
         /// A tap on the screen, in tips and features.

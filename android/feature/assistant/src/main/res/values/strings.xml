@@ -90,7 +90,7 @@
     <string name="assistant_no_match">No matching chats</string>
     <string name="assistant_no_match_detail">Try another keyword.</string>
     <string name="assistant_more">More</string>
-    <string name="assistant_home">Back to home</string>
+    <string name="assistant_back_to_main">Back to main chat</string>
     <string name="assistant_todos">To-dos</string>
     <string name="assistant_open_settings">Settings</string>
     <string name="assistant_make_leader">Pin</string>
@@ -151,4 +151,17 @@
     <string name="assistant_health_history">Health chats</string>
     <string name="assistant_health_new">New health chat</string>
     <string name="assistant_health_load_failed">Couldn\'t load health chats</string>
+    <string name="assistant_rename_menu">Rename…</string>
+    <string name="assistant_rename_title">Rename</string>
+    <string name="assistant_rename_field">Session name</string>
+    <string name="assistant_save">Save</string>
+    <string name="assistant_renamed">Renamed</string>
+    <string name="assistant_copy_diagnostics">Copy diagnostics</string>
+    <string name="assistant_diagnostics_copied">Diagnostics copied</string>
+    <string name="assistant_end_menu">End…</string>
+    <string name="assistant_archived_count">Archived (%1$d)</string>
+    <string name="assistant_archived_empty">No archived chats</string>
+    <string name="assistant_archived_empty_detail">Swipe left on a chat in the list to archive it. It\'ll show up here.</string>
+    <string name="assistant_unarchive">Unarchive</string>
+    <string name="assistant_unarchived">Unarchived</string>
 </resources>
