@@ -885,6 +885,16 @@ The watch widget extension doesn't build `Theme`, so complications take their fo
 - **Taps** open the app with the action the face offers (`persona://allday?action=start|continue|open`): start when off, continue when paused or stopped, the page when recording or stale. Only the app in front can open the microphone, so the face never acts on its own.
 - VoiceOver reads the title, the running time as its value and what a tap does as its hint. `-openWatchItem allday-complication` previews every family in every state.
 
+### 3.14 Home Screen and Lock Screen widgets
+
+The widget extension doesn't build `Theme`: Persona's own widgets take their colors, type, sizes and marks from `HomeWidgetTokens` (`apple/Shared/Design/HomeWidgetTokens.swift`), whose symbols mirror `Theme.Icon` with an `// icon:` note, as the watch's complications do. The numerals and faces are fixed sizes (the system sets a widget's size); every line of words is a text style. Rules and every widget in `docs/apple/home-widgets.md`.
+
+- **The stage**: every widget stands on the app icon's paper (its dark in the dark) with the icon's ink; the only strong colors are the agent states' (`StatusPalette`), a recording's red and the persona's glow. A row of them reads as one family.
+- **The Persona widget**: the persona between four tiles of modules the user chose, the face cut out where the tiles meet (`PersonaHero`). A module's own widget has its name top left and the persona top right, its face telling how that module is (`ModuleWidgetView`).
+- **Moods**: the Live Activity's persona states plus Done (an agent finished, unseen), in the same order; a snapshot over 30 minutes old makes the face offline and the tiles step back.
+- **Every rendering mode**: in tinted, clear and Lock Screen modes tiles become a faint wash, Mochi a line drawing (`MochiGlyph`), a package's picture gray, and every state color, cue and button goes in the accent group (`homeAccent()`); a mark on a filled shape is knocked out of it.
+- **Counts** are the app's own (Needs You per session, section 4.8; the Inbox's Needs You; the Machines page's windows); inbox and health content is `privacySensitive`.
+
 ## 4. Interaction patterns
 
 ### 4.1 Navigation hierarchy (super rule 3)
