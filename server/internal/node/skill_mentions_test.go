@@ -115,7 +115,21 @@ func TestClaudeSkillCatalogDoesNotBypassCustomizationOrSkillPermissions(t *testi
 	}
 }
 
+func TestClaudeSkillCatalogRespectsLauncherSettings(t *testing.T) {
+	probedLaunchers(t, map[string]string{"policy-claude": "claude"})
+	withLauncherSettings(t, map[string]string{"policy-claude": `{"permissions":{"deny":["Skill(review)"]}}`})
+	f := sdkTest(t)
+	f.n.home = os.Getenv("HOME")
+	profile, cwd := t.TempDir(), t.TempDir()
+	writeFile(t, filepath.Join(profile, "skills", "review", "SKILL.md"), "---\nname: review\n---\nInstructions\n")
+	_, err := f.n.skillCatalog(context.Background(), skillCatalogRequest{Owner: "helper", Cwd: cwd, Launcher: "policy-claude", ConfigDir: profile})
+	if err == nil {
+		t.Fatal("launcher Skill deny policy was bypassed")
+	}
+}
+
 func TestCodexSkillCatalogToTypedTurnAndSteer(t *testing.T) {
+	probedLaunchers(t, map[string]string{"cx_test": "codex"})
 	n := codexTestNode(t)
 	withFakeHub(t, n)
 	cwd := t.TempDir()
@@ -128,9 +142,18 @@ func TestCodexSkillCatalogToTypedTurnAndSteer(t *testing.T) {
 		map[string]any{"name": "review", "description": "Review", "path": file, "scope": "repo", "enabled": true},
 		map[string]any{"name": "hidden", "path": "/hidden/SKILL.md", "enabled": false},
 	}, "errors": []any{}}}}
-	entries, complete, err := n.codexSkillCatalog(context.Background(), skillCatalogRequest{SessionID: testThread, Cwd: cwd, Launcher: p.launcher})
-	if err != nil || !complete || len(entries) != 1 {
-		t.Fatalf("native catalog: %+v %v", entries, err)
+	request := skillCatalogRequest{Owner: "helper-a", Machine: n.machineID, SessionID: testThread, Cwd: cwd, Launcher: p.launcher}
+	catalog, err := n.skillCatalog(context.Background(), request)
+	if err != nil || !catalog.Complete || len(catalog.Skills) != 1 {
+		t.Fatalf("native catalog: %+v %v", catalog, err)
+	}
+	text := `<persona-context kind="skill" ref="` + catalog.Skills[0].ID + `">review</persona-context>` + "\nReview"
+	entries, err := n.selectedSkills(withSkillOwner(context.Background(), request.Owner), testThread, cwd, p.launcher, text, modelExecution{})
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("catalog-to-send resolution: %+v %v", entries, err)
+	}
+	if _, err := n.selectedSkills(withSkillOwner(context.Background(), "helper-b"), testThread, cwd, p.launcher, text, modelExecution{}); err == nil {
+		t.Fatal("Codex selection crossed assistant ownership")
 	}
 	f.results["turn/start"] = map[string]any{"turn": map[string]any{"id": "turn-1"}}
 	if err := c.deliver(context.Background(), "", "Review", nil, entries...); err != nil {
@@ -145,5 +168,11 @@ func TestCodexSkillCatalogToTypedTurnAndSteer(t *testing.T) {
 		if sent.Input[0]["type"] != "skill" || sent.Input[0]["name"] != "review" || sent.Input[0]["path"] != file {
 			t.Fatalf("%s lost typed invocation: %+v", method, sent)
 		}
+	}
+	if err := os.Remove(file); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := n.selectedSkills(withSkillOwner(context.Background(), request.Owner), testThread, cwd, p.launcher, text, modelExecution{}); err == nil {
+		t.Fatal("Codex selected a deleted instruction file")
 	}
 }

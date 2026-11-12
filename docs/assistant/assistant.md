@@ -582,6 +582,8 @@ that profile's `skills` and the working directory's ancestor `.claude/skills` ro
 16 KiB frontmatter per file). Names/descriptions are data, not executed YAML or shell substitutions; bodies are not
 read for the menu. `user-invocable: false` and local `skillOverrides: off` are respected. Known strict-plugin policy
 or `Skill` deny/ask rules refuse this adapter rather than work around native customization/approval gates.
+The launcher's existing `--settings` file or inline object is checked through the same settings reader as startup;
+its values are never returned in the catalog or diagnostics.
 Known managed-policy files/drop-in directories or a server-policy cache also refuse the bounded adapter:
 it checks their presence without reading a potentially credential-bearing cache or executing policy helpers.
 This bounded adapter deliberately does **not** claim to enumerate plugin, bundled or remote skills.

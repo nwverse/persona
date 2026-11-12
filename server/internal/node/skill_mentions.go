@@ -70,7 +70,14 @@ func (n *Node) skillCatalog(ctx context.Context, in skillCatalogRequest) (assist
 		// Bounded local roots, not a claim to enumerate bundled, remote or plugin-only commands.
 		entries, err = assistantskills.LocalCatalog(roots)
 		if err == nil {
-			entries, err = visibleClaudeSkills(entries, profile, in.Cwd)
+			var own map[string]any
+			if settings := n.launcherOwnSettings(ctx, in.Launcher); settings != "" {
+				own, err = readLauncherSettings(settings, in.Cwd, n.home)
+				if err != nil {
+					return out, errors.New("cannot establish the launcher's skill settings")
+				}
+			}
+			entries, err = visibleClaudeSkills(entries, profile, in.Cwd, own)
 		}
 	default:
 		err = errors.New("skill selection is unavailable for this runtime")
@@ -84,7 +91,7 @@ func (n *Node) skillCatalog(ctx context.Context, in skillCatalogRequest) (assist
 	return out, nil
 }
 
-func visibleClaudeSkills(entries []assistantskills.Entry, profile, cwd string) ([]assistantskills.Entry, error) {
+func visibleClaudeSkills(entries []assistantskills.Entry, profile, cwd string, launcherSettings ...map[string]any) ([]assistantskills.Entry, error) {
 	// A bounded local adapter cannot establish the effective managed policy. Check presence only:
 	// never execute a policy helper or read a server-policy cache that may contain credentials.
 	policies := append([]string{filepath.Join(profile, "remote-settings.json"),
@@ -99,12 +106,16 @@ func visibleClaudeSkills(entries []assistantskills.Entry, profile, cwd string) (
 			return nil, errors.New("skill catalog is unavailable while a managed policy may apply")
 		}
 	}
-	overrides := map[string]string{}
+	layers := []map[string]any{}
 	for _, file := range []string{filepath.Join(profile, "settings.json"), filepath.Join(cwd, ".claude", "settings.json"), filepath.Join(cwd, ".claude", "settings.local.json")} {
 		settings, err := readSettingsFile(file)
 		if err != nil {
 			return nil, err
 		}
+		layers = append(layers, settings)
+	}
+	overrides := map[string]string{}
+	for _, settings := range append(layers, launcherSettings...) {
 		strict, _ := settings["strictPluginOnlyCustomization"].([]any)
 		enabled, _ := settings["strictPluginOnlyCustomization"].(bool)
 		if enabled || len(strict) > 0 {
