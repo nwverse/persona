@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/extension"
@@ -22,28 +23,36 @@ import (
 // it (newImportGroup, importEnv). The text holds keys: it is never logged, and the answer carries none of its
 // secrets but the key itself (the user pasted it into the form it stays in).
 
-// pasteMost is how many drafts a paste answers at most (too_many beyond).
-const pasteMost = 50
+// What one paste answers at most: drafts (reading stops past them, too_many), notes in all (the top-level ones and
+// every draft's), variables and headers one draft names as left out. A text of the body's 256 KiB stays a small answer.
+const (
+	pasteMost        = 50
+	pasteNotesMost   = 200
+	pasteSkippedMost = 100
+)
 
 // The codes of a paste's notes (clients localize them): a note carries names (an alias, a variable, a header, an
 // option, a protocol), never a value of the text.
 const (
-	noteUnrecognized  = "unrecognized"   // nothing in the text looks like a provider configuration
-	noteInvalidJSON   = "invalid_json"   // it starts like JSON but does not parse
-	noteLineUnused    = "line_unused"    // a shell line that is no comment, alias, export, assignment or claude command
-	noteNotClaude     = "not_claude"     // an alias or command that does not start Claude Code
-	noteNoGateway     = "no_gateway"     // Claude Code without ANTHROPIC_BASE_URL: its own sign-in, nothing to add
-	noteURLShell      = "url_shell"      // the address is a shell expansion: no draft
-	noteURLUser       = "url_user"       // the address carries a user name or password: no draft
-	noteKeyShell      = "key_shell"      // the key is a shell expansion: left out
-	noteNoKey         = "no_key"         // no key found: it is typed
-	noteKeyHelper     = "key_helper"     // settings.json's apiKeyHelper runs a command for the key
-	noteCurlOption    = "curl_option"    // a curl option not used
-	noteCurlPath      = "curl_path"      // a curl URL's path is no endpoint Persona knows
-	noteCindyKind     = "cindy_kind"     // a cindy preset or builtin provider
-	noteCindyAuth     = "cindy_auth"     // a cindy provider signing in with oauth (no draft) or none (no key)
-	noteCindyEndpoint = "cindy_endpoint" // a cindy endpoint not imported
-	noteTooMany       = "too_many"       // more than pasteMost drafts: the rest left out
+	noteUnrecognized  = "unrecognized"      // nothing in the text looks like a provider configuration
+	noteInvalidJSON   = "invalid_json"      // it starts like JSON but does not parse
+	noteLineUnused    = "line_unused"       // a shell line that is no comment, alias, export, assignment or claude command
+	noteNotClaude     = "not_claude"        // an alias or command that does not start Claude Code
+	noteNoGateway     = "no_gateway"        // Claude Code without ANTHROPIC_BASE_URL: its own sign-in, nothing to add
+	noteURLShell      = "url_shell"         // the address is a shell expansion: no draft
+	noteURLUser       = "url_user"          // the address carries a user name or password: no draft
+	noteURLQuery      = "url_query"         // the address carries a query or fragment (it may hold a key): no draft
+	noteKeyShell      = "key_shell"         // the key is a shell expansion: left out
+	noteNoKey         = "no_key"            // no key found: it is typed
+	noteKeyHelper     = "key_helper"        // settings.json's apiKeyHelper runs a command for the key
+	noteCurlOption    = "curl_option"       // a curl option not used
+	noteCurlPath      = "curl_path"         // a curl URL's path is no endpoint Persona knows
+	noteCindyKind     = "cindy_kind"        // a cindy preset or builtin provider
+	noteCindyAuth     = "cindy_auth"        // a cindy provider signing in with oauth (no draft) or none (no key)
+	noteCindyEndpoint = "cindy_endpoint"    // a cindy endpoint not imported
+	noteArgsLeftOut   = "args_left_out"     // the arguments look like they hold a secret or a setting's text: none kept
+	noteHeaderUnread  = "header_unreadable" // a header whose name is no plain token: left out, unnamed
+	noteTooMany       = "too_many"          // more than pasteMost drafts: the rest left out
 )
 
 // pasteNote is something said about the pasted text or one draft: Line is 1-based, of the text with CRLF made LF.
@@ -53,9 +62,9 @@ type pasteNote struct {
 	Name string `json:"name,omitempty"`
 }
 
-// addNote adds n to notes once.
+// addNote adds n to notes once, up to pasteNotesMost.
 func addNote(notes *[]pasteNote, n pasteNote) {
-	if !slices.Contains(*notes, n) {
+	if len(*notes) < pasteNotesMost && !slices.Contains(*notes, n) {
 		*notes = append(*notes, n)
 	}
 }
@@ -65,6 +74,7 @@ const (
 	headerSkipCredential  = "credential"  // its name looks like a secret's
 	headerSkipProtocol    = "protocol"    // a request basic Claude Code or the manager sets itself
 	headerSkipUnsupported = "unsupported" // a direct API provider takes no headers
+	headerSkipUnsafe      = "unsafe"      // its value has a control character, a backslash or a $: no header line holds it as it is
 )
 
 // skippedHeader is one header of a paste left out, and why.
@@ -127,12 +137,13 @@ type pasteDraft struct {
 	Notes          []pasteNote     `json:"notes,omitempty"`
 }
 
-// setKey puts the pasted key in the draft, or says why there is none: a shell expansion is no key.
+// setKey puts the pasted key in the draft, or says why there is none: a shell expansion is no key, nor is a value
+// with a blank or a control character in it (no key has one; it could run on into other text).
 func (d *pasteDraft) setKey(key string) {
 	switch {
 	case shellExpands(key):
 		addNote(&d.Notes, pasteNote{Code: noteKeyShell})
-	case key == "":
+	case key == "" || strings.ContainsFunc(key, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }):
 		addNote(&d.Notes, pasteNote{Code: noteNoKey})
 	default:
 		d.Provider.APIKey = key
@@ -169,9 +180,23 @@ func parsePaste(text string) pasteResult {
 	if len(res.Drafts) == 0 && len(res.Notes) == 0 {
 		res = pasteResult{Notes: []pasteNote{{Code: noteUnrecognized}}}
 	}
-	if len(res.Drafts) > pasteMost {
-		res.Drafts = res.Drafts[:pasteMost]
-		res.note(noteTooMany, 0, "")
+	// Bounded: drafts past pasteMost (a reader stops at one past them, or says too_many itself), then notes in all.
+	tooMany := pasteNote{Code: noteTooMany}
+	cut := len(res.Drafts) > pasteMost || slices.Contains(res.Notes, tooMany)
+	res.Drafts = res.Drafts[:min(len(res.Drafts), pasteMost)]
+	res.Notes = slices.DeleteFunc(res.Notes, func(n pasteNote) bool { return n == tooMany })
+	if cut {
+		res.Notes = append(res.Notes[:min(len(res.Notes), pasteNotesMost-1)], tooMany)
+	}
+	res.Notes = res.Notes[:min(len(res.Notes), pasteNotesMost)]
+	left := pasteNotesMost - len(res.Notes)
+	for i := range res.Drafts {
+		d := &res.Drafts[i]
+		d.Notes = d.Notes[:min(len(d.Notes), left)]
+		left -= len(d.Notes)
+		if len(d.Notes) == 0 {
+			d.Notes = nil
+		}
 	}
 	if res.Drafts == nil {
 		res.Drafts = []pasteDraft{}

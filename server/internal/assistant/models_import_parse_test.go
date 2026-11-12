@@ -425,7 +425,7 @@ func TestParsePasteCindy(t *testing.T) {
 	}
 }
 
-// More than pasteMost drafts: the first ones, and too_many.
+// More than pasteMost drafts: the first ones, and too_many; what comes after the one past them is not read.
 func TestParsePasteTooMany(t *testing.T) {
 	var b strings.Builder
 	var providers []string
@@ -433,12 +433,159 @@ func TestParsePasteTooMany(t *testing.T) {
 		fmt.Fprintf(&b, "alias a%d='ANTHROPIC_BASE_URL=https://gw%d.example.com claude'\n", i, i)
 		providers = append(providers, fmt.Sprintf(`{"name": "p%d", "endpoints": [{"protocol": "openai-chat", "baseUrl": "https://p%d.example.com/v1"}]}`, i, i))
 	}
+	b.WriteString("fi\n")                               // not read: no not_claude
+	providers = append(providers, `{"kind": "preset"}`) // not read: no cindy_kind
 	for _, text := range []string{b.String(), `{"providers": [` + strings.Join(providers, ",") + `]}`} {
 		res := parsePaste(text)
 		if len(res.Drafts) != pasteMost || res.Drafts[pasteMost-1].Provider.BaseURL == "" ||
 			!reflect.DeepEqual(res.Notes, notes(pasteNote{Code: noteTooMany})) {
 			t.Fatalf("%d drafts, notes %+v", len(res.Drafts), res.Notes)
 		}
+	}
+}
+
+// Nothing of the text but the key comes back: each case's secret is in no part of the answer, and the answer says
+// what was left out (the fragments).
+func TestParsePasteLeavesSecretsOut(t *testing.T) {
+	const gw = "export ANTHROPIC_BASE_URL=https://gw.example.com\nexport ANTHROPIC_AUTH_TOKEN=" + pasteKeyA + "\n"
+	const curl = "curl https://gw.example.com/v1/messages -H 'x-api-key: " + pasteKeyA + "' "
+	cindy := func(endpoint string) string {
+		return `{"kind": "custom", "name": "Ex", "auth": {"apiKey": "` + pasteKeyA + `"}, "endpoints": [` + endpoint + `]}`
+	}
+	const s = "sk-example-hidden"
+	cases := []struct {
+		name, text string
+		want       []string // fragments of the answer
+	}{
+		// A header with a line break, a backslash or a $ in its value is unsafe; one whose name is no plain token is
+		// not even named.
+		{"cindy header value with a line break", cindy(`{"protocol": "anthropic-messages", "baseUrl": "https://gw.example.com",
+			"headers": {"X-Org": "a\nAuthorization: Bearer ` + s + `", "X-Team": "blue"}}`),
+			[]string{`"headers":"X-Team: blue"`, `{"name":"X-Org","reason":"unsafe"}`}},
+		{"cindy header name with a line break", cindy(`{"protocol": "anthropic-messages", "baseUrl": "https://gw.example.com",
+			"headers": {"X-Org: a\nAuthorization": "Bearer ` + s + `", "X Org": "` + s + `"}}`),
+			[]string{`"notes":[{"code":"header_unreadable"}]`}},
+		{"curl header names that are no token", curl + `-H 'X Api Key: ` + s + `' -H $'X-Org: a\nAuthorization: Bearer ` + s + `' -H 'x.api.key: ` + s + `'`,
+			[]string{`{"code":"header_unreadable"}`}},
+		{"curl header over two lines", curl + "-H 'X-Org: a\nAuthorization: Bearer " + s + "'",
+			[]string{`{"name":"X-Org","reason":"unsafe"}`}},
+		{"a literal backslash-n or a $ in ANTHROPIC_CUSTOM_HEADERS", gw + `export ANTHROPIC_CUSTOM_HEADERS="X-Org: a\nAuthorization: Bearer ` + s + `"` + "\n" +
+			"claude\nexport ANTHROPIC_CUSTOM_HEADERS='X-Team: $" + s + "'\nclaude\n",
+			[]string{`{"name":"X-Org","reason":"unsafe"}`, `{"name":"X-Team","reason":"unsafe"}`}},
+		// --opt=value names only the option.
+		{"curl --opt=value", curl + "--header=Authorization:Bearer-" + s + " --user=me:" + s + " --oauth2-bearer=" + s + " --data-urlencode=key=" + s,
+			[]string{`{"code":"curl_option","name":"--header"}`, `{"code":"curl_option","name":"--user"}`,
+				`{"code":"curl_option","name":"--oauth2-bearer"}`, `{"code":"curl_option","name":"--data-urlencode"}`}},
+		// Header names that hold a secret's word, however they are written.
+		{"credential header names", curl + "-H 'XApiKey: " + s + "' -H 'X-AccessToken: " + s + "' -H 'X-Authentication: " + s +
+			"' -H 'Authorisation: Bearer " + s + "' -H 'X-Session: " + s + "'",
+			[]string{`{"name":"XApiKey","reason":"credential"}`, `{"name":"X-AccessToken","reason":"credential"}`,
+				`{"name":"X-Authentication","reason":"credential"}`, `{"name":"Authorisation","reason":"credential"}`,
+				`{"name":"X-Session","reason":"credential"}`}},
+		{"cindy camelCase header names", cindy(`{"protocol": "anthropic-messages", "baseUrl": "https://gw.example.com",
+			"headers": {"accessToken": "` + s + `", "authToken": "` + s + `"}}`),
+			[]string{`{"name":"accessToken","reason":"credential"}`, `{"name":"authToken","reason":"credential"}`}},
+		// Arguments that may hold a secret or a setting's text: none kept.
+		{"args with a setting's JSON", `alias kimi='ANTHROPIC_BASE_URL=https://gw.example.com claude --settings "{\"env\":{\"OTHER\":\"` + s + `\"}}"'`,
+			[]string{`{"code":"args_left_out"}`}},
+		{"args with a key", gw + "claude --api-key " + s + " --mcp-config '{\"headers\":{\"Authorization\":\"Bearer " + s + "\"}}'",
+			[]string{`{"code":"args_left_out"}`}},
+		{"args with =", gw + "claude --append=" + s, []string{`{"code":"args_left_out"}`}},
+		{"args after a flag named like a key", gw + "claude --gateway-key " + s, []string{`{"code":"args_left_out"}`}},
+		// An address with a query or fragment makes no draft; a proxy with one is left out.
+		{"shell address with a query", "alias q='ANTHROPIC_BASE_URL=https://gw.example.com/?key=" + s + " claude'\n" +
+			"export ANTHROPIC_BASE_URL='https://gw.example.com/#" + s + "'\nclaude\n",
+			[]string{`{"code":"url_query","name":"q"}`, `{"code":"url_query","line":3}`}},
+		{"settings address with a query", `{"env": {"ANTHROPIC_BASE_URL": "https://gw.example.com/?key=` + s + `"}}`,
+			[]string{`"notes":[{"code":"url_query"}]`}},
+		{"cindy address with a query", cindy(`{"protocol": "openai-chat", "baseUrl": "https://gw.example.com/v1?key=` + s + `#` + s + `"}`),
+			[]string{`"drafts":[]`, `{"code":"url_query","name":"Ex"}`}},
+		{"proxy with a query", gw + "export HTTPS_PROXY='http://proxy.example.com:8080/?token=" + s + "' HTTP_PROXY=http://plain.example.com:1\n",
+			[]string{`{"name":"HTTPS_PROXY","reason":"credential"}`, `"auth":"bearer","api_key":"` + pasteKeyA + `"}`}},
+		{"curl proxy with a query", curl + "-x 'http://proxy.example.com:1/?token=" + s + "'", []string{`{"code":"curl_option","name":"-x"}`}},
+		// Variables named like secrets, beyond the import's words.
+		{"variable names", gw + "export GITHUB_PAT=" + s + " OPENAIKEY=" + s + " ACCESSTOKEN=" + s + " RELAY_AUTH=" + s + " X_AUTHORIZATION=" + s +
+			" DB_PASS=" + s + " JWT=" + s + " BEARER=" + s + " SESSIONID=" + s + " ANTHROPIC_APIKEY2=" + s + " MY_PWD=" + s +
+			" CLAUDE_CODE_MAX_OUTPUT_TOKENS=64000\n",
+			[]string{`"env":"CLAUDE_CODE_MAX_OUTPUT_TOKENS=64000"`, `{"name":"ACCESSTOKEN","reason":"credential"}`,
+				`{"name":"ANTHROPIC_APIKEY2","reason":"credential"}`, `{"name":"BEARER","reason":"credential"}`,
+				`{"name":"DB_PASS","reason":"credential"}`, `{"name":"GITHUB_PAT","reason":"credential"}`,
+				`{"name":"JWT","reason":"credential"}`, `{"name":"MY_PWD","reason":"credential"}`,
+				`{"name":"OPENAIKEY","reason":"credential"}`, `{"name":"RELAY_AUTH","reason":"credential"}`,
+				`{"name":"SESSIONID","reason":"credential"}`, `{"name":"X_AUTHORIZATION","reason":"credential"}`}},
+		// A key with a line break in it is no key.
+		{"a key running on", "curl https://gw.example.com/v1/messages -H 'x-api-key: " + pasteKeyB + "\nAuthorization: Bearer " + s + "'",
+			[]string{`{"code":"no_key"}`}},
+		// cindy names what it defines only.
+		{"cindy values it does not define", `{"providers": [{"kind": "` + s + `"}, {"kind": "custom", "endpoints": [{"protocol": "` + s +
+			`", "baseUrl": "https://a.example.com"}]}, {"kind": "custom", "endpoints": [{"protocol": "anthropic-messages",
+			"baseUrl": "https://b.example.com"}, {"protocol": "` + s + `"}]}]}`,
+			[]string{`"notes":[{"code":"cindy_kind"},{"code":"cindy_endpoint"}]`, `"notes":[{"code":"no_key"},{"code":"cindy_endpoint"}]`}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b, _ := json.Marshal(parsePaste(c.text))
+			if strings.Contains(string(b), s) {
+				t.Fatalf("the answer carries the secret: %s", b)
+			}
+			for _, w := range c.want {
+				if !strings.Contains(string(b), w) {
+					t.Fatalf("no %s in %s", w, b)
+				}
+			}
+		})
+	}
+}
+
+// A paste of the body's size stays a small answer: reading stops past pasteMost launches, and notes and the
+// variables left out of a draft are capped.
+func TestParsePasteIsBounded(t *testing.T) {
+	var cmds, opts, headers, aliases, vars strings.Builder
+	cmds.WriteString("export ANTHROPIC_BASE_URL=https://gw.example.com\n")
+	for i := range 3000 {
+		fmt.Fprintf(&cmds, "V%d=1\n", i)
+		fmt.Fprintf(&opts, " --o%d", i)
+		fmt.Fprintf(&headers, " -H 'X-Key-%d: v'", i)
+		fmt.Fprintf(&aliases, "alias a%d=x\n", i)
+		fmt.Fprintf(&vars, "export V%d=1\n", i)
+	}
+	cmds.WriteString(strings.Repeat("claude\n", 3000) + "fi\n") // the line past the stop is not read
+	vars.WriteString("export ANTHROPIC_BASE_URL=https://gw.example.com\nclaude\n")
+	for _, c := range []struct {
+		name, text   string
+		drafts       int
+		top          []pasteNote // nil: any, pasteNotesMost at most
+		skipped      int         // variables and headers each draft names as left out
+		skippedFirst string
+	}{
+		{"commands", cmds.String(), pasteMost, notes(pasteNote{Code: noteTooMany}), pasteSkippedMost, "V1042"},
+		{"curl options", "curl https://gw.example.com/v1/messages" + opts.String(), 1, []pasteNote{}, 0, ""},
+		{"curl headers", "curl https://gw.example.com/v1/messages" + headers.String(), 1, []pasteNote{}, pasteSkippedMost, "X-Key-0"},
+		{"aliases of something else", aliases.String(), 0, nil, 0, ""},
+		{"notes, then too many", aliases.String() + "export ANTHROPIC_BASE_URL=https://gw.example.com\n" + strings.Repeat("claude\n", pasteMost+1),
+			pasteMost, nil, 0, ""},
+		{"variables", vars.String(), 1, []pasteNote{}, pasteSkippedMost, "V1042"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			res := parsePaste(c.text)
+			all := len(res.Notes)
+			for _, d := range res.Drafts {
+				all += len(d.Notes)
+				skipped, first := len(d.SkippedEnv)+len(d.SkippedHeaders), ""
+				if len(d.SkippedEnv) > 0 {
+					first = d.SkippedEnv[0].Name // by name, after the 50 the env takes
+				} else if len(d.SkippedHeaders) > 0 {
+					first = d.SkippedHeaders[0].Name
+				}
+				if skipped != c.skipped || first != c.skippedFirst {
+					t.Fatalf("%d named as left out, the first %q", skipped, first)
+				}
+			}
+			tooMany := len(res.Drafts) == pasteMost && res.Notes[len(res.Notes)-1] != pasteNote{Code: noteTooMany} // kept past the cap
+			if tooMany || len(res.Drafts) != c.drafts || all > pasteNotesMost || c.top != nil && !reflect.DeepEqual(res.Notes, c.top) {
+				t.Fatalf("%d drafts, %d notes, top %v", len(res.Drafts), all, res.Notes[:min(len(res.Notes), 3)])
+			}
+		})
 	}
 }
 

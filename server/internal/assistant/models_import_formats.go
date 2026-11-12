@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -21,33 +22,67 @@ import (
 // ---- Claude Code launches: shell lines and settings.json ----
 
 // launchGateway is a Claude Code launch's gateway address (its env's ANTHROPIC_BASE_URL) as a draft stores it, or
-// the note code why it makes no draft: none, a shell expansion, a user in it.
+// the note code why it makes no draft (gatewayRefused).
 func launchGateway(env map[string]string) (base, code string) {
 	raw := strings.TrimSpace(env["ANTHROPIC_BASE_URL"])
-	switch {
-	case raw == "":
+	if raw == "" {
 		return "", noteNoGateway
-	case shellExpands(raw):
-		return "", noteURLShell
-	case urlWithUser(raw):
-		return "", noteURLUser
+	}
+	if code := gatewayRefused(raw); code != "" {
+		return "", code
 	}
 	return proto.MessagesBaseURL(raw), ""
 }
 
+// gatewayRefused is why a pasted gateway address makes no draft, "" when it does: a shell expansion (Persona stores
+// text), a user or password in it, or a query or fragment (where some gateways take a key; a saved address has none).
+func gatewayRefused(raw string) string {
+	switch {
+	case shellExpands(raw):
+		return noteURLShell
+	case urlWithUser(raw):
+		return noteURLUser
+	case strings.ContainsAny(raw, "?#"):
+		return noteURLQuery
+	}
+	return ""
+}
+
 // groupDraft is an alias group (or one launch, newImportGroup) as a draft: the fields an import would save, the key in
-// the clear and the headers that are no credentials. Name is left to the caller (aliases only).
-func groupDraft(g importGroup) pasteDraft {
+// the clear, and of the rest only what holds no secret (the draft goes back to the browser, not into sealed storage).
+// On top of the import's rules (importEnv) it leaves out the variables named like secrets (secretEnvName), a proxy
+// with a query or fragment, arguments that may hold a secret (setArgs) and the headers setHeaders leaves out. env is
+// the launch's (its first alias's for a group: the group takes its settings). Name is left to the caller.
+func groupDraft(g importGroup, env map[string]string) pasteDraft {
 	l := g.ManagedLauncher
-	d := pasteDraft{EnvNames: g.EnvNames, SkippedEnv: g.SkippedEnv, Provider: pastedProvider{
+	d := pasteDraft{Provider: pastedProvider{
 		Kind: "launcher", Agent: "claude", API: "messages", BaseURL: l.BaseURL, Auth: l.Auth, Model: l.Model, Models: l.Models,
 		OpusModel: l.OpusModel, SonnetModel: l.SonnetModel, HaikuModel: l.HaikuModel, FableModel: l.FableModel,
 		SmallModel: l.SmallModel, SubagentModel: l.SubagentModel, SubagentForce: l.SubagentForce,
 		CustomModel: l.CustomModel, CustomModelName: l.CustomModelName, CustomModelDescription: l.CustomModelDescription,
 		Effort: l.Effort, CompactWindow: l.CompactWindow, MaxContext: l.MaxContext, TimeoutMS: l.TimeoutMS,
-		Proxy: l.Proxy, NoProxy: l.NoProxy, Args: l.Args, Env: g.env,
+		NoProxy: l.NoProxy,
 	}}
-	d.Provider.Headers, d.SkippedHeaders = pasteHeaders(parseHeaders(g.headers), false, false)
+	skipped := slices.Clone(g.SkippedEnv)
+	var lines []string
+	for i, line := range strings.Split(g.env, "\n")[:len(g.EnvNames)] { // importEnv's lines, one a name
+		if name := g.EnvNames[i]; secretEnvName(name) {
+			skipped = append(skipped, skippedEnv{Name: name, Reason: envSkipCredential})
+		} else {
+			lines, d.EnvNames = append(lines, line), append(d.EnvNames, name)
+		}
+	}
+	d.Provider.Env = strings.Join(lines, "\n")
+	if strings.ContainsAny(l.Proxy, "?#") { // it may carry a token: the variable it came from is named
+		i := slices.IndexFunc(importProxyEnv, func(k string) bool { return strings.TrimSpace(env[k]) != "" })
+		skipped = append(skipped, skippedEnv{Name: importProxyEnv[i], Reason: envSkipCredential})
+	} else {
+		d.Provider.Proxy = l.Proxy
+	}
+	slices.SortStableFunc(skipped, func(a, b skippedEnv) int { return strings.Compare(a.Name, b.Name) })
+	d.SkippedEnv = skipped[:min(len(skipped), pasteSkippedMost)]
+	d.setArgs(l.Args)
+	d.setHeaders(parseHeaders(g.headers), false)
 	d.setKey(g.key)
 	return d
 }
@@ -59,7 +94,45 @@ func envDraft(env map[string]string, args []string) (pasteDraft, string) {
 	if code != "" {
 		return pasteDraft{}, code
 	}
-	return groupDraft(newImportGroup("", zshrcAlias{Env: env, Args: args}, base)), ""
+	return groupDraft(newImportGroup("", zshrcAlias{Env: env, Args: args}, base), env), ""
+}
+
+// pasteSecretWords: a header's name, an argument or a variable's name holding one of these (any case, separators
+// aside) may name or hold a secret. A false positive only names one more thing left out.
+var pasteSecretWords = []string{"KEY", "TOKEN", "AUTH", "SECRET", "PASS", "COOKIE", "SESSION", "BEARER", "CREDENTIAL",
+	"JWT", "SIGNATURE"}
+
+// holdsSecretWord: s, upper-cased and without - _ . and blanks (XApiKey, X-Access-Token, x.api.key), holds one of
+// pasteSecretWords.
+func holdsSecretWord(s string) bool {
+	s = strings.ToUpper(strings.Map(func(r rune) rune {
+		if r == '-' || r == '_' || r == '.' || unicode.IsSpace(r) {
+			return -1
+		}
+		return r
+	}, s))
+	return slices.ContainsFunc(pasteSecretWords, func(w string) bool { return strings.Contains(s, w) })
+}
+
+// secretEnvName: a variable a paste leaves out as a credential on top of importEnv's words (GITHUB_PAT, OPENAIKEY,
+// ACCESSTOKEN, RELAY_AUTH, SESSIONID): its name holds one of pasteSecretWords, a word TOKENS aside
+// (CLAUDE_CODE_MAX_OUTPUT_TOKENS is a number), or has a word PAT or PWD.
+func secretEnvName(name string) bool {
+	words := strings.Split(strings.ToUpper(name), "_")
+	if slices.Contains(words, "PAT") || slices.Contains(words, "PWD") {
+		return true
+	}
+	return holdsSecretWord(strings.Join(slices.DeleteFunc(words, func(w string) bool { return w == "TOKENS" }), ""))
+}
+
+// setArgs keeps the launch's arguments unless one of them may hold a secret or a setting's text (a {, an =, a name
+// of pasteSecretWords: --api-key S, --settings '{…}'): then none, as args_left_out.
+func (d *pasteDraft) setArgs(args []string) {
+	if slices.ContainsFunc(args, func(a string) bool { return strings.ContainsAny(a, "{=") || holdsSecretWord(a) }) {
+		addNote(&d.Notes, pasteNote{Code: noteArgsLeftOut})
+		return
+	}
+	d.Provider.Args = args
 }
 
 // setsClaude: env has a variable of Claude Code's (ANTHROPIC_…, CLAUDE_…).
@@ -106,7 +179,10 @@ func parseShell(lines []shellcmd.Line) pasteResult {
 	}
 	env, baseAt := map[string]string{}, 0 // baseAt: the line setting ANTHROPIC_BASE_URL
 	var aliases, commands []shellLaunch
-	recognized := false
+	recognized, cut := false, false
+	// Past pasteMost claude launches the rest is not read (too_many): each launch's draft reads all of E.
+	full := func() bool { cut = len(aliases)+len(commands) > pasteMost; return cut }
+read:
 	for _, l := range lines {
 		if t := strings.TrimSpace(l.Text); t == "" || strings.HasPrefix(t, "#") {
 			continue
@@ -134,7 +210,9 @@ func parseShell(lines []shellcmd.Line) pasteResult {
 						tell(l.Start, noteNotClaude, 0, d.Name)
 						continue
 					}
-					aliases = append(aliases, shellLaunch{alias: d.Name, line: l.Start, env: a.Env, args: a.Args})
+					if aliases = append(aliases, shellLaunch{alias: d.Name, line: l.Start, env: a.Env, args: a.Args}); full() {
+						break read
+					}
 				}
 			case words[0] == "export" || !slices.ContainsFunc(words, func(w string) bool { return !shellcmd.AssignRe.MatchString(w) }):
 				for _, w := range words {
@@ -153,7 +231,9 @@ func parseShell(lines []shellcmd.Line) pasteResult {
 					continue
 				}
 				recognized = true
-				commands = append(commands, shellLaunch{line: l.Start, env: withEnv(env, own), args: slices.Clone(words[i+1:])})
+				if commands = append(commands, shellLaunch{line: l.Start, env: withEnv(env, own), args: slices.Clone(words[i+1:])}); full() {
+					break read
+				}
 			}
 		}
 	}
@@ -161,13 +241,14 @@ func parseShell(lines []shellcmd.Line) pasteResult {
 		return pasteResult{} // nothing of a configuration: unrecognized, the lines unnamed
 	}
 	var group []zshrcAlias
+	envOf := map[string]map[string]string{}
 	for _, a := range aliases {
 		e := withEnv(env, a.env)
 		if _, code := launchGateway(e); code != "" {
 			tell(a.line, code, 0, a.alias)
 			continue
 		}
-		group = append(group, zshrcAlias{Alias: a.alias, Env: e, Args: a.args, Command: "claude"})
+		group, envOf[a.alias] = append(group, zshrcAlias{Alias: a.alias, Env: e, Args: a.args, Command: "claude"}), e
 	}
 	for _, g := range mergeZshrcAliases("", group, nil) {
 		each := []importGroup{g}
@@ -175,7 +256,7 @@ func parseShell(lines []shellcmd.Line) pasteResult {
 			each = g.variants
 		}
 		for _, v := range each {
-			d := groupDraft(v)
+			d := groupDraft(v, envOf[v.Aliases[0]])
 			d.Label, d.Aliases, d.Provider.Name = strings.Join(v.Aliases, ", "), v.Aliases, v.Name
 			res.Drafts = append(res.Drafts, d)
 		}
@@ -204,6 +285,9 @@ func parseShell(lines []shellcmd.Line) pasteResult {
 			seen[t.note] = true
 			res.Notes = append(res.Notes, t.note)
 		}
+	}
+	if cut {
+		res.Notes = append(res.Notes, pasteNote{Code: noteTooMany})
 	}
 	return res
 }
@@ -244,34 +328,44 @@ func parseSettings(obj map[string]any) pasteResult {
 // set themselves.
 var protocolHeaders = []string{"anthropic-version", "anthropic-beta", "content-type", "accept", "accept-encoding", "user-agent"}
 
-// credentialHeader: a header name with a word (between - and _, any case) that names a secret (importCredentialWords,
-// AUTHORIZATION, AUTH).
-func credentialHeader(name string) bool {
-	return credentialWord(strings.FieldsFunc(name, func(r rune) bool { return r == '-' || r == '_' }), "AUTHORIZATION", "AUTH")
+// headerToken is a header name a paste names or keeps: a plain token. Anything else (blanks, dots, a $'…' from a
+// shell) may be a value run into the name.
+var headerToken = lazyre.New(`^[A-Za-z0-9_-]{1,64}$`)
+
+// unsafeHeaderValue: v holds what one "Name: value" line cannot keep as it is (a control character: it would start
+// another header) or what a shell or Claude Code would read as something else (a backslash, a $).
+func unsafeHeaderValue(v string) bool {
+	return strings.ContainsFunc(v, func(r rune) bool { return unicode.IsControl(r) || r == '\\' || r == '$' })
 }
 
-// pasteHeaders sorts a paste's headers (name, value: parseHeaders') into the provider's ("Name: value" lines) and the
-// ones left out with why: request basics (when protocol: a curl command's, a cindy endpoint's), credentials, and every
-// other header of a direct API provider (api), which takes none.
-func pasteHeaders(hs [][2]string, protocol, api bool) (kept string, skipped []skippedHeader) {
+// setHeaders sorts a paste's headers (name, value) into the draft's ("Name: value" lines) and the ones left out with
+// why: request basics (when protocol: a curl command's, a cindy endpoint's), names of pasteSecretWords (credential),
+// values a line would not keep (unsafe), and every other header of a direct API provider, which takes none. A name
+// that is no plain token is neither kept nor named: header_unreadable, once. At most pasteSkippedMost are named.
+func (d *pasteDraft) setHeaders(hs [][2]string, protocol bool) {
 	var lines []string
 	for _, h := range hs {
 		why := ""
 		switch {
+		case !headerToken.MatchString(h[0]):
+			addNote(&d.Notes, pasteNote{Code: noteHeaderUnread})
+			continue
 		case protocol && slices.Contains(protocolHeaders, strings.ToLower(h[0])):
 			why = headerSkipProtocol
-		case credentialHeader(h[0]):
+		case holdsSecretWord(h[0]):
 			why = headerSkipCredential
-		case api:
+		case unsafeHeaderValue(h[1]):
+			why = headerSkipUnsafe
+		case d.Provider.Kind == "api":
 			why = headerSkipUnsupported
 		}
-		if why != "" {
-			skipped = append(skipped, skippedHeader{Name: h[0], Reason: why})
-			continue
+		if why == "" {
+			lines = append(lines, h[0]+": "+h[1])
+		} else if len(d.SkippedHeaders) < pasteSkippedMost {
+			d.SkippedHeaders = append(d.SkippedHeaders, skippedHeader{Name: h[0], Reason: why})
 		}
-		lines = append(lines, h[0]+": "+h[1])
 	}
-	return strings.Join(lines, "\n"), skipped
+	d.Provider.Headers = strings.Join(lines, "\n")
 }
 
 // ---- curl ----
@@ -347,7 +441,8 @@ func readCurl(args []string) curlRequest {
 			c.noProxy, c.noProxyOpt = value, opt
 		case opt == "-X" || opt == "--request" || curlQuiet.MatchString(a):
 		case strings.HasPrefix(a, "--"):
-			c.unused = append(c.unused, opt)
+			name, _, _ := strings.Cut(opt, "=") // --opt=value is no curl syntax, and the value may be a secret
+			c.unused = append(c.unused, name)
 		case strings.HasPrefix(a, "-") && len(a) > 1:
 			c.unused = append(c.unused, a[:2])
 		default:
@@ -439,7 +534,7 @@ func curlDraft(c curlRequest) (pasteDraft, string) {
 	}
 	switch {
 	case c.proxyOpt == "":
-	case api || urlWithUser(c.proxy): // a direct API takes no proxy; one with a user is stored in the clear
+	case api || urlWithUser(c.proxy) || strings.ContainsAny(c.proxy, "?#"): // a direct API takes none; a proxy is kept in the clear
 		addNote(&d.Notes, pasteNote{Code: noteCurlOption, Name: c.proxyOpt})
 	default:
 		p.Proxy = c.proxy
@@ -458,7 +553,12 @@ func curlDraft(c curlRequest) (pasteDraft, string) {
 	}
 	var hs [][2]string
 	key, found := "", false
-	for _, h := range parseHeaders(strings.Join(c.headers, "\n")) {
+	for _, line := range c.headers { // one header each, whatever it holds (a quote may span lines)
+		name, value, ok := strings.Cut(line, ":")
+		h := [2]string{strings.TrimSpace(name), strings.TrimSpace(value)}
+		if !ok || h[0] == "" {
+			continue
+		}
 		f := strings.Fields(h[1])
 		switch {
 		case found: // a second key is a credential header like any
@@ -471,7 +571,7 @@ func curlDraft(c curlRequest) (pasteDraft, string) {
 		}
 		hs = append(hs, h)
 	}
-	p.Headers, d.SkippedHeaders = pasteHeaders(hs, true, api)
+	d.setHeaders(hs, true)
 	d.setKey(key)
 	return d, ""
 }
@@ -528,6 +628,21 @@ const (
 	cindyChat      = "openai-chat"
 )
 
+// What cindy v1 defines of a provider's kind and an endpoint's protocol: a note names only these (cindyNamed),
+// anything else may be a value pasted into the wrong field. A note names an auth method only as oauth or none.
+var (
+	cindyKinds     = []string{"custom", "preset", "builtin"}
+	cindyProtocols = []string{cindyMessages, cindyResponses, cindyChat, "google-generative-ai"}
+)
+
+// cindyNamed is v when cindy defines it (one of known), else "" (the note goes without a name).
+func cindyNamed(v string, known []string) string {
+	if slices.Contains(known, v) {
+		return v
+	}
+	return ""
+}
+
 // parseCindy reads a cindy v1 provider import's JSON: one provider, or {providers: […]}. A custom provider is one
 // draft: its first Messages endpoint as a Claude Code gateway, else its first Responses or Chat endpoint as a direct
 // API; its other endpoints are noted. Presets and built-in key slots name cindy's own catalog: noted, as is OAuth.
@@ -549,7 +664,9 @@ func parseCindy(data []byte) pasteResult {
 		if err := json.Unmarshal(raw, &p); err != nil && !errors.As(err, &typed) {
 			return pasteResult{Notes: []pasteNote{{Code: noteInvalidJSON}}}
 		}
-		res.cindyProvider(p)
+		if res.cindyProvider(p); len(res.Drafts) > pasteMost {
+			break // too_many: the rest is not read
+		}
 	}
 	return res
 }
@@ -557,7 +674,7 @@ func parseCindy(data []byte) pasteResult {
 // cindyProvider adds p's draft to res, or the notes why there is none.
 func (res *pasteResult) cindyProvider(p cindyProvider) {
 	if kind := cmp.Or(p.Kind, "custom"); kind != "custom" {
-		res.note(noteCindyKind, 0, kind)
+		res.note(noteCindyKind, 0, cindyNamed(kind, cindyKinds))
 		return
 	}
 	if p.Auth.Method == "oauth" {
@@ -575,14 +692,14 @@ func (res *pasteResult) cindyProvider(p cindyProvider) {
 	}
 	if pick < 0 {
 		for _, e := range p.Endpoints {
-			res.note(noteCindyEndpoint, 0, e.Protocol)
+			res.note(noteCindyEndpoint, 0, cindyNamed(e.Protocol, cindyProtocols))
 		}
 		return
 	}
 	e := p.Endpoints[pick]
 	raw := strings.TrimSpace(e.BaseURL)
-	if urlWithUser(raw) {
-		res.note(noteURLUser, 0, p.Name)
+	if code := gatewayRefused(raw); code != "" {
+		res.note(code, 0, p.Name)
 		return
 	}
 	api := "messages"
@@ -599,9 +716,10 @@ func (res *pasteResult) cindyProvider(p cindyProvider) {
 	if len(models) == 0 {
 		models = p.Models
 	}
+	seen := map[string]bool{}
 	for _, m := range models {
-		if pm := cindyProviderModel(m); pm.ID != "" && !slices.ContainsFunc(pr.Models, func(o proto.ProviderModel) bool { return o.ID == pm.ID }) {
-			pr.Models = append(pr.Models, pm)
+		if pm := cindyProviderModel(m); pm.ID != "" && !seen[pm.ID] {
+			seen[pm.ID], pr.Models = true, append(pr.Models, pm)
 		}
 	}
 	if len(pr.Models) > 0 {
@@ -613,7 +731,7 @@ func (res *pasteResult) cindyProvider(p cindyProvider) {
 			hs = append(hs, [2]string{name, v})
 		}
 	}
-	pr.Headers, d.SkippedHeaders = pasteHeaders(hs, true, pr.Kind == "api")
+	d.setHeaders(hs, true)
 	if p.Auth.Method == "none" {
 		pr.Auth = ""
 		addNote(&d.Notes, pasteNote{Code: noteCindyAuth, Name: p.Auth.Method})
@@ -622,7 +740,7 @@ func (res *pasteResult) cindyProvider(p cindyProvider) {
 	}
 	for i, other := range p.Endpoints {
 		if i != pick {
-			addNote(&d.Notes, pasteNote{Code: noteCindyEndpoint, Name: other.Protocol})
+			addNote(&d.Notes, pasteNote{Code: noteCindyEndpoint, Name: cindyNamed(other.Protocol, cindyProtocols)})
 		}
 	}
 	res.Drafts = append(res.Drafts, d)
