@@ -7,7 +7,6 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.test.assertExists
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -37,8 +36,8 @@ import persona.core.contracts.generated.ExtensionNotifyAction
 import persona.core.contracts.generated.ExtensionNotifyActionInput
 import persona.core.contracts.generated.ExtensionUIContext
 import persona.core.contracts.generated.ExtensionUIStreamCapability
-import persona.core.contracts.stream.ExtensionUIStreamOpenRequest
-import persona.core.contracts.stream.ExtensionUIStreamRequest
+import persona.core.contracts.generated.ExtensionUIStreamOpenRequest
+import persona.core.contracts.generated.ExtensionUIStreamRequest
 import persona.core.contracts.stream.NativeStreamIdentity
 import persona.core.contracts.stream.NativeStreamSession
 import persona.core.contracts.stream.NativeStreamTransport

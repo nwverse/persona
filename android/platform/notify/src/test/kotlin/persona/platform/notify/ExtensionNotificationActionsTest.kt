@@ -29,14 +29,15 @@ class ExtensionNotificationActionsTest {
             ExtensionNotifyAction("refresh", "Refresh"),
         )
         val validated = ExtensionNotificationPayload.validate(ExtensionNotification("example-gateway", "usage", "state", actions))!!
-        assertEquals("Disable this key", validated.actions!![0].title)
-        assertEquals("destructive", validated.actions[0].role)
-        assertEquals(true, validated.actions[0].foreground)
-        assertEquals("Say something", validated.actions[1].input!!.placeholder)
+        val validatedActions = validated.actions!!
+        assertEquals("Disable this key", validatedActions[0].title)
+        assertEquals("destructive", validatedActions[0].role)
+        assertEquals(true, validatedActions[0].foreground)
+        assertEquals("Say something", validatedActions[1].input!!.placeholder)
         assertNull(ExtensionNotificationPayload.validate(ExtensionNotification("example-gateway", "usage",
             actions = actions + ExtensionNotifyAction("four", "Four"))))
         assertNull(ExtensionNotificationPayload.validate(ExtensionNotification("example-gateway", "usage",
-            actions = listOf(actions[0], actions[0].copy(title = "Again"))))
+            actions = listOf(actions[0], actions[0].copy(title = "Again")))))
         assertNull(ExtensionNotificationPayload.validate(ExtensionNotification("example-gateway", "usage",
             actions = listOf(ExtensionNotifyAction("bad", "Bad", "unknown")))))
         assertNull(ExtensionNotificationPayload.validate(ExtensionNotification("example-gateway", null,
@@ -73,9 +74,9 @@ class ExtensionNotificationActionsTest {
         assertEquals(3, data.toSet().size)
         assertNotEquals(data[0], data[1])
         val actions = records.map { intents.action(it) }
-        assertEquals("Say something", actions[0].remoteInputs.single().label)
+        assertEquals("Say something", actions[0].remoteInputs!!.single().label)
         assertTrue(actions[1].remoteInputs.isNullOrEmpty())
-        assertTrue(actions[2].authenticationRequired)
+        assertTrue(actions[2].isAuthenticationRequired)
         assertEquals("destructive", records[2].action!!.role)
         assertTrue(data.all { it.getQueryParameter("action") == null })
     }
@@ -83,21 +84,21 @@ class ExtensionNotificationActionsTest {
     @Test fun unscopedAlertsNeedOneOpenGroupAndNamespacedIdsStayOnTheirOwnHub() {
         assertNull(extensionEventScope(environment(scope), "", null))
         assertEquals(scope, extensionEventScope(environment(scope, unscoped = true), "", null))
-        assertNull(extensionEventScope(environment(scope), "machine~other", null))
-        assertNull(extensionEventScope(environment(scope), "", "alert~other"))
-        val other = scope.copy(namespace = "other")
-        assertEquals(other, extensionEventScope(environment(other), "machine~other", null))
-        assertEquals(other, extensionEventScope(environment(other), "", "alert~other"))
+        assertNull(extensionEventScope(environment(scope), "machine~g00000002", null))
+        assertNull(extensionEventScope(environment(scope), "", "alert~g00000002"))
+        val other = scope.copy(namespace = "g00000002")
+        assertEquals(other, extensionEventScope(environment(other), "machine~g00000002", null))
+        assertEquals(other, extensionEventScope(environment(other), "", "alert~g00000002"))
 
         assertEquals("raw machine and alert ids consistently name the primary scope", scope,
             extensionEventScope(environment(scope), "machine", "alert"))
         assertNull("primary machine conflicts with a namespaced alert",
-            extensionEventScope(environment(scope), "machine", "alert~other"))
-        val first = scope.copy(namespace = "first")
+            extensionEventScope(environment(scope), "machine", "alert~g00000002"))
+        val first = scope.copy(namespace = "g00000001")
         assertNull("two different namespaces conflict",
-            extensionEventScope(environment(first), "machine~first", "alert~other"))
+            extensionEventScope(environment(first), "machine~g00000001", "alert~g00000002"))
         assertEquals("matching machine and alert namespaces are accepted", first,
-            extensionEventScope(environment(first), "machine~first", "alert~first"))
+            extensionEventScope(environment(first), "machine~g00000001", "alert~g00000001"))
     }
 
     @Test fun everyDegradedReplacementRetiresOldTokensAndPreservesOtherTags() {
@@ -125,7 +126,7 @@ class ExtensionNotificationActionsTest {
         assertTrue(store.peek(other.body.token) != null)
 
         val wrongSource = valid()
-        assertNull(prepareExtensionNotification(event(payload, machine = "machine~other", id = null),
+        assertNull(prepareExtensionNotification(event(payload, machine = "machine~g00000002", id = null),
             "alert:one", environment, store))
         assertNull(store.peek(wrongSource.body.token))
         assertTrue(store.peek(other.body.token) != null)

@@ -286,11 +286,17 @@ data object ManagersEvent : ServerEvent
 data object UnknownEvent : ServerEvent
 
 /** A malformed optional extension payload degrades to the ordinary alert instead of dropping the whole event. */
-private fun decodeNotifyEvent(json: Json, obj: JsonObject): NotifyEvent = try {
-    json.decodeFromJsonElement<NotifyEvent>(obj)
-} catch (failure: Exception) {
-    if ("extension_notification" !in obj) throw failure
-    json.decodeFromJsonElement<NotifyEvent>(JsonObject(obj.filterKeys { it != "extension_notification" }))
+private fun decodeNotifyEvent(json: Json, obj: JsonObject): NotifyEvent {
+    val extension = try {
+        when (val element = obj["extension_notification"]) {
+            null, JsonNull -> null
+            else -> Json(from = json) { coerceInputValues = false }.decodeFromJsonElement<ExtensionNotification>(element)
+        }
+    } catch (_: Exception) {
+        null
+    }
+    return json.decodeFromJsonElement<NotifyEvent>(JsonObject(obj.filterKeys { it != "extension_notification" }))
+        .copy(extensionNotification = extension)
 }
 
 object ServerEventSerializer : KSerializer<ServerEvent> {
