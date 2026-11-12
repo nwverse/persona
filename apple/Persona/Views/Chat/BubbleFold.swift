@@ -27,10 +27,13 @@ nonisolated enum BubbleFoldRule: Equatable, Sendable {
     static let typical: CGFloat = 16
     /// The body's size at the default text size, which `narrowest` and `typical` are for.
     static let bodySize: CGFloat = 17
-    /// Folded, a long message lays out only its start: this many characters at most, and its first `limit + 2` lines.
-    /// That is past `limit` lines at the widest bubble (the chat's readable width, narrow Latin letters); a start that is
-    /// not is drawn whole instead (`BubbleFold`).
+    /// Folded, a long message lays out only its start: its first `limit + 2` lines as they wrap at the bubble's width
+    /// (`start(of:lines:ems:)`), this many characters at most. A start that does not run past `limit` lines after all is
+    /// drawn whole instead (`Folding`).
     static let startCharacters = 3000
+    /// A character's width in ems, for where the start's lines wrap: CJK, kana, hangul, full-width forms and emoji take
+    /// an em; letters, digits and spaces less than any of them does on average, so the start errs long.
+    static func ems(_ c: Character) -> CGFloat { (c.unicodeScalars.first?.value ?? 0) >= 0x2E80 ? 1 : 0.4 }
 
     /// DEBUG `-showWholeBubbles YES`: every bubble whole, as before #5676 (before / after screenshots and measurements
     /// from one build).
@@ -72,24 +75,42 @@ nonisolated enum BubbleFoldRule: Equatable, Sendable {
     }
     private static let lengthsMemo = TextMemo<[Int]>(limit: 400)
 
-    /// The start a folded bubble draws under `rule` (`start(of:lines:)`), once per text: a bubble that appears again as
-    /// the chat scrolls does not walk its characters again.
-    static func shownStart(of text: String, rule: BubbleFoldRule) -> String? {
-        (rule == .regular ? regularStarts : largeStarts)(text) { start(of: $0, lines: rule.limit + 2) }
-    }
-    private static let regularStarts = TextMemo<String?>(limit: 100)
-    private static let largeStarts = TextMemo<String?>(limit: 100)
+    /// The width of a long bubble's words, as last laid out (`Folding`, from Show More's row, which spans it): where the
+    /// next one's start wraps. nil until one is; that one's start is cut by its lines alone.
+    @MainActor static var wordsWidth: CGFloat?
 
-    /// The start of `text` a folded bubble draws (`startCharacters`, its first `lines` lines); nil when that is all of it.
-    static func start(of text: String, lines: Int) -> String? {
+    /// The start a folded bubble draws under `rule`, `ems` to a line (nil: not known yet), once per text and width: a
+    /// bubble that appears again as the chat scrolls does not walk its characters again.
+    static func shownStart(of text: String, rule: BubbleFoldRule, ems: CGFloat?) -> String? {
+        // Half ems, rounded up: a start a little long rather than short.
+        let half = ems.map { Int(($0 * 2).rounded(.up)) }
+        let key = "\(rule.limit)/\(half.map(String.init) ?? "-")/" + text
+        return starts(key) { _ in start(of: text, lines: rule.limit + 2, ems: half.map { CGFloat($0) / 2 }) }
+    }
+    private static let starts = TextMemo<String?>(limit: 200)
+
+    /// The start of `text` a folded bubble draws: its first `lines` lines, wrapped at `ems` to a line when given (by
+    /// `ems(_:)`), and `startCharacters` at most; nil when that is all of it.
+    static func start(of text: String, lines: Int, ems: CGFloat? = nil) -> String? {
         var count = 0
         var breaks = 0
+        var x: CGFloat = 0
         var end = text.startIndex
         for i in text.indices {
             if count >= startCharacters { break }
-            if text[i] == "\n" {
+            let c = text[i]
+            if c == "\n" {
                 breaks += 1
+                x = 0
                 if breaks >= lines { break }
+            } else if let ems {
+                let w = Self.ems(c)
+                if x > 0, x + w > ems {
+                    breaks += 1
+                    x = 0
+                    if breaks >= lines { break }
+                }
+                x += w
             }
             count += 1
             end = text.index(after: i)
@@ -133,7 +154,8 @@ struct BubbleFoldKey {
 /// in the bubble. A message that cannot run past the rule's lines even in the narrowest bubble is drawn as before, with
 /// nothing measured; one that can is measured once its words are laid out (`onGeometryChange` on their size, which
 /// scrolling does not change), not as it scrolls, and drawn again only when that changes what its characters said.
-/// Folded, only its start is laid out (`BubbleFoldRule.start`). The lifted copy (`liftCopy`) is always whole.
+/// Folded, only its start is laid out (`BubbleFoldRule.start`: a few lines past the rule's, as they wrap). The lifted
+/// copy (`liftCopy`) is always whole.
 struct BubbleFold<Words: View>: View {
     var text: String
     var fold: BubbleFoldKey?
@@ -155,7 +177,7 @@ struct BubbleFold<Words: View>: View {
            BubbleFoldRule.lines(lengths, perLine: BubbleFoldRule.perLine(BubbleFoldRule.narrowest, size: bodySize)) > rule.limit {
             let guess = BubbleFoldRule.lines(lengths, perLine: BubbleFoldRule.perLine(BubbleFoldRule.typical, size: bodySize)) > rule.limit
             Folding(text: text, fold: fold, rule: rule, cut: BubbleFoldRule.height(lines: rule.shown, size: typeSize), guess: guess,
-                    tint: tint, words: words)
+                    ems: BubbleFoldRule.wordsWidth.map { $0 / bodySize }, tint: tint, words: words)
         } else {
             words(text)
         }
@@ -172,6 +194,8 @@ private struct Folding<Words: View>: View {
     var cut: CGFloat
     /// Whether it folds by its characters, until it is measured.
     var guess: Bool
+    /// Body ems to a line of the words (`BubbleFoldRule.wordsWidth`), where its start wraps; nil: not known yet.
+    var ems: CGFloat?
     var tint: Color
     var words: (String) -> Words
 
@@ -191,7 +215,7 @@ private struct Folding<Words: View>: View {
     var body: some View {
         let open = OpenReports.shared.isOpen(key)
         let folded = long && !open
-        let start = folded && !whole ? BubbleFoldRule.shownStart(of: text, rule: rule) : nil
+        let start = folded && !whole ? BubbleFoldRule.shownStart(of: text, rule: rule, ems: ems) : nil
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
             words(start ?? text)
                 .fixedSize(horizontal: false, vertical: true)
@@ -213,6 +237,10 @@ private struct Folding<Words: View>: View {
             if long {
                 FoldToggle(open: open, prefix: "bubble", tint: tint, showMore: true) {
                     BubbleFoldKey.flip(key, pinKey: fold.pin, open: open, pin: pin)
+                }
+                // Its row spans the words' width: where the next long message's start wraps. Not state: nothing redraws.
+                .onGeometryChange(for: CGFloat.self) { $0.size.width.rounded() } action: { w in
+                    if w > 0 { BubbleFoldRule.wordsWidth = w }
                 }
             }
         }

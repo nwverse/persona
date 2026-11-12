@@ -45,8 +45,8 @@ struct BubbleFoldTests {
         #expect(start.split(separator: "\n", omittingEmptySubsequences: false).count == 16)
         #expect(many.hasPrefix(start))
         // What a bubble draws, kept once per text: the same start.
-        #expect(BubbleFoldRule.shownStart(of: many, rule: .regular) == start)
-        #expect(BubbleFoldRule.shownStart(of: many, rule: .large) == BubbleFoldRule.start(of: many, lines: 11))
+        #expect(BubbleFoldRule.shownStart(of: many, rule: .regular, ems: nil) == start)
+        #expect(BubbleFoldRule.shownStart(of: many, rule: .large, ems: nil) == BubbleFoldRule.start(of: many, lines: 11))
         // Characters: one line of 10 000 is cut at `startCharacters`.
         let wide = String(repeating: "字", count: 10_000)
         #expect(BubbleFoldRule.start(of: wide, lines: 16)?.count == BubbleFoldRule.startCharacters)
@@ -57,5 +57,24 @@ struct BubbleFoldTests {
         let cut = try #require(BubbleFoldRule.start(of: flags, lines: 16))
         #expect(cut.count == BubbleFoldRule.startCharacters)
         #expect(cut.unicodeScalars.count == 2 * BubbleFoldRule.startCharacters)
+    }
+
+    /// A long paragraph with few line breaks (a pasted report) is cut where its lines wrap at the bubble's width, not
+    /// laid out whole: wide characters an em each, letters less.
+    @Test func theStartWrapsAtTheBubblesWidth() throws {
+        let wide = String(repeating: "字", count: 1_000)
+        #expect(BubbleFoldRule.start(of: wide, lines: 16, ems: 17)?.count == 16 * 17)
+        let letters = String(repeating: "a", count: 1_000)
+        #expect(BubbleFoldRule.start(of: letters, lines: 16, ems: 17)?.count == 16 * 42) // 0.4 em each
+        // Line breaks still end lines: two short lines and wrapped ones after them.
+        let mixed = "一\n二\n" + wide
+        #expect(BubbleFoldRule.start(of: mixed, lines: 4, ems: 10) == "一\n二\n" + String(repeating: "字", count: 20))
+        // Short enough: nothing to cut.
+        #expect(BubbleFoldRule.start(of: "短的一句", lines: 16, ems: 17) == nil)
+        // Kept by width too: another width, another start.
+        let narrow = try #require(BubbleFoldRule.shownStart(of: wide, rule: .regular, ems: 10))
+        let broad = try #require(BubbleFoldRule.shownStart(of: wide, rule: .regular, ems: 20))
+        #expect(narrow.count == 16 * 10)
+        #expect(broad.count == 16 * 20)
     }
 }
