@@ -290,6 +290,7 @@ It also lists the transcript every unarchived session of the index runs, however
 - **What the app decides:** the session runs on the app's provider, model, permission mode and effort, as one the app opens itself (an imported session starts in the app's default mode). `launchers.models` answers no models, with `locked` saying so; Settings › Models' Test has nothing to run.
 - **Refused before anything is written:** a read-only plan start (`readonly_unsupported`: the app runs its own mode, and an approval waiting there could not be answered from the phone), a first message that is a slash command (`peer_command`: the inbox runs none), a folder that is not there, a `secret_ticket` (`secret_env_agent`: no terminal to start through). An import that does not come in time is `desktop_open_failed`; the transcript the CLI wrote stays, and the app may still import it later.
 - A first message that does not go in is logged on the node: the session is in the app and the list, and the message can be sent again.
+- **No terminal runs it:** Run Agent Here with it and a switch of a running session to it are refused (a terminal would type `claude-desktop` into a shell); a resume that names it (New Agent's launcher, which the hub sends for a session nothing says the launcher of) runs plain `claude` (`terminalLauncher`).
 - Only macOS: the index is read there alone. Tests: `node/claudedesktop_new_test.go`.
 
 ## Blocking configuration directories (#676)

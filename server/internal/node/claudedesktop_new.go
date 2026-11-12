@@ -119,6 +119,23 @@ func isDesktopLauncher(name string) bool {
 	return name == claudeDesktopLauncher && !shellLauncherNames()[name]
 }
 
+// errDesktopLauncherInTerminal refuses the desktop app's launcher where a terminal would run it.
+var errDesktopLauncherInTerminal = errors.New("claude-desktop 只在 Claude 桌面版里新开会话，不能在终端里运行；换一个启动器。")
+
+// terminalLauncher is the launcher a start in a terminal runs (control.go start): the desktop app's runs nowhere but in
+// the app. A resume naming it (New Agent's launcher, which the hub sends for a session nothing says the launcher of)
+// runs plain claude; a new start with it is refused (session.start sends it to the app before this; Run Agent Here and
+// a work session would type it into a shell).
+func terminalLauncher(launcher, resume string) (string, error) {
+	if !isDesktopLauncher(launcher) {
+		return launcher, nil
+	}
+	if resume == "" {
+		return "", errDesktopLauncherInTerminal
+	}
+	return "claude", nil
+}
+
 // startInDesktopApp starts a new session in the desktop app for a start with its launcher; handled false for any
 // other start (and a resume: a session of the app is continued by a message, claudedesktop_open.go). nameHint names it
 // when the start carries no first message (the apps send it after the start).

@@ -487,3 +487,36 @@ func TestDesktopTitleIsTheFirstLineOfTheFirstMessage(t *testing.T) {
 		}
 	}
 }
+
+// The desktop app's launcher runs nowhere but in the app: not in a pane (Run Agent Here), not as the launcher a running
+// session switches to, not for a new start in a terminal; a resume naming it runs plain claude.
+func TestTheDesktopLauncherNeverRunsInATerminal(t *testing.T) {
+	n, home := testNode(t)
+	first, _ := useDesktopDirs(t)
+	if err := os.MkdirAll(filepath.Join(first, "claude-code-sessions"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fakeClaudeOnPath(t)
+	shellLaunchers(t, "claude")
+	if _, err := n.runAgentInPane(context.Background(), "w1:p1", "claude-desktop"); !errors.Is(err, errDesktopLauncherInTerminal) {
+		t.Errorf("Run Agent Here: %v", err)
+	}
+	var re *rpc.Error
+	if _, _, err := n.checkSwitchLauncher(context.Background(), sidA, "claude-desktop", ""); !errors.As(err, &re) || re.Code != proto.CodeSwitchOtherAgent {
+		t.Errorf("switch: %v", err)
+	}
+	if _, err := n.start(context.Background(), home, "claude-desktop", "", "", "", "", "", "", "", ""); !errors.Is(err, errDesktopLauncherInTerminal) {
+		t.Errorf("new start in a terminal: %v", err)
+	}
+	for _, c := range []struct{ launcher, resume, want string }{
+		{"claude-desktop", sidA, "claude"}, {"glm", sidA, "glm"}, {"glm", "", "glm"},
+	} {
+		if got, err := terminalLauncher(c.launcher, c.resume); err != nil || got != c.want {
+			t.Errorf("%+v: %q %v", c, got, err)
+		}
+	}
+	shellLaunchers(t, "claude", "claude-desktop") // the login shell's of that name is an ordinary launcher
+	if got, err := terminalLauncher("claude-desktop", ""); err != nil || got != "claude-desktop" {
+		t.Errorf("shell's claude-desktop: %q %v", got, err)
+	}
+}
