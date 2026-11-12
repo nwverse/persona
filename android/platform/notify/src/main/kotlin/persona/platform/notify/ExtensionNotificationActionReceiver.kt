@@ -9,6 +9,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicBoolean
 import persona.core.contracts.api.EXTENSION_NOTIFICATION_REMOTE_INPUT
 import persona.core.contracts.api.ExtensionNotificationActionRecord
 import persona.core.contracts.api.ExtensionNotificationActionStore
@@ -22,6 +23,7 @@ class ExtensionNotificationActionReceiver : BroadcastReceiver() {
         val text = RemoteInput.getResultsFromIntent(intent)?.getCharSequence(EXTENSION_NOTIFICATION_REMOTE_INPUT)?.toString()
         val dependencies = Notify.dependencies(context)
         val pending = goAsync()
+        val completion = ExtensionNotificationReceiverCompletion()
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             var record: ExtensionNotificationActionRecord? = null
             try {
@@ -53,12 +55,19 @@ class ExtensionNotificationActionReceiver : BroadcastReceiver() {
                 record?.let(dependencies.notifier()::notifyExtensionTimeout)
                     ?: dependencies.notifier().notifyExtensionMissing(token)
             } finally {
-                pending.finish()
+                completion.finish(pending::finish)
             }
         }
     }
 
     companion object {
         const val ACTION = "persona.notify.extension"
+    }
+}
+
+internal class ExtensionNotificationReceiverCompletion {
+    private val completed = AtomicBoolean()
+    fun finish(done: () -> Unit) {
+        if (completed.compareAndSet(false, true)) done()
     }
 }

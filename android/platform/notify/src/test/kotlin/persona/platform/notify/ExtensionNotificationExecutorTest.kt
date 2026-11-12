@@ -98,6 +98,14 @@ class ExtensionNotificationExecutorTest {
         assertEquals(1, ui.calls)
     }
 
+    @Test fun duplicateReceiverCompletionCallsFinishOnlyOnce() {
+        val completion = ExtensionNotificationReceiverCompletion()
+        var finishes = 0
+        completion.finish { finishes++ }
+        completion.finish { finishes++ }
+        assertEquals(1, finishes)
+    }
+
     private fun record() = ExtensionNotificationActionRecord("0".repeat(32), "alert", "example-gateway", "usage", "state",
         ExtensionNotifyAction("stop", "Stop"), scope, 1, "dedupe")
     private fun claimed(record: ExtensionNotificationActionRecord, values: Map<String, String> = emptyMap()) =

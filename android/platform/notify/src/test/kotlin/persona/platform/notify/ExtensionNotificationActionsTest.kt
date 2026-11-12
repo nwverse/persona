@@ -78,6 +78,21 @@ class ExtensionNotificationActionsTest {
         assertTrue(data.all { it.getQueryParameter("action") == null })
     }
 
+    @Test fun unscopedAlertsNeedOneOpenGroupAndNamespacedIdsStayOnTheirOwnHub() {
+        fun environment(scope: ExtensionNotificationScope, unscoped: Boolean = false) = object : ExtensionNotificationEnvironment {
+            override fun currentScope() = scope
+            override fun canRouteUnscopedEvents() = unscoped
+            override fun extensionUi(record: ExtensionNotificationActionRecord) = null
+        }
+        assertNull(extensionEventScope(environment(scope), "", null))
+        assertEquals(scope, extensionEventScope(environment(scope, unscoped = true), "", null))
+        assertNull(extensionEventScope(environment(scope), "machine~other", null))
+        assertNull(extensionEventScope(environment(scope), "", "alert~other"))
+        val other = scope.copy(namespace = "other")
+        assertEquals(other, extensionEventScope(environment(other), "machine~other", null))
+        assertEquals(other, extensionEventScope(environment(other), "", "alert~other"))
+    }
+
     private fun record(token: String, action: ExtensionNotifyAction?) = ExtensionNotificationActionRecord(
         token = token.padEnd(32, '0'), tag = "alert:$token", extension = "example-gateway", ui = "usage", state = "state",
         action = action, scope = scope, createdAt = 1, dedupeKey = token)

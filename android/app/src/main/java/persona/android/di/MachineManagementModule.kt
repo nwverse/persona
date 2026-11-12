@@ -261,6 +261,8 @@ object MachineManagementModule {
                 return ExtensionNotificationScope(data.scope.path, group.namespace, ManagerRoster.ASSISTANT_MANAGER)
             }
 
+            override fun canRouteUnscopedEvents(): Boolean = runtime.groups.value.size == 1
+
             override fun extensionUi(record: ExtensionNotificationActionRecord): ExtensionUi? {
                 if (currentScope() != record.scope) return null
                 val data = runtime.scopedData.value ?: return null

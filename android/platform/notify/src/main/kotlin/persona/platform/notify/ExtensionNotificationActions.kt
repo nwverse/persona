@@ -6,7 +6,6 @@ import android.content.Intent
 import android.net.Uri
 import androidx.core.app.NotificationCompat
 import androidx.core.app.RemoteInput
-import persona.core.contracts.GroupKeys
 import persona.core.contracts.NotifyEvent
 import persona.core.contracts.api.EXTENSION_NOTIFICATION_REMOTE_INPUT
 import persona.core.contracts.api.ExtensionNotificationActionRecord
@@ -92,8 +91,7 @@ internal fun prepareExtensionNotification(context: Context, event: NotifyEvent, 
     if (event.kind != "alert") return null
     val payload = event.extensionNotification?.let(ExtensionNotificationPayload::validate) ?: return null
     val environment = Notify.dependencies(context).extensionNotifications()
-    val scope = environment.currentScope() ?: return null
-    if (event.machineId.isNotEmpty() && GroupKeys.namespaceOf(event.machineId) != scope.namespace) return null
+    val scope = extensionEventScope(environment, event.machineId, event.id) ?: return null
     val actions = payload.actions.orEmpty()
     val records = ExtensionNotificationActionStore.shared.registerBatch(tag, payload.extension, payload.ui, payload.state,
         listOf(null) + actions, scope, environment::currentScope) ?: return null
