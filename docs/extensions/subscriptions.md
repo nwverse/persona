@@ -217,9 +217,11 @@ opens the same page. The manager reports `inbox_sources` with these pages, and t
   and turns its Inbox on. They stay off until then.
 - **Set Up with the assistant** (in place of drafting with a model) is named as the app names the assistant in its composer
   ("Ask {name}…"): the apps send that name as `context.assistant` with these page requests only, never handed to an extension,
-  and without it the pages say "the assistant". The press answers `open_url` `persona://ask?text=<percent-encoded>`; the apps
-  take it only from these pages (`-subscriptions`), close them and send the text to the assistant's main conversation as the
-  user, as Ask Persona does. The text is a `<persona-context kind="context">` block naming `connector`, `source`, `subscription`
+  and with `""` the pages say "the assistant". The key itself says the app opens the press: without it (iOS builds before
+  #5278's iPhone part, Android until #5308) the pages leave Set Up with … out, since such an app would drop the link and the
+  row would do nothing (#5661); Choose a Tool and the rest stay. The press answers `open_url`
+  `persona://ask?text=<percent-encoded>`; the apps take it only from these pages (`-subscriptions`), close them and send the
+  text to the assistant's main conversation as the user, as Ask Persona does. The text is a `<persona-context kind="context">` block naming `connector`, `source`, `subscription`
   (left out before there is one) and a line of how it is set up now, then one sentence of what the user wants. The assistant
   reads the rest and changes it with its tools ("Assistant tools"), every save confirmed on the phone.
 - **Preview What Comes In** pulls once (a dry run) and draws the items as the Inbox would list them: an avatar, the title,
