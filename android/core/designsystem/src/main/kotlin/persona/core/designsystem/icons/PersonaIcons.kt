@@ -270,6 +270,8 @@ object PersonaIcons {
     val retry: PhIcon get() = PhIcons.ArrowClockwise
     /** SF Symbol `play.fill`. */
     val run: PhIcon get() = PhIcons.Play
+    /** SF Symbol `safari`. */
+    val safari: PhIcon get() = PhIcons.GlobeSimple
     /** SF Symbol `display`. */
     val screen: PhIcon get() = PhIcons.Monitor
     /** SF Symbol `magnifyingglass`. */

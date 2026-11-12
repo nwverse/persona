@@ -742,17 +742,10 @@ func TestEngineSwitchStopsWhenTheStartMayHaveTheMessage(t *testing.T) {
 	}
 	writeThread(t, home, switchedThread, cwd, got[0].Prompt)
 	f.reply("session.snapshot", snapshot(nil, nil, []any{agentOf("codex", switchedThread, proto.StatusIdle, "w1:p1", "w1:t1", "w1", cwd, "")}, nil))
-	deadline := time.Now().Add(15 * time.Second)
-	for {
+	waitWithin(t, 15*time.Second, "the late thread to take the conversation", func() bool {
 		st, ok := n.state.get(switchedThread)
-		if ok && len(st.EngineHistory) == 1 && st.EngineHistory[0].SessionID == sidA && st.Pane == "w1:p1" {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the late thread did not take the conversation: %+v (%v)", st, ok)
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
+		return ok && len(st.EngineHistory) == 1 && st.EngineHistory[0].SessionID == sidA && st.Pane == "w1:p1"
+	})
 	if st, _ := n.state.get(sidA); st.EngineHistory != nil {
 		t.Errorf("the old session still carries the history: %+v", st)
 	}
@@ -802,16 +795,23 @@ func TestEngineSwitchHoldsTheEarlierSessionWhileItResumesIt(t *testing.T) {
 			f.reply("tab.create", map[string]any{"tab": map[string]any{"tab_id": "w1:t2"}, "root_pane": map[string]any{"pane_id": "w1:p2"}})
 			n.state.setPendingSwitch(sidB, &proto.PendingSwitch{Launcher: "claude", Agent: "claude", At: time.Now()})
 			quitsOn(f, "w1:p1", sidB, nil, shellPane("w1:p1", "w1:t1", "w1", cwd, sidB))
-			// The switch's claude --resume comes up a second after it is typed; the user's Resume goes in before.
+			// The switch's claude --resume comes up after the start has read its terminal; the user's Resume goes in before.
 			plain, ansi := screenFixture(t, "claude-2.1.312-empty-162.txt"), screenFixture(t, "claude-2.1.312-empty-162.ansi")
 			var mu sync.Mutex
-			up, asked := false, false
+			up, asked, starting := false, false, false
+			readyRead := make(chan struct{}, 1)
 			resumed := make(chan error, 1)
 			f.after(func(c herdrCall) {
 				if str(c.Params["pane_id"]) != "w1:p1" {
 					return
 				}
 				mu.Lock()
+				if c.Method == "pane.read" && starting {
+					select {
+					case readyRead <- struct{}{}:
+					default:
+					}
+				}
 				ask := !asked && tc.when(c)
 				asked = asked || ask
 				mu.Unlock()
@@ -822,8 +822,11 @@ func TestEngineSwitchHoldsTheEarlierSessionWhileItResumesIt(t *testing.T) {
 					}()
 				}
 				if c.Method == "pane.send_input" && strings.Contains(str(c.Params["text"]), "--resume "+sidA) {
+					mu.Lock()
+					starting = true
+					mu.Unlock()
 					go func() {
-						time.Sleep(time.Second)
+						<-readyRead
 						f.setScreens("w1:p1", plain, ansi)
 						f.reply("session.snapshot", snapshot(nil, nil, []any{claudeAgent(sidA, proto.StatusIdle, "w1:p1", "w1:t1", "w1", cwd, "")}, nil))
 						mu.Lock()

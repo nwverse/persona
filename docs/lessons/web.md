@@ -38,6 +38,17 @@ grew 9 B, but the ja count grew 255 B and `main` failed the build, with no first
 now counts imported names as one fixed string and export lists as empty ones. To check a surprising move, compare the
 number of entries in each first-screen chunk's `export{…}` between the two builds.
 
+## An idle-contracted chunk's growth raises the idle budget, it cannot move to on-intent (#5386)
+
+`code-views-lazy.test` asserts that `ExtensionChart` loads with `{ idle: true }`, so adding the single-category share
+bar to that chunk grew the idle tier 183 gzip bytes and failed `IDLE_TIER_BUDGET` (the headroom was 58 B). Moving the
+renderer to its own on-intent chunk was not an option: the test pins the loading mode on purpose, and splitting the
+module just moves the same bytes into another file the idle tier still pulls. Measure the real baseline before touching
+the constant — a clean main build measured 43,782 B against the 43,840 B limit — then raise `IDLE_TIER_BUDGET` to the
+new measured value and record both numbers and the reason in the comment above it, as the constant's own convention
+requires ("raise it on purpose, in the change that needs it"). A build whose only failure is the startup-preload budget
+still exits non-zero even when the last log lines look like warnings; always check the plugin error text.
+
 ## A new list of sessions folds child sessions too (#5120)
 
 Child sessions (`folded_under`) are left out of lists and counts in one place, `foldRows` (`lib/folded-rows.ts`), which

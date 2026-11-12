@@ -173,8 +173,14 @@ class OutboxMessageSender(
     override suspend fun discard(clientMessageId: String): Boolean =
         change(clientMessageId, undecided, OutboxState.Cancelled)
 
-    override suspend fun retry(clientMessageId: String): Boolean = change(
-        clientMessageId, setOf(OutboxState.Refused, OutboxState.NeedsConfirmation), OutboxState.Queued)
+    override suspend fun retry(clientMessageId: String): Boolean {
+        // Still on its way: the queue looks again now rather than at its next wake (iOS's Retry Now on a waiting message).
+        if (store.entries.first().any { it.clientMessageId == clientMessageId && it.state in dispatchable }) {
+            wake.trySend(Unit)
+            return true
+        }
+        return change(clientMessageId, setOf(OutboxState.Refused, OutboxState.NeedsConfirmation), OutboxState.Queued)
+    }
 
     override suspend fun confirm(clientMessageId: String, delivered: Boolean): Boolean = change(
         clientMessageId, undecided,
