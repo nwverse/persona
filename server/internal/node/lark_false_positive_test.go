@@ -152,6 +152,7 @@ func TestLarkLoopWritesStayBehindApproval(t *testing.T) {
 		{"conditional assignment keeps previous route", `action=delete; false && action=read; ex GET "/documents/$action"`},
 		{"binary builtin keeps previous route", "action=read\ntrue && printf -v action delete\nex GET \"/documents/$action\""},
 		{"getopts keeps previous route", "action=read\ngetopts a action -a\nex GET \"/documents/$action\""},
+		{"redirect arithmetic keeps previous route", "action=1\n: > \"/tmp/$((action=2))\"\nex GET \"/documents/$action\""},
 		{"unquoted route becomes delete", `for route in '/health -X DELETE'; do ex GET $route; done`},
 		{"unquoted query becomes delete", `for query in 'q=a -X DELETE'; do ex GET /health --url-query $query; done`},
 		{"command substitution becomes delete", `ex GET /health --url-query $(printf 'q=a -X DELETE')`},

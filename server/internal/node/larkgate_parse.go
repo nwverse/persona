@@ -365,6 +365,9 @@ func larkVariableScopeStable(cmd string, gates []proto.CommandGate) bool {
 		case *syntax.BinaryCmd:
 			stable = false
 			return false
+		case *syntax.ArithmExp:
+			stable = false
+			return false
 		case *syntax.ParamExp:
 			if n.Exp != nil {
 				stable = false
