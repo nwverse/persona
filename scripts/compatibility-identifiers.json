@@ -1207,14 +1207,6 @@
       ],
       "path_tokens": [],
       "external_refs": []
-    },
-    "web/src/lib/provider-link.test.ts": {
-      "reason": "Regression coverage for legacy managed-provider source markers in provider sharing links.",
-      "tokens": [
-        "jarvis"
-      ],
-      "path_tokens": [],
-      "external_refs": []
     }
   }
 }
