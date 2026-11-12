@@ -266,6 +266,11 @@ func (n *Node) commitCodexTakeover(ctx context.Context, id, token string, confir
 	if !ok {
 		return nil, takeoverRefusal("writer_busy")
 	}
+	// A running TUI is not yet a usable resumed thread: the requested folder may
+	// still need its trust dialog answered before the remote app-server loads it.
+	if err := n.waitCodexBox(ctx, a.PaneID); err != nil {
+		return nil, err
+	}
 	st.Pane = a.PaneID
 	n.state.put(id, st)
 	return n.sessionFor(id, a), nil

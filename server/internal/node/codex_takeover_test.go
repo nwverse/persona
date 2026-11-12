@@ -20,6 +20,7 @@ func takeoverNode(t *testing.T, running bool) (*Node, func() codexStartFile, *[]
 	n, f, cwd := codexHistoryNode(t)
 	listSessions(t, n)
 	file := resumeFile(f, cwd)
+	f.setScreen("w1:p2", cxReady)
 	var calls []string
 	var writers []codexWriter
 	if running {
@@ -36,6 +37,36 @@ func takeoverNode(t *testing.T, running bool) (*Node, func() codexStartFile, *[]
 		return nil
 	}
 	return n, file, &calls
+}
+
+func TestCodexTakeoverWaitsForTheNewTerminalsTrustDialog(t *testing.T) {
+	withCodexWaits(t)
+	n, f, cwd := codexHistoryNode(t)
+	listSessions(t, n)
+	resumeFile(f, cwd)
+	n.takeovers.writers = func(codexSource) ([]codexWriter, error) { return nil, nil }
+	n.takeovers.shared = func(context.Context, codexSource) ([]string, error) {
+		return []string{"codex", "--remote", "unix:///shared/socket"}, nil
+	}
+	for _, dialog := range codexTrustDialogs(t) {
+		f.screenSteps("w1:p2", isKeys("enter"), dialog, cxReady)
+		break
+	}
+	plan, err := n.prepareCodexTakeover(context.Background(), startThread)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := n.commitCodexTakeover(context.Background(), startThread, plan.Token, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.SessionID != startThread {
+		t.Fatalf("resumed the wrong thread: %+v", session)
+	}
+	keys := f.trace("pane.send_keys")
+	if len(keys) != 1 || !strings.Contains(keys[0], `"w1:p2"`) || !strings.Contains(keys[0], `["enter"]`) {
+		t.Fatalf("only the new terminal's trust dialog should be answered: %v", keys)
+	}
 }
 
 func TestCodexTakeoverExitedWriterUsesSharedNewTab(t *testing.T) {
