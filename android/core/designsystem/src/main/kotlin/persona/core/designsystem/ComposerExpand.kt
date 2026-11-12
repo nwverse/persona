@@ -74,11 +74,11 @@ fun ExpandedComposer(
     val focus = remember { FocusRequester() }
     JFullScreen(onCollapse) {
         Column(Modifier.fillMaxSize().systemBarsPadding().imePadding().testTag("composer-expanded")) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), horizontalArrangement = Arrangement.End) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp.dense), horizontalArrangement = Arrangement.End) {
                 ComposerExpandButton(expanded = true, onClick = onCollapse)
             }
             BasicTextField(
-                value, onValueChange, Modifier.weight(1f).fillMaxWidth().padding(horizontal = 20.dp).focusRequester(focus),
+                value, onValueChange, Modifier.weight(1f).fillMaxWidth().padding(horizontal = 20.dp.dense).focusRequester(focus),
                 enabled = enabled, textStyle = PersonaTheme.type.body.copy(color = palette.ink), cursorBrush = SolidColor(palette.ink),
                 decorationBox = { field ->
                     Box {
@@ -87,7 +87,7 @@ fun ExpandedComposer(
                     }
                 },
             )
-            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), horizontalArrangement = Arrangement.End,
+            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp.dense, vertical = 4.dp.dense), horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically, content = send)
         }
     }
