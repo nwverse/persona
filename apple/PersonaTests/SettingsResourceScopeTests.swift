@@ -81,7 +81,7 @@ struct SettingsResourceScopeTests {
         let captured = hub.client.showing("work").currentAssistantSettings()
         _ = try await captured.mailAccounts()
         _ = try await captured.googleConfig()
-        _ = try await captured.addMailAccount(.init(email: "me@example.com"))
+        _ = try await captured.addMailAccount(.init(name: "Example", email: "me@example.com"))
         try await captured.deleteMailAccount("example")
         #expect(hub.requests.count == 4)
         #expect(hub.requests.allSatisfy { $0.headers[Self.header] == "work" })

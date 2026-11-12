@@ -38300,7 +38300,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已连接 hub"
+            "value" : "已连接 Hub"
           }
         }
       },
@@ -63283,7 +63283,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "hub 版本"
+            "value" : "Hub 版本"
           }
         }
       },
