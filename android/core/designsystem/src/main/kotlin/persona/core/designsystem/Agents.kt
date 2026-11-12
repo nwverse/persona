@@ -93,13 +93,13 @@ private val Holder = 26.dp
 private val None = 0.dp
 
 /** Glass's leading well (iOS `Theme.Size.wellL`), the agent's mark in it (`markL`) and the rim around its corner (`rule`). */
-private val AvatarWell = Tokens.Space.xxl + Tokens.Space.xs
-private val AvatarMark = Tokens.Space.l + Tokens.Space.xxs / 2
-private val AvatarRim = Tokens.Space.xxs
+private val AvatarWell = Tokens.Space.Standard.xxl + Tokens.Space.Standard.xs
+private val AvatarMark = Tokens.Space.Standard.l + Tokens.Space.Standard.xxs / 2
+private val AvatarRim = Tokens.Space.Standard.xxs
 /** Between the well and the row's words (iOS's Avatar row: `Theme.Space.m`). */
-private val AvatarGap = Tokens.Space.m
+private val AvatarGap get() = Tokens.Space.m
 /** Between Two Lines' dot and its words (iOS style B: `Theme.Space.s`). */
-private val TwoLineGap = Tokens.Space.s
+private val TwoLineGap get() = Tokens.Space.s
 /** The background-waiting clock against the dot it stands in for (as on the space page's cards). */
 private const val WaitClockScale = 1.7f
 /** A State Card that needs you, tinted in its blue (iOS `StatusPalette.needsYouWash`: the system blue at this opacity). */
@@ -855,7 +855,7 @@ private fun HolderGlyph(status: Status) {
     val ink = PersonaTheme.palette.status(status).text
     when (status) {
         Status.Working, Status.Waiting -> if (PersonaTheme.reduceMotion) JIcon(PhIcons.Play, null, size = Caret, tint = ink, selected = true)
-            else JSpinner(Modifier.size(Caret), color = ink, stroke = Tokens.Space.xxs)
+            else JSpinner(Modifier.size(Caret), color = ink, stroke = Tokens.Space.Standard.xxs)
         Status.NeedsYou -> JIcon(PhIcons.Hand, null, size = Caret, tint = ink, selected = true)
         Status.Unread -> JIcon(PhIcons.Check, null, size = Caret, tint = ink)
         Status.Offline -> JIcon(PhIcons.Power, null, size = Caret, tint = ink)
@@ -1029,13 +1029,13 @@ fun QuickFilterBar(bays: List<Bay>, selected: Int, onSelect: (Int) -> Unit, modi
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
     when (PersonaTheme.style) {
-        AppStyle.Glass -> Row(modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        AppStyle.Glass -> Row(modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp.dense)) {
             bays.forEachIndexed { index, bay -> JChip(bay.label, selected = index == selected, onClick = { onSelect(index) }, status = bay.status, count = bay.count) }
         }
         // Tabs that do not fit scroll sideways rather than being cut off at the edge.
         AppStyle.Brief -> JSegmented(bays.map { JSegment(it.label, it.count) }, selected, onSelect, modifier.horizontalScroll(rememberScrollState()))
         AppStyle.Board -> BoxWithConstraints(modifier.fillMaxWidth()) {
-            val shape = RoundedCornerShape(10.dp)
+            val shape = RoundedCornerShape(10.dp.corner)
             // Each bay is a share of the width while its label fits; more bays than that (the Agents list's six) keep
             // their width and the board scrolls sideways instead of cutting every label short.
             val fits = maxWidth / bays.size.coerceAtLeast(1) >= BoardBayMinWidth
@@ -1051,11 +1051,11 @@ fun QuickFilterBar(bays: List<Bay>, selected: Int, onSelect: (Int) -> Unit, modi
                     val color = bay.status?.let { palette.status(it).dot } ?: palette.ink
                     val cell = if (fits) Modifier.weight(1f) else Modifier.widthIn(min = bayWidth)
                     Box(cell.clickable(role = Role.Tab) { onSelect(index) }.semantics { this.selected = on }) {
-                        Column(Modifier.padding(start = 12.dp, top = 10.dp, bottom = 12.dp, end = 6.dp)) {
+                        Column(Modifier.padding(start = 12.dp.dense, top = 10.dp.dense, bottom = 12.dp.dense, end = 6.dp.dense)) {
                             Text("${bay.count ?: "—"}", style = type.number, color = if ((bay.count ?: 0) == 0) palette.ink3 else palette.ink, maxLines = 1)
-                            Spacer(Modifier.height(2.dp))
+                            Spacer(Modifier.height(2.dp.dense))
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                if (bay.status != null) { Box(Modifier.size(8.dp).clip(RoundedCornerShape(2.dp)).background(color)); Spacer(Modifier.width(5.dp)) }
+                                if (bay.status != null) { Box(Modifier.size(8.dp).clip(RoundedCornerShape(2.dp)).background(color)); Spacer(Modifier.width(5.dp.dense)) }
                                 Text(bay.label, style = type.caption.copy(fontSize = androidx.compose.ui.unit.TextUnit(12f, androidx.compose.ui.unit.TextUnitType.Sp)), color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                         }

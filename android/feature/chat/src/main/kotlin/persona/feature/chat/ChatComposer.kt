@@ -338,9 +338,9 @@ fun ChatComposer(
         }
     }
 
-    // The field grows with the draft up to growLines (from the height above the keyboard), then scrolls inside and
-    // shows Expand at its top right; the text keeps clear of the button only while it shows.
-    val growLines = rememberComposerGrowLines()
+    // The field grows with the draft through six lines, then scrolls inside and offers Expand.
+    // The text keeps clear of the button only while it shows.
+    val growLines = ComposerGrowLines
     var lineCount by remember { mutableIntStateOf(1) }
     val offersExpand = enabled && composerOffersExpand(lineCount, growLines)
     LaunchedEffect(enabled) { if (!enabled) expandedEditor = false }
