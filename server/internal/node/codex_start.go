@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/screen"
+	"github.com/nwverse/persona/server/internal/shellcmd"
 )
 
 // Starting a Codex from the phone (docs/integrations/codex.md "Starting from the phone"). A Codex launcher (plain `codex`, or an alias whose
@@ -110,11 +112,46 @@ func codexOwnProcess(argv []string) string {
 	return ""
 }
 
+// A managed launcher's -- can precede every caller argument. Defer injection until Launch has assembled its argv.
+const codexBypassEnv = "PERSONA_CODEX_BYPASS_PERMISSIONS"
+
+func codexBypassArgs(argv []string) []string {
+	end := slices.Index(argv, "--")
+	if end < 0 {
+		end = len(argv)
+	}
+	for i := 0; i < end; i++ {
+		if argv[i] == "--dangerously-bypass-approvals-and-sandbox" || argv[i] == "--yolo" {
+			return argv
+		}
+		if codexValueFlags[argv[i]] {
+			i++
+		}
+	}
+	return slices.Insert(slices.Clone(argv), end, "--dangerously-bypass-approvals-and-sandbox")
+}
+
 // startCodex starts a Codex launcher in a new tab with the first message and returns its session once the thread is
-// known.
+// known. With no message it returns the waiting row once Codex's input box is up (codex_waiting.go).
 func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launcher string, argv []string, prompt, ws, tabName, mode string) (*proto.Session, error) {
-	if strings.TrimSpace(prompt) == "" {
-		return nil, refusal("codex_needs_prompt", "新建 Codex 会话要连第一条消息一起发：Codex 收到第一条消息才建会话。", nil)
+	waiting := strings.TrimSpace(prompt) == ""
+	if waiting {
+		prompt = ""
+	}
+	if mode == "bypassPermissions" {
+		if managed, ok := n.managedLauncher(launcher); ok && len(argv) >= 3 && slices.Equal(argv[:3], []string{n.bin, "launch", launcher}) {
+			// Only this wrapper executes managed Args; a same-name shell alias takes precedence.
+			args := append(slices.Clone(managed.Args), argv[3:]...)
+			if len(codexBypassArgs(args)) != len(args) {
+				if slices.Contains(managed.Args, "--") {
+					argv = append([]string{codexBypassEnv + "=1"}, argv...)
+				} else {
+					argv = codexBypassArgs(argv)
+				}
+			}
+		} else {
+			argv = codexBypassArgs(argv)
+		}
 	}
 	key := cwd + "\x00" + launcher
 	if err := n.closeAbandonedCodex(ctx, key); err != nil {
@@ -163,7 +200,18 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 		return nil, err
 	}
 	defer done()
-	id, err := n.waitCodexThread(ctx, pane, cwd, prompt, began)
+	var id string
+	if waiting {
+		err = n.waitCodexBox(ctx, pane)
+		if errors.Is(err, errCodexBoxLate) {
+			// Codex runs but its box has not come up yet: the row all the same, and its tab stays. Nothing is queued in it
+			// that could run later; the first message waits for the box itself (codexBoxFor).
+			n.logf("codex %s: its input box did not come within %s; offering the row anyway", pane, codexStartWait)
+			err = nil
+		}
+	} else {
+		id, err = n.waitCodexThread(ctx, pane, cwd, prompt, began)
+	}
 	if err != nil {
 		shown, _ := n.readPane(ctx, pane, "recent-unwrapped", 30)
 		if strings.TrimSpace(shown) == "" { // a screen Codex draws from the top of a tall pane: the bottom rows are blank
@@ -189,9 +237,12 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 		}
 		return nil, fmt.Errorf("%w\n%s", err, lastLines(shown, 12))
 	}
+	if waiting {
+		return n.openCodexWait(ctx, pane, cwd, launcher, mode, began), nil
+	}
 	n.bindPane(pane, id)
 	st := sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: began.UTC()}
-	if mode == "plan" { // Other modes still come from the launcher's arguments, not this request.
+	if mode == "plan" {
 		st.AppMode = mode
 	}
 	n.state.put(id, st)
@@ -395,7 +446,7 @@ func CodexStart(args []string) error {
 	if f.Agent != "" {
 		env = append(withoutEnv(env, []string{herdrAgentEnv}), herdrAgentEnv+"="+f.Agent)
 	}
-	for len(words) > 0 && assignRe.MatchString(words[0]) {
+	for len(words) > 0 && shellcmd.AssignRe.MatchString(words[0]) {
 		env = append(env, words[0])
 		words = words[1:]
 	}

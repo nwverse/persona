@@ -133,7 +133,7 @@ to-do with priority `high`, still asks the owner with the card, as before.
 
 ## Header count
 
-The web's header reads "N open · N shelved · N done" beside the title on wider screens (a phone leaves it out). The iOS and
+The web's header reads "N open · N shelved · N done" beside the title on wider screens (a phone leaves it out); it counts what the list's filter shows, whatever is searched (#3740). The iOS and
 Android lists have no such line (#3712): it said again what the sections say, so each section's title carries the number of
 to-dos its rows list (a merged row's related ones too), in the section's state color, and the counts follow a search and the
 list's filter (#3740). **Open** counts to-dos that are not closed, not accepted or deployed,

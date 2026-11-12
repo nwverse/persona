@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Smaller details of an Agent's chat in iOS's words (docs/plans/android-ios-alignment/chats.md, C9). -->
+<resources>
+    <string name="chat_placeholder_agent">给 %1$s 发消息</string>
+    <string name="chat_getting_ready">%1$s 正在准备…</string>
+    <string name="chat_recap_open_spoken">离开期间回顾：%1$s。点按关闭</string>
+    <string name="chat_plan_sheet_title">计划</string>
+    <string name="chat_plan_sheet_step">第 %1$d 步，共 %2$d 步</string>
+    <plurals name="chat_plan_sheet_all_done">
+        <item quantity="other">%1$d 步全部完成</item>
+    </plurals>
+    <string name="chat_plan_sheet_summary">%1$s · %2$s</string>
+    <string name="chat_plan_pill_opens">显示计划</string>
+</resources>

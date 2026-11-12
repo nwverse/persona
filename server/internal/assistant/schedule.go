@@ -69,6 +69,10 @@ type Task struct {
 	// sentence or two on top. On for the default morning and evening routines (a hub set up before gets it with their
 	// current prompt, upgradeDefaultRoutines); an app that leaves it out of a change keeps it.
 	Facts bool `json:"facts,omitempty"`
+	// Report: a daily report (a dot's, docs/assistant/north-star.md "Daily briefing"): its runs open with the north
+	// star's lines. Set with schedule_routine's report or in the body of PUT /api/v1/assistant/tasks/{id}; a change
+	// that leaves it out keeps it.
+	Report bool `json:"report,omitempty"`
 	// factsText is the run's facts as the model is given them (briefing.go); set on the copy a run is made from, never stored.
 	factsText string
 	// kbDir is the knowledge directory the run's hint names (a daily run with the knowledge base on); set on the copy, never stored.
@@ -339,6 +343,8 @@ type schedule struct {
 	wake   chan struct{} // the list changed: scheduleLoop recomputes when to wake up
 	// sending: tasks whose run is being sent right now (runTask), so two can't go into one conversation at once.
 	sending map[string]bool
+	// held: by task, until when its due run waits for the owner (runDue, relay_presence.go runHold); in memory only.
+	held map[string]time.Time
 	// inflight: runs runDue started and that have not recorded their result yet.
 	inflight sync.WaitGroup
 	// waitTold: by task, the wait on the user its skip was pushed for (tellWaitingSkip, waitKey): a patrol every 30
@@ -1079,7 +1085,8 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, self string, args jso
 		Weekdays []int           `json:"weekdays"`
 		Cron     string          `json:"cron"`
 		Enabled  *bool           `json:"enabled"`
-		Push     *string         `json:"push"` // left out: a new routine pushes every run, an existing one keeps its push
+		Report   *bool           `json:"report"` // left out: kept
+		Push     *string         `json:"push"`   // left out: a new routine pushes every run, an existing one keeps its push
 		Until    json.RawMessage `json:"until"`
 		// The task's own model configuration (schedule_model.go): nil leaves it as it is, "" clears that part.
 		Launcher *string `json:"launcher"`
@@ -1158,6 +1165,9 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, self string, args jso
 	}
 	if a.Enabled != nil {
 		t.Enabled = *a.Enabled
+	}
+	if a.Report != nil {
+		t.Report = *a.Report
 	}
 	if push != nil {
 		t.Push = *push
@@ -1405,7 +1415,11 @@ func (s *Service) nextDue(ctx context.Context, now time.Time) time.Time {
 	defer sc.mu.Unlock()
 	var next time.Time
 	for _, t := range sc.tasks {
-		if n := t.nextWithLeaderCadence(now, loc, open); !n.IsZero() && (next.IsZero() || n.Before(next)) {
+		n := t.nextWithLeaderCadence(now, loc, open)
+		if until, ok := sc.held[t.ID]; ok && until.After(now) {
+			n = until // held for the owner (runDue): looked at again when the hold ends
+		}
+		if !n.IsZero() && (next.IsZero() || n.Before(next)) {
 			next = n
 		}
 	}
@@ -1423,9 +1437,20 @@ type dueTask struct {
 func (s *Service) runDue(ctx context.Context, now time.Time) {
 	loc := s.location(ctx)
 	open := s.leaderOpenWork(ctx)
+	present := s.ownersPresent(now) // read before schedule.mu
 	sc, err := s.lockedSchedule(ctx)
 	if err != nil {
 		return // this turn is skipped: a task run now could not be marked as run
+	}
+	// A run that goes into a conversation the owner is talking in waits (relay_presence.go runHold): it stays due,
+	// nothing of it is consumed or recorded, and nextDue looks again when the hold ends.
+	held := map[string]time.Time{}
+	waits := func(t *Task, due time.Time) bool {
+		h := runHold(present, *t, due, now)
+		if h > 0 {
+			held[t.ID] = now.Add(h)
+		}
+		return h > 0
 	}
 	var due []dueTask
 	var skipped []ScheduleRun
@@ -1467,6 +1492,10 @@ func (s *Service) runDue(ctx context.Context, now time.Time) {
 			if next.IsZero() || next.After(now) {
 				continue
 			}
+			// One that never ran is only looked back for two minutes (above): waiting would lose its first run.
+			if !t.LastRun.IsZero() && waits(t, next) {
+				continue
+			}
 			t.LastRun, changed = now.UTC(), true // saved before it starts: a restart in between loses the run rather than repeating it
 			if now.Sub(next) < dailyCatchUp {
 				due = append(due, dueTask{*t, next})
@@ -1494,6 +1523,9 @@ func (s *Service) runDue(ctx context.Context, now time.Time) {
 			if next.IsZero() || next.After(now) {
 				continue
 			}
+			if !t.LastRun.IsZero() && waits(t, next) { // as a daily one
+				continue
+			}
 			// The times missed while the hub was down count once, as the latest of them: a run every 30 minutes
 			// back after an hour runs once now rather than skip.
 			for n := rule.next(next, loc); !n.IsZero() && !n.After(now); n = rule.next(n, loc) {
@@ -1508,14 +1540,14 @@ func (s *Service) runDue(ctx context.Context, now time.Time) {
 					Status: runSkipped, Error: t.LastError, of: now.UTC()})
 			}
 		case repeatOnce:
-			if t.At.After(now) {
+			if t.At.After(now) || waits(t, t.At) {
 				continue
 			}
 			due = append(due, dueTask{*t, t.At})
 			t.LastRun, t.Enabled, changed = now.UTC(), false, true
 		case repeatInterval:
 			next := t.nextWithLeaderCadence(now, loc, open)
-			if next.After(now) {
+			if next.After(now) || waits(t, next) {
 				continue
 			}
 			dueAt := next
@@ -1534,6 +1566,7 @@ func (s *Service) runDue(ctx context.Context, now time.Time) {
 			}
 		}
 	}
+	sc.held = held
 	// A one-off that ran a day ago is only history now.
 	kept := tasks[:0:0]
 	for _, t := range tasks {
@@ -1689,9 +1722,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 	if kb {
 		t.kbDir = s.kb.dir // the hint names where the knowledge base is, not the default
 	}
-	if t.Facts {
-		t.factsText = s.briefStart(ctx, t, time.Now()) // the run's facts, worked out once (briefing.go)
-	}
+	t.factsText = s.runFacts(ctx, t, time.Now()) // the run's facts, worked out once (north_star.go)
 	if t.SessionID != "" && t.pushesOnlyAsked() && s.mayBeMain(ctx, t.SessionID) {
 		// The conversation it came from became (or may be) the main one, which is never quiet.
 		s.logf("task %s: %s is (or may be) the main conversation, which is never quiet; running in its own", t.ID, short(t.SessionID))
@@ -1703,7 +1734,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 			// conversation's launcher like a message from the phone does. On the task's category launcher (Agents
 			// then) it moved the main conversation onto another one (plain claude, not logged in there) for good (#1518).
 			params := map[string]any{"session_id": t.SessionID, "text": taskPrompt(t, due, now, loc, manual, kb, false), "message_source": taskMessageSource(t), "permission_mode": t.PermissionMode}
-			err := s.sendModel(ctx, t.MachineID, t.SessionID, params)
+			err := s.sendModel(ctx, t.MachineID, t.SessionID, params, s.lang(ctx))
 			if err == nil {
 				err = s.call(ctx, m.ID, DeviceAssistantSend, params, nil)
 			}
@@ -1937,6 +1968,9 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 		}
 	}
 	if text == "" {
+		if t.Facts {
+			s.briefReached(run.SessionID) // the briefing is in its conversation, whether or not a push follows
+		}
 		return
 	}
 	full := text
@@ -2578,6 +2612,13 @@ func (s *Service) scheduleRoutes() {
 		}
 		if v, ok := raw["facts"]; ok { // and its facts: set only when the body has them
 			if err := json.Unmarshal(v, &t.Facts); err != nil {
+				sc.mu.Unlock()
+				apierr.Write(w, http.StatusBadRequest, err)
+				return
+			}
+		}
+		if v, ok := raw["report"]; ok { // and whether it is a daily report, the same way
+			if err := json.Unmarshal(v, &t.Report); err != nil {
 				sc.mu.Unlock()
 				apierr.Write(w, http.StatusBadRequest, err)
 				return

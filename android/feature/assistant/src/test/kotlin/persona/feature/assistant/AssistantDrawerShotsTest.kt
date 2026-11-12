@@ -88,7 +88,7 @@ class AssistantDrawerShotsTest {
                 Box(Modifier.testTag("shot").width(400.dp).height(1100.dp).background(PersonaTheme.palette.background)) {
                     AssistantDrawer("", {}, groups, active = null, hasMain = groups.main != null,
                         onEnd = null, onMain = { mainTapped = true }, onOpen = { opened = it }, onInfo = { info = it },
-                        onNew = {}, onHome = {}, onSettings = { settingsTapped = true }, onTodos = {}, todoCount = 2,
+                        onNew = {}, onSettings = { settingsTapped = true }, onTodos = {}, todoCount = 2,
                         onInbox = { inboxTapped = true }, inboxCount = 5, settingsDot = true,
                         pages = listOf(
                             NavItem("machines", "电脑", PhIcons.Desktop, badge = 2),
@@ -151,7 +151,7 @@ class AssistantDrawerShotsTest {
                 CompositionLocalProvider(LocalHomeDrawer provides true) {
                     Box(Modifier.width(320.dp).height(800.dp).background(PersonaTheme.palette.background)) {
                         AssistantDrawer("", {}, ConversationGroups(null, emptyList(), emptyList()), active = null,
-                            hasMain = false, onEnd = null, onMain = {}, onOpen = {}, onInfo = {}, onNew = {}, onHome = {},
+                            hasMain = false, onEnd = null, onMain = {}, onOpen = {}, onInfo = {}, onNew = {},
                             onSettings = {}, onInbox = {}, inboxCount = 2, showTodos = false, pages = listOf(
                                 NavItem("machines", "电脑", PhIcons.Desktop, badge = 2),
                                 NavItem("extension", "扩展", PhIcons.PuzzlePiece, badge = 2),
@@ -185,7 +185,7 @@ class AssistantDrawerShotsTest {
         rule.setContent {
             PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
                 AssistantDrawer("", {}, ConversationGroups(main, emptyList(), recent.take(1)), active = null,
-                    hasMain = true, onEnd = null, onMain = {}, onOpen = {}, onInfo = {}, onNew = {}, onHome = {}, onSettings = {},
+                    hasMain = true, onEnd = null, onMain = {}, onOpen = {}, onInfo = {}, onNew = {}, onSettings = {},
                     onArchive = { archived = it })
             }
         }
@@ -206,7 +206,7 @@ class AssistantDrawerShotsTest {
             PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
                 Box(Modifier.testTag("shot").width(400.dp).height(700.dp).background(PersonaTheme.palette.background)) {
                     AssistantDrawer("", {}, groups, active = null, hasMain = true, onEnd = null, onMain = {}, onOpen = {},
-                        onInfo = {}, onNew = {}, onHome = {}, onSettings = {})
+                        onInfo = {}, onNew = {}, onSettings = {})
                 }
             }
         }
@@ -234,7 +234,7 @@ class AssistantDrawerShotsTest {
             PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
                 Box(Modifier.testTag("shot").width(400.dp).height(900.dp).background(PersonaTheme.palette.background)) {
                     AssistantDrawer("", {}, groups, active = null, hasMain = true, onEnd = null, onMain = {}, onOpen = {},
-                        onInfo = {}, onNew = {}, onHome = {}, onSettings = {})
+                        onInfo = {}, onNew = {}, onSettings = {})
                 }
             }
         }
@@ -251,5 +251,85 @@ class AssistantDrawerShotsTest {
         rule.onNodeWithText("全部对话（2）").performClick()
         rule.onNodeWithText("整理收件箱").assertExists()
         capture("drawer-all-chats-glass-light")
+    }
+
+    // #4922: Recent, the user's own newest chats, between 常驻 and All chats (which still lists everything), in every style,
+    // light and dark; no Recent heading when nothing qualifies.
+    @Test fun drawsRecentBetweenTheLeadersAndAllChats() {
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        val lead = Session(machineId = "hub", sessionId = "l1", title = "1110 | 探索 | 增长", status = "working", updatedAt = minutesAgo(4))
+        val auto = Session(machineId = "hub", sessionId = "a1", title = "收件箱分身", origin = "inbox", status = "idle", updatedAt = minutesAgo(1))
+        val snapshot = persona.core.contracts.api.AssistantSnapshot(main.key, listOf(main, lead, auto) + recent, leaders = listOf("l1"),
+            directionNames = mapOf("l1" to "增长"))
+        var groups by mutableStateOf(conversationGroups(snapshot, "", ConversationWords("新对话", "接力", "接力：%s")))
+        rule.setContent {
+            PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                Box(Modifier.testTag("shot").width(400.dp).height(1300.dp).background(PersonaTheme.palette.background)) {
+                    AssistantDrawer("", {}, groups, active = null, hasMain = true, onEnd = null, onMain = {}, onOpen = {},
+                        onInfo = {}, onNew = {}, onSettings = {})
+                }
+            }
+        }
+        val top = { text: String -> rule.onNodeWithText(text).fetchSemanticsNode().boundsInRoot.top }
+        rule.onNodeWithText("最近").assertExists()
+        assertTrue("常驻 › 最近 › 全部对话", top("常驻") < top("最近") && top("最近") < top("整理收件箱") && top("周末去哪儿") < top("全部对话（3）"))
+        rule.onNodeWithText("收件箱分身").assertDoesNotExist()
+        for (s in AppStyle.entries) for (d in listOf(false, true)) {
+            style = s; dark = d
+            androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
+            capture("drawer-recent-${s.name.lowercase()}-${if (d) "dark" else "light"}")
+        }
+        groups = groups.copy(recent = emptyList())
+        rule.waitForIdle()
+        rule.onNodeWithText("最近").assertDoesNotExist()
+    }
+
+    // #5084: the built-in background supervisor waits under All chats with the chats Persona opened itself, under the
+    // app's name for it, in every style, light and dark; its menu only copies its session id.
+    @Test fun drawsTheBackgroundSupervisorUnderAllChatsWithoutPinArchiveOrEnd() {
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        val scheduled = Session(machineId = "hub", sessionId = "s1", title = "每日早报", origin = "task", originRef = "t1",
+            status = "idle", updatedAt = minutesAgo(50))
+        val background = Session(machineId = "hub", sessionId = "bg", title = "Background supervisor", origin = "task",
+            status = "working", updatedAt = minutesAgo(3), lastText = "登录页修复：三条验收标准都有证据，已验收。")
+        val snapshot = persona.core.contracts.api.AssistantSnapshot(main.key, listOf(main, scheduled, background) + recent,
+            backgroundSupervisor = "bg")
+        val groups = conversationGroups(snapshot, "", ConversationWords("新对话", "接力", "接力：%s", "后台督办"))
+        rule.setContent {
+            PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                Box(Modifier.testTag("shot").width(400.dp).height(1700.dp).background(PersonaTheme.palette.background)) {
+                    AssistantDrawer("", {}, groups, active = null, hasMain = true, onEnd = {}, onMain = {}, onOpen = {},
+                        onInfo = {}, onNew = {}, onSettings = {}, onArchive = {}, onLeader = {})
+                }
+            }
+        }
+        // not among the user's recent chats; under All chats, which lists it with the scheduled task's conversation
+        rule.onNodeWithText("后台督办").assertDoesNotExist()
+        rule.onNodeWithText("全部对话（4）").performClick()
+        rule.onNodeWithText("后台督办").assertExists()
+        rule.onNodeWithText("每日早报").assertExists()
+        rule.onAllNodesWithText("Background supervisor").assertCountEquals(0)
+        for (s in AppStyle.entries) for (d in listOf(false, true)) {
+            style = s; dark = d
+            androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
+            capture("drawer-background-supervisor-${s.name.lowercase()}-${if (d) "dark" else "light"}")
+        }
+        style = AppStyle.Glass; dark = false
+        rule.waitForIdle()
+        // The rows with a menu, top to bottom: Persona, the two recent chats, then All chats newest first, where the
+        // background supervisor (3 minutes ago) is first.
+        rule.onAllNodesWithContentDescription("对话操作")[3].performClick()
+        rule.onNodeWithText("拷贝会话 ID").assertExists()
+        rule.onAllNodesWithText("设为常驻").assertCountEquals(0)
+        rule.onAllNodesWithText("归档").assertCountEquals(0)
+        rule.onAllNodesWithText("结束…").assertCountEquals(0)
+        rule.onNodeWithText("拷贝会话 ID").performClick()
+        // any other chat there keeps its whole menu
+        rule.onAllNodesWithContentDescription("对话操作")[4].performClick()
+        rule.onNodeWithText("设为常驻").assertExists()
+        rule.onNodeWithText("归档").assertExists()
+        rule.onNodeWithText("结束…").assertExists()
     }
 }
