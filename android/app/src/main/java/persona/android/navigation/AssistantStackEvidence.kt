@@ -2,6 +2,7 @@ package persona.android.navigation
 
 import androidx.navigation3.runtime.NavKey
 import persona.core.navigation.AddComputerRoute
+import persona.core.navigation.AppTab
 import persona.core.navigation.AgentsRoute
 import persona.core.navigation.AssistantRoute
 import persona.core.navigation.ChatRoute
@@ -31,7 +32,7 @@ import persona.feature.knowledge.KnowledgeRoute
 internal data class AssistantStackEvidence(val route: String, val selectedKey: String?)
 
 /** The visible route and its stable content key, used only by DEBUG adaptive evidence. */
-internal fun assistantStackEvidence(key: NavKey?): AssistantStackEvidence = when (key) {
+internal fun assistantStackEvidence(key: NavKey?, tab: AppTab = AppTab.Persona): AssistantStackEvidence = when (key) {
     null -> AssistantStackEvidence("none", null)
     AssistantRoute -> AssistantStackEvidence("assistant", null)
     AgentsRoute -> AssistantStackEvidence("agents", null)
@@ -40,8 +41,8 @@ internal fun assistantStackEvidence(key: NavKey?): AssistantStackEvidence = when
     MachinesRoute -> AssistantStackEvidence("machines", null)
     KnowledgeRoute -> AssistantStackEvidence("knowledge", null)
     TodosRoute -> AssistantStackEvidence("todos", null)
-    is ChatRoute -> AssistantStackEvidence("chat", "${key.machineId}/${key.sessionId}")
-    is InteractionRoute -> AssistantStackEvidence("request", "${key.chat.machineId}/${key.chat.sessionId}")
+    is ChatRoute -> AssistantStackEvidence("${tab.name}/chat", "${key.machineId}/${key.sessionId}")
+    is InteractionRoute -> AssistantStackEvidence("${tab.name}/chat", "${key.chat.machineId}/${key.chat.sessionId}")
     is LarkRoute -> AssistantStackEvidence("inbox/lark", key.itemId ?: key.feedId)
     is MailRoute -> AssistantStackEvidence("inbox/mail", key.itemId)
     is InboxEventRoute -> AssistantStackEvidence("inbox/event", key.itemId)

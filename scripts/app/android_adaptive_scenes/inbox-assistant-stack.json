@@ -6,6 +6,7 @@
     "mockEnv": {
       "MOCK_INBOX_EVENTS": "1"
     },
+    "stackProbe": true,
     "fields": [
       "pid",
       "route",

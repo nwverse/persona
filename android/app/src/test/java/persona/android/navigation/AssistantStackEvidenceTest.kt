@@ -2,6 +2,8 @@ package persona.android.navigation
 
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import persona.core.navigation.AppTab
+import persona.core.navigation.ChatRoute
 import persona.core.navigation.ExtensionUiRoute
 import persona.core.navigation.InboxRoute
 import persona.core.navigation.MachineDetailRoute
@@ -26,6 +28,16 @@ class AssistantStackEvidenceTest {
         assertEquals(
             AssistantStackEvidence("extension/extension/page", "extension/page"),
             assistantStackEvidence(ExtensionUiRoute("extension", "page", "Page")),
+        )
+    @Test
+    fun chatRoutesKeepTheOriginalTabContract() {
+        assertEquals(
+            AssistantStackEvidence("Agents/chat", "machine/session"),
+            assistantStackEvidence(ChatRoute("machine", "session"), AppTab.Agents),
+        )
+        assertEquals(
+            AssistantStackEvidence("Persona/chat", "machine/session"),
+            assistantStackEvidence(ChatRoute("machine", "session"), AppTab.Persona),
         )
     }
 }

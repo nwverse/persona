@@ -734,7 +734,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         val sides = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
         val sideRoom = sides.getLeft(LocalDensity.current, LocalLayoutDirection.current) > 0 ||
             sides.getRight(LocalDensity.current, LocalLayoutDirection.current) > 0
-        val stackEvidence = assistantStackEvidence(visible)
+        val stackEvidence = assistantStackEvidence(visible, selected)
         CompositionLocalProvider(LocalAmbience provides ambience, LocalWindowLayout provides windowLayout, LocalLargeWindowInput provides regular,
             LocalInboxItemPages provides inboxItemPages,
             LocalInboxTriageSetup provides triageSetup, LocalAssistantSidebarHost provides sidebar) {
