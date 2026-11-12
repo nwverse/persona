@@ -1,5 +1,30 @@
 # Lessons: hub / node and networking
 
+## Resident exec must drain replies before closing transport (#5277)
+
+Stopping idle assistant processes after Attach closes spends the node's reconnect grace on SIGTERM/SIGKILL waits.
+Drain and reap them while the old transport still serves, then retain the Unix listener and run-lock descriptors across exec.
+The listener keeps the socket inode and accept backlog, not the active RPC connection or process-local assistant keeper.
+A same-PID descriptor ticket must be consumed before children start; protect the close-on-exec change with the fork lock.
+
+A handler returning is not proof its reply reached the manager. Hold admission through the reply write, announce reload,
+suspend new outgoing manager calls, and acknowledge an ordered state.load barrier only after preceding pending replies drain.
+Retry only explicit before-execution refusals and known-unsent calls; never replay an ambiguous dropped write.
+A failed barrier must resume calls and clear its reload window, and an old peer must not change a new peer's state.
+Context cancellation cannot interrupt an arbitrary writer already in progress: close an unconfirmed announcement's physical peer so a late event cannot
+suspend a surviving manager. Publish a received reply before removing its pending entry, and prefer it over a simultaneous close.
+Legacy images cannot consume a retained run lock: require their explicit handover support before install/ordinary reload; startup rollback releases both fds.
+Measure actual RPC waiting separately from signal-to-readiness: preflight and idle-process drain can take time while requests
+still succeed. Online flags and successful retries alone do not prove uninterrupted blue-green transport.
+
+## A preference clients report is not "the last one wins" (#5238)
+
+The user language was whatever full-role client sent `client_hello.locale` last. An English test simulator paired with
+a real hub, or simply an English Mac next to a Chinese iPhone, flipped it at every reconnect, and with it the Inbox
+summaries, folder names, the assistant's answers and pushes. Connecting is not choosing: remember what each device
+last reported and take only a device's own change (`server/internal/hub/locale.go`, `docs/protocol/i18n.md` "Protocol:
+telling hub the language"). Apply the same rule to any hub-wide value inferred from what several devices report.
+
 ## Authority handover must include the trusted keeper roster (#5228)
 
 A machine its manager keeps has moved out of hub.json, but its hub-owned keeper

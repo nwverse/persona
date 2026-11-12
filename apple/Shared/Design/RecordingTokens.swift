@@ -89,5 +89,10 @@ nonisolated extension Theme {
         /// How long "Persona is looking at the photo…" waits for the room's note after the photo was added, in seconds:
         /// a room that never writes one doesn't keep the spinner turning for the rest of the meeting.
         static let photoNoteWait: TimeInterval = 120
+        /// A Summary item opened in place (#5026): the transcript line its time picks, with this many lines before it
+        /// and after it. One before says what led to it; two after hold the reply or the follow-up, since an item is
+        /// stamped as its sentence begins. Few enough that the card stays a summary.
+        static let contextBefore = 1
+        static let contextAfter = 2
     }
 }

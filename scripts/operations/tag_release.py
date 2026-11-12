@@ -309,7 +309,11 @@ def upload(repository, tag, assets, gh="gh"):
                             *(str(staging / name) for name in batch)], check=True, timeout=1800)
     remote = json.loads(subprocess.check_output(
         [gh, "release", "view", tag, "--repo", repository, "--json", "assets"], text=True, timeout=60))
-    actual = {item["name"]: item for item in remote}
+    # gh returns {"assets": [...]}; older callers may return the bare list.
+    listed = remote if isinstance(remote, list) else remote.get("assets") if isinstance(remote, dict) else None
+    if not isinstance(listed, list):
+        raise ConfigError("gh release view returned no asset list")
+    actual = {item["name"]: item for item in listed}
     for item in assets:
         digest = hashlib.sha256(Path(item["path"]).read_bytes()).hexdigest()
         remote_asset = actual.get(item["name"])
