@@ -327,3 +327,51 @@ func TestWorkflowUsageOnItsReport(t *testing.T) {
 		t.Fatalf("state file task %q", task)
 	}
 }
+
+// An agent reported more than once, a nested background one to the session and to its launcher's report, or one that
+// failed and was resumed in a later exchange, says the same id each time, with what its transcript used by then (from
+// the #5426 review's reproduction).
+func TestAgentUsageReportedAgainUnderItsID(t *testing.T) {
+	n, home := testNode(t)
+	const id = "aaaaaaaa-0000-0000-0000-000000005429"
+	proj := filepath.Join(home, ".claude", "projects", "-work")
+	dir := filepath.Join(proj, id, "subagents")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeUsageLines(t, filepath.Join(dir, "agent-P.jsonl"), usagePrompt, usageReply("p1", "claude-opus-5-5", `{"input_tokens":10,"output_tokens":100}`))
+	writeUsageLines(t, filepath.Join(dir, "agent-P.meta.json"), `{"agentType":"general-purpose","toolUseId":"toolu_P","requestShape":"background"}`)
+	writeUsageLines(t, filepath.Join(dir, "agent-C.jsonl"), usagePrompt, usageReply("c1", "claude-opus-5-5", `{"input_tokens":1000,"output_tokens":5000}`))
+	writeUsageLines(t, filepath.Join(dir, "agent-C.meta.json"), `{"agentType":"general-purpose","parentAgentId":"P","requestShape":"background"}`)
+	path := filepath.Join(proj, id+".jsonl")
+	writeUsageLines(t, path,
+		`{"type":"user","uuid":"p1","timestamp":"2026-11-12T08:00:00Z","message":{"role":"user","content":"review"}}`,
+		usageAgentCall("l1", "toolu_P"), usageAgentReceipt("r1", "toolu_P", "P", true),
+		usageAgentNotice("nc", "C", "toolu_inside_P", "failed"),
+		usageAgentNotice("np", "P", "toolu_P", "failed"))
+	c := proto.TokenUsage{ID: "agent:C", Model: "claude-opus-5-5", Input: 1000, Output: 5000}
+	page := func() map[string][]proto.TokenUsage {
+		got := map[string][]proto.TokenUsage{}
+		for _, it := range pageItems(t, n, id) {
+			if it.Task != nil {
+				got[it.ID] = it.Usage
+			}
+		}
+		return got
+	}
+	want := map[string][]proto.TokenUsage{"r1#0": nil, "nc#0": {c},
+		"np#0": {{ID: "agent:P", Model: "claude-opus-5-5", Input: 10, Output: 100}, c}}
+	if got := page(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("first exchange %+v,\nwant %+v", got, want)
+	}
+	// Resumed: P works on and reports again.
+	appendUsageLines(t, filepath.Join(dir, "agent-P.jsonl"), usagePrompt, usageReply("p2", "claude-opus-5-5", `{"input_tokens":5,"output_tokens":50}`))
+	appendUsageLines(t, path,
+		`{"type":"user","uuid":"p2","timestamp":"2026-11-12T09:00:00Z","message":{"role":"user","content":"resume it"}}`,
+		usageAgentNotice("np2", "P", "toolu_P", "completed"))
+	want["np#0"] = []proto.TokenUsage{{ID: "agent:P", Model: "claude-opus-5-5", Input: 15, Output: 150}, c}
+	want["np2#0"] = want["np#0"]
+	if got := page(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("after the resume %+v,\nwant %+v", got, want)
+	}
+}
