@@ -296,6 +296,12 @@ class AssistantSwitcherShotsTest {
                     val shown = capture("$case-$suffix")
                     assertTrue("$case lost the assistant identity ($suffix)", !product.sameAs(shown))
                     assertEquals("assistant", AssistantManagerChoice.current.value.shown)
+                    tap(status)
+                    rule.onNodeWithText("新建助手").assertIsDisplayed()
+                    rule.onNodeWithText("管理助手…").assertIsDisplayed()
+                    rule.onAllNodesWithText("默认").assertCountEquals(0)
+                    if (case == "single-installing") rule.onNodeWithText("测试").assertIsDisplayed()
+                    rule.onNodeWithContentDescription("Sample assistant，$status").performSemanticsAction(SemanticsActions.OnClick)
                 }
                 rule.runOnIdle { roster = ManagerRoster(emptyList(), "assistant") }
                 rule.onAllNodesWithText("Sample assistant").assertCountEquals(0)
