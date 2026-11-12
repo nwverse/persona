@@ -28,7 +28,7 @@ import persona.core.chatlist.*
 import persona.core.contracts.*
 import persona.core.contracts.api.*
 import persona.core.designsystem.*
-import persona.core.designsystem.icons.PhIcons
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import persona.core.domain.ChatTaps
 import persona.core.domain.chatBubbles
 import persona.core.domain.lines.ChatLine
@@ -285,19 +285,26 @@ private fun ChatPage(
     var hostRetried by rememberSaveable(key.path) { mutableStateOf<String?>(null) }
     val deliveryActions = remember(sender) { ChatDeliveryActions(sender) }
     var statusSheet by remember { mutableStateOf(false) }
+    // The shell presents transient notices once; persistent sync errors stay inline.
+    val feedback = persona.core.designsystem.LocalAppFeedback.current
+    // A message only on this phone taken off (Cancel send / Delete): nothing was sent; Undo puts it back (#4645,
+    // docs/design/DESIGN_SYSTEM.md 4.4 principle 3).
+    fun removed(message: OutboxMessage) {
+        val deleted = res.getString(R.string.chat_delivery_deleted)
+        val undo = persona.core.designsystem.FeedbackAction(res.getString(R.string.chat_delivery_undo)) { sender.restore(message) }
+        if (feedback?.notice(deleted, undo) != true) notice = deleted
+    }
     fun deliveryAction(message: OutboxMessage, action: DeliveryAction) {
         if (readOnly) return
         scope.launch {
             try {
-                if (!deliveryActions.perform(message.clientMessageId, action, composer::restoreMessage))
+                if (!deliveryActions.perform(message.clientMessageId, action, composer::restoreMessage, ::removed))
                     notice = res.getString(R.string.chat_screen_delivery_changed)
                 else if (action == DeliveryAction.Discard) statusSheet = false
             } catch (e: CancellationException) { throw e }
             catch (_: Exception) { notice = res.getString(R.string.chat_screen_delivery_failed) }
         }
     }
-    // The shell presents transient notices once; persistent sync errors stay inline.
-    val feedback = persona.core.designsystem.LocalAppFeedback.current
     LaunchedEffect(notice) { notice?.let { if (feedback?.notice(it) == true) notice = null } }
     val currentDraftCallback by rememberUpdatedState(onDraftChanged)
     LaunchedEffect(composer) { snapshotFlow { composer.draft }.collect { currentDraftCallback?.invoke(it) } }
@@ -380,22 +387,27 @@ private fun ChatPage(
     var backgroundOpen by rememberSaveable(key.path) { mutableStateOf(false) }
     // The message a hub link named (`?at=`, #2194) while it is being landed on: like a search hit, its drawer opens.
     var jumpItem by remember { mutableStateOf<String?>(null) }
-    val backgroundFolding = if (foldsBackground) persona.core.domain.tasks.BackgroundFolding(openWork, search.selected?.itemId ?: jumpItem) else null
-    val assistantPresentation = remember(projection, snapshot.items, feed, renderStyle, backgroundFolding) {
+    // Glass draws the hub's task records among the lines, as iOS does (#4339 C13), and folds a supervision round into one
+    // line there rather than moving it to the background record; Brief and Board keep both behind the trays.
+    val inlineRecords = PersonaTheme.style == AppStyle.Glass
+    val backgroundFolding = if (foldsBackground || (inlineRecords && renderStyle.compactToolSummary))
+        persona.core.domain.tasks.BackgroundFolding(openWork, search.selected?.itemId ?: jumpItem, rounds = foldsBackground) else null
+    val assistantPresentation = remember(projection, snapshot.items, feed, renderStyle, backgroundFolding, inlineRecords) {
         if (renderStyle.compactToolSummary) {
-            val presentation = persona.core.domain.tasks.AssistantConversation.project(projection.lines, snapshot.items, backgroundFolding)
+            val presentation = persona.core.domain.tasks.AssistantConversation.project(projection.lines, snapshot.items, backgroundFolding,
+                inline = inlineRecords)
             presentation.copy(background = persona.core.domain.tasks.AssistantLines.lines(presentation.background,
-                persona.core.domain.tasks.AssistantTaskCards.backgroundFeed(feed)))
+                persona.core.domain.tasks.AssistantTaskCards.backgroundFeed(feed, inlineRecords)))
         } else persona.core.domain.tasks.AssistantConversation(projection.lines, emptyList())
     }
     LaunchedEffect(key, tasks) { tasks?.load(key.sessionId); tasks?.loadTodayIfMain(key.sessionId) }
-    val lines = remember(assistantPresentation, search.selected, jumpItem, feed, tasks, taskPlans, taskTodos, taskCardProjection, renderStyle) {
+    val lines = remember(assistantPresentation, search.selected, jumpItem, feed, tasks, taskPlans, taskTodos, taskCardProjection, renderStyle, inlineRecords) {
         searchVisibleLines(assistantPresentation.foreground, search.selected?.itemId ?: jumpItem)
             .let {
                 when {
                     tasks == null -> it
                     renderStyle.compactToolSummary -> persona.core.domain.tasks.AssistantTaskCards.lines(it, feed, taskPlans,
-                        taskTodos, taskCardProjection[key.sessionId].orEmpty())
+                        taskTodos, taskCardProjection[key.sessionId].orEmpty(), inline = inlineRecords)
                     else -> persona.core.domain.tasks.AssistantLines.lines(it,
                         persona.core.domain.tasks.SentToAgents.shown(feed))
                 }
@@ -451,6 +463,9 @@ private fun ChatPage(
     var folding by remember { mutableStateOf(emptySet<String>()) }
     var foldErrors by remember { mutableStateOf(emptyMap<String, String>()) }
     val terminal: (() -> Unit)? = if (readOnly || !canTerminal) null else onTerminal?.let { action -> { action(key) } }
+    // A session without a terminal (a Codex thread, an agent runtime's) has nothing to open or explain (#4339 C7).
+    val hasTerminal = ChatTerminalPlaces.has(readOnly, canTerminal, renderStyle)
+    val agentTerminal = terminal?.takeIf { hasTerminal }
     val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
 
     fun followEnd() {
@@ -847,8 +862,10 @@ private fun ChatPage(
         LocalContentColor provides PersonaTheme.palette.ink, LocalChatPorts provides chatPorts,
         persona.core.designsystem.LocalAssistantCards provides cardsHost, LocalChatSubagents provides subagentLinks, LocalChatWorkflows provides workflowCards,
         LocalChatTaskIndex provides projection.tasks, LocalChatJumpToCall provides callJumps::jump) {
+        // Under the files pane or the terminal's cover: hidden from screen readers too.
         ChatLinkHost(Modifier.fillMaxSize().background(PersonaTheme.palette.background)
-            .then(if (embedded) Modifier else Modifier.imePadding()), preloadUrls, list.isScrollInProgress,
+            .then(if (embedded) Modifier else Modifier.imePadding())
+            .then(if (chrome.covered) Modifier.clearAndSetSemantics {} else Modifier), preloadUrls, list.isScrollInProgress,
             onContext = { if (readOnly || !canSend) notice = res.getString(R.string.chat_screen_read_only_context) else linkContexts = linkContexts + it },
             onEdit = { selection, instruction ->
                 if (readOnly || !canSend) notice = res.getString(R.string.chat_screen_read_only_edit)
@@ -869,11 +886,8 @@ private fun ChatPage(
                                 onFiles = chrome.onFiles, onGit = chrome.onGit, gitLabel = chrome.gitLabel,
                                 statusState = status, onDetails = { statusSheet = true },
                                 onOpenTodo = chrome.onOpenTodo, agentShares = chrome.agentShares, worktrees = chrome.worktrees,
-                                onSearch = { search.open(chatList) { timeline.freeze(currentItems); timelineVersion++ } }) {
-                                // A session without a terminal (a Codex thread, an agent runtime's) has nothing to open or explain.
-                                if (!readOnly && canTerminal && renderStyle != ChatRenderStyle.Assistant) JIconButton(PhIcons.TerminalWindow, stringResource(if (terminal != null) R.string.chat_screen_open_terminal else R.string.chat_screen_terminal_help),
-                                    terminal ?: { terminalHelp = true })
-                            }
+                                onSearch = { search.open(chatList) { timeline.freeze(currentItems); timelineVersion++ } },
+                                onTerminal = agentTerminal, onTerminalHelp = if (hasTerminal && terminal == null) ({ terminalHelp = true }) else null)
                             // The space's other tabs under the title (iOS SiblingTabs); not for the assistant's conversation.
                             if (showTopBar && renderStyle != ChatRenderStyle.Assistant) ChatSiblingTabs(session, sessionList, chrome.onOpenSession)
                             // The ports it listens on (its dev servers, docs/operations/ports.md): a tap opens the page.
@@ -1046,7 +1060,7 @@ private fun ChatPage(
                                     val deliveryState = if (message.state in setOf(DeliveryState.Refused, DeliveryState.Rejected))
                                         delivery?.state ?: message.state else message.state
                                     Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-                                        UserBubble(composerMessagePreview(message.text))
+                                        UserBubble(composerMessagePreview(message.text), message.clientMessageId, deliveryState)
                                         OutboxStatus(message.copy(state = deliveryState,
                                             error = delivery?.refusal?.code ?: message.error),
                                             busy = message.clientMessageId in deliveryActions.busyIds,
@@ -1083,7 +1097,7 @@ private fun ChatPage(
                                         } == true,
                                         plan = (line as? ChatLine.Step)?.let { contentPlans[it.groupId] },
                                         showSourceLabel = line.id in contentSourceLabels, waiting = waitingOnYou,
-                                        closeoutReply = closeoutReply, hideTaskPrompts = foldsBackground)
+                                        closeoutReply = closeoutReply, hideTaskPrompts = foldsBackground, onTerminal = agentTerminal)
                                         }
                                     }
                                 }
@@ -1143,7 +1157,10 @@ private fun ChatPage(
                 onContext = { text -> linkContexts = linkContexts + messageContext(menuTitle, text, context.resources); notice = res.getString(R.string.chat_screen_added_context) },
                 onHandToPersona = chrome.onHandToPersona?.takeIf { renderStyle != ChatRenderStyle.Assistant }
                     ?.let { hand -> { text: String -> hand(handoffMessage(menuTitle, text, context.resources)) } },
-                onNotice = { notice = it }, onFork = onFork, rewind = rewindMenu)
+                onNotice = { notice = it }, onFork = onFork, rewind = rewindMenu,
+                onDelete = { target -> messages.firstOrNull { it.clientMessageId == target.id }?.let { message ->
+                    deliveryAction(message, if (message.state.allows(DeliveryAction.Cancel)) DeliveryAction.Cancel else DeliveryAction.Delete)
+                } })
             viewer?.let { request ->
                 ChatImageViewer(request.images, request.index, onDismiss = { viewer = null },
                     onEdited = if (readOnly) null else ({ attachment -> composer.beginEdit(); composer.attachments += attachment }),
