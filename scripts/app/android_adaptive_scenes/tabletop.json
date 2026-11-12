@@ -1,7 +1,7 @@
 {
   "id": "tabletop",
   "manifestId": "tabletop-page-safety",
-  "description": "Keep one Assistant chat, its multiline draft, selection and focus alive through real book, fake tabletop, constrained safe areas and flat restoration.",
+  "description": "Keep chat state alive through posture changes, then prove Settings, Machines, Files, a file preview and Terminal keep their content clear of a fake tabletop hinge in one process.",
   "requires": {
     "page": "chat",
     "fields": [
@@ -29,7 +29,10 @@
     },
     {
       "step": "key",
-      "keycombination": ["SHIFT_LEFT", "ENTER"]
+      "keycombination": [
+        "SHIFT_LEFT",
+        "ENTER"
+      ]
     },
     {
       "step": "text",
@@ -37,7 +40,10 @@
     },
     {
       "step": "key",
-      "keycombination": ["SHIFT_LEFT", "ENTER"]
+      "keycombination": [
+        "SHIFT_LEFT",
+        "ENTER"
+      ]
     },
     {
       "step": "text",
@@ -45,7 +51,10 @@
     },
     {
       "step": "key",
-      "keycombination": ["SHIFT_LEFT", "ENTER"]
+      "keycombination": [
+        "SHIFT_LEFT",
+        "ENTER"
+      ]
     },
     {
       "step": "text",
@@ -53,13 +62,18 @@
     },
     {
       "step": "key",
-      "keycombination": ["CTRL_LEFT", "A"]
+      "keycombination": [
+        "CTRL_LEFT",
+        "A"
+      ]
     },
     {
       "step": "assert",
       "checks": {
         "focused": true,
-        "route": {"matches": "/chat$"}
+        "route": {
+          "matches": "/chat$"
+        }
       }
     },
     {
@@ -197,6 +211,181 @@
       "step": "capture",
       "name": "06-flat-restored",
       "state": "flat-assistant-restored"
+    },
+    {
+      "step": "open",
+      "page": "settings",
+      "probePage": "Settings",
+      "posture": "tabletop",
+      "fake": true
+    },
+    {
+      "step": "assert",
+      "requires": {
+        "page": "Settings",
+        "fields": [
+          "contentBounds",
+          "hingeBounds"
+        ]
+      },
+      "checks": {
+        "contentBounds": {
+          "notOverlaps": "hingeBounds"
+        }
+      }
+    },
+    {
+      "step": "capture",
+      "name": "07-settings",
+      "state": "fake-tabletop-settings",
+      "requires": {
+        "page": "Settings",
+        "fields": [
+          "contentBounds",
+          "hingeBounds"
+        ]
+      }
+    },
+    {
+      "step": "open",
+      "page": "machines",
+      "probePage": "Machines",
+      "posture": "tabletop",
+      "fake": true
+    },
+    {
+      "step": "assert",
+      "requires": {
+        "page": "Machines",
+        "fields": [
+          "contentBounds",
+          "hingeBounds"
+        ]
+      },
+      "checks": {
+        "contentBounds": {
+          "notOverlaps": "hingeBounds"
+        }
+      }
+    },
+    {
+      "step": "capture",
+      "name": "08-machines",
+      "state": "fake-tabletop-machines",
+      "requires": {
+        "page": "Machines",
+        "fields": [
+          "contentBounds",
+          "hingeBounds"
+        ]
+      }
+    },
+    {
+      "step": "open",
+      "session": "chat",
+      "conversationKind": "agent",
+      "posture": "tabletop",
+      "fake": true
+    },
+    {
+      "step": "tap",
+      "content-desc": "More actions"
+    },
+    {
+      "step": "tap",
+      "text": "Files"
+    },
+    {
+      "step": "assert",
+      "requires": {
+        "page": "weather",
+        "fields": [
+          "contentBounds",
+          "hingeBounds"
+        ]
+      },
+      "checks": {
+        "contentBounds": {
+          "notOverlaps": "hingeBounds"
+        }
+      }
+    },
+    {
+      "step": "capture",
+      "name": "09-files",
+      "state": "fake-tabletop-files",
+      "requires": {
+        "page": "weather",
+        "fields": [
+          "contentBounds",
+          "hingeBounds"
+        ]
+      }
+    },
+    {
+      "step": "tap",
+      "text": "README.md"
+    },
+    {
+      "step": "assert",
+      "requires": {
+        "page": "README.md",
+        "fields": [
+          "contentBounds",
+          "hingeBounds"
+        ]
+      },
+      "checks": {
+        "contentBounds": {
+          "notOverlaps": "hingeBounds"
+        }
+      }
+    },
+    {
+      "step": "capture",
+      "name": "10-file-preview",
+      "state": "fake-tabletop-file-preview",
+      "requires": {
+        "page": "README.md",
+        "fields": [
+          "contentBounds",
+          "hingeBounds"
+        ]
+      }
+    },
+    {
+      "step": "open",
+      "link": "terminal",
+      "probePage": "给天气 App 加主屏幕小组件",
+      "posture": "tabletop",
+      "fake": true
+    },
+    {
+      "step": "assert",
+      "requires": {
+        "page": "给天气 App 加主屏幕小组件",
+        "fields": [
+          "contentBounds",
+          "hingeBounds"
+        ]
+      },
+      "checks": {
+        "contentBounds": {
+          "notOverlaps": "hingeBounds"
+        }
+      }
+    },
+    {
+      "step": "capture",
+      "name": "11-terminal",
+      "state": "fake-tabletop-terminal",
+      "requires": {
+        "page": "给天气 App 加主屏幕小组件",
+        "fields": [
+          "contentBounds",
+          "hingeBounds"
+        ]
+      }
     }
   ]
 }

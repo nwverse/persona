@@ -23,7 +23,8 @@
     },
     {
       "open": {
-        "page": "machines"
+        "page": "machines",
+        "probePage": "Machines"
       }
     },
     {
@@ -170,7 +171,8 @@
     },
     {
       "open": {
-        "page": "machine:concern-needs"
+        "page": "machine:concern-needs",
+        "probePage": "Waiting agents computer"
       }
     },
     {
