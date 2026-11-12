@@ -1080,6 +1080,13 @@ reads as text until Edit opens it for typing, and **Done** closes it (iOS `Messa
 The original card's not-sent receipt remains inspectable. This deliberately does not reuse Inbox completion, which
 would suppress future progress replies for the same source. The API contract is in `docs/assistant/agent-work.md`.
 
+A hand-off write-back card (#5932, web `HandoffCard`, iOS `HandoffCardView`) is the same card for an Inbox item the
+user handed to the conversation: the item's summary over the reply, **Send** primary (**Got It** for a conclusion),
+**Edit** on iOS beside it (the web edits in place) and **Later**, which folds it to one line. It has no Don't handle:
+the item is still in the Inbox, where it can be turned down. Its state comes from the item, so it is never a second
+count of the same request. The main conversation's **Wrap up: <title>** chips over the composer follow `RouteChip`'s
+capsule, one per open item handed to it, at most two.
+
 Today there are seven mechanisms and the same action can use different ones (DS-24). Archive in the sidebar, to-do swipe delete and mail-account delete have no confirmation and no Undo. Only the Mac discards edits with a prompt.
 
 ### 4.5 Push, notifications and reminders
