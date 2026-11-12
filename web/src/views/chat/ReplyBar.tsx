@@ -5,7 +5,8 @@
 // is in: MessageActions') or keyboard focus in the bar shows it; it stays REPLY_BAR_LINGER_MS after the pointer leaves,
 // then fades (at once with reduced motion), and an open ⋯ menu keeps it. Narration inside a work summary and a reply
 // still streaming have no bar: their right-click / long-press menu (MessageActions) has every action, and touch screens
-// have MessageActions' copy + ⋯ row instead. All of it watches the pointer itself, so the reply around it draws nothing
+// have MessageActions' copy + ⋯ row instead. The chat's last reply (`pinned`, #5285) keeps its time on screen in its
+// place at the end of the bar; the buttons still come only with the pointer. All of it watches the pointer itself, so the reply around it draws nothing
 // again, and none of it is on the first screen (MessageActions loads it lazily).
 import { useEffect, useRef, useState } from "react";
 import { t } from "../../i18n";
@@ -27,8 +28,9 @@ async function copyQuietly(text: string): Promise<boolean> {
   return done || copyText(text);
 }
 
-/** `fork`: "Start a new session", when the session can. `more`: the ⋯ menu's actions; no ⋯ without any. */
-export function ReplyBar({ text, ts, fork, more }: { text: string; ts?: string; fork?: Action; more: Action[] }) {
+/** `fork`: "Start a new session", when the session can. `more`: the ⋯ menu's actions; no ⋯ without any. `pinned`: the
+ *  chat's last message, whose time stays shown without the pointer. */
+export function ReplyBar({ text, ts, fork, more, pinned }: { text: string; ts?: string; fork?: Action; more: Action[]; pinned?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const [hovered, setHovered] = useState(false);
   const [visible, setVisible] = useState(false);
@@ -65,7 +67,18 @@ export function ReplyBar({ text, ts, fork, more }: { text: string; ts?: string; 
     return () => clearInterval(tick);
   }, [hovered]);
 
+  // a pinned reply's time is on screen without the pointer, so it keeps up by itself (one reply in a chat is pinned)
+  useEffect(() => {
+    if (!pinned) return;
+    setNow(Date.now());
+    const tick = window.setInterval(() => setNow(Date.now()), TIME_TICK_MS);
+    return () => clearInterval(tick);
+  }, [pinned]);
+
   const time = relativeTime(ts, now);
+  // with the pointer, an open ⋯ menu or keyboard focus in it: the whole bar; otherwise nothing, or (`pinned`) the time only
+  const fade = visible || menu ? "opacity-100" : pinned ? "pointer-events-none opacity-0 group-has-[:focus-visible]/bar:pointer-events-auto group-has-[:focus-visible]/bar:opacity-100" : "pointer-events-none opacity-0 has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:opacity-100";
+  const fadeStyle = { transitionDuration: `${REPLY_BAR_FADE_MS}ms` };
   const copyLabel = t("chat-messageactions.copy_message");
   const moreLabel = t("chat-replybar.more_actions");
   return (
@@ -76,40 +89,42 @@ export function ReplyBar({ text, ts, fork, more }: { text: string; ts?: string; 
       // so a click does not keep it after the pointer leaves)
       className={cx(
         "mt-1.5 hidden h-6 items-center gap-0.5 transition-opacity [@media(hover:hover)]:flex",
-        visible || menu ? "opacity-100" : "pointer-events-none opacity-0 has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:opacity-100",
+        pinned ? "group/bar" : fade,
       )}
-      style={{ transitionDuration: `${REPLY_BAR_FADE_MS}ms` }}
+      style={fadeStyle}
       onFocus={() => setNow(Date.now())}
     >
-      <button
-        type="button"
-        aria-label={copyLabel}
-        title={copyLabel}
-        onClick={async () => {
-          if (await copyQuietly(text)) setCopied(true);
-        }}
-        className={cx(BUTTON, !copied && "hover:text-ink")}
-      >
-        <Icon name={copied ? "check" : "copy"} size={14} />
-      </button>
-      {fork && (
-        <button type="button" aria-label={fork.label} title={fork.label} onClick={() => void fork.onSelect()} className={cx(BUTTON, "hover:text-ink")}>
-          <Icon name={fork.icon} size={14} />
-        </button>
-      )}
-      {more.length > 0 && (
+      <div className={cx("flex items-center gap-0.5", pinned && cx("transition-opacity", fade))} style={pinned ? fadeStyle : undefined}>
         <button
           type="button"
-          aria-label={moreLabel}
-          title={moreLabel}
-          aria-haspopup="menu"
-          aria-expanded={Boolean(menu)}
-          onClick={(e) => setMenu(menu ? null : e.currentTarget)}
-          className={cx(BUTTON, "hover:text-ink", menu && "bg-hover-2 text-ink")}
+          aria-label={copyLabel}
+          title={copyLabel}
+          onClick={async () => {
+            if (await copyQuietly(text)) setCopied(true);
+          }}
+          className={cx(BUTTON, !copied && "hover:text-ink")}
         >
-          <Icon name="more" size={14} />
+          <Icon name={copied ? "check" : "copy"} size={14} />
         </button>
-      )}
+        {fork && (
+          <button type="button" aria-label={fork.label} title={fork.label} onClick={() => void fork.onSelect()} className={cx(BUTTON, "hover:text-ink")}>
+            <Icon name={fork.icon} size={14} />
+          </button>
+        )}
+        {more.length > 0 && (
+          <button
+            type="button"
+            aria-label={moreLabel}
+            title={moreLabel}
+            aria-haspopup="menu"
+            aria-expanded={Boolean(menu)}
+            onClick={(e) => setMenu(menu ? null : e.currentTarget)}
+            className={cx(BUTTON, "hover:text-ink", menu && "bg-hover-2 text-ink")}
+          >
+            <Icon name="more" size={14} />
+          </button>
+        )}
+      </div>
       {time && (
         <time dateTime={ts} title={exactTime(ts)} className="flex h-6 cursor-default items-center text-[12px] whitespace-nowrap text-ink-3">
           {time}
