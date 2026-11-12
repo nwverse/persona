@@ -192,6 +192,16 @@ class SettingsGroupsShotsTest {
         }
     }
 
+    @Test fun formerFullNamesSearchTheirGroupedHomeEntries() {
+        show()
+        for ((query, entry) in listOf("模型供应商" to "模型", "Claude Code 设置" to "Agent", "后台保活" to "通知与后台",
+            "悬浮胶囊" to "通知与后台", "检查更新" to "关于与更新", "连接诊断" to "连接")) {
+            rule.onNode(hasSetTextAction()).performTextClearance()
+            rule.onNode(hasSetTextAction()).performTextInput(query)
+            rule.onNodeWithText(entry).assertExists()
+        }
+    }
+
     /** Switch opens the sidebar's roster: picking another assistant makes the group that one's. */
     @Test fun switchOpensTheRosterAndTheGroupFollows() {
         AssistantManagerChoice.choose("hub", null, "assistant")

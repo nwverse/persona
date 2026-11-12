@@ -61,8 +61,14 @@ internal fun SettingsHomePage(
             value = if (LocalPersonaPack.current != null) LocalPersonaName.current else LocalPersonaDesign.current.title),
         entry(SettingsPage.Devices, R.string.settings_devices_title, PersonaIcons.thisDevice, R.string.settings_row_devices_subtitle),
     )
-    fun visible(rows: List<HomeEntry>) = rows.filter { settingsSearchMatches(query, resources.getString(it.title),
-        it.subtitle?.let(resources::getString), it.aliases?.let(resources::getString).orEmpty()) }
+    fun visible(rows: List<HomeEntry>): List<HomeEntry> {
+        if (query.isBlank()) return rows
+        return rows.filter {
+            val former = (it.key as? SettingsPageRoute)?.page?.let { page -> settingsFormerEntryAliases(resources, page) }.orEmpty()
+            settingsSearchMatches(query, resources.getString(it.title), it.subtitle?.let(resources::getString),
+                listOf(it.aliases?.let(resources::getString).orEmpty(), former).joinToString(" "))
+        }
+    }
     val a = visible(assistantEntries); val d = visible(deviceEntries); val h = visible(hubEntries)
     val nativeVisible = styleStore != null && settingsSearchMatches(query, stringResource(R.string.settings_update_v7_native_title),
         stringResource(R.string.settings_update_v7_native_subtitle))

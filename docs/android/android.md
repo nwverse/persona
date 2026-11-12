@@ -229,7 +229,8 @@ without opening sockets. JVM Native-rendered component captures are separate evi
 
 Settings keeps three scopes: the current assistant, this device, and Hub. This is a navigation reorganization;
 model choices, notification defaults, permissions, pairing, update installation and assistant ownership do not change.
-Search filters entry names and localized common aliases (including former entry names), case-insensitively with
+Search filters entry names and localized common aliases (including complete former labels from the existing
+localization resources), case-insensitively with
 Unicode width normalization. It never indexes credentials, account values or addresses. Clearing it restores the
 three groups; a query with no matches shows an empty state. Extension-contributed navigation stays in its original
 assistant scope and is shown when the search is empty.

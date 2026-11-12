@@ -35,6 +35,12 @@ those images do not establish device or live-service behavior.
 ![Models before and after opening Advanced](models-gallery.png)
 ![Merged secondary pages in light and dark](pages-gallery.png)
 
+The following detail gallery uses clearly labelled **upper-viewport crops**: working notification preferences,
+the capsule/online-computer entry on an older hub, and the user-initiated APK update action. Full notification-page
+renders are available in [light](notifications-light.png) and [dark](notifications-dark.png).
+
+![Notification preferences, mobile controls and app update detail](notification-details-gallery.png)
+
 ## Reproduce
 
 With JDK 21 and the Android SDK configured, from `android/`:
