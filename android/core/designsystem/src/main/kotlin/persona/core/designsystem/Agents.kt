@@ -101,7 +101,7 @@ private val AvatarGap get() = Tokens.Space.m
 /** Between Two Lines' dot and its words (iOS style B: `Theme.Space.s`). */
 private val TwoLineGap get() = Tokens.Space.s
 /** The background-waiting clock against the dot it stands in for (as on the space page's cards). */
-private const val WaitClockScale = 1.7f
+internal const val WaitClockScale = 1.7f
 /** A State Card that needs you, tinted in its blue (iOS `StatusPalette.needsYouWash`: the system blue at this opacity). */
 private const val CardWashAlpha = 0.1f
 /** iOS's outlined chip: secondary words in a hairline of the secondary color at this opacity. */
