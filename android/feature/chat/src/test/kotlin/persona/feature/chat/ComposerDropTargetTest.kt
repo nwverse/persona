@@ -25,14 +25,16 @@ class ComposerDropTargetTest {
         DragAndDropEvent(DragEventBuilder.newBuilder().setAction(action).setX(10f).setY(20f)
             .setClipDescription(description).setClipData(data).setResult(false).build())
 
-    @Test fun fileMimeTypesPassAndPlainTextPayloadsDoNot() {
+    @Test fun mimeTypesAreOnlyCandidatesUntilClipDataProvesAFile() {
         assertTrue(composerDropAccepts(fileDescription))
         assertTrue(composerDropAccepts(ClipDescription("photos", arrayOf("image/*"))))
         assertTrue(composerDropAccepts(ClipDescription("mixed", arrayOf("text/plain", "image/png"))))
-        assertFalse(composerDropAccepts(ClipDescription("text", arrayOf("text/plain"))))
-        assertFalse(composerDropAccepts(ClipDescription("html", arrayOf("text/html"))))
-        assertFalse(composerDropAccepts(ClipDescription("uris", arrayOf("text/uri-list"))))
+        // A .txt file and plain text can both say text/plain; the URI extraction below makes the final decision.
+        assertTrue(composerDropAccepts(ClipDescription("text", arrayOf("text/plain"))))
+        assertTrue(composerDropAccepts(ClipDescription("html", arrayOf("text/html"))))
+        assertTrue(composerDropAccepts(ClipDescription("uris", arrayOf("text/uri-list"))))
         assertFalse(composerDropAccepts(null))
+        assertTrue(composerDropUris(ClipData(ClipDescription("text", arrayOf("text/plain")), ClipData.Item("plain"))).isEmpty())
     }
 
     @Test fun enterExitAndEndedOnlyHighlightAnAcceptedTarget() {

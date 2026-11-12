@@ -36,18 +36,12 @@ internal class ComposerDropTarget(
     }
 }
 
-/** Conservative started-event filtering: plain text / HTML / URI lists are not file drops. */
+/** STARTED often has only a description; text files and plain text share MIME types, so ClipData URIs decide on DROP. */
 internal fun composerDropAccepts(description: ClipDescription?): Boolean = composerDropAcceptsMimeTypes(
     description?.let { clip -> (0 until clip.mimeTypeCount).map(clip::getMimeType) },
 )
 
-internal fun composerDropAcceptsMimeTypes(types: Iterable<String>?): Boolean {
-    val present = types?.toList().orEmpty()
-    return present.isNotEmpty() && present.any { type ->
-        type != ClipDescription.MIMETYPE_TEXT_PLAIN && type != ClipDescription.MIMETYPE_TEXT_HTML &&
-            type != ClipDescription.MIMETYPE_TEXT_URILIST && !type.startsWith("text/")
-    }
-}
+internal fun composerDropAcceptsMimeTypes(types: Iterable<String>?): Boolean = types?.any() == true
 
 /** Only URI-bearing file/content items are imported; text, intents and other payload kinds are ignored. */
 internal fun composerDropUris(data: ClipData?): List<Uri> = buildList {
