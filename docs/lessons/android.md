@@ -579,3 +579,7 @@ Measure pending and parsed frames with the real chat row and reverse list. A fix
 ## Pairing fixtures must follow the default sign-in page (#4623)
 
 Skipping onboarding does not skip password sign-in. Tests of manual or scan pairing must select the localized pairing alternative from that default page before using the existing controls. Keep initial-link fixtures on their direct confirmation path, and retain back-stack, field-retention, invalid-input and screenshot assertions rather than changing the product default to fit older fixtures.
+
+## Extension notification source and replacement identity
+
+Merged `NotifyEvent`s carry a hub group's namespace in a non-empty machine or alert id; an event with neither does not prove that it came from the selected group. Only accept an unscoped extension alert when one open group makes its origin unambiguous, and bind the action's HTTP adapter to the captured `ScopedHubData` rather than reading the selected connection again after the claim. A notification body and its buttons share one replacement tag but must coexist: validate and replace them as one batch, not one record at a time, or the last button invalidates the body and every earlier button.
