@@ -1,14 +1,17 @@
 package hub
 
 import (
+	"encoding/json"
 	"net/http"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // POST …/modes with a launcher (#5035) goes to the node's session.modes as it came, launcher and from included; a
@@ -111,5 +114,43 @@ func TestSendMessagePassesApplySwitch(t *testing.T) {
 		if got := sendWait(tc.p, tc.s); got != tc.want {
 			t.Errorf("sendWait(%v, %s) = %v, want %v", tc.p, tc.s.Status, got, tc.want)
 		}
+	}
+}
+
+// A node without engine_switch (#5054) refuses a pick of the other engine's launcher in its own words, which read as if
+// the pick could never work: the apps are told the node needs an update instead (node_outdated). A node with it, and
+// the node's other refusals, pass through as they came.
+func TestSessionModesSaysAnOldNodeCannotSwitchEngines(t *testing.T) {
+	launchers := []string{nodeproto.Sessions, nodeproto.LauncherSwitch}
+	engines := append(slices.Clone(launchers), nodeproto.EngineSwitch)
+	for _, tc := range []struct {
+		name  string
+		caps  []string
+		agent string // the session's engine as listed
+		code  string // the node's refusal
+		want  string // the code the app gets
+	}{
+		{"claude picks codex on an old node", launchers, "claude", proto.CodeSwitchOtherAgent, proto.CodeNodeOutdated},
+		{"codex picks claude on an old node", launchers, "codex", proto.CodeSwitchUnsupported, proto.CodeNodeOutdated},
+		{"a claude session's own refusal on an old node", launchers, "claude", proto.CodeSwitchUnsupported, proto.CodeSwitchUnsupported},
+		{"another refusal on an old node", launchers, "claude", proto.CodeSwitchConfigDir, proto.CodeSwitchConfigDir},
+		{"a node that switches engines", engines, "claude", proto.CodeSwitchOtherAgent, proto.CodeSwitchOtherAgent},
+		{"a codex refusal from a node that switches engines", engines, "codex", proto.CodeSwitchUnsupported, proto.CodeSwitchUnsupported},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newTestHub(t)
+			modelsNode(t, h, MachineConfig{ID: "box"}, func(method string, p map[string]any) (any, error) {
+				return nil, &rpc.Error{Code: tc.code, Message: "the node's words", Data: json.RawMessage(`{"delivered":"none"}`)}
+			})
+			m := h.machineByID("box")
+			m.mu.Lock()
+			m.info = proto.NodeInfo{Version: "test", Protocol: 1, Capabilities: tc.caps}
+			m.mu.Unlock()
+			m.setSessions([]proto.Session{{SessionID: "s1", Agent: tc.agent}})
+			w := modelsRequest(h, "POST", "/api/v1/sessions/box/s1/modes", `{"launcher":"cx","from":"claude","model":"gpt-5.5"}`)
+			if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), `"code":"`+tc.want+`"`) {
+				t.Fatalf("%d %s, want %s", w.Code, w.Body, tc.want)
+			}
+		})
 	}
 }

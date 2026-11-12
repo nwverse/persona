@@ -600,7 +600,10 @@ or another program runs, an agent in a terminal only); its own launcher known (o
 back on it after a failed switch); its conversation's folder known (Claude Code: the transcript's project folder; Codex:
 its record's, else its rollout's `session_meta`); the launcher on that computer and running that engine; with `model`,
 one the launcher takes. `effort` is the one picked only, since the engines' levels differ (Codex: one of `low`…`max`;
-`auto` or none: the launcher's own). A Codex session picking another Codex launcher stays `switch_unsupported`.
+`auto` or none: the launcher's own). A Codex session picking another Codex launcher stays `switch_unsupported`. A node
+without the `engine_switch` capability refuses such a pick in its own words (`switch_other_agent`, or `switch_unsupported`
+for a Codex session); the hub answers `409 node_outdated` instead, "This computer's node can't switch a running agent
+between Claude Code and Codex yet. Update the node" (`hub/ultracode.go` `oldEngineRefusal`).
 
 **Carrying it out.** Only a message with `apply_switch`, as above; while the agent is busy (Claude Code as above; Codex:
 working, waiting for the user, a turn running on its app-server, starting) the message goes to it and the switch waits.
