@@ -83,6 +83,7 @@
     <string name="agents_grouping_project">By project</string>
     <string name="agents_menu_compact">Compact list</string>
     <string name="agents_menu_detailed">Detailed list</string>
+    <string name="agents_menu_display">Display</string>
     <string name="agents_menu_collapse_all">Collapse all</string>
     <string name="agents_menu_expand_all">Expand all</string>
     <string name="agents_menu_machines">Machine monitor</string>

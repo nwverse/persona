@@ -967,6 +967,8 @@ export function Dialog({
   children,
   width = 440,
   footer,
+  labelledBy,
+  describedBy,
 }: {
   open: boolean;
   onClose: () => void;
@@ -974,6 +976,10 @@ export function Dialog({
   children: React.ReactNode;
   width?: number;
   footer?: React.ReactNode;
+  /** With no `title`: the id of the heading the body draws itself (a confirmation laid out as one block). */
+  labelledBy?: string;
+  /** The id of the text that says what the dialog asks. */
+  describedBy?: string;
 }) {
   const panel = useRef<HTMLDivElement>(null);
   const titleId = useId();
@@ -1008,7 +1014,8 @@ export function Dialog({
         ref={panel}
         role="dialog"
         aria-modal={open || undefined}
-        aria-labelledby={shown.title ? titleId : undefined}
+        aria-labelledby={shown.title ? titleId : labelledBy}
+        aria-describedby={describedBy}
         tabIndex={-1}
         className="flex max-h-[calc(88vh-(--spacing(8)))] w-full max-w-(--dialog-w) animate-[slide-up_220ms_var(--ease-out-strong)_both] flex-col overflow-hidden rounded-[14px] bg-surface shadow-overlay outline-none max-sm:max-h-[calc(var(--kb-h)*0.9)] max-sm:max-w-none max-sm:animate-none max-sm:rounded-b-none max-sm:transition-transform max-sm:duration-300 max-sm:ease-(--ease-out-strong) max-sm:starting:translate-y-full"
         style={{ "--dialog-w": `${width}px` } as React.CSSProperties}

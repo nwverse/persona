@@ -71,6 +71,7 @@ interface Opts {
   onForget?: (p: string, m: string) => void;
   quotas?: Readonly<Record<string, LauncherQuotaAnswer>>;
   header?: React.ReactNode;
+  held?: boolean;
 }
 
 async function open(o: Opts = {}) {
@@ -91,6 +92,7 @@ async function open(o: Opts = {}) {
         onForget={o.onForget}
         quotas={o.quotas}
         header={o.header}
+        held={extra.held ?? o.held}
       />,
     );
   act(() => render());
@@ -253,6 +255,35 @@ describe("the model panel", () => {
     act(() => fast.click());
     await flush();
     expect(onApplyCurrent).toHaveBeenCalledWith({ fast: true });
+  });
+
+  it("held by a dialog about the pick (#5054): stays open under its backdrop, leaving it the clicks, focus and Escape", async () => {
+    const { onClose, render } = await open({ held: true });
+    const shell = document.body.querySelector<HTMLElement>("[data-model-panel]")!;
+    expect(shell.className).toContain("z-30");
+    expect(shell.getAttribute("data-held")).toBe("true");
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    act(() => outside.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })));
+    act(() => outside.focus());
+    key(outside, "Escape");
+    expect(onClose).not.toHaveBeenCalled();
+    // answered: back above the page, and outside closes it again
+    act(() => render({ held: false }));
+    expect(shell.className).toContain("z-50");
+    act(() => outside.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    outside.remove();
+  });
+
+  it("while a switch waits, the running model's row is picked back even where its provider's rows are off", async () => {
+    const fixed = codex({ unavailable: "Codex 运行中不能换模型" });
+    const { onPick } = await open({ providers: [claude(), fixed], state: { current: { provider: "codex", model: "gpt-5.5" }, pending: { provider: "claude", model: "opus" }, recommended: [] } });
+    const gpt = row("GPT");
+    expect(gpt.getAttribute("aria-disabled")).toBeNull();
+    key(gpt, "Enter");
+    await flush();
+    expect(onPick).toHaveBeenCalledWith(expect.objectContaining({ provider: "codex", model: "gpt-5.5" }));
   });
 
   it("Esc closes the flyout first (the focus back on its row), then the panel", async () => {

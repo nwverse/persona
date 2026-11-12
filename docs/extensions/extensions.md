@@ -1891,6 +1891,7 @@ For items the extension's connector collects into the Inbox, the body of the det
 - `value` is a number (may be negative or fractional); `display` is how to write that value ("¥1.20", "1.2M"); without it the app writes a compact number using `unit` (`1.2M tokens`). The app computes the y-axis ticks itself and writes them as compact numbers.
 - `tone`: if omitted, the app's own data colors (taken in series order, the first is the primary color); if set, a role color (`positive` / `caution` / `danger` / `neutral`). Extensions cannot set colors.
 - `stacked`: stack the bars of multiple series (side by side by default); ignored for line charts.
+- A stacked `bar` whose every series has exactly one point, all values non-negative with a positive total, is **one category's shares** (a persona-card's single day): every client draws it as a horizontal segmented bar — the total above, one capsule split into the parts in the series colors, the legend and rows naming each part and its value — not a lone vertical column. A chart with two or more categories keeps its columns for the comparison. The same predicate on every client (the web's `stackedShare`, iOS `DataChart.isSingleCategoryShare`, Android `ChartMath.singleCategoryShares`; #5386).
 - Clients: tapping or hovering a point shows the `label` and each series' `display` (or number); in compact, no axis text is drawn, only the bars / lines and the first and last labels. With many labels the app writes every few, never overlapping.
 
 **`stat_grid`**: several numbers side by side, so a card can fit summaries like today / 7 days / cost.
@@ -2022,7 +2023,7 @@ Cards in assistant replies use the same components and renderer as extension Vie
   - One section; the card's `title` is the section title (a `stat`'s `title` is its `metric`'s `label`); `subtitle` is a leading paragraph of secondary text. Numbers use thousands separators and at most one decimal place (`2,250`, `7.5`), followed by a space and the unit.
   - `stat` → `metric {label: title or "Value", value, detail: note}`.
   - `stacked_bar` → `metric {label: Total, value: total (the sum of parts if absent), detail: note}`; one stacked bar chart, one series per part (beyond 4 parts, the first three plus "Other"; `rest` and "Other" are `neutral`),
-    one point per series with `title` or "Total" as its label; then one `row {title: label, subtitle: note, value}` per part. Use `total`'s unit, or the card's if absent.
+    one point per series with `title` or "Total" as its label; then one `row {title: label, subtitle: note, value}` per part. Use `total`'s unit, or the card's if absent. Since every series has the single category's one point, the chart is the horizontal segmented bar above, not a column (see "New items", `chart`; #5386).
   - `ring` (#3061, one day's total and its parts; `stacked_bar` is for comparing days or people) → one `donut` chart, one series with a point per part (beyond 8 parts, the first seven plus "Other"),
     `center` the total with its unit (left out past 20 characters), `detail: note`; then one `row` per part. When `total` is more than the parts' sum, a "Remaining" part (total minus the sum) comes last.
     Use `total`'s unit, or the card's if absent. iOS draws `donut` / `pie` with `RingChart` (ring, total in the hole, legend with shares); an app that does not know `ring` keeps the code block
