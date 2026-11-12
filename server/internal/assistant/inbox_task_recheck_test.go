@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -52,7 +51,7 @@ func TestInboxTaskRecheckDraft(t *testing.T) {
 	}
 	after := *it.Agent
 	after.TodoID = ""
-	if !reflect.DeepEqual(before, after) || !it.open() || it.Handling.State != HandlingDone || it.Suggestion.Version != 3 {
+	if string(rawJSON(before)) != string(rawJSON(after)) || !it.open() || it.Handling.State != HandlingDone || it.Suggestion.Version != 3 {
 		t.Fatalf("processing changed: %+v / %+v / %+v", it.Agent, it.Handling, it.Suggestion)
 	}
 	if c := onlyCall(t, calls()); !strings.Contains(c.User, todo.ID) {
