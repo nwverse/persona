@@ -69,9 +69,10 @@ class AgentRowContentTest {
         assertNull(row { copy(paneId = "w1:p2", assistant = true) }.rowContent().source)
     }
 
-    @Test fun theModelIsTheSessionsElseItsLaunchers() {
-        assertEquals("claude-opus-4", row { copy(model = " claude-opus-4 ", launcher = "deepseek") }.rowContent().model)
-        assertEquals("deepseek", row { copy(launcher = "deepseek") }.rowContent().model)
+    @Test fun theModelIsNamedByItsShortNameElseTheLaunchers() {
+        // Never the raw id (DESIGN_SYSTEM.md 3.4), unlike iOS's row.
+        assertEquals("Sonnet 4.5", row { copy(model = " claude-sonnet-4-5 ", launcher = "deepseek") }.rowContent().model)
+        assertEquals("Deepseek", row { copy(launcher = "deepseek") }.rowContent().model)
         assertNull(row { copy(model = " ") }.rowContent().model)
         assertNull(row().rowContent().model)
     }

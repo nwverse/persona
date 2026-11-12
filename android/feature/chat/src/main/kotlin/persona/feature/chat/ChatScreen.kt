@@ -59,6 +59,9 @@ import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+// Finish the fade in the existing gap below the tab strip, without changing the chat's content padding.
+private val TabbedChatScrollEdgeStyle = ScrollEdgeStyle.Gradient.copy(overlap = Tokens.Space.s)
+
 /** The shell supplies repositories and optional terminal/navigation affordances, never wire clients. */
 @OptIn(ExperimentalMaterial3Api::class, FlowPreview::class)
 @Composable
@@ -908,8 +911,14 @@ private fun ChatPage(
             BoxWithConstraints(Modifier.fillMaxSize().padding(bottom = linkInset)) {
                 val panelMax = maxHeight * 0.55f
                 val trayMax = maxHeight * AssistantTrayTokens.maximumHeightFraction
+                val onOpenSibling = chrome.onOpenSession
+                val siblingSessions = if (showTopBar && renderStyle != ChatRenderStyle.Assistant && onOpenSibling != null) {
+                    remember(session, sessionList) { spaceTabs(session, sessionList) }
+                } else emptyList()
                 JPage(
                     title = session?.displayTitle ?: stringResource(R.string.chat_screen_untitled),
+                    scrollEdgeStyle = ScrollEdgeStyle.Gradient,
+                    topScrollEdgeStyle = if (siblingSessions.size > 1) TabbedChatScrollEdgeStyle else ScrollEdgeStyle.Gradient,
                     topBar = {
                         Column {
                             if (showTopBar) ChatHeader(session, machine, sessionList, controls, connection, readOnly, onBack,
@@ -920,7 +929,9 @@ private fun ChatPage(
                                 onSearch = { search.open(chatList) { timeline.freeze(currentItems); timelineVersion++ } },
                                 onTerminal = agentTerminal, onTerminalHelp = if (hasTerminal && terminal == null) ({ terminalHelp = true }) else null)
                             // The space's other tabs under the title (iOS SiblingTabs); not for the assistant's conversation.
-                            if (showTopBar && renderStyle != ChatRenderStyle.Assistant) ChatSiblingTabs(session, sessionList, chrome.onOpenSession)
+                            if (session != null && onOpenSibling != null && siblingSessions.size > 1) {
+                                ChatSiblingTabs(session, siblingSessions, onOpenSibling)
+                            }
                             // The ports it listens on (its dev servers, docs/operations/ports.md): a tap opens the page.
                             if (showTopBar && renderStyle != ChatRenderStyle.Assistant) ChatPortChips(session?.ports)
                             // The goal it works toward (Claude Code's /goal, a Codex thread goal; docs/integrations/agent-goal.md): a tap opens it.

@@ -724,6 +724,7 @@ fun AssistantScreen(
             }) else null,
             // An embedded conversation is a page of its own and softens the edges under these bars itself.
             edges = !(active != null && hasChat),
+            scrollEdgeStyle = ScrollEdgeStyle.Gradient,
         ) { padding ->
             if (active != null && hasChat) {
                 // The conversation fills the page and scrolls under the bar above it and the dock below, like any

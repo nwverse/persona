@@ -651,6 +651,15 @@ struct RecordingDetailView: View {
     /// The transcript line a timestamp jumped to, lit for a moment.
     @State private var lit: Int?
     @State private var minutes = RecordingMinutesModel()
+    #if os(iOS)
+    /// Summary or Transcript (#5026), as picked on this page; nil until the user picks, which is the Summary once the
+    /// minutes are ready. It lasts while the page is open: no setting.
+    @State private var picked: RecordingMinutesCards.Pane?
+    /// The Summary's cards, worked out when the minutes or the transcript change rather than on every pass (P4).
+    @State private var summary: RecordingMinutesCards.Summary?
+    /// A time tapped in the Summary: shown, lit, once the transcript has taken the Summary's place.
+    @State private var pendingJump: Double?
+    #endif
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -717,24 +726,28 @@ struct RecordingDetailView: View {
             if entry.isRolling {
                 rollingSections(entry)
             } else {
-                RecordingMinutesSections(entry: entry, model: minutes, synced: sync.status(entry) == .synced) {
-                    jump(to: $0, in: entry, proxy: proxy)
-                }
-                Section("Transcript") {
-                    if entry.sentences.isEmpty {
-                        Text("No transcript yet.").font(Theme.Font.secondary).foregroundStyle(.secondary)
-                    }
-                    let ids = Self.stableIDs(entry.sentences)
-                    ForEach(Array(entry.sentences.enumerated()), id: \.offset) { index, sentence in
-                        VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                            Text(RecordingFormat.clock(sentence.start)).font(Theme.Font.caption.monospacedDigit()).foregroundStyle(.secondary)
-                            Text(sentence.text).font(Theme.Font.body).textSelection(.enabled)
+                let synced = sync.status(entry) == .synced
+                #if os(iOS)
+                // Once the minutes are ready the switch takes their sections' place (#5026): the Summary's cards, or the
+                // transcript as before. Until then the page is as it was, with no switch.
+                let pane = RecordingMinutesCards.pane(picked: picked, ready: minutes.ready != nil)
+                if let ready = minutes.ready, let pane {
+                    minutesSwitch(entry, ready, pane)
+                    if pane == .summary {
+                        if let summary {
+                            RecordingMinutesSummary(entry: entry, model: minutes, synced: synced, summary: summary) { showInTranscript($0) }
                         }
-                        .id(ids[index])
-                        .listRowBackground(lit == index ? Theme.accentTint : nil)
-                        .accessibilityIdentifier(lit == index ? "recording-sentence-lit" : "recording-sentence")
+                    } else {
+                        transcriptSection(entry)
                     }
+                } else {
+                    RecordingMinutesSections(entry: entry, model: minutes, synced: synced) { jump(to: $0, in: entry, proxy: proxy) }
+                    transcriptSection(entry)
                 }
+                #else
+                RecordingMinutesSections(entry: entry, model: minutes, synced: synced) { jump(to: $0, in: entry, proxy: proxy) }
+                transcriptSection(entry)
+                #endif
             }
             if !entry.active {
                 Section {
@@ -767,6 +780,36 @@ struct RecordingDetailView: View {
         }
         // The minutes unfold when they arrive (Reduce Motion: at once).
         .animation(reduceMotion ? nil : Theme.Motion.reveal, value: minutes.state)
+        #if os(iOS)
+        .onChange(of: minutes.state, initial: true) { refreshSummary() }
+        .onChange(of: entry.revision) { refreshSummary() }
+        // A time tapped in the Summary: the transcript's rows reach the list in this update, so the scroll to its line
+        // waits for the main actor's next turn.
+        .onChange(of: picked) { _, now in
+            guard now == .transcript, let at = pendingJump else { return }
+            pendingJump = nil
+            Task { jump(to: at, in: entry, proxy: proxy) }
+        }
+        #endif
+    }
+
+    /// The transcript, a line a row with its time; a line a time in the minutes jumped to is lit.
+    private func transcriptSection(_ entry: RecordingEntry) -> some View {
+        Section("Transcript") {
+            if entry.sentences.isEmpty {
+                Text("No transcript yet.").font(Theme.Font.secondary).foregroundStyle(.secondary)
+            }
+            let ids = Self.stableIDs(entry.sentences)
+            ForEach(Array(entry.sentences.enumerated()), id: \.offset) { index, sentence in
+                VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                    Text(RecordingFormat.clock(sentence.start)).font(Theme.Font.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    Text(sentence.text).font(Theme.Font.body).textSelection(.enabled)
+                }
+                .id(ids[index])
+                .listRowBackground(lit == index ? Theme.accentTint : nil)
+                .accessibilityIdentifier(lit == index ? "recording-sentence-lit" : "recording-sentence")
+            }
+        }
     }
 
     private func followMinutes() async {
@@ -778,6 +821,46 @@ struct RecordingDetailView: View {
     }
 
     #if os(iOS)
+    // MARK: Summary | Transcript (#5026)
+
+    /// The switch, right under the page's header, with the minutes' Copy and Share under it: they send the minutes
+    /// whichever view shows, so they stay in one place. Both rows sit on the page's canvas, as the cards below do.
+    private func minutesSwitch(_ entry: RecordingEntry, _ ready: RecordingMinutes, _ pane: RecordingMinutesCards.Pane) -> some View {
+        Section {
+            Picker("Minutes", selection: Binding(get: { pane }, set: { picked = $0 })) {
+                Text("Summary").tag(RecordingMinutesCards.Pane.summary)
+                    .accessibilityIdentifier("recording-view-summary")
+                Text("Transcript").tag(RecordingMinutesCards.Pane.transcript)
+                    .accessibilityIdentifier("recording-view-transcript")
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .accessibilityIdentifier("recording-view-switch")
+            .minutesCanvasRow()
+            RecordingMinutesActions(entry: entry, minutes: ready)
+                .minutesCanvasRow()
+        }
+    }
+
+    /// A time in the Summary: the Transcript takes its place, then shows that line, lit (`jump`, from `.onChange(of: picked)`).
+    private func showInTranscript(_ seconds: Double) {
+        pendingJump = seconds
+        picked = .transcript
+    }
+
+    /// The Summary's cards from the minutes and the transcript as they are now; read in an action, not in `body`.
+    private func refreshSummary() {
+        guard let ready = minutes.ready, let entry = library.entry(id) else {
+            if summary != nil { summary = nil }
+            return
+        }
+        let next = RecordingMinutesCards.summary(ready, sentences: entry.sentences)
+        guard next != summary else { return }
+        // The first cards come a moment after the minutes (this runs after the update that brought them): they unfold
+        // as the minutes do (Reduce Motion: at once); later changes of the transcript just redraw them.
+        withAnimation(reduceMotion || summary != nil ? nil : Theme.Motion.reveal) { summary = next }
+    }
+
     // MARK: The meeting conversation (#3862)
 
     /// Private Meeting for any meeting (whatever recorded it: a meeting with no mark counts as private until it is turned
