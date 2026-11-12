@@ -430,6 +430,10 @@ Use an invalidation revision as the task key and handle the flag after completio
   window (`AnswerPartsLookTests`), not `ImageRenderer`: one pass of it draws the blocks before their margins arrive.
   - Parts trade the opening freeze for drawing as they come into view: the lazy stack drops a part's layers once it scrolls far away, and drawing
     many distinct CJK glyphs the first time is most of the main thread's work in fast programmatic jumps (#5076). Finger scrolling stays in budget.
+  - Whatever acted on the row acts on the message, not the part (#5221): with each part's long press lifting its own words, the lifted card showed a
+    fragment of the answer and Select Text selected only it, while Copy (the bar's text) still took all of it. The part's press lifts a copy of every
+    part (`AnswerPartsLift`) with one text view for selecting over all of them. When splitting any message into rows, list what reads the row's view
+    (long press, selection, accessibility, share as image) and check each against the whole message.
 - Check that a scroll measurement moved the list before trusting it (#4970). `-showPagePerf`'s glide and `-showListOffset` move the `UIScrollView`
   themselves; a chat not told a finger is on it keeps following its newest end and puts its stored `ScrollPosition` back as rows size themselves, so
   the list barely moves and the numbers look excellent. Chats register a per-list hook (`PagePerf.touchers`): a single static one was taken by Persona's
@@ -920,6 +924,10 @@ Use an invalidation revision as the task key and handle the flag after completio
 - For new APIs, build with 26.0 before merge when available (`eval "$(python3 scripts/persona_config.py env)"` for `DEVELOPER_DIR`). **Without that environment, no mandatory build or merge / release blockage** (explicitly requested 2026-11-03): build / test with available tools, `state` actual version and "26.0 not verified" in PR without repeated exemptions; retain compatibility targets and compile guards.
 - Raising minimum is a product decision: ask the user and update `CLAUDE.md`'s rule and this section.
 
+- **SourceKit's diagnostics on a file opened alone are noise** (2026-11-12, #4741): an editor or an Agent's language server that
+  checks one file of `apple/` without the XcodeGen project's build settings reports types from other files, `Theme` and the targets'
+  modules as missing, and calls across them as errors. They say nothing about the build: judge a change by `xcodebuild`'s own `error:`
+  lines (after `eval "$(python3 scripts/persona_config.py env)"`), never by those squiggles, and don't "fix" code to quiet them.
 - Release machine Swift 6.3.3 differs from other machines and may report "unable to type-check this expression in reasonable time":
   multi-statement closures in long modifier chains (`.task { … }`) are inferred with the entire chain, with shifting error lines. Extract closure methods and computed ids (`ChatView.prewarmRows`).
 - Xcode 26.3 / Swift 6.2.4 also times out on long array-concatenated fixtures (`RFBClientTests.sessionFollowsDesktopSize`).
@@ -936,6 +944,25 @@ Use an invalidation revision as the task key and handle the flag after completio
 - watchOS Picker in compact VStack can flatten to a thin line, missed by compile / accessibility-existence checks. Use single-line toggle buttons for a few recording languages and inspect watch screenshots.
 - Recording and composer dictation share microphone ownership; failed / late stop callbacks must not close another user's audio session. Recording deletion retains tombstones against late watch transfers resurrecting items.
 - The watch app keeps running in the background while it records (`UIBackgroundModes: audio`, 2026-11-02), and the phone's summaries still arrive over WatchConnectivity then, so a page keyed on `model.lastUpdate` or a session's `rev` reloads in the background too. watchOS kills a background app over its CPU budget (`CAROUSEL 0xc51bad01`, #6256): gate page reloads on `scenePhase == .active`, and keep only what the page draws (`WatchMessage`, the newest few) instead of the hub's whole `Item` page, whose synthesized `Hashable` hashes nested tool input on every assignment.
+
+### All-day recording on the watch (#4741)
+
+- **AVAudioFile's m4a files carry about 23 KB of padding**: the writer leaves a `free` box between `moov` and `mdat` (room for the
+  header to grow, never used once the file is closed), so 10 s of 32 kbps AAC came to about 65 KB instead of 42 KB, over the 48 000
+  bytes all-day recording's live envelope allows (`sendMessageData`, `docs/assistant/day-recap.md` "Chunks"). Every chunk would have
+  gone the slow `transferFile` way. `RecordingM4A.compact` drops the top-level `free` / `skip` boxes from each finished all-day chunk
+  and moves the chunk offsets (`stco`, `co64`) back; a layout it doesn't know stays as written. Measure the real file size before
+  sizing anything on bitrate × seconds.
+- **A watch haptic does nothing in the background**: `WKInterfaceDevice.play` plays only while the app is in front, and the call
+  fails silently otherwise. A recording paused by a call with the wrist down reached nobody: rolling recording still only taps
+  (`docs/apple/recording-rolling.md` "Interruptions and the microphone"). Anything that must reach a wrist that is down is a local
+  notification the watch posts itself (`AllDayAlertPolicy` decides the haptic only when `appActive`).
+- **`WCSession.sendMessage` can't launch the watch app**: from the watch it may wake the iPhone app, but the phone's message reaches
+  the watch app only while it runs and is reachable. The phone's all-day commands, acknowledgements, erases and deletes therefore fall
+  back to `transferUserInfo`, and a suspended or closed watch app gets them only when the system wakes it, which it does only for an
+  app with a `.backgroundTask(.watchConnectivity)` handler; without one they waited for the next time the user opened the app. The
+  handler returns once `hasContentPending` is false and what it led to is done (`WatchAllDay.receiveConnectivity`). It can't open
+  the microphone either: a start the phone asked for becomes a notification whose button brings the app to the front.
 
 ## System capabilities and page conventions
 
@@ -1630,6 +1657,15 @@ but UIKit still had a page with only Agents Back and empty content.
   no longer has. `git diff origin/main --stat` should then show only `+` lines for your keys. Git's own text merge of two branches that added the
   same key leaves a duplicate JSON key, which `check` rejects: keep one copy.
 
+### `Localizable.xcstrings` no longer round-trips: insert entries as text (2026-11-12, #4741)
+- `main`'s catalog mixes two formats: most entries as `json.dumps(indent=2)` writes them (`"key": {`), some as Xcode writes them
+  (`"key" : {`). Loading it and writing it back with `json.dumps(d, ensure_ascii=False, indent=2) + "\n"`, with no key added, makes
+  a diff of about 3,200 lines in other people's entries. The merge and sync entries in this section still say to write the file that
+  way: don't.
+- Never rewrite the file whole. Insert each new entry as text, in the format of the entries around it, before the first key that sorts
+  after it; then `apple_l10n.py check`, and `git diff origin/main --stat` must show only `+` lines. Check the round trip first
+  (`json.dumps(json.load(f), …) == f.read()`) before trusting any script that writes the catalog.
+
 ### Two PRs that add the same catalog key both pass, then break master (#5811)
 - #5743 and #5757 each added `"Run"` to `Localizable.xcstrings`. Each passed `apple_l10n.py check` against its own base, and git merged them
   without a conflict, because the two entries sat at different places in the file. Master then had a duplicate JSON key: `check` failed,
@@ -1973,6 +2009,20 @@ The watch only prunes by age. Segments the phone has not confirmed stay up to `u
   reported the end (found by replaying a recording that ran out). `RFBOutbox.next()` wraps the wait in
   `withTaskCancellationHandler` and resumes the parked continuation with nil, with a flag for a cancel that comes
   before the continuation is stored (`RFBFrameTests.outboxHandsOverInOrderAndEndsOnFinishOrCancel`).
+## A menu's button must stay the same view while its menu opens (2026-11-12, #5289)
+
+- On an iPhone on its side with the keyboard up, tapping ⋯ on the VNC page stopped the app:
+  `AnimationKit/LiquidMorphAnimation.swift:310: Fatal error: Starting a pivot morph to a view that isn't in the view hierarchy`, under
+  `-[_UIContextMenuPresentation present]`. Opening a menu hides the keyboard (UIKit deactivates it for the menu:
+  `setDeactivatedKeyboard … reason: setDisableBecomeFirstResponder`). The page got taller, the rail's `ViewThatFits` picked a roomier
+  child, and since each child is its own subtree, the `Menu`'s button was replaced while the menu morphed out of it.
+- Anything that picks views by the space the keyboard leaves (`ViewThatFits` by height, `if` on a measured height, a size class) must not
+  hold a `Menu`, or must keep it the same view. The VNC rails (`fittingRail` in `apple/Persona/Screen/VNCPage.swift`) measure hidden copies
+  of their ways in a `ViewThatFits`. The copy shown says which one it is (`onAppear`), and the visible rail is one set of views that only
+  changes its spacing, which buttons it shows and whether it scrolls (a `ScrollView` always there, `scrollDisabled` when it fits).
+- The crash needs the menu's morph (iOS 26 and later) and a layout that changes when the keyboard goes. Upright, the VNC top row's
+  `ViewThatFits` picks by width, which the keyboard doesn't change, so it never met this.
+
 ## Simulator arguments and screenshot settling (#1872)
 
 - On Xcode 27.2, a direct `simctl launch` can drop leading DEBUG arguments before they reach `UserDefaults`; put `--` before them. Verify the App actually adopted the mock pairings—an old real-hub cache on screen is a launch-environment failure, not the target RED. UI launch helpers can carry the same separator without changing the assertions.

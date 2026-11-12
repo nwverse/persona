@@ -2,6 +2,7 @@
 // (cindy's AddProviderWizard: connect → models, the rest folded under "Advanced"; the hub's presets are lib/launcher-presets.ts), its checks, the POST / PUT body, and the import preview of a computer's aliases. Pure: the views
 // in views/settings/Provider*.tsx only render it.
 import { ApiError, errorText } from "./api";
+import type { SecretReference } from "./secret-reference";
 import { hostOf as urlHost } from "./hubs";
 import { displayNameProblem, launcherNameProblem, testableKey } from "./launcher-presets";
 import type { ScopeView } from "./provider-scope";
@@ -41,6 +42,8 @@ export interface ProviderView extends ScopeView {
   custom_model_description?: string;
   args?: string[];
   has_key?: boolean;
+  /** The stored key is this secret provider's reference (docs/extensions/secret-providers.md "Launcher keys"). */
+  key_reference?: SecretReference;
   auth?: "api_key" | "bearer";
   models?: ProviderModel[];
   opus_model?: string;
@@ -58,6 +61,8 @@ export interface ProviderView extends ScopeView {
   effort?: string;
   /** ManagedLauncher.Source: "" made by hand, "zshrc:<alias>@<machine>", "preset:<id>". */
   origin?: string;
+  /** A direct API connection's "Send through": the computer whose node sends its requests; none: the hub itself. */
+  via_machine?: string;
 }
 
 /** One model row of step 3: numbers as typed. */
@@ -80,7 +85,10 @@ export interface ProviderForm {
   display_name: string;
   base_url: string;
   auth: "bearer" | "api_key";
+  /** What is typed for the key: a key, or with `key_by_reference` a secret provider's reference; "" keeps what is stored. */
   api_key: string;
+  /** The key field takes a reference (the hub's `launcher_secret_references`). */
+  key_by_reference: boolean;
   models: FormModel[];
   /** The default model: one of the checked models. */
   model: string;
@@ -109,6 +117,8 @@ export interface ProviderForm {
   custom_model_name: string;
   custom_model_description: string;
   args: string;
+  /** Send through (kind api): a computer's id, "" the hub itself. */
+  via_machine: string;
 }
 
 /** A compatible gateway's form, typed by hand (the providers the hub knows are presets, lib/launcher-presets.ts). */
@@ -123,6 +133,7 @@ export function newForm(): ProviderForm {
     // gateways mostly want Bearer (ANTHROPIC_AUTH_TOKEN)
     auth: "bearer",
     api_key: "",
+    key_by_reference: false,
     models: [],
     model: "",
     small_model: "",
@@ -147,6 +158,7 @@ export function newForm(): ProviderForm {
     custom_model_name: "",
     custom_model_description: "",
     args: "",
+    via_machine: "",
   };
 }
 
@@ -172,6 +184,7 @@ export function formFromView(v: ProviderView): ProviderForm {
     display_name: v.display_name ?? "",
     base_url: v.base_url ?? "",
     auth: storedAuth(v),
+    key_by_reference: !!v.key_reference,
     models,
     model: v.model ?? "",
     small_model: v.small_model ?? "",
@@ -192,6 +205,7 @@ export function formFromView(v: ProviderView): ProviderForm {
     custom_model: v.custom_model ?? "",
     custom_model_name: v.custom_model_name ?? "",
     custom_model_description: v.custom_model_description ?? "",
+    via_machine: v.via_machine ?? "",
     args: (v.args ?? []).join(" "),
   };
 }
@@ -364,7 +378,7 @@ export function fallbackTitle(f: ProviderForm, autoName: boolean): string {
  *  key that looks whole (typed, or the stored one when editing). A saved provider is checked only once its address, key
  *  or sign-in method differs from what is stored, so opening it sends nothing (#4881). */
 export function autoCheckable(f: ProviderForm, old: ProviderView | null): boolean {
-  if (!f.base_url.trim() || gatewayProblem(f.base_url)) return false;
+  if (!f.base_url.trim() || gatewayProblem(f.base_url) || referencePending(f)) return false;
   const key = f.api_key.trim();
   if (key && !testableKey(key)) return false;
   if (!old) return !!key;
@@ -448,7 +462,7 @@ export function providerBody(f: ProviderForm, old: ProviderView | null, clearLeg
     args: api ? [] : f.args.split(/\s+/).filter(Boolean),
     auth: openAI ? "api_key" : f.auth,
   };
-  if (f.api_key.trim()) body.api_key = f.api_key.trim();
+  if (f.api_key.trim()) body[f.key_by_reference ? "api_key_reference" : "api_key"] = f.api_key.trim();
   const extra = extraFields(f);
   const before = old && extraFields(formFromView(old));
   for (const [k, v] of Object.entries(extra)) {
@@ -458,17 +472,26 @@ export function providerBody(f: ProviderForm, old: ProviderView | null, clearLeg
   if (!chat && f.headers_touched) body.headers = f.headers.trim();
   if (!chat && f.env_touched) body.env = f.env.replace(/\s+$/, ""); // the start kept: the hub's line numbers match the box
   if (chat && clearLegacyChat) Object.assign(body, legacyChatClears(old));
+  if (api && f.via_machine !== (old?.via_machine ?? "")) body.via_machine = f.via_machine;
   return body;
 }
 
-/** POST /api/v1/launchers/test and /discover's body: by name when editing (the stored key and headers), what is typed over it. */
+/** POST /api/v1/launchers/test and /discover's body: by name when editing (the stored key and headers), what is typed over it.
+ *  A reference is never sent: the probe would hand its value to the address in the request (`referencePending`). */
 export function probeBody(f: ProviderForm, stored: string | null, model?: string): Record<string, unknown> {
   const b: Record<string, unknown> = { base_url: f.base_url.trim(), auth: f.auth, api: f.api };
   if (stored) b.name = stored;
-  if (f.api_key.trim()) b.api_key = f.api_key.trim();
+  if (f.api_key.trim() && !f.key_by_reference) b.api_key = f.api_key.trim();
   if (!(f.kind === "api" && f.api === "chat") && f.headers_touched) b.headers = f.headers.trim();
   if (model !== undefined) b.model = model;
+  if (f.kind === "api") b.via_machine = f.via_machine; // tested from where it will be sent
   return b;
+}
+
+/** A reference is typed that is not saved yet: the connection test and the model list wait for the save, which checks
+ *  that it resolves (the stored provider is then probed by name). */
+export function referencePending(f: Pick<ProviderForm, "api_key" | "key_by_reference">): boolean {
+  return f.key_by_reference && !!f.api_key.trim();
 }
 
 export interface TestResult {
@@ -544,7 +567,8 @@ export interface ImportRow {
 }
 
 export const hostOf = (u?: string) => (u ? urlHost(u) : "");
-const names = (xs: string[]) => xs.join(t("lib-providers.alias_separator"));
+/** Names in a line: aliases, variables, headers. */
+export const names = (xs: string[]) => xs.join(t("lib-providers.alias_separator"));
 
 /** The group asks "A provider for each alias" / "One provider": its aliases set more than the model differently. */
 export const importCanSplit = (p: ImportedProvider) => !!p.differs?.length && (p.variants?.length ?? 0) > 1;
@@ -577,18 +601,23 @@ export function importFrom(p: ImportedProvider): string[] {
 }
 
 /** The variables the provider brings along, or "" when none. */
-export const importBrings = (p: ImportedProvider) => (p.env_names?.length ? t("lib-providers.brings", { names: names(p.env_names) }) : "");
+export const importBrings = (p: Pick<ImportedProvider, "env_names">) => (p.env_names?.length ? t("lib-providers.brings", { names: names(p.env_names) }) : "");
 
 const SKIP_ORDER = ["credential", "shell", "computer", "limit"];
 
-/** The variables left out, a line per reason in plain words; an unknown reason reads as the generic one. */
-export function importLeftOut(p: ImportedProvider): string[] {
+/** Names left out grouped by why: the reasons of `order` that have any, in that order, then "other" for the unknown ones. */
+export function byReason(items: readonly { name: string; reason: string }[], order: readonly string[]): [string, string[]][] {
   const by = new Map<string, string[]>();
-  for (const s of p.skipped_env ?? []) {
-    const reason = SKIP_ORDER.includes(s.reason) ? s.reason : "other";
+  for (const s of items) {
+    const reason = order.includes(s.reason) ? s.reason : "other";
     by.set(reason, [...(by.get(reason) ?? []), s.name]);
   }
-  return [...SKIP_ORDER, "other"].filter((r) => by.has(r)).map((r) => t(`lib-providers.left_out_${r}`, { names: names(by.get(r)!), max: ENV_LIMIT }));
+  return [...order, "other"].filter((r) => by.has(r)).map((r) => [r, by.get(r)!]);
+}
+
+/** The variables left out, a line per reason in plain words; an unknown reason reads as the generic one. */
+export function importLeftOut(p: Pick<ImportedProvider, "skipped_env">): string[] {
+  return byReason(p.skipped_env ?? [], SKIP_ORDER).map(([r, list]) => t(`lib-providers.left_out_${r}`, { names: names(list), max: ENV_LIMIT }));
 }
 
 const DIFFERS = ["tiers", "effort", "args", "limits", "proxy", "headers", "env", "auth", "custom_model"];
