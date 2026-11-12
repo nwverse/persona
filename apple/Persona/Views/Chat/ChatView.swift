@@ -1276,27 +1276,28 @@ struct ChatView: View {
     }
 
     private func changeWork(_ id: String, fromHeader: Bool, run: Bool, wasOpen: Bool) {
-        // A work line opened while following (at the newest end its header goes up under the top bar, #1173): it stays
-        // where it is while a running turn's steps keep coming in under it, until the user takes the list, folds it or
-        // taps ↓. Following on would scroll it away; holding back would freeze the turn (#1046). The same for one opened
-        // while the chat holds still for a row the user opened (`ChatFollow.toggledRow`), and for a run of chips opened
-        // or closed: handed to the usual hold, following came back 1.5 s later and took the list to the newest end, the
-        // tapped chips up by what had opened under them (BeautifulUI, 119–381 pt, #1123), or the next step did (#3005).
-        // Folded, likewise: the folded header stays where it was, and the user reads on from there. Going back to the
-        // newest end 1.5 s later moved the list by itself (a work line folded 61 pt short of it, `UnfoldTests`). Only a
-        // fold the list could not keep the header for (at the newest end, what is left under it shorter than the
-        // screen) glides to the newest end, and follows from there (`ChatPin.landed`, #1173).
+        // A work line or a run of chips is a row like any other (`ChatFollow.toggledRow`, #3757). In the middle it stays
+        // where it is, folded too, until the user takes the list, taps ↓ or sends: handed to the usual hold, following
+        // came back 1.5 s later and took the list to the newest end (the tapped chips up by what opened under them,
+        // BeautifulUI, 119–381 pt, #1123; a work line folded 61 pt short of it, #3005). Opened at the newest end it rises
+        // to the top bar with what opens and what comes in after (#1173), the newest end on screen, and stays there while
+        // a running turn's steps keep coming in under it (following on would scroll it away, holding back would freeze
+        // the turn, #1046). Closed there while following, the list follows on. A fold the list could not keep the header
+        // for glides to the newest end and follows from there (`ChatPin.landed`).
         let following = follow.follows
-        let anchored = fromHeader && follow.followsNext
+        var anchored = false, rise: CGFloat = 0
         if fromHeader {
-            pin.hold(id, from: id, slow: true,
-                     rise: !run && !wasOpen ? workRise(id) : 0, keep: anchored)
+            var next = follow
+            let how = next.toggledRow(closing: wasOpen, atNewest: scratch.atNewest)
+            anchored = how != .moment
+            rise = how == .rising ? workRise(id) : 0
+            pin.hold(id, from: id, slow: true, rise: rise, keep: anchored)
         }
         if wasOpen { scratch.foldedAt = .now }
         // Not taking the list: while the header settles nothing pulls it away (the pin has it) and nothing is held
         // back (the running turn opened at the newest keeps growing: it froze, #1046); then the chat goes on as before.
         holdFollow(anchored: anchored)
-        if anchored, following, !run, !wasOpen { keepHeader(id, rise: workRise(id)) }
+        if anchored, rise > 0, following, !run, !wasOpen { keepHeader(id, rise: rise) }
         var t = Transaction()
         t.disablesAnimations = true
         withTransaction(t) {
@@ -1315,8 +1316,11 @@ struct ChatView: View {
     /// Elsewhere it stays where it was tapped.
     private func workRise(_ id: String) -> CGFloat {
         guard scratch.atNewest, let y = scratch.workHeadY[id], scratch.listFrame.height > 0 else { return 0 }
-        return y - (scratch.listFrame.minY + headerRoom + Theme.Space.l)
+        return y - riseTop
     }
+
+    /// How high on screen a row opened at the newest end goes (window y): just under the top bar (#1173, #3757).
+    private var riseTop: CGFloat { scratch.listFrame.minY + headerRoom + Theme.Space.l }
 
     #if DEBUG
     /// Where the work line header `id` is drawn (`DrawnProbe`); the Mac has no probe.
@@ -1365,7 +1369,7 @@ struct ChatView: View {
         case .supervision(let id, _, let live, let source):
             SupervisionRecordLine(live: live, open: openSupervision.contains(id) != Self.debugOpenSupervision, source: source) {
                 Haptics.tap()
-                toggleInPlace(pin, id, animation: Theme.Motion.state) {
+                toggleInPlace(pin, id, animation: Theme.Motion.state, closing: openSupervision.contains(id) != Self.debugOpenSupervision) {
                     if openSupervision.contains(id) { openSupervision.remove(id) } else { openSupervision.insert(id) }
                 }
             }
@@ -1421,7 +1425,7 @@ struct ChatView: View {
         case .workEnd(let group, let count, let files):
             if AppStyle.current.usesBeautifulUI {
                 // The foot of the open work line's card: the files it changed, then Collapse.
-                WorkEndView(count: count, files: files) { toggleWork(group, fromHeader: false) }
+                WorkEndView(count: count, files: files, pinKey: "work-end-" + group) { toggleWork(group, fromHeader: false) }
                     .equatable()
                     .unfolding(stepUnfolding(group))
             } else {
@@ -1447,7 +1451,7 @@ struct ChatView: View {
                 .unfolding(stepUnfolding(group))
             }
         case .recaps(_, let items):
-            RecapCard(items: items)
+            RecapCard(items: items).chatPinned("recap-" + line.id) // where the open recap folds to (`dismissRecap`)
         case .viewed(_, let images):
             ViewedImagesRow(images: images).equatable()
         }
@@ -1808,7 +1812,7 @@ struct ChatView: View {
     /// put back (BeautifulUI, #1173's test failed on master too). By id the list lays that row out exactly:
     /// it goes to the top, under the bar as far as `rise` let it, and the pin holds it from there.
     private func keepHeader(_ key: String, rise: CGFloat) {
-        let target = scratch.listFrame.minY + headerRoom + Theme.Space.l
+        let target = riseTop
         Task { @MainActor in
             for _ in 0..<3 {
                 try? await Task.sleep(for: .milliseconds(300))
@@ -2074,6 +2078,7 @@ struct ChatView: View {
             footerRoom.listFloor = Theme.Size.line + Theme.Space.s // and a gap over 「N 个待处理」
             footerRoom.fixedHeader = h
             footerRoom.chrome = style == .dev && !sideBars ? chrome : nil
+            pin.riseTop = scratch.listFrame.minY + h + Theme.Space.l // `riseTop`, with the header's new height
         }
         .onChange(of: session?.awaitingFirstMessage == true ? session?.paneID : nil, initial: true) { _, pane in
             if let pane { codexWaitingPane = pane; codexWaitingID = key.sessionID }
@@ -2303,8 +2308,9 @@ struct ChatView: View {
     }
 
     /// Opening a work line the page folded fetches its steps (docs/protocol/protocol.md「Folded work」).
+    /// The pin holds the work line's header until they are in (`ChatPin.awaiting`, #3757).
     private var openFold: (Item) async throws -> Void {
-        { [model, shownKey] fold in try await model.unfold(shownKey, fold) }
+        { [model, shownKey, pin] fold in try await pin.awaiting { try await model.unfold(shownKey, fold) } }
     }
 
     @ViewBuilder private var footer: some View {
@@ -2370,7 +2376,11 @@ struct ChatView: View {
     private var unfoldProbe: some View {
         Color.clear.frame(width: Theme.Size.line, height: Theme.Size.line)
             .screenProbe("unfold", page: style == .assistant ? "assistant" : "agents", UnfoldTrace.shared.results)
-            .onAppear { UnfoldTrace.shared.idle(after: 6) }
+            .onAppear {
+                UnfoldTrace.shared.idle(after: 6)
+                UnfoldTrace.shared.newestGap = { [pin] in pin.measuredNewestGap }
+                UnfoldTrace.shared.riseTop = { [pin] in pin.riseTop }
+            }
     }
     #endif
 
@@ -2585,16 +2595,20 @@ struct ChatView: View {
     private func recapInFlow(_ open: ChatLines.OpenRecap) -> some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             if !open.earlier.isEmpty { RecapCard(items: open.earlier) }
-            RecapStrip(item: open.newest) { dismissRecap(open.newest) }
+            RecapStrip(item: open.newest) { dismissRecap(open.newest, line: open.line) }
         }
         .transition(.opacity)
+        .chatPinned("recap-" + open.line)
     }
 
-    private func dismissRecap(_ recap: Item) {
+    /// Closes the open recap; tapped (`line`: its line), the line stays where it is in the chat, the marker it folds to
+    /// in its place (#3757).
+    private func dismissRecap(_ recap: Item, line: String? = nil) {
         var all = (try? JSONDecoder().decode([String: String].self, from: closedRecapsData)) ?? [:]
         all[key.machineID + "/" + key.sessionID] = recap.id
         if all.count > 300 { all = Dictionary(uniqueKeysWithValues: all.suffix(200).map { ($0.key, $0.value) }) }
-        withAnimation(Theme.Motion.standard) { closedRecapsData = (try? JSONEncoder().encode(all)) ?? Data() }
+        let close = { closedRecapsData = (try? JSONEncoder().encode(all)) ?? Data() }
+        if let line { toggleInPlace(pin, "recap-" + line, animation: Theme.Motion.standard, closing: true, close) } else { withAnimation(Theme.Motion.standard, close) }
     }
 
     /// Switches the chat to a subagent (nil: back to the main agent); its transcript streams like a session's.
@@ -2773,6 +2787,7 @@ struct ChatView: View {
         }) { rect in
             let old = scratch.listFrame
             scratch.listFrame = rect
+            pin.riseTop = riseTop
             // Drawn upside down from its bottom edge, the list moves everything on it when that edge moves: what sits
             // under it came or went (the queue strip taken as the next turn started moved the rows the user had open
             // 60 pt down, #3005). The pin puts a held row back. Only that edge: its top edge moving moves nothing on
@@ -2852,11 +2867,11 @@ struct ChatView: View {
         .onAppear {
             pin.letGo = { [position = $position] in position.wrappedValue = ScrollPosition(idType: String.self) }
             pin.onRising = { [rising = $pinRising] in rising.wrappedValue = $0 }
-            pin.anchor = { [follow = $follow] in
+            pin.toggled = { [follow = $follow, scratch] closing in
                 var next = follow.wrappedValue
-                let anchored = next.toggledRow()
+                let how = next.toggledRow(closing: closing, atNewest: scratch.atNewest)
                 if next != follow.wrappedValue { follow.wrappedValue = next }
-                return anchored
+                return (keep: how != .moment, rise: how == .rising)
             }
             pin.landed = { [follow = $follow, pin] in
                 var next = follow.wrappedValue
@@ -6443,8 +6458,11 @@ struct WorkCardSlice: View {
 /// the file, like the diff's header), the first six and "+N files" for the rest; then Collapse N steps.
 struct WorkEndView: View, Equatable {
     @Environment(\.openFile) private var openFile
+    @Environment(\.chatPin) private var pin
     nonisolated let count: Int
     nonisolated let files: [ChangedFile]
+    /// What the chat's pin knows the chips by: "+N files" opens the rest under them, the chips staying where they are (#3757).
+    nonisolated let pinKey: String
     var collapse: () -> Void
     @State private var all = false
 
@@ -6458,13 +6476,14 @@ struct WorkEndView: View, Equatable {
                 let list = all ? files : Array(files.prefix(Self.shown))
                 FileDiffChips(list.map { FileDiff(file: ($0.path as NSString).lastPathComponent, additions: $0.adds, deletions: $0.dels) },
                               moreLabel: files.count > list.count ? String(localized: "+\(files.count - list.count) files") : nil,
-                              onMore: { all = true },
+                              onMore: { toggleInPlace(pin, pinKey, animation: Theme.Motion.standard) { all = true } },
                               onSelect: openFile.map { open in { diff in
                                   if let f = files.first(where: { ($0.path as NSString).lastPathComponent == diff.file }) { open(f.path) }
                               } })
                     .padding(.horizontal, WorkCardSlice.inset)
                     .padding(.top, Theme.Space.m)
                     .accessibilityIdentifier("work-files")
+                    .chatPinned(pinKey)
             }
             Button(action: collapse) {
                 HStack(spacing: Theme.Space.sm) {
