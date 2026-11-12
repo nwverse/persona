@@ -38,29 +38,30 @@ const (
 // The codes of a paste's notes (clients localize them): a note carries names (an alias, a variable, a header, an
 // option, a protocol), never a value of the text.
 const (
-	noteUnrecognized  = "unrecognized"      // nothing in the text looks like a provider configuration
-	noteInvalidJSON   = "invalid_json"      // it starts like JSON but does not parse
-	noteLineUnused    = "line_unused"       // a shell line that is no comment, alias, export, assignment or claude command
-	noteNotClaude     = "not_claude"        // an alias or command that does not start Claude Code
-	noteNoGateway     = "no_gateway"        // Claude Code without ANTHROPIC_BASE_URL: its own sign-in, nothing to add
-	noteURLShell      = "url_shell"         // the address is a shell expansion: no draft
-	noteURLUser       = "url_user"          // the address carries a user name or password: no draft
-	noteURLQuery      = "url_query"         // the address carries a query or fragment (it may hold a key): no draft
-	noteKeyShell      = "key_shell"         // the key is a shell expansion: left out
-	noteNoKey         = "no_key"            // no key found: it is typed
-	noteKeyHelper     = "key_helper"        // settings.json's apiKeyHelper runs a command for the key
-	noteCurlOption    = "curl_option"       // a curl option not used
-	noteCurlPath      = "curl_path"         // a curl URL's path is no endpoint Persona knows
-	noteCindyKind     = "cindy_kind"        // a cindy preset or builtin provider
-	noteCindyAuth     = "cindy_auth"        // a cindy provider signing in with oauth (no draft) or none (no key)
-	noteCindyEndpoint = "cindy_endpoint"    // a cindy endpoint not imported
-	noteArgsLeftOut   = "args_left_out"     // the arguments look like they hold a secret or a setting's text: none kept
-	noteHeaderUnread  = "header_unreadable" // a header whose name is no plain token: left out, unnamed
-	noteTooMany       = "too_many"          // more than pasteMost drafts: the rest left out
-	noteLinkInvalid   = "link_invalid"      // an import link damaged or breaking a v1 rule: nothing used (the field's path)
-	noteLinkVersion   = "link_version"      // an import link of another format version (named when a number)
-	noteLinkTooLong   = "link_too_long"     // an import link, or the JSON it carries, longer than cindy takes
-	noteLinkField     = "link_field"        // an import link with a field v1 does not define: nothing used (its path)
+	noteUnrecognized  = "unrecognized"       // nothing in the text looks like a provider configuration
+	noteInvalidJSON   = "invalid_json"       // it starts like JSON but does not parse
+	noteLineUnused    = "line_unused"        // a shell line that is no comment, alias, export, assignment or claude command
+	noteNotClaude     = "not_claude"         // an alias or command that does not start Claude Code
+	noteNoGateway     = "no_gateway"         // Claude Code without ANTHROPIC_BASE_URL: its own sign-in, nothing to add
+	noteURLShell      = "url_shell"          // the address is a shell expansion: no draft
+	noteURLUser       = "url_user"           // the address carries a user name or password: no draft
+	noteURLQuery      = "url_query"          // the address carries a query or fragment (it may hold a key): no draft
+	noteKeyShell      = "key_shell"          // the key is a shell expansion: left out
+	noteNoKey         = "no_key"             // no key found: it is typed
+	noteKeyHelper     = "key_helper"         // settings.json's apiKeyHelper runs a command for the key
+	noteCurlOption    = "curl_option"        // a curl option not used
+	noteCurlPath      = "curl_path"          // a curl URL's path is no endpoint Persona knows
+	noteCindyKind     = "cindy_kind"         // a cindy preset or builtin provider
+	noteCindyAuth     = "cindy_auth"         // a cindy provider signing in with oauth (no draft) or none (no key)
+	noteCindyEndpoint = "cindy_endpoint"     // a cindy endpoint not imported
+	noteCindyPath     = "cindy_request_path" // a cindy endpoint's own request path: the draft calls the API's usual one
+	noteArgsLeftOut   = "args_left_out"      // the arguments look like they hold a secret or a setting's text: none kept
+	noteHeaderUnread  = "header_unreadable"  // a header whose name is no plain token: left out, unnamed
+	noteTooMany       = "too_many"           // more than pasteMost drafts: the rest left out
+	noteLinkInvalid   = "link_invalid"       // an import link damaged or breaking a v1 rule: nothing used (the field's path)
+	noteLinkVersion   = "link_version"       // an import link of another format version (named when a number)
+	noteLinkTooLong   = "link_too_long"      // an import link, or the JSON it carries, longer than cindy takes
+	noteLinkField     = "link_field"         // an import link with a field v1 does not define: nothing used (its path)
 )
 
 // pasteNote is something said about the pasted text or one draft: Line is 1-based, of the text with CRLF made LF.

@@ -750,6 +750,63 @@
           "code": "unrecognized"
         }
       ]
+    },
+    {
+      "name": "a request path of its own is noted, never named",
+      "text": "https://persona.example.invalid/settings?tab=models#import=eyJraW5kIjoiY3VzdG9tIiwibmFtZSI6IkV4YW1wbGUiLCJlbmRwb2ludHMiOlt7InByb3RvY29sIjoib3BlbmFpLWNoYXQiLCJiYXNlVXJsIjoiaHR0cHM6Ly9leGFtcGxlLmludmFsaWQvdjEiLCJyZXF1ZXN0UGF0aCI6Ii9jdXN0b20vY2hhdCJ9XX0",
+      "drafts": [
+        {
+          "kind": "api",
+          "api": "chat",
+          "base_url": "https://example.invalid/v1",
+          "display_name": "Example",
+          "auth": "bearer",
+          "api_key": "",
+          "model": "",
+          "models": [],
+          "notes": [
+            {
+              "code": "cindy_request_path"
+            }
+          ]
+        }
+      ],
+      "notes": [],
+      "format": "link"
+    },
+    {
+      "name": "a cindy link broken by a line break",
+      "text": "cindy://provider/import?v=1&data=eyJraW5kIjoiY3VzdG9tIiwibmFtZSI6IkV4YW1wbGUgQUkiLCJhdXRoIjp7\nIm1ldGhvZCI6ImFwaUtleSIsImFwaUtleSI6IkZBS0UtRVhBTVBMRS1LRVkifSwiZW5kcG9pbnRzIjpbeyJwcm90b2NvbCI6Im9wZW5haS1jaGF0IiwiYmFzZVVybCI6Imh0dHBzOi8vZXhhbXBsZS5pbnZhbGlkL3YxIn1dfQ",
+      "drafts": [],
+      "notes": [
+        {
+          "code": "link_invalid"
+        }
+      ],
+      "format": "link"
+    },
+    {
+      "name": "a web link broken by a space",
+      "text": "https://persona.example.invalid/settings?tab=models#import=eyJraW5kIjoiY3VzdG9tIiwibmFtZSI6IkV4YW1wbGUgQUkiLCJhdXRoIjp7 Im1ldGhvZCI6ImFwaUtleSIsImFwaUtleSI6IkZBS0UtRVhBTVBMRS1LRVkifSwiZW5kcG9pbnRzIjpbeyJwcm90b2NvbCI6Im9wZW5haS1jaGF0IiwiYmFzZVVybCI6Imh0dHBzOi8vZXhhbXBsZS5pbnZhbGlkL3YxIn1dfQ",
+      "drafts": [],
+      "notes": [
+        {
+          "code": "link_invalid"
+        }
+      ],
+      "format": "link"
+    },
+    {
+      "name": "base URL with a port past 65535",
+      "text": "https://persona.example.invalid/settings?tab=models#import=eyJraW5kIjoiY3VzdG9tIiwibmFtZSI6IkV4YW1wbGUiLCJlbmRwb2ludHMiOlt7InByb3RvY29sIjoib3BlbmFpLWNoYXQiLCJiYXNlVXJsIjoiaHR0cHM6Ly9leGFtcGxlLmludmFsaWQ6OTk5OTkvdjEifV19",
+      "drafts": [],
+      "notes": [
+        {
+          "code": "link_invalid",
+          "name": "endpoints[0].baseUrl"
+        }
+      ],
+      "format": "link"
     }
   ]
 }

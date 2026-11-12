@@ -11515,7 +11515,10 @@ def _paste_cindy(data):
              "auth": "" if api == "messages" or none else "bearer", "model": models[0]["id"] if models else "", "models": models}
         p["headers"], skipped = _paste_headers(ep["headers"].items() if isinstance(ep.get("headers"), dict) else [], True, api != "messages")
         key = "" if none else str(ep.get("apiKey") or auth.get("apiKey") or "")
-        drafts.append(_draft(p, key, ([_note("cindy_auth", name="none")] if none else []) + others, label=c.get("name"), skipped_headers=skipped))
+        # the endpoint's own request path, never named: the draft calls the API's usual one
+        path = [_note("cindy_request_path")] if isinstance(ep.get("requestPath"), str) and ep["requestPath"].strip() else []
+        drafts.append(_draft(p, key, path + ([_note("cindy_auth", name="none")] if none else []) + others, label=c.get("name"),
+                             skipped_headers=skipped))
     return drafts, notes
 
 
@@ -11723,13 +11726,15 @@ def _link_payload(data):
 
 def _paste_link(t):
     """(drafts, notes) of an import link (t trimmed), None when t is no link: one word, cindy:// or an http(s) address
-    whose fragment has import."""
-    head = t[:8].lower()
-    if re.search(r"\s", t) or not head.startswith(("cindy://", "http://", "https://")): return None
+    whose fragment has import. A link going on after a blank is one a chat app broke: refused whole."""
+    word = re.split(r"\s", t, maxsplit=1)[0]
+    head = word[:8].lower()
+    if not head.startswith(("cindy://", "http://", "https://")): return None
     cindy = head.startswith("cindy://")
-    part = t[len("cindy://"):] if cindy else t.partition("#")[2]  # what follows cindy://, a web link's fragment
+    part = word[len("cindy://"):] if cindy else word.partition("#")[2]  # what follows cindy://, a web link's fragment
     if not cindy and "import" not in _link_query(part)[0]: return None
     try:
+        if word != t: _link_bad()  # which part of a broken link is its data is unknown
         if len(part.encode()) > LINK_MOST: _link_bad(code="link_too_long")
         if cindy:
             path, sep, q = part.partition("?")

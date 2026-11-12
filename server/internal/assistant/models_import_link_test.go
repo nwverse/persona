@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -230,6 +231,10 @@ func TestParseLinkRules(t *testing.T) {
 		{"a models URL on another port", withEndpoint(`,"modelsUrl":"https://example.invalid:8443/v1/models"`), invalid("endpoints[0].modelsUrl")},
 		{"a base URL without a host", custom(`"endpoints":[{"protocol":"openai-chat","baseUrl":"https:///v1"}]`), invalid("endpoints[0].baseUrl")},
 		{"a base URL ending in ?", custom(`"endpoints":[{"protocol":"openai-chat","baseUrl":"https://example.invalid/v1?"}]`), invalid("endpoints[0].baseUrl")},
+		{"a port past 65535", custom(`"endpoints":[{"protocol":"openai-chat","baseUrl":"https://example.invalid:65536/v1"}]`), invalid("endpoints[0].baseUrl")},
+		{"the last port", custom(`"endpoints":[{"protocol":"openai-chat","baseUrl":"https://example.invalid:65535/v1"}]`), ok},
+		{"a models URL on a port past 65535", withEndpoint(`,"modelsUrl":"https://example.invalid:99999999999999999999/v1/models"`),
+			invalid("endpoints[0].modelsUrl")},
 		{"a header name that is no token", withEndpoint(`,"headers":{"X Tenant":"a"}`), invalid("endpoints[0].headers")},
 		{"no headers", withEndpoint(`,"headers":{}`), invalid("endpoints[0].headers")},
 		{"25 headers", withEndpoint(`,"headers":{` + headers + `}`), invalid("endpoints[0].headers")},
@@ -270,25 +275,51 @@ func TestParseLinkKeyNotes(t *testing.T) {
 	}
 }
 
-// What is a link: either scheme in any case; a blank inside, or another fragment, leaves the text to the other readers;
-// a broken %-escape breaks the link.
+// What is a link: either scheme in any case; text that starts with no link, or an address with another fragment, is
+// left to the other readers. A broken %-escape breaks the link, as does a blank or a line break after its first word
+// (a chat app wrapping it): nothing of it is read.
 func TestParseLinkRecognized(t *testing.T) {
 	data := base64.RawURLEncoding.EncodeToString([]byte(linkTestPayload))
+	broken := []string{
+		"https://persona.example.invalid/#import=" + data + "%zz",
+		"cindy://provider/import?v=1&data=" + data[:40] + "\n" + data[40:],
+		"https://persona.example.invalid/settings?tab=models#import=" + data[:40] + " " + data[40:],
+		"cindy://provider/import?v=1&data=" + data + " and more",
+		"cindy://provider/import?v=1&data=" + data + "\t" + data,
+	}
 	for text, link := range map[string]bool{
 		"CINDY://provider/import?v=1&data=" + data:                     true,
 		"HTTPS://persona.example.invalid/settings#import=" + data:      true,
 		"http://persona.example.invalid/#v=1&import=" + data:           true,
 		"https://persona.example.invalid/#imp%6Frt=" + data:            true,
-		"https://persona.example.invalid/#import=" + data + "%zz":      true,
-		"cindy://provider/import?v=1&data=" + data + " and more":       false,
 		"https://persona.example.invalid/#settings-providers&x=import": false,
 		"https://persona.example.invalid/?import=" + data:              false,
+		"Here it is: cindy://provider/import?v=1&data=" + data:         false,
+		"https://persona.example.invalid/settings and #import=" + data: false,
 	} {
 		if res := parsePaste(text); (res.Format == "link") != link {
 			t.Errorf("%.60s…: format %q", text, res.Format)
 		}
 	}
-	if res := parsePaste("https://persona.example.invalid/#import=" + data + "%zz"); linkNotes(res) != `[{"code":"link_invalid"}]` {
-		t.Fatalf("a broken escape: %s", linkNotes(res))
+	for _, text := range broken {
+		if res := parsePaste(text); res.Format != "link" || len(res.Drafts) != 0 || linkNotes(res) != `[{"code":"link_invalid"}]` {
+			t.Errorf("%.60s…: %s %s", text, res.Format, linkNotes(res))
+		}
+	}
+}
+
+// An endpoint's own request path is noted on the draft, never named: Persona calls the API's usual one.
+func TestParseCindyRequestPath(t *testing.T) {
+	payload := `{"kind":"custom","name":"Example","auth":{"method":"apiKey","apiKey":"FAKE-KEY"},"endpoints":[` +
+		`{"protocol":"openai-chat","baseUrl":"https://example.invalid/v1","requestPath":"/secret-path/chat"}]}`
+	for _, text := range []string{payload, webLink(payload)} {
+		res := parsePaste(text)
+		b, _ := json.Marshal(res)
+		if len(res.Drafts) != 1 || !slices.Contains(res.Drafts[0].Notes, pasteNote{Code: noteCindyPath}) || strings.Contains(string(b), "secret-path") {
+			t.Fatalf("%s", b)
+		}
+	}
+	if res := parsePaste(strings.Replace(payload, "/secret-path/chat", " ", 1)); len(res.Drafts) != 1 || res.Drafts[0].Notes != nil {
+		t.Fatalf("a blank request path is none: %+v", res.Drafts)
 	}
 }
