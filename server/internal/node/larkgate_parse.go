@@ -341,8 +341,33 @@ func gateAimed(gates []proto.CommandGate, text string) (proto.CommandGate, bool)
 }
 
 // gateNamed reports literal gate command words in a command the shell
-// splitter could not read. It is deliberately conservative about quoted text.
+// splitter could not read. The AST preserves names next to redirections;
+// the fallback is deliberately conservative about quoted text.
 func gateNamed(gates []proto.CommandGate, cmd string) bool {
+	tree, err := syntax.NewParser().Parse(strings.NewReader(cmd), "")
+	if err == nil {
+		found := false
+		syntax.Walk(tree, func(node syntax.Node) bool {
+			call, ok := node.(*syntax.CallExpr)
+			if !ok || len(call.Args) == 0 || found {
+				return !found
+			}
+			words := make([]string, len(call.Args))
+			for i, word := range call.Args {
+				words[i], _ = executionWord(word)
+			}
+			suffix, ok := unwrapCommand(words)
+			if ok && len(suffix) > 0 {
+				found = gateOf(gates, suffix[0]) >= 0
+				if !found && (suffix[0] == "bash" || suffix[0] == "sh") && len(suffix) > 1 {
+					found = gateOf(gates, suffix[1]) >= 0
+				}
+			}
+			return !found
+		})
+		return found
+	}
+	cmd = strings.NewReplacer("<", " ", ">", " ").Replace(cmd)
 	for _, word := range strings.Fields(cmd) {
 		if gateOf(gates, strings.Trim(word, "'\"`;&|()")) >= 0 {
 			return true

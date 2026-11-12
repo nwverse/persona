@@ -157,6 +157,7 @@ func TestLarkLoopWritesStayBehindApproval(t *testing.T) {
 		{"array assignment keeps previous route", "action=(read delete)\nex GET \"/documents/${action[1]}\""},
 		{"indexed assignment keeps previous route", "action=read\naction[0]=delete\nex GET \"/documents/$action\""},
 		{"declaration changes route case", "declare -l action=INITIAL\naction=DELETE\nex GET \"/documents/$action\""},
+		{"unparsed redirect gate call", `{ ex</dev/null POST /documents; }`},
 		{"unquoted route becomes delete", `for route in '/health -X DELETE'; do ex GET $route; done`},
 		{"unquoted query becomes delete", `for query in 'q=a -X DELETE'; do ex GET /health --url-query $query; done`},
 		{"command substitution becomes delete", `ex GET /health --url-query $(printf 'q=a -X DELETE')`},
