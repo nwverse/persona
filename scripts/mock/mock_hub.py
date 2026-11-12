@@ -1350,6 +1350,11 @@ if MOCK_CODEX_WAITING:
                          "", agent="codex", launcher="codex", awaiting_first_message=True, capabilities=CODEX_WAITING_CAPS))
 
 
+# MOCK_RUN_HERE_CODEX=<mid,…> (#5504): those computers start Codex in a shell pane the user picked and keep that pane when
+# the start fails (run_here), so Run agent here offers their Codex launchers; the others' stay out, as an older node's.
+RUN_HERE_CODEX = {x.strip() for x in os.environ.get("MOCK_RUN_HERE_CODEX", "").split(",") if x.strip()}
+
+
 def codex_launcher(name="codex", model="gpt-5.5"):
     l = {"name": name, "model": model, "agent": "codex", "agent_type": "codex"}
     if MOCK_CODEX_WAITING:
@@ -2988,7 +2993,57 @@ def sorted_todos():
                 t["ask"]["suggestion"] = sg
         if t.get("done_at") is None and t["id"] in TODO_ORPHANED:
             t["orphaned"] = {"reason": TODO_ORPHANED[t["id"]], "since": TODO_ORPHANED_SINCE}
+        review = current_decision_review(t)
+        if review:
+            t["decision_review"] = review
     return out
+
+
+# ---------- a decision row's Later / Don't handle (server/internal/assistant/task_review_dismissals.go) ----------
+DECISION_DISMISSALS = {}  # todo id -> {"review_at", "dismissal_id", "undone"}; reset with the mock hub
+
+
+def current_decision_review(t):
+    """decision_review of GET /todos: only an open task whose latest review and supervision state are needs_user, with the
+    dismissal receipt when that very round was dismissed and not undone."""
+    sup = t.get("supervision") or {}
+    reviews = sup.get("reviews") or []
+    if t.get("done_at") is not None or sup.get("state") != "needs_user" or not reviews or reviews[-1].get("verdict") != "needs_user":
+        return None
+    out = {"review_at": reviews[-1]["at"]}
+    d = DECISION_DISMISSALS.get(t["id"])
+    if d and d["review_at"] == out["review_at"] and not d["undone"]:
+        out["dismissal_id"] = d["dismissal_id"]
+    return out
+
+
+def decision_dismissal_route(h, tid, undo):
+    """POST /api/v1/todos/{id}/decision-dismiss and …/decision-undo-dismiss: {review_at[, dismissal_id]}; 400 for a missing
+    field, 409 when the round is no longer the task's current one (or the receipt is not the live dismissal)."""
+    try:
+        body = json.loads(h.last_body or b"{}")
+    except ValueError:
+        body = {}
+    at, receipt = str(body.get("review_at") or ""), str(body.get("dismissal_id") or "")
+    if not at or (undo and not receipt):
+        h.send_json({"error": "review_at is required (and dismissal_id to undo)", "code": "bad_request"}, 400)
+        return
+    todo = next((t for t in sorted_todos() if t["id"] == tid), None)
+    current = (todo or {}).get("decision_review")
+    if not current or current["review_at"] != at:
+        h.send_json({"error": "the decision changed; reload and look again", "code": "conflict"}, 409)
+        return
+    book = DECISION_DISMISSALS.get(tid)
+    if undo:
+        if not book or book["undone"] or book["dismissal_id"] != receipt or book["review_at"] != at:
+            h.send_json({"error": "the decision changed; reload and look again", "code": "conflict"}, 409)
+            return
+        book["undone"] = True
+        h.send_json({"review_at": at})
+    else:
+        DECISION_DISMISSALS[tid] = {"review_at": at, "dismissal_id": "dsm_" + uuid.uuid4().hex[:8], "undone": False}
+        h.send_json({"review_at": at, "dismissal_id": DECISION_DISMISSALS[tid]["dismissal_id"]})
+    push_todos()
 
 
 def push_todos():
@@ -3523,7 +3578,7 @@ def recording_minutes(body, rid=None):
 
 # The managers' roster (docs/assistant/managers.md): the hub's own assistant (the default), one on another computer, one offline,
 # one still installing. MOCK_MANAGER_COMMANDS=1 adds the install commands to a new code's answer; MOCK_MANAGERS=0 is a
-# hub from before the roster (404); MOCK_MANAGERS=1 only the hub's own (one manager: no switcher, no grouping).
+# hub from before the roster (404); MOCK_MANAGERS=1 only the hub's own (one manager: a one-row switcher without Default, no grouping).
 def _managers_seed():
     if os.environ.get("MOCK_MANAGERS") == "1":
         return [{"id": "assistant", "name": "助手", "online": True, "builtin": True, "host": "server", "os": "linux", "arch": "amd64",
@@ -7332,6 +7387,24 @@ if MOCK_TASKS:
         TODOS_INIT.append(_adopted)
         TODOS.append(copy.deepcopy(_adopted))
         TASK_FEED[ASK1].append(_feed("feed_adopted", 4, "task", "todo_task_adopted", {"wake": "active"}))
+    # MOCK_TASK_DECISION=1: the decision row's review round (the hub's decision_review), so Later / Don't handle have a round
+    # to dismiss; a dismissal belongs to that round and is undone by its receipt.
+    if os.environ.get("MOCK_TASK_DECISION") == "1":
+        for _t in TODOS_INIT + TODOS:
+            if _t["id"] == "todo_task_tests":
+                _sup = _t.setdefault("supervision", {"supervisor": ASK1, "done_when": ["覆盖率到 80%"], "round": 0, "reviews": []})
+                _sup["state"] = "needs_user"
+                _sup["reviews"] = [{"at": ago(minutes=20), "verdict": "needs_user", "round": 0, "checks": [],
+                                    "note": "要你拍板：是否继续更换缓存方案"}]  # i18n-ignore
+    # MOCK_TASKS_STARTING=1: a task whose Agent is not up yet (no agent, no start error: the apps say Starting) and a task
+    # the main chat picked up again after its Agent stopped (hand-off wake "resumed", the web's Resumed card).
+    if os.environ.get("MOCK_TASKS_STARTING") == "1":
+        _starting = _task_todo("todo_task_starting", "检查启动状态", "看看启动流程里哪一步最慢。", "macbook", "", "/Users/me/code/weather", 1, "")
+        _starting["agents"] = []
+        TODOS_INIT.append(_starting)
+        TODOS.append(copy.deepcopy(_starting))
+        TASK_FEED[ASK1].append(_feed("feed_starting", 1, "task", "todo_task_starting", {"wake": "created"}))
+        TASK_FEED[ASK1].append(_feed("feed_resumed", 2, "task", "todo_task_blog", {"wake": "resumed"}))
     # MOCK_TASKS_MESSAGE=filed / sent: the message card's inbox item was handled elsewhere (filed_at, #4797), or its reply
     # went out from the card (sent_at): the apps draw it handled / sent, with no Send.
     _msg = os.environ.get("MOCK_TASKS_MESSAGE", "")
@@ -7810,6 +7883,9 @@ def tasks_area(h, method, p, raw):
         return True
     if method == "POST" and p.startswith("/api/v1/todos/") and p.endswith("/retry"):
         retry_task(h, p.split("/")[4])
+        return True
+    if method == "POST" and p.startswith("/api/v1/todos/") and p.endswith(("/decision-dismiss", "/decision-undo-dismiss")):
+        decision_dismissal_route(h, p.split("/")[4], p.endswith("/decision-undo-dismiss"))
         return True
     if p == "/mock/cut" and os.environ.get("MOCK_TASKS_CUT") == "1":
         SESSIONS[:] = [copy.deepcopy(CUT_SESSION) if x["session_id"] == RELEASE else x for x in SESSIONS]
@@ -11067,6 +11143,40 @@ if MOCK_INBOX_EVENTS:
             if _x["id"] in _event_mutes: _x["mutes"] = _event_mutes[_x["id"]]
 
 
+# MOCK_HANDOFF_CARD=1 (with MOCK_TASKS=1): an item handed to the main conversation that wrote back (#5932,
+# docs/assistant/inbox.md "Item actions"): the item carries the hand-off and the conversation's reply suggestion, and the
+# main conversation's feed has the write-back card (kind inbox_suggestion), so the chat draws the card and "Wrap up".
+# MOCK_HANDOFF_CARD=sent: the reply was confirmed and sent (the card says so). Confirming the card's suggestion files the
+# item as replied, as the hub does for a hand-off conversation's reply.
+MOCK_HANDOFF_CARD = os.environ.get("MOCK_HANDOFF_CARD", "")
+if MOCK_HANDOFF_CARD:
+    _hid = "lark:oc_handoff:300"
+    _hcard = {"version": 2, "kind": "reply", "text": "王总您好，报价单我周五上午发您，按三年维保报，有问题随时找我。",
+              "note": "上次给同类客户的报价按三年维保；周五上午有空。",
+              "recap": "示例客户问报价和维保年限。我们在对话里定了：周五上午发报价单，按三年维保报。",
+              "title": "示例客户", "source": "lark", "account": "飞书", "sender": "示例客户"}
+    _hitem = {"id": _hid, "source": "lark", "kind": "dm", "account": "lark", "account_name": "飞书", "title": "示例客户",
+              "sender": "示例客户", "preview": "周五前能给个报价吗？维保按几年算？", "count": 2, "started_at": ago(minutes=50),
+              "updated_at": ago(minutes=3), "tier": "action", "status": "action", "summary": "示例客户问报价和维保年限",
+              "read": True, "recap": _hcard["recap"], "lark": {"feed_id": "oc_handoff", "is_group": False, "start_position": "300"},
+              "handoffs": [{"machine_id": "server", "session_id": ASK1, "at": ago(minutes=40)}],
+              "suggestion": {"version": 2, "kind": "reply", "text": _hcard["text"], "note": _hcard["note"], "at": ago(minutes=3),
+                             "conversation": {"machine_id": "server", "session_id": ASK1}},
+              "chain": [{"id": "c1", "at": ago(minutes=50), "kind": "received", "text": "收到 2 条消息 · 示例客户", "count": 2, "sender": "示例客户"},
+                        {"id": "c2", "at": ago(minutes=40), "kind": "handling", "text": "交给了 Persona 主对话",
+                         "link": {"type": "session", "machine_id": "server", "session_id": ASK1}}]}
+    if MOCK_HANDOFF_CARD == "sent":
+        _hitem.pop("suggestion")
+        _hitem.pop("status")
+        _hitem.update(done_at=ago(minutes=1), done_by="replied")
+        _hitem["chain"] += [{"id": "c3", "at": ago(minutes=1), "kind": "confirmed", "text": "你确认了", "detail": _hcard["text"]},
+                            {"id": "c4", "at": ago(minutes=1), "kind": "sent", "text": "发了飞书消息", "link": {"type": "source"}}]
+    INBOX.insert(0, _hitem)
+    if MOCK_TASKS:
+        TASK_FEED.setdefault(ASK1, []).append({"id": "feed_handoff", "conversation": ASK1, "at": ago(minutes=0.4), "kind": "inbox_suggestion",
+                                               "ref": _hid, "body": _hcard})
+
+
 def _chain_add(x, kind, text, **more):
     x.setdefault("chain", []).append(dict({"id": "c%d" % (len(x["chain"]) + 1), "at": ago(), "kind": kind, "text": text}, **more))
 
@@ -11084,7 +11194,8 @@ def inbox_suggestion(iid, body):
     SENT.append(dict(body, inbox=iid))
     x.pop("suggestion", None)
     x.pop("agent", None)
-    h = x.setdefault("handling", {"owner": "manager"})
+    # a hand-off conversation's suggestion leaves the item's processing state alone (assistant/inbox_handoff.go)
+    h = {} if s.get("conversation") else x.setdefault("handling", {"owner": "manager"})
     if action == "reject":
         _chain_add(x, "rejected", "你驳回了")
         h.update(state="looking", since=ago()); x["status"] = "working"
@@ -11098,7 +11209,12 @@ def inbox_suggestion(iid, body):
         text = body.get("text") or s["text"]
         edited = text != s["text"]
         _chain_add(x, "confirmed", "你确认了（改过文字）" if edited else "你确认了", detail=text, **({"edited": True} if edited else {}))
-        if s["kind"] == "reply":
+        if s["kind"] == "reply" and s.get("conversation"):
+            # a hand-off conversation's reply (#5932): sent and filed as replied; nobody follows the other side's answer
+            _chain_add(x, "sent", "发了邮件" if x.get("mail") else "发了飞书消息", link={"type": "source"})
+            x.pop("status", None)
+            x["done_at"], x["done_by"] = ago(), "replied"
+        elif s["kind"] == "reply":
             _chain_add(x, "sent", "发了邮件" if x.get("mail") else "发了飞书消息", link={"type": "source"})
             h.update(state="waiting", since=ago()); x["status"] = "working"
         elif s["kind"] == "agent":
@@ -12417,6 +12533,8 @@ def machine_launchers(mid=""):
         out = [l for l in out if l["name"] != "codex"]
     if mid and mid in os.environ.get("MOCK_NO_CODEX", "").split(","):  # computers without a Codex launcher (#5275)
         out = [l for l in out if l["name"] != "codex"]
+    if mid in RUN_HERE_CODEX:
+        out = [dict(l, run_here=True, prompt_optional=True) if l.get("agent") == "codex" else l for l in out]
     if MOCK_PROVIDERS:
         out += [{k: l[k] for k in ("name", "display_name", "base_url", "model", "source") if l.get(k)}
                 for l in LAUNCHERS if l["source"] == "persona" and l.get("kind") != "api"]
@@ -19774,7 +19892,8 @@ PLUGINS["example-gateway"] = {
            {"plugin": "example-gateway", "plugin_name": "Example 网关面板", "id": "notes", "title": "笔记（组件 v3）", "placement": "plugin_page", "size": "full"}]}
 # MOCK_SECRET_HANDOFF=1 (with MOCK_EXTENSIONS=1): secret references (docs/extensions/secret-providers.md). Example Notes'
 # API key holds a reference of a made-up provider, Example Vault, whose page lists who uses its references and one Always
-# rule; Persona's main conversation waits on a hand-off card (secret_handoff) for an Agent on the MacBook.
+# rule; Persona's main conversation waits on a hand-off card (secret_handoff) for an Agent on the MacBook. The model
+# provider `gateway` keeps its key as one of Example Vault's references, the server's own key as another.
 SECRET_HANDOFF = os.environ.get("MOCK_SECRET_HANDOFF") == "1"
 if SECRET_HANDOFF and PLUGINS_MODE:
     PLUGINS["example-notes"]["secrets"][0].update({"set": True, "reference": {
@@ -19792,6 +19911,22 @@ if SECRET_HANDOFF and PLUGINS_MODE:
              "reference": "op://Example/Gateway/key"}],
         "handoff_rules": [{"id": "0123456789abcdef", "reference": "op://Example/Registry token/credential", "launcher": "claude",
                            "machine": "macbook", "by": "device:d1", "at": "2026-01-01T10:00:00Z"}]}
+    # The provider that uses Example Vault's reference: added in Persona, its key a reference, the server's own key
+    # another (launcher_secret_references, docs/extensions/secret-providers.md "Launcher keys"; #3962 step 4c), with the
+    # features its form's computers page (launcher_scope) and a preset's key step (builtin_presets) need.
+    LAUNCHERS.insert(0, {
+        "name": "gateway", "display_name": "Example 网关", "source": "persona", "kind": "launcher", "base_url": "https://gateway.example.com",
+        "model": "example-large", "has_key": True, "auth": "bearer", "models": [{"id": "example-large", "context_window": 200000}],
+        "key_reference": {"provider": "example-vault", "provider_name": "Example Vault", "reference": "op://Example/Gateway/key",
+                          "title": "Gateway › key"},
+        "share": "all", "delivery": "on_demand", "own_service": "skip", "key_machines": ["server"],
+        "machine_key_references": {"server": {"provider": "example-vault", "provider_name": "Example Vault",
+                                              "reference": "op://Example/Server gateway/key", "title": "Server gateway › key"}}})
+    _features_without_launcher_references = features
+
+    def features():
+        f = _features_without_launcher_references()
+        return f + [x for x in ("launcher_secret_references", "launcher_scope", "builtin_presets") if x not in f]
 
 
 # MOCK_EXTENSION_PICKERS=1 (with MOCK_EXTENSIONS): a chat extension whose form picks one machine (format machine, Macs and
@@ -21867,7 +22002,7 @@ class H(BaseHTTPRequestHandler):
             INTERACTIONS[:] = [x for x in INTERACTIONS if not x["id"].startswith(("ix_bump_", "ix_churn"))]
             BUMPED["asks"].clear()
             BUMPED.pop("blocked", None)
-            TODOS[:] = copy.deepcopy(TODOS_INIT)
+            TODOS[:] = copy.deepcopy(TODOS_INIT); DECISION_DISMISSALS.clear()
             TODO_DECISIONS[:] = copy.deepcopy(TODO_DECISIONS_INIT)
             again = CODEX_INTERACTIONS + SCREEN_MULTI_INTERACTIONS + ASK_LONG_INTERACTIONS  # the cards back, unanswered
             ids = {x["id"] for x in again}
@@ -24745,6 +24880,7 @@ MOCK_HELP.append("MOCK_INBOX_EXTRA=<n>  收件箱多 n 封知悉即可的示例�
 MOCK_HELP.append("MOCK_CHANNELS=1  设置 › 插件 › 渠道：App、飞书机器人和微信已连接、飞书 /agent 只读、一个待绑定（令牌 example-token）、一个出错、一个在市场里；主对话第一条来自微信")
 MOCK_HELP.append("MOCK_EXCHANGES=1  主对话新布局的素材（#1666）：Persona 发给任务的长消息、任务带链接和证据的长汇报、督办消息")
 MOCK_HELP.append("MOCK_MARKDOWN=1  任务往来和回执里带 **粗体**、`代码`、标题的原话（#2363）：应渲染成 Markdown，不露标记")
+MOCK_HELP.append("MOCK_TASKS_STARTING=1  再加一个 Agent 还没起来的任务「检查启动状态」（Starting）和一张 wake=resumed 的交接卡（#5569）；MOCK_TASK_DECISION=1 的拍板任务带 decision_review，可点 Later / Don't handle（POST /todos/{id}/decision-dismiss、decision-undo-dismiss）")
 MOCK_HELP.append("MOCK_TASK_RENAMED=1  整理发布说明这个任务在回执写好后改了名：回执应显示新名字「写本周发布说明」（#3036）")
 MOCK_HELP.append("MOCK_AUTO_CONVERSATIONS=1  助手对话带来源 origin（feature conversation_origin）：另有 10 段自动对话（收件箱 6、定时任务 2、飞书 /agent、对话派生），侧边栏「最近」和用户自己的一起列、带来源标记，「全部对话」按来源筛（#3264、#5195）")
 MOCK_HELP.append("MOCK_EXTERNAL=1  和 MOCK_AUTO_CONVERSATIONS=1 一起用：飞书 /agent 那段带上请求和上下文，另加一段别的扩展开的（origin extension），两段都是外部的（#3758）")
@@ -25330,6 +25466,8 @@ def mock_showcase(handler, ui, body):
     request = json.loads(body) if body else {}
     if ui == "controls":
         return _showcase_controls(handler, view, request)
+    if request.get("action") == "context":
+        return _showcase_context(handler, request.get("values") or {})
     if request.get("action"):
         handler.send_json({"toast": "快照测试不执行写操作"})
     else:
@@ -25371,6 +25509,17 @@ def _showcase_controls(handler, view, request):
         if when is not None and bool(c.get("on")) == when:
             c["action"]["confirm"] = words
     handler.send_json({"items": [changed]} if changed else {"view": view})
+    return True
+
+
+def _showcase_context(handler, values):
+    """A diff's hidden lines (UI version 5's `context`, #827): made-up lines of a 90-line file, as many as asked."""
+    total = 90
+    start = max(1, int(values.get("from") or 1))
+    to = values.get("to")
+    end = total if to in (None, "", "end") else min(total, int(to))
+    lines = [f"// {values.get('path', 'file')}: line {n}" for n in range(start, end + 1)]
+    handler.send_json({"lines": {"path": values.get("path", ""), "side": "new", "start": start, "lines": lines, "total": total}})
     return True
 
 
@@ -25685,6 +25834,18 @@ ADD_COMPUTER_ERRORS = {
     "mesh_member": (409, "这台 hub 是组里的成员，到中心 hub 上添加电脑"),
     "too_many_pending": (429, "已经有 3 台电脑在等确认"),
 }
+# add.manager's own refusals, as the hub words them (server/internal/hub/machines_add.go, locales hub-pairing: no_assistant,
+# assistant_installing, assistant_away; owners_unknown is the hub's plain English), by the request's Accept-Language.
+ADD_MANAGER_ERRORS = {
+    "no_manager": (404, {"en": "There\u2019s no such assistant", "zh-Hans": "没有这个助手", "ja": "そのアシスタントはありません"}),
+    "installing": (409, {"en": "This assistant isn\u2019t installed yet. Add the computer once it is",
+                         "zh-Hans": "这个助手还没装好，装好后再添加电脑",
+                         "ja": "このアシスタントはまだインストールされていません。インストールが終わってからコンピュータを追加してください"}),
+    "assistant_offline": (503, {"en": "This computer is with an assistant that\u2019s offline right now, so it can\u2019t be moved. Try again when that assistant is back",
+                                "zh-Hans": "这台电脑现在所在的助手不在线，挪不过来。等那个助手上线后再试",
+                                "ja": "このコンピュータが今いるアシスタントがオフラインのため、移動できません。そのアシスタントがオンラインに戻ってからもう一度お試しください"}),
+    "owners_unknown": (503, "the hub could not read which manager carries which machine; try again"),
+}
 
 
 def _add_computer_push():
@@ -25744,7 +25905,11 @@ if ADD_COMPUTER:
                 return False  # an app's code: the handler's own
             code = os.environ.get("MOCK_ADD_COMPUTER_ERROR", "")
             if add and code:
-                status, text = ADD_COMPUTER_ERRORS.get(code, (409, code))
+                if code in ADD_MANAGER_ERRORS:
+                    status, text = ADD_MANAGER_ERRORS[code]
+                    if isinstance(text, dict): text = text[cron_lang(handler.headers.get("Accept-Language"))]
+                else:
+                    status, text = ADD_COMPUTER_ERRORS.get(code, (409, code))
                 reply = {"error": text, "code": code}
                 if code == "tls_required":
                     reply["action"] = "enable_tls"
@@ -25849,7 +26014,7 @@ if ADD_COMPUTER:
 
 MOCK_HELP.append("MOCK_ADD_COMPUTER=1|seed  机器 › 添加电脑（#287）：features 有 machines_add / machine_trust，pair-codes 的 add 加一台待确认的电脑，"
                  "MOCK_ADD_COMPUTER_JOIN 秒后（默认 8，0 = 不来）它连上来等确认；seed 另列一台没连过的待确认电脑、Mac Studio 离线（link_offline）；"
-                 "MOCK_ADD_COMPUTER_ERROR=tls_required|mesh_member|too_many_pending 拒绝添加，MOCK_ADD_COMPUTER_NO_SITE=1 不给安装命令；"
+                 "MOCK_ADD_COMPUTER_ERROR=tls_required|mesh_member|too_many_pending|no_manager|installing|assistant_offline|owners_unknown 拒绝添加，MOCK_ADD_COMPUTER_NO_SITE=1 不给安装命令；"
                  "add.manager 把电脑加到那个助手名下（回包 manager；助手离线时 /machines 先不列它），MOCK_ADD_COMPUTER_NO_MANAGER=1 模拟不认它的旧 hub（回包没有 manager）")
 
 # ---------- area: the main conversation's readiness (#287, docs/assistant/onboarding.md 4.4–4.6, 5.1–5.4) ----------
