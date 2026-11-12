@@ -1228,6 +1228,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return nil, err
 		}
 		return n.assistantMemory(a)
+	case "session.switch": // the switch picked a moment before, carried out now with no message (launcher_switch.go)
+		var to struct {
+			From string `json:"from"`
+		}
+		_ = json.Unmarshal(params, &to)
+		return ok(n.switchIdle(ctx, p.SessionID, p.Launcher, to.From, p.Model))
 	case "session.send":
 		var opts sendOpts
 		_ = json.Unmarshal(params, &opts)

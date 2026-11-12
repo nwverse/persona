@@ -130,6 +130,19 @@ running Agent to another provider".
   the `launcher_switch_now` capability is refused by the hub (`node_outdated`) before anything is typed. An agent a
   usage limit stopped is sent `agents/limit_continue` when the assistant gives no text; its pending usage-limit
   continuation is not sent afterwards (its turn moved on: `workGuard` drops the wake).
+- **Many at once** (`agents_switch`, #6008): when the user asks, the assistant moves a list of agents, or every running
+  Claude Code agent on a computer and/or launcher, with one confirmation. One a usage limit stopped is switched with the
+  continuation (`switch_now`); an idle one is switched with no message (node `session.switch`, capability
+  `launcher_switch_idle`: the same quit and resume, then it waits on the new launcher for whatever message comes next);
+  a busy one (working, waiting for the user, starting, background work, or refused `switch_busy` by the node) is queued
+  by the manager and switched when its turn ends, with the continuation if that turn ended on a usage limit. The queue
+  is the manager's (settings key `agents.switch_queue`, kept over restarts), apart from the user's own pick
+  (`pending_switch`, carried out by their message): a queued switch is picked only when it is carried out, and is
+  dropped when the agent moved to another launcher meanwhile or after a day. `agents_list` shows a queued one as
+  `switch_queued=<launcher>`. A stopped agent Persona started (one in the batch, or a queued one that stopped before
+  its turn ended) is not started: `session.switch` with `launcher` points its record at the new launcher and model, so
+  its next Resume, or the message that resumes it, comes up there ("switched (takes effect when resumed)"). A switch
+  that fails on the node (it did not come up and rolled back) is reported as refused with its reason and not retried.
 - **A busy agent is not switched**: one that works, waits for the user, is starting, or has background work a quit
   would end gets the message on its launcher as always, and the switch waits for a later message. Background work is the
   row's (running subagents and workflows, a `/loop`) and every background command or monitor of its claude process,
