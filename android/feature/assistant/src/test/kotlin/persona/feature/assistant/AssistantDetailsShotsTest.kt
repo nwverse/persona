@@ -129,7 +129,7 @@ class AssistantDetailsShotsTest {
             rule.onNodeWithText("Persona").performClick()
             capture("$name-1-menu", dialog = true)
             // iOS's heading names the conversation and what it runs on, in every style
-            rule.onNodeWithText("Trip plan · claude · claude-opus-4-5").assertExists()
+            rule.onNodeWithText("Trip plan · claude · Opus 4.5").assertExists()
             rule.onNodeWithText("Copy info").assertExists()
             rule.onNodeWithText("Copy directory").performClick(); rule.waitForIdle()
 

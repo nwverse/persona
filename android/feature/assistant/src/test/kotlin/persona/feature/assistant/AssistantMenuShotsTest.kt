@@ -54,7 +54,7 @@ class AssistantMenuShotsTest {
         for (d in listOf(false, true)) {
             dark = d
             rule.waitForIdle()
-            rule.onNodeWithText("Main chat · claude · claude-opus-4-5").assertExists()
+            rule.onNodeWithText("Main chat · claude · Opus 4.5").assertExists()
             rule.onNodeWithText("Compact context").assertExists()
             rule.onNodeWithText("New main chat").assertExists()
             val bitmap = rule.onNode(isDialog()).captureToImage().asAndroidBitmap()

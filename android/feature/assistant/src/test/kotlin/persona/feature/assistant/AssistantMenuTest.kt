@@ -103,24 +103,35 @@ class AssistantMenuTest {
         val config = AssistantConfig(machineId = "mac", launcher = "glm", cwd = "~/assistant")
         fun title(session: Session?, key: SessionKey?, main: Boolean, group: String? = null) =
             AssistantCopyText(session, key, main, config, assistantMachine = "", machines = emptyList()).menuTitle(res, "Persona", group)
-        // The main conversation follows the settings' launcher and shows the model it runs, a provider path cut to its last part.
-        val mainRow = Session(machineId = "mac", sessionId = "main", title = "Whatever", launcher = "claude", model = "anthropic/opus")
-        assertEquals("Main chat · glm · opus", title(mainRow, main, main = true))
+        // The main conversation follows the settings' launcher and shows the model it runs by its short name (the pill's and the
+        // Agents rows'), never the id: iOS's `Fmt.model` shows "claude-opus-4-5", Android says "Opus 4.5".
+        val mainRow = Session(machineId = "mac", sessionId = "main", title = "Whatever", launcher = "claude", model = "anthropic/claude-opus-4-5")
+        assertEquals("Main chat · glm · Opus 4.5", title(mainRow, main, main = true))
         // A stored pick (#5055) names the launcher and the model its next message runs on, before either.
         val picked = mainRow.copy(modelPick = ModelPick("work", "work/deepseek-v4-flash", "high"))
-        assertEquals("Main chat · work · deepseek-v4-flash", title(picked, main, main = true))
+        assertEquals("Main chat · work · Deepseek V4 Flash", title(picked, main, main = true))
         // A pick of the launcher's default model keeps the model it runs now.
-        assertEquals("Main chat · work · opus", title(mainRow.copy(modelPick = ModelPick("work")), main, main = true))
+        assertEquals("Main chat · work · Opus 4.5", title(mainRow.copy(modelPick = ModelPick("work")), main, main = true))
+        // The short names as the rows say them: a dated Claude id, a GPT id, an id with nothing to shorten.
+        assertEquals("Main chat · glm · Haiku 4.5", title(mainRow.copy(model = "claude-haiku-4-5-20251001"), main, main = true))
+        assertEquals("Main chat · glm · GPT-5.4 Mini", title(mainRow.copy(model = "gpt-5.4-mini"), main, main = true))
+        // No model to name (not picked, not running yet): the heading ends with the launcher.
+        assertEquals("Main chat · glm", title(mainRow.copy(model = null), main, main = true))
+        assertEquals("Main chat · glm", title(mainRow.copy(model = "  "), main, main = true))
         // Another conversation is named by its title and keeps its own launcher; with no title of its own it takes the persona's name.
         val side = Session(machineId = "mac", sessionId = "side", title = "Trip plan", launcher = "claude")
         assertEquals("Trip plan · claude", title(side, this.side, main = false))
+        assertEquals("Trip plan · claude · Opus 4.5", title(side.copy(model = "claude-opus-4-5"), this.side, main = false))
         assertEquals("Persona · claude", title(side.copy(title = "Claude Code"), this.side, main = false))
         assertEquals("Persona · claude", title(side.copy(title = ""), this.side, main = false))
         // The blank page: a conversation that would start on the settings' launcher.
         assertEquals("New chat · glm", title(null, null, main = false))
         // With several hub groups the selected one's name ends it.
-        assertEquals("Main chat · glm · opus · Office", title(mainRow, main, main = true, group = "Office"))
+        assertEquals("Main chat · glm · Opus 4.5 · Office", title(mainRow, main, main = true, group = "Office"))
         assertEquals("New chat · glm · Office", title(null, null, main = false, group = "Office"))
+        // Copy info is text for a terminal or another agent: it keeps the model's id (its provider path cut, as iOS does).
+        val info = AssistantCopyText(mainRow, main, main = true, config = config, assistantMachine = "", machines = emptyList()).info(res)
+        assertEquals(true, info.lines().contains("Launcher: glm · Model: claude-opus-4-5"))
     }
 
     @Test fun theHeadingIsTranslated() {
@@ -128,8 +139,8 @@ class AssistantMenuTest {
         for ((tag, words) in mapOf("zh" to ("主对话" to "新对话"), "ja" to ("メインチャット" to "新しいチャット"))) {
             val localized = android.content.res.Configuration(base.resources.configuration).apply { setLocale(java.util.Locale.forLanguageTag(tag)) }
             val res = base.createConfigurationContext(localized).resources
-            val session = Session(machineId = "mac", sessionId = "main", launcher = "claude", model = "opus")
-            assertEquals("${words.first} · claude · opus", AssistantCopyText(session, main, main = true, config = null, assistantMachine = "", machines = emptyList()).menuTitle(res, "Persona"))
+            val session = Session(machineId = "mac", sessionId = "main", launcher = "claude", model = "claude-opus-4-5")
+            assertEquals("${words.first} · claude · Opus 4.5", AssistantCopyText(session, main, main = true, config = null, assistantMachine = "", machines = emptyList()).menuTitle(res, "Persona"))
             assertEquals("${words.second} · claude", AssistantCopyText(null, null, main = false, config = null, assistantMachine = "", machines = emptyList()).menuTitle(res, "Persona"))
         }
     }

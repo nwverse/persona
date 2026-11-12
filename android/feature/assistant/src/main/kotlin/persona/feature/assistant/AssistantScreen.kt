@@ -1091,7 +1091,7 @@ fun AssistantScreen(
         val glassIcons = PersonaTheme.style == AppStyle.Glass
         fun action(item: AssistantMenuItem, separator: Boolean): JAction = rawAction(item, separator)
             .copy(icon = item.icon.takeIf { glassIcons || item == AssistantMenuItem.BackToMain })
-        // iOS's heading: which conversation and what it runs on ("Main chat · claude · opus").
+        // iOS's heading: which conversation and what it runs on ("Main chat · claude · Opus 4.5").
         JActionSheet(title = copyText.menuTitle(resources, LocalPersonaName.current, hubGroup), onDismiss = { menu = false },
             actions = sections.flatMapIndexed { index, items -> items.mapIndexed { i, item -> action(item, separator = index > 0 && i == 0) } })
     }

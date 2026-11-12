@@ -8,6 +8,7 @@ import persona.core.contracts.SessionKey
 import persona.core.contracts.api.AssistantConfig
 import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcon
+import persona.core.domain.modelShortName
 
 /**
  * One item of the title menu (iOS `AssistantTopBar.menuItems`) with its words and iOS's icon for it (`Theme.Icon`, by
@@ -66,11 +67,16 @@ internal class AssistantCopyText(private val session: Session?, private val key:
         return picked ?: (if (main) configured ?: own else own ?: configured) ?: "claude"
     }
 
-    /** The model its next message runs on as far as the app knows: its stored pick's, else the one it runs now (iOS `pickedModel ?? session?.model`). */
-    val model: String? get() = modelShown(session?.modelPick?.model) ?: modelShown(session?.model)
+    /**
+     * The model its next message runs on as far as the app knows: its stored pick's, else the one it runs now (iOS
+     * `pickedModel ?? session?.model`), by its short name ("Opus 4.5", `modelShortName`: the pill and the Agents rows say it
+     * so). iOS's `Fmt.model` shows the id with only its provider path cut; the spec keeps raw model IDs out of what people
+     * read (`DESIGN_SYSTEM.md` 3.4, 5.6), so this differs on purpose. Copy info keeps the id: that text is for a terminal.
+     */
+    val model: String? get() = listOf(session?.modelPick?.model, session?.model).firstNotNullOfOrNull { modelShortName(it).takeIf(String::isNotEmpty) }
 
     /**
-     * The menu's heading (iOS `AssistantTopBar.menuTitle`): which conversation and what it runs on, "Main chat · claude · opus"
+     * The menu's heading (iOS `AssistantTopBar.menuTitle`): which conversation and what it runs on, "Main chat · claude · Opus 4.5"
      * for the main conversation, "<title> · claude" for another (the persona's name for one with no title of its own), and
      * "New chat · claude" on a blank page. With several hub groups paired the selected one's name ends it ([group]).
      */
