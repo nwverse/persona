@@ -1,5 +1,16 @@
 # Lessons: hub / node and networking
 
+## Authority handover must include the trusted keeper roster (#5228)
+
+A machine its manager keeps has moved out of hub.json, but its hub-owned keeper
+record still authorizes routing. Building sharing authority from cfgEntries alone
+leaves that manager's authority map empty while per-request routing produces a
+valid authority: creation skips as authority_stale and persists no receipt.
+Use knownEntries for this authority handover, retain entryOwner and database
+routing checks, and leave the separate machine-config handover alone. A manager's
+report is not a keeper record. Test a kept machine through the real handover, not
+only by injecting a matching authority map into both sides of a fixture.
+
 ## A creation reply is not a durable receipt (#5215)
 
 A successful runtime reply and `ownership_unbound` do not reveal whether the
