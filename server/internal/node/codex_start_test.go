@@ -233,6 +233,8 @@ func TestCodexStartBypassLauncherArguments(t *testing.T) {
 			n, _, _, _ := codexStartHerdr(t, 0)
 			launchKeyHome(t)
 			dir := t.TempDir()
+			// Native starts read shell rc files; keep the fake launcher away from the user's rc.
+			t.Setenv("ZDOTDIR", dir)
 			self, err := os.Executable()
 			if err != nil {
 				t.Fatal(err)
