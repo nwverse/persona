@@ -100,8 +100,10 @@ func importEnvSkip(k, v string) string {
 	if slices.Contains(importComputerEnv, k) {
 		return envSkipComputer
 	}
-	if credentialWord(strings.Split(k, "_")) {
-		return envSkipCredential
+	for _, w := range strings.Split(k, "_") {
+		if slices.Contains(importCredentialWords, strings.ToUpper(w)) {
+			return envSkipCredential
+		}
 	}
 	if urlWithUser(v) {
 		return envSkipCredential
@@ -113,14 +115,6 @@ func importEnvSkip(k, v string) string {
 		return envSkipShell
 	}
 	return ""
-}
-
-// credentialWord: one of a name's words (any case) names a secret: importCredentialWords, or one of extra.
-func credentialWord(words []string, extra ...string) bool {
-	return slices.ContainsFunc(words, func(w string) bool {
-		w = strings.ToUpper(w)
-		return slices.Contains(importCredentialWords, w) || slices.Contains(extra, w)
-	})
 }
 
 // shellExpands: the shell would make something else of v ($…, `…`, a leading ~).

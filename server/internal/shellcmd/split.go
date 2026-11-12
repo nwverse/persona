@@ -20,6 +20,7 @@ type Segment struct {
 func Split(cmd string) (segs []Segment, ok bool) {
 	r := []rune(cmd)
 	var seg Segment
+	var redirects []string // seg's, joined when it ends: one string grown per redirection would be quadratic
 	var word strings.Builder
 	inWord := false
 	start := 0
@@ -33,10 +34,11 @@ func Split(cmd string) (segs []Segment, ok bool) {
 	endSeg := func(at int) {
 		endWord()
 		seg.Text = strings.TrimSpace(string(r[start:at]))
+		seg.Redirect = strings.Join(redirects, " ")
 		if len(seg.Words) > 0 || seg.Redirect != "" {
 			segs = append(segs, seg)
 		}
-		seg = Segment{}
+		seg, redirects = Segment{}, nil
 		start = at
 	}
 	// skipGroup copies $( … ) / `…` / <( … ) into the word, nesting and quotes respected; false when it never closes.
@@ -141,15 +143,15 @@ func Split(cmd string) (segs []Segment, ok bool) {
 			return nil, false // heredoc / herestring
 		case c == '>' || c == '<' || (c == '&' && i+1 < len(r) && r[i+1] == '>'):
 			// A redirection: an fd number just before it belongs to it; then its target.
-			op := ""
+			var op strings.Builder // one string grown a character at a time would be quadratic
 			if inWord && strings.Trim(word.String(), "0123456789") == "" {
-				op = word.String()
+				op.WriteString(word.String())
 				word.Reset()
 				inWord = false
 			}
 			endWord()
 			for i < len(r) && strings.ContainsRune("<>&", r[i]) {
-				op += string(r[i])
+				op.WriteRune(r[i])
 				i++
 			}
 			for i < len(r) && (r[i] == ' ' || r[i] == '\t') {
@@ -173,16 +175,16 @@ func Split(cmd string) (segs []Segment, ok bool) {
 					inWord = false
 					continue
 				}
-				op += string(r[i])
+				op.WriteRune(r[i])
 				i++
 			}
 			// "2>&1": the target was the fd after &.
-			if strings.HasSuffix(op, "&") && i < len(r) && r[i] >= '0' && r[i] <= '9' {
-				op += string(r[i])
+			if strings.HasSuffix(op.String(), "&") && i < len(r) && r[i] >= '0' && r[i] <= '9' {
+				op.WriteRune(r[i])
 				i++
 			}
 			i--
-			seg.Redirect = strings.TrimSpace(seg.Redirect + " " + op)
+			redirects = append(redirects, op.String())
 		case c == '|' || c == ';' || c == '&' || c == '\n':
 			endSeg(i)
 			if i+1 < len(r) && (c == '|' && r[i+1] == '|' || c == '&' && r[i+1] == '&') {
