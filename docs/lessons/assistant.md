@@ -380,3 +380,12 @@ shown. The owner could not follow and stopped trusting the replies. The CLAUDE.m
 with the rule that everything written for the owner (replies, cards, `notify_user`, `leader_progress`) assumes they
 have seen nothing else: plain names instead of codes, one sentence on where an unseen thing came from, and an approval
 only for something they were shown, with a link.
+
+## `--tools` filters ToolSearch too (#5839)
+
+With tool search back on (#5838), the other MCP servers' tools are deferred, and only `ToolSearch` loads them. The
+assistant names its built-ins with `--tools`, and that list filters `ToolSearch` like any other built-in: without it the
+request lists the deferred tools by name but nothing can load them (the transcript's `deferred_tools_delta` says
+`toolSearchAbsent: true`), so the user's own MCP servers and claude.ai connectors were unusable from the assistant.
+Measured on Claude Code 2.1.321 with a 256-tool connector: with `--tools Bash,Read` the connector's tools were
+unreachable; with `ToolSearch` added the model loaded one on request, and the first request stayed ~15K tokens.
