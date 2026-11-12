@@ -50,9 +50,9 @@ func gatewayRefused(raw string) string {
 
 // groupDraft is an alias group (or one launch, newImportGroup) as a draft: the fields an import would save, the key in
 // the clear, and of the rest only what holds no secret (the draft goes back to the browser, not into sealed storage).
-// On top of the import's rules (importEnv) it leaves out the variables named like secrets (secretEnvName), a proxy
-// with a query or fragment, arguments that may hold a secret (setArgs) and the headers setHeaders leaves out. env is
-// the launch's (its first alias's for a group: the group takes its settings). Name is left to the caller.
+// On top of the import's rules (importEnv) it leaves out the variables named or valued like secrets (secretEnv), a
+// proxy with a query or fragment, arguments that may hold a secret (setArgs) and the headers setHeaders leaves out.
+// env is the launch's (its first alias's for a group: the group takes its settings). Name is left to the caller.
 func groupDraft(g importGroup, env map[string]string) pasteDraft {
 	l := g.ManagedLauncher
 	d := pasteDraft{Provider: pastedProvider{
@@ -66,7 +66,7 @@ func groupDraft(g importGroup, env map[string]string) pasteDraft {
 	skipped := slices.Clone(g.SkippedEnv)
 	var lines []string
 	for i, line := range strings.Split(g.env, "\n")[:len(g.EnvNames)] { // importEnv's lines, one a name
-		if name := g.EnvNames[i]; secretEnvName(name) {
+		if name := g.EnvNames[i]; secretEnv(name, env[name]) {
 			skipped = append(skipped, skippedEnv{Name: name, Reason: envSkipCredential})
 		} else {
 			lines, d.EnvNames = append(lines, line), append(d.EnvNames, name)
@@ -97,8 +97,8 @@ func envDraft(env map[string]string, args []string) (pasteDraft, string) {
 	return groupDraft(newImportGroup("", zshrcAlias{Env: env, Args: args}, base), env), ""
 }
 
-// pasteSecretWords: a header's name, an argument or a variable's name holding one of these (any case, separators
-// aside) may name or hold a secret. A false positive only names one more thing left out.
+// pasteSecretWords: a header's or a variable's name holding one of these (any case, separators aside) may name a
+// secret. A false positive only names one more thing left out.
 var pasteSecretWords = []string{"KEY", "TOKEN", "AUTH", "SECRET", "PASS", "COOKIE", "SESSION", "BEARER", "CREDENTIAL",
 	"JWT", "SIGNATURE"}
 
@@ -114,21 +114,85 @@ func holdsSecretWord(s string) bool {
 	return slices.ContainsFunc(pasteSecretWords, func(w string) bool { return strings.Contains(s, w) })
 }
 
-// secretEnvName: a variable a paste leaves out as a credential on top of importEnv's words (GITHUB_PAT, OPENAIKEY,
-// ACCESSTOKEN, RELAY_AUTH, SESSIONID): its name holds one of pasteSecretWords, a word TOKENS aside
-// (CLAUDE_CODE_MAX_OUTPUT_TOKENS is a number), or has a word PAT or PWD.
-func secretEnvName(name string) bool {
+// nameWords is a name's words, upper-cased: split at - _ . and blanks and where camelCase starts a word (XApiKey:
+// X, API, KEY; bypassPermissions: BYPASS, PERMISSIONS).
+func nameWords(s string) []string {
+	var words []string
+	var cur []rune
+	rs := []rune(s)
+	for i, r := range rs {
+		sep := r == '-' || r == '_' || r == '.' || unicode.IsSpace(r)
+		// An upper-case letter after a lower-case one or a digit, or one that starts a word after an acronym (the A of XApi).
+		starts := i > 0 && unicode.IsUpper(r) && (unicode.IsLower(rs[i-1]) || unicode.IsDigit(rs[i-1]) ||
+			unicode.IsUpper(rs[i-1]) && i+1 < len(rs) && unicode.IsLower(rs[i+1]))
+		if (sep || starts) && len(cur) > 0 {
+			words, cur = append(words, strings.ToUpper(string(cur))), nil
+		}
+		if !sep {
+			cur = append(cur, r)
+		}
+	}
+	if len(cur) > 0 {
+		words = append(words, strings.ToUpper(string(cur)))
+	}
+	return words
+}
+
+// secretHeaderWords: a header name with one of these as a word (nameWords) names a secret too, beyond
+// pasteSecretWords (X-Api, X-Access, X-Sig, X-Otp…).
+var secretHeaderWords = []string{"PWD", "HMAC", "SIG", "SIGNATURE", "OTP", "SID", "ACCESS", "API"}
+
+// secretHeader: a header that is a credential, by its name (pasteSecretWords, secretHeaderWords) or its value
+// (secretValue).
+func secretHeader(name, value string) bool {
+	return holdsSecretWord(name) || slices.ContainsFunc(nameWords(name), func(w string) bool { return slices.Contains(secretHeaderWords, w) }) ||
+		secretValue(value)
+}
+
+// secretValuePrefixes start the keys of common services (OpenAI-style sk-, GitHub, Slack, AWS, Google, GitLab).
+var secretValuePrefixes = []string{"sk-", "ghp_", "gho_", "ghs_", "github_pat_", "xox", "AKIA", "AIza", "glpat-"}
+
+// secretValue: v looks like a secret whatever it is named: it holds a Bearer credential (any case) or starts like a
+// common service's key.
+func secretValue(v string) bool {
+	v = strings.TrimSpace(v)
+	return strings.Contains(strings.ToLower(v), "bearer ") ||
+		slices.ContainsFunc(secretValuePrefixes, func(p string) bool { return strings.HasPrefix(v, p) })
+}
+
+// secretEnv: a variable a paste leaves out as a credential on top of importEnv's rules: its name holds one of
+// pasteSecretWords, a word TOKENS aside (CLAUDE_CODE_MAX_OUTPUT_TOKENS is a number), has a word PAT or PWD
+// (GITHUB_PAT, OPENAIKEY, ACCESSTOKEN, RELAY_AUTH, SESSIONID) or ends in _HEADERS (OTEL_EXPORTER_OTLP_HEADERS); or
+// its value looks like a secret (secretValue).
+func secretEnv(name, value string) bool {
 	words := strings.Split(strings.ToUpper(name), "_")
-	if slices.Contains(words, "PAT") || slices.Contains(words, "PWD") {
+	if slices.Contains(words, "PAT") || slices.Contains(words, "PWD") || strings.HasSuffix(strings.ToUpper(name), "_HEADERS") ||
+		secretValue(value) {
 		return true
 	}
 	return holdsSecretWord(strings.Join(slices.DeleteFunc(words, func(w string) bool { return w == "TOKENS" }), ""))
 }
 
-// setArgs keeps the launch's arguments unless one of them may hold a secret or a setting's text (a {, an =, a name
-// of pasteSecretWords: --api-key S, --settings '{…}'): then none, as args_left_out.
+// secretOptionWords: an option named with one of these as a word (nameWords) takes a secret: --api-key, --token.
+var secretOptionWords = []string{"KEY", "APIKEY", "TOKEN", "AUTH", "SECRET", "PASSWORD", "PASS", "PASSWD", "PWD", "COOKIE",
+	"BEARER", "CREDENTIAL", "CREDENTIALS", "JWT"}
+
+// setArgs keeps the launch's arguments unless one may hold a secret or a setting's text, then none (args_left_out):
+// an option named for a secret (secretOptionWords: its value may be the secret), or a value (an argument, or an
+// option's after its =) with a { or an =, or that looks like a secret (secretValue). --permission-mode
+// bypassPermissions, --fork-session and --allowedTools "Bash(git:*)" stay.
 func (d *pasteDraft) setArgs(args []string) {
-	if slices.ContainsFunc(args, func(a string) bool { return strings.ContainsAny(a, "{=") || holdsSecretWord(a) }) {
+	risky := func(a string) bool {
+		value := a
+		if name, ok := strings.CutPrefix(a, "-"); ok {
+			name, value, _ = strings.Cut(name, "=")
+			if slices.ContainsFunc(nameWords(name), func(w string) bool { return slices.Contains(secretOptionWords, w) }) {
+				return true
+			}
+		}
+		return strings.ContainsAny(value, "{=") || secretValue(value)
+	}
+	if slices.ContainsFunc(args, risky) {
 		addNote(&d.Notes, pasteNote{Code: noteArgsLeftOut})
 		return
 	}
@@ -179,9 +243,10 @@ func parseShell(lines []shellcmd.Line) pasteResult {
 	}
 	env, baseAt := map[string]string{}, 0 // baseAt: the line setting ANTHROPIC_BASE_URL
 	var aliases, commands []shellLaunch
+	// Past pasteLaunchMost claude launches or pasteEnvMost variables the rest is not read (too_many): each launch's
+	// draft reads all of E, so the two bound the work. Aliases on one gateway still merge, exports below them still count.
 	recognized, cut := false, false
-	// Past pasteMost claude launches the rest is not read (too_many): each launch's draft reads all of E.
-	full := func() bool { cut = len(aliases)+len(commands) > pasteMost; return cut }
+	launched := func() bool { cut = len(aliases)+len(commands) == pasteLaunchMost; return cut }
 read:
 	for _, l := range lines {
 		if t := strings.TrimSpace(l.Text); t == "" || strings.HasPrefix(t, "#") {
@@ -210,13 +275,18 @@ read:
 						tell(l.Start, noteNotClaude, 0, d.Name)
 						continue
 					}
-					if aliases = append(aliases, shellLaunch{alias: d.Name, line: l.Start, env: a.Env, args: a.Args}); full() {
+					if launched() {
 						break read
 					}
+					aliases = append(aliases, shellLaunch{alias: d.Name, line: l.Start, env: a.Env, args: a.Args})
 				}
 			case words[0] == "export" || !slices.ContainsFunc(words, func(w string) bool { return !shellcmd.AssignRe.MatchString(w) }):
 				for _, w := range words {
 					if k, v, ok := strings.Cut(w, "="); ok && shellcmd.AssignRe.MatchString(w) {
+						if _, set := env[k]; !set && len(env) == pasteEnvMost {
+							cut = true
+							break read
+						}
 						env[k], recognized = v, true
 						if k == "ANTHROPIC_BASE_URL" {
 							baseAt = l.Start
@@ -231,9 +301,10 @@ read:
 					continue
 				}
 				recognized = true
-				if commands = append(commands, shellLaunch{line: l.Start, env: withEnv(env, own), args: slices.Clone(words[i+1:])}); full() {
+				if launched() {
 					break read
 				}
+				commands = append(commands, shellLaunch{line: l.Start, env: withEnv(env, own), args: slices.Clone(words[i+1:])})
 			}
 		}
 	}
@@ -339,9 +410,10 @@ func unsafeHeaderValue(v string) bool {
 }
 
 // setHeaders sorts a paste's headers (name, value) into the draft's ("Name: value" lines) and the ones left out with
-// why: request basics (when protocol: a curl command's, a cindy endpoint's), names of pasteSecretWords (credential),
-// values a line would not keep (unsafe), and every other header of a direct API provider, which takes none. A name
-// that is no plain token is neither kept nor named: header_unreadable, once. At most pasteSkippedMost are named.
+// why: request basics (when protocol: a curl command's, a cindy endpoint's), credentials by name or value
+// (secretHeader), values a line would not keep (unsafe), and every other header of a direct API provider, which takes
+// none. A name that is no plain token is neither kept nor named: header_unreadable, once. At most pasteSkippedMost are
+// named.
 func (d *pasteDraft) setHeaders(hs [][2]string, protocol bool) {
 	var lines []string
 	for _, h := range hs {
@@ -352,7 +424,7 @@ func (d *pasteDraft) setHeaders(hs [][2]string, protocol bool) {
 			continue
 		case protocol && slices.Contains(protocolHeaders, strings.ToLower(h[0])):
 			why = headerSkipProtocol
-		case holdsSecretWord(h[0]):
+		case secretHeader(h[0], h[1]):
 			why = headerSkipCredential
 		case unsafeHeaderValue(h[1]):
 			why = headerSkipUnsafe

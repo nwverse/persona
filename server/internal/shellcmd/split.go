@@ -3,7 +3,10 @@
 // share it.
 package shellcmd
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+)
 
 // Segment is one simple command of a command line.
 type Segment struct {
@@ -184,7 +187,7 @@ func Split(cmd string) (segs []Segment, ok bool) {
 				i++
 			}
 			i--
-			redirects = append(redirects, op.String())
+			redirects = append(redirects, strings.TrimRightFunc(op.String(), unicode.IsSpace)) // as TrimSpace of the joined ones had it
 		case c == '|' || c == ';' || c == '&' || c == '\n':
 			endSeg(i)
 			if i+1 < len(r) && (c == '|' && r[i+1] == '|' || c == '&' && r[i+1] == '&') {
