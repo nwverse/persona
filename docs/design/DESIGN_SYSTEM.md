@@ -1693,16 +1693,19 @@ page the user watches during the meeting is the page they keep writing in after 
   the regular sizes, cut at the end (VoiceOver reads them whole); the words are not a button. At the accessibility sizes
   the words take what they need and the time goes under them. The last row has **Live Transcript** (one line, the
   `Theme.Icon.expand` / `collapse` chevron after it, read with Expanded / Collapsed) on the leading side and **Full
-  Transcript** on the trailing side, one under the other at the accessibility sizes. Live Transcript opens the card in
-  place, closed by default and kept while the page is open (on `Theme.Motion.reveal` / `conceal`): in the regular
-  layout, where only the thread scrolls, only the newest highlight (the latest `at`) stays above it; then Live
-  Transcript with how far behind on the right, the Live box's newest lines drawn as the Live box draws them, and Full
-  Transcript. At the accessibility sizes every highlight stays above the lines. A time pushes the whole timeline
-  scrolled to the first of the phone's lines in that highlight's minute (`at` to `end`), every such line lit for two
-  seconds with `Theme.accentTint` (cleared on `Theme.Motion.standard`), or the line `RecordingMinutes.sentenceIndex`
-  picks when none starts there. The switch from the Live box to the first highlights cross-fades on
-  `Theme.Motion.state` (at once with Reduce Motion); a new or changed highlight is never announced. Reason: the owner
-  sees what the meeting has come to at a glance, and the transcript stays one tap away, closed or open.
+  Transcript** on the trailing side while both fit there at their full width, at that text size and in that language
+  (`ViewThatFits`); otherwise, and always at the accessibility sizes, one under the other, so neither label is cut (1.2,
+  rule 3). Live Transcript opens the card in place, closed by default and kept while the page is open, also across the
+  switch to or from the accessibility layout (on `Theme.Motion.reveal` / `conceal`): in the regular layout, where only
+  the thread scrolls, only the newest highlight (the latest `at`) stays above it; then Live Transcript with how far
+  behind on the right (stacked the same way when they don't fit), the Live box's newest lines drawn as the Live box
+  draws them, and Full Transcript. At the accessibility sizes every highlight stays above the lines. A time pushes the
+  whole timeline scrolled to the first of the phone's lines in that highlight's minute (`at` to `end`), every such line
+  lit for two seconds with `Theme.accentTint` (cleared on `Theme.Motion.standard`) and read by VoiceOver as selected
+  meanwhile, or the line `RecordingMinutes.sentenceIndex` picks when none starts there. The Live box and the Highlights
+  card cross-fade in place, one over the other, on `Theme.Motion.state` when the card changes (the first highlights,
+  the keyboard; at once with Reduce Motion), never as the page opens; a new or changed highlight is never announced.
+  Reason: the owner sees what the meeting has come to at a glance, and the transcript stays one tap away, closed or open.
 - **The thread**: rows read as one element each. The room's first message is a quiet centered line ("Persona joined the
   meeting"); each batch of live lines is a collapsed capsule ("N lines from the meeting") that expands to its `[m:ss]`
   lines; a heard question is a capsule "What was just said (m:ss)"; the owner's questions are labelled **You**, answers
@@ -1803,7 +1806,8 @@ page the user watches during the meeting is the page they keep writing in after 
 - Identifiers for tests: `meeting-page-menu`, `meeting-role`, `meeting-private`, `meeting-page-subtitle`,
   `meeting-room-problem`, `meeting-live`, `meeting-transcript`, the highlights card `meeting-highlights` with each
   highlight `meeting-highlight` (its words and its time), its time `meeting-highlight-time` and Live Transcript
-  `meeting-live-transcript`, on the transcript a lit row `recording-timeline-sentence-lit`, `meeting-thread-header`,
+  `meeting-live-transcript`, on the transcript a lit row `recording-timeline-sentence-lit` (selected while lit),
+  `meeting-thread-header`,
   `meeting-thread-earlier`,
   one `meeting-thread-<kind>` per row kind (`lines`, `heard`, `question`, `answer` and the others),
   `meeting-just-me`, `meeting-just-me-retry`, `meeting-plus`, `meeting-heard`, `meeting-photo-camera`,
@@ -1823,7 +1827,8 @@ page the user watches during the meeting is the page they keep writing in after 
   `recording-bookmark`, `recording-stop`, `recording-wrapup-title`, `recording-wrapup-open`, `recording-wrapup-done`)
   keep their names. UI tests: `MeetingConversationUITests`, `MeetingLiveViewUITests` (the topics),
   `MeetingHighlightsUITests` (the highlights card in light, dark and the largest text size, a time opening the
-  transcript lit, Live Transcript, the keyboard, a hub without the flag), `TalkAboutMeetingUITests`.
+  transcript lit, Live Transcript, the keyboard, a hub without the flag, a meeting started without it),
+  `TalkAboutMeetingUITests`.
 - Platforms: the web shows the same thread on the recording detail (**Conversation**, with **Talk about this meeting**
   from phase 6); Android has no meeting page yet.
 

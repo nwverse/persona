@@ -11,8 +11,8 @@ struct RecordingTimelineRows: View {
     var paused: Bool
     /// Whether the Jump to Latest button should show, and how many arrived: reported to the page that draws it.
     @Binding var items: [RecordingTimeline.Item]
-    /// Rows lit for a moment (`Theme.accentTint`): the meeting page's transcript opened at a highlight's minute (#3862
-    /// phase 2b, `RecordingTimeline.focus`). Every other page passes none.
+    /// Rows lit for a moment (`Theme.accentTint`, and selected for VoiceOver): the meeting page's transcript opened at a
+    /// highlight's minute (#3862 phase 2b, `RecordingTimeline.focus`). Every other page passes none.
     var lit: Set<RecordingTimeline.Item.ID> = []
 
     @Environment(\.dynamicTypeSize) private var size
@@ -91,6 +91,8 @@ struct RecordingTimelineRows: View {
             }
         }
         .accessibilityElement(children: .combine)
+        // Lit is said, not only tinted (DESIGN_SYSTEM.md 6.3): VoiceOver reads the target lines as selected while lit.
+        .accessibilityAddTraits(lit ? .isSelected : [])
         .accessibilityIdentifier(lit ? "recording-timeline-sentence-lit" : "recording-timeline-sentence")
     }
 

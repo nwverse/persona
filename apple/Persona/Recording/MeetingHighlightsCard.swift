@@ -61,29 +61,44 @@ nonisolated enum MeetingHighlights {
 }
 
 /// The meeting page's top card (#3862 phase 2b; docs/design/DESIGN_SYSTEM.md「Meeting page (#3862)」): phase 2's Live box
-/// as it was, or the Highlights card once the room set highlights for a meeting started with them, cross-fading on
-/// `Theme.Motion.state` (at once with Reduce Motion); the folded Live box while the keyboard is up. A view of its own, so
-/// the highlights are read and listed here when they change (`MeetingHighlights.rows`), and a highlight's time pushes the
-/// transcript at its minute. A new or changed highlight is never announced.
+/// as it was, or the Highlights card once the room set highlights for a meeting started with them, cross-fading in place
+/// on `Theme.Motion.state` (at once with Reduce Motion); the folded Live box while the keyboard is up. The page hands it
+/// the meeting's highlights as it reads them, so this card observes nothing of `MeetingConversation`, and its rows are
+/// listed as it is made (at most four, as `MeetingTopicsRow` lists the topics): the first frame is already the right card,
+/// so nothing animates as the page opens or switches layout. Live Transcript's choice and the transcript a highlight's
+/// time pushes are the page's, kept while the page is open. A new or changed highlight is never announced.
 struct MeetingTopCard: View {
     var entry: RecordingEntry
     var exchanges: [MeetingAsk.Exchange]
     /// The composer has the keyboard (the page passes it at the regular sizes only).
     var writing: Bool
+    /// Live Transcript: closed until the owner opens it, then as they left it while the page is open.
+    @Binding var open: Bool
+    /// The transcript pushed at a highlight's time (the page's `navigationDestination`).
+    @Binding var transcriptAt: MeetingTranscriptFocus?
+    private let rows: [MeetingHighlights.Row]
 
     @Environment(\.dynamicTypeSize) private var size
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var conversation = MeetingConversation.shared
-    @State private var rows: [MeetingHighlights.Row] = []
-    /// Live Transcript: closed until the owner opens it, then as they left it while the page is open.
-    @State private var open = false
-    /// The transcript pushed at a highlight's time.
-    @State private var transcriptAt: MeetingTranscriptFocus?
+
+    /// `highlights`: the room's, as the page read them (none for a meeting started without them).
+    init(entry: RecordingEntry, exchanges: [MeetingAsk.Exchange], highlights: [MeetingHighlight], writing: Bool,
+         open: Binding<Bool>, transcriptAt: Binding<MeetingTranscriptFocus?>) {
+        self.entry = entry
+        self.exchanges = exchanges
+        self.writing = writing
+        _open = open
+        _transcriptAt = transcriptAt
+        rows = MeetingHighlights.rows(highlights)
+    }
 
     var body: some View {
         let mode = MeetingHighlights.mode(shows: entry.attendance?.highlights == true, hasHighlights: !rows.isEmpty,
                                           writing: writing, accessibilitySize: size.isAccessibilitySize)
-        Group {
+        // One over the other while they fade, from the top: in a stack of their own the outgoing card would keep its slot
+        // until it is gone, and push the thread down meanwhile. Only a change of the mode animates (the first highlights,
+        // the keyboard), never the first frame.
+        ZStack(alignment: .top) {
             switch mode {
             case .live(let folded):
                 MeetingLiveBox(entry: entry, exchanges: exchanges, folded: folded)
@@ -96,15 +111,6 @@ struct MeetingTopCard: View {
             }
         }
         .animation(reduceMotion ? nil : Theme.Motion.state, value: mode)
-        // Here, not on the card: the destination stays while the card turns into the Live box under the pushed page.
-        .navigationDestination(item: $transcriptAt) { focus in
-            MeetingTranscriptPage(id: entry.id, exchanges: exchanges, focus: focus)
-        }
-        // Only for a meeting started with them: a read that brings highlights changes the rows, and only then.
-        .onChange(of: entry.attendance?.highlights == true ? conversation.meeting(entry.id).highlights : [], initial: true) { _, new in
-            let next = MeetingHighlights.rows(new)
-            if next != rows { rows = next }
-        }
     }
 }
 
@@ -119,9 +125,6 @@ private struct MeetingHighlightsCard: View {
     var show: (MeetingHighlights.Row) -> Void
 
     @Environment(\.dynamicTypeSize) private var size
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// The newest lines Live Transcript opens, read when the recording changes (P4), as the Live box reads them.
-    @State private var lines: [LiveRow] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
@@ -136,16 +139,14 @@ private struct MeetingHighlightsCard: View {
                 }
             }
             if open {
-                // Live Transcript heads the lines as "Live" heads the Live box's, with how far behind on the other side.
-                controls(disclosure, MeetingLiveBehind(last: lines.last))
-                ForEach(lines) { row in MeetingLiveLine(row: row) }
-                    .transition(.opacity)
-                HStack {
-                    Spacer(minLength: Theme.Space.flush)
+                // Mounted only while open: the transcript's lines are read only while they show.
+                MeetingHighlightsLines(entry: entry, exchanges: exchanges, open: $open)
+            } else {
+                MeetingCardRow {
+                    MeetingLiveTranscriptToggle(open: $open)
+                } trailing: {
                     MeetingFullTranscriptLink(id: entry.id, exchanges: exchanges)
                 }
-            } else {
-                controls(disclosure, MeetingFullTranscriptLink(id: entry.id, exchanges: exchanges))
             }
         }
         .padding(.horizontal, Theme.Space.m)
@@ -155,10 +156,6 @@ private struct MeetingHighlightsCard: View {
         .surface(in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("meeting-highlights")
-        .onChange(of: entry.revision, initial: true) {
-            let next = MeetingLiveBox.rows(entry)
-            if next != lines { lines = next }
-        }
     }
 
     /// A highlight: its time as the minutes cards' chip, then its words (`Theme.Recording.highlightLines` lines at most,
@@ -192,12 +189,52 @@ private struct MeetingHighlightsCard: View {
         .accessibilityLabel(String(localized: "Show at \(row.clock) in the transcript"))
         .accessibilityIdentifier("meeting-highlight-time")
     }
+}
 
-    /// Live Transcript: opens or closes the newest lines in place; one line, its chevron saying which way it goes.
-    private var disclosure: some View {
+/// The open card's part under the highlights: Live Transcript with how far behind on the other side, as "Live" heads the
+/// Live box's lines, the Live box's newest lines and Full Transcript. A view of its own, there only while the card is
+/// open, so the transcript's lines (every segment sorted and filtered, `MeetingLiveBox.rows`) are read only while they
+/// show, and again when the recording changes (P4, P9), as the Live box reads them.
+private struct MeetingHighlightsLines: View {
+    var entry: RecordingEntry
+    var exchanges: [MeetingAsk.Exchange]
+    @Binding var open: Bool
+
+    @State private var lines: [LiveRow] = []
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            MeetingCardRow {
+                MeetingLiveTranscriptToggle(open: $open)
+            } trailing: {
+                MeetingLiveBehind(last: lines.last)
+            }
+            ForEach(lines) { row in MeetingLiveLine(row: row) }
+                .transition(.opacity)
+            HStack {
+                Spacer(minLength: Theme.Space.flush)
+                MeetingFullTranscriptLink(id: entry.id, exchanges: exchanges)
+            }
+        }
+        .onChange(of: entry.revision, initial: true) {
+            let next = MeetingLiveBox.rows(entry)
+            if next != lines { lines = next }
+        }
+    }
+}
+
+/// Live Transcript: opens or closes the newest lines in place; one line, its chevron saying which way it goes.
+private struct MeetingLiveTranscriptToggle: View {
+    @Binding var open: Bool
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
         Button(action: toggle) {
             HStack(spacing: Theme.Space.xs) {
-                Text("Live Transcript").lineLimit(1)
+                // Shrinks a little only where it stands alone and still doesn't fit (a long translation at the largest
+                // sizes); beside the other label the row stacks first (`MeetingCardRow`).
+                Text("Live Transcript").lineLimit(1).minimumScaleFactor(0.7)
                 ThemedIcon(open ? Theme.Icon.collapse : Theme.Icon.expand).font(Theme.Font.captionStrong).accessibilityHidden(true)
             }
             .font(Theme.Font.secondaryStrong)
@@ -210,23 +247,38 @@ private struct MeetingHighlightsCard: View {
         .accessibilityIdentifier("meeting-live-transcript")
     }
 
-    /// One row, the first on the leading side and the second on the trailing side; at the accessibility sizes one under
-    /// the other, so neither wraps.
-    @ViewBuilder private func controls(_ leading: some View, _ trailing: some View) -> some View {
+    private func toggle() {
+        let opening = !open
+        withAnimation(reduceMotion ? nil : (opening ? Theme.Motion.reveal : Theme.Motion.conceal)) { open = opening }
+    }
+}
+
+/// The card's last row: the first on the leading side and the second on the trailing side, each at its full width, while
+/// the two fit side by side at that size and in that language; one under the other otherwise, and always at the
+/// accessibility sizes, so neither label is ever cut (DESIGN_SYSTEM.md 1.2, rule 3).
+private struct MeetingCardRow<Leading: View, Trailing: View>: View {
+    @ViewBuilder var leading: Leading
+    @ViewBuilder var trailing: Trailing
+
+    @Environment(\.dynamicTypeSize) private var size
+
+    var body: some View {
         if size.isAccessibilitySize {
-            VStack(alignment: .leading, spacing: Theme.Space.flush) { leading; trailing }
+            stacked
         } else {
-            HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
-                leading
-                Spacer(minLength: Theme.Space.s)
-                trailing
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+                    leading.fixedSize()
+                    Spacer(minLength: Theme.Space.s)
+                    trailing.fixedSize()
+                }
+                stacked
             }
         }
     }
 
-    private func toggle() {
-        let opening = !open
-        withAnimation(reduceMotion ? nil : (opening ? Theme.Motion.reveal : Theme.Motion.conceal)) { open = opening }
+    private var stacked: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.flush) { leading; trailing }
     }
 }
 #endif

@@ -297,26 +297,37 @@ identifiers are in [DESIGN_SYSTEM.md](../design/DESIGN_SYSTEM.md) "Meeting page 
   `ContentState` is as phase 2 has it; a page back on screen reads them again.
 - **The card** (`MeetingTopCard`, `MeetingHighlightsCard.swift`): where the Live box was, both layouts. With the flag and
   at least one highlight it is **Highlights**: each highlight's time as the minutes cards' chip and its words
-  (`Theme.Recording.highlightLines` lines at the regular sizes), earliest first, then Live Transcript (closed by default,
-  kept while the page is open) and Full Transcript on one row. Open, the regular layout keeps only the newest highlight
-  above the Live box's newest lines (`MeetingLiveLine`, `MeetingLiveBehind`, shared with `MeetingLiveBox`); the
-  accessibility sizes keep them all. While the keyboard is up at the regular sizes the card is the folded Live box,
-  whatever it was. What it shows is `MeetingHighlights` (the mode, the rows with their ids and clocks, the newest),
-  worked out when the highlights change, not in `body`. The Live box switches to the first highlights with a
-  cross-fade on `Theme.Motion.state` (at once with Reduce Motion); nothing about them is announced. After Stop the page
-  goes on as the thread and shows no highlights.
-- **A highlight's time** pushes `MeetingTranscriptPage` with a `MeetingTranscriptFocus` (`at`, `end`;
+  (`Theme.Recording.highlightLines` lines at the regular sizes), earliest first, then Live Transcript (closed by default)
+  and Full Transcript on one row while both fit at their full width (`ViewThatFits`), one under the other otherwise and
+  at the accessibility sizes. Open, the regular layout keeps only the newest highlight above Live Transcript with how far
+  behind (laid out the same way) and the Live box's newest lines (`MeetingLiveLine`, `MeetingLiveBehind`, shared with
+  `MeetingLiveBox`); the accessibility sizes keep them all. The open part is a view of its own
+  (`MeetingHighlightsLines`), there only while the card is open, so the transcript's lines are read only then. While the
+  keyboard is up at the regular sizes the card is the folded Live box, whatever it was. The page reads the highlights
+  with the rest of the meeting and hands them to the card (`MeetingPage.topCard`), so the card observes nothing of
+  `MeetingConversation`; the card lists them as it is made (`MeetingHighlights`: the mode, the rows with their ids and
+  clocks, the newest; at most four), so its first frame is already the right card and nothing animates as the page opens
+  or changes layout. Live Transcript's choice and the pushed transcript are the page's state, kept while the page is
+  open, across the switch between the regular and the accessibility layouts. The two cards cross-fade in place, one
+  over the other (a `ZStack` from the top), on `Theme.Motion.state` when the mode changes (the first highlights, the
+  keyboard; at once with Reduce Motion); nothing about them is announced. After Stop the page goes on as the thread and
+  shows no highlights.
+- **A highlight's time** pushes `MeetingTranscriptPage` with a `MeetingTranscriptFocus` (`at`, `end`; the live page's
   `.navigationDestination(item:)`): 100 ms after it appears it scrolls to the first of the phone's lines whose start is
-  from `at` to `end` and lights every such line for two seconds (`Theme.accentTint`, cleared on `Theme.Motion.standard`),
-  or, with none there, the line `RecordingMinutes.sentenceIndex` picks for `at` (`RecordingTimeline.focus`, compared in
-  milliseconds). `RecordingTimelineRows` takes the lit rows (none for every other page) and gives each row its id.
+  from `at` to `end` and lights every such line for two seconds (`Theme.accentTint`, cleared on `Theme.Motion.standard`;
+  VoiceOver reads them as selected meanwhile), or, with none there, the line `RecordingMinutes.sentenceIndex` picks for
+  `at` (`RecordingTimeline.focus`, compared in milliseconds). `RecordingTimelineRows` takes the lit rows (none for every
+  other page) and gives each row its id.
 - **Screenshots and tests**: `-showMeetingSample room-highlights` (the room meeting started with the live view and the
   highlights, 24:20 in, a line in each of fourteen minutes). The mock hub serves the phase (`POST /mock/meeting_highlights
   {"on"}` and `{"id", "highlights": [{"text", "at"}]}`; its room makes highlights after a batch). UI tests
   `MeetingHighlightsUITests` (the card in time order above the thread, a time opening the transcript with its minute lit
-  and Back, Live Transcript open and closed, the folded Live box with the keyboard, a hub without the flag, the time
-  under the words at the largest text; shots `highlights-<look>-card|transcript-lit|open|keyboard|no-highlights` in
-  light, dark and `large`); `MeetingLiveViewUITests` turns the highlights off to keep covering phase 2. Unit tests
+  and selected and Back, Live Transcript open with how far behind and closed, the folded Live box with the keyboard and
+  the card back as it was once the keyboard is down, a hub without the flag, a meeting started without it on a hub with
+  it after its room made a highlight, the time under the words and the highlights above the lines at the largest text;
+  shots `highlights-<look>-card|transcript-lit|open|keyboard|no-highlights|started-without` in light, dark and `large`;
+  every call to the mock must answer 2xx, so they need the mock with the phase); `MeetingLiveViewUITests` turns the
+  highlights off to keep covering phase 2. Unit tests
   `MeetingHighlightsTests` (the flag and its snapshot, the decoding, the merge, the cap and the order, the parts, the
   card's mode, its rows and newest highlight, which lines a time lights).
 

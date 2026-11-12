@@ -60,6 +60,10 @@ struct MeetingPage: View {
     /// the bar stays two rows. Likewise that some picked photos couldn't be read (#3862 phase 3), beside it.
     @State private var notice: String?
     @State private var photoNotice: String?
+    /// The top card's Live Transcript (phase 2b) and the transcript a highlight's time pushed: the page's, so both stay as
+    /// the owner left them while the page is open, across the switch between the regular and the accessibility layouts.
+    @State private var highlightsOpen = false
+    @State private var transcriptAt: MeetingTranscriptFocus?
 
     private var paused: Bool { capture.state == .paused }
 
@@ -117,6 +121,10 @@ struct MeetingPage: View {
                 // answers never are: VoiceOver would say them out loud to the room.
                 if new.count > old.count, let latest = new.last { AccessibilityNotification.Announcement(latest).post() }
             }
+            // On the page, not the card: one host in either layout, kept while the card turns into the Live box under it.
+            .navigationDestination(item: $transcriptAt) { focus in
+                MeetingTranscriptPage(id: id, exchanges: exchanges, focus: focus)
+            }
     }
 
     @ViewBuilder private func liveLayout(_ entry: RecordingEntry) -> some View {
@@ -134,7 +142,7 @@ struct MeetingPage: View {
                         }
                         problems(entry)
                         topics(entry)
-                        MeetingTopCard(entry: entry, exchanges: exchanges, writing: false)
+                        topCard(entry, writing: false)
                         threadHeader(entry)
                         thread(entry)
                         noticeBanner
@@ -157,7 +165,7 @@ struct MeetingPage: View {
                 .padding(.top, Theme.Space.s)
                 problems(entry)
                 if !writing { topics(entry) }
-                MeetingTopCard(entry: entry, exchanges: exchanges, writing: writing)
+                topCard(entry, writing: writing)
                     .padding(.horizontal, Theme.Space.page)
                 threadHeader(entry)
                     .padding(.horizontal, Theme.Space.page)
@@ -297,6 +305,16 @@ struct MeetingPage: View {
         if entry.attendance?.liveView == true, !topics.isEmpty {
             MeetingTopicsRow(topics: topics, inset: size.isAccessibilitySize ? Theme.Space.flush : Theme.Space.page)
         }
+    }
+
+    // MARK: The top card
+
+    /// The Live box, or the room's highlights (phase 2b) for a meeting started with them: read here with the rest of the
+    /// meeting (`topics(_:)`, `problems(_:)`) and handed to the card as they are, so the card observes nothing itself.
+    private func topCard(_ entry: RecordingEntry, writing: Bool) -> some View {
+        let highlights = entry.attendance?.highlights == true ? conversation.meeting(id).highlights : []
+        return MeetingTopCard(entry: entry, exchanges: exchanges, highlights: highlights, writing: writing,
+                              open: $highlightsOpen, transcriptAt: $transcriptAt)
     }
 
     // MARK: Problems
@@ -821,7 +839,7 @@ struct MeetingFullTranscriptLink: View {
     var body: some View {
         NavigationLink { MeetingTranscriptPage(id: id, exchanges: exchanges) } label: {
             HStack(spacing: Theme.Space.xs) {
-                Text("Full Transcript").lineLimit(1)
+                Text("Full Transcript").lineLimit(1).minimumScaleFactor(0.7)
                 ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.captionStrong).accessibilityHidden(true)
             }
             .font(Theme.Font.secondaryStrong)
