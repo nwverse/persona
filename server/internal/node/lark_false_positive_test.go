@@ -2,8 +2,8 @@ package node
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
-	"syscall"
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/proto"
@@ -110,12 +110,14 @@ func TestLarkLiteralCommandVariable(t *testing.T) {
 func TestLarkHeredocUnsafeTargets(t *testing.T) {
 	dir := t.TempDir()
 	fifo := filepath.Join(dir, "pipe")
-	if err := syscall.Mkfifo(fifo, 0600); err != nil {
-		t.Fatal(err)
+	if err := exec.Command("mkfifo", fifo).Run(); err != nil {
+		t.Logf("FIFO case unavailable: %v", err)
+		fifo = ""
 	}
 	link := filepath.Join(dir, "link")
 	if err := os.Symlink("/dev/null", link); err != nil {
-		t.Fatal(err)
+		t.Logf("Symlink case unavailable: %v", err)
+		link = ""
 	}
 	for _, tc := range []struct{ name, command string }{
 		{"device", "cat > /dev/null <<'EOF'\n lark-cli im +messages-send\nEOF"},
@@ -129,6 +131,11 @@ func TestLarkHeredocUnsafeTargets(t *testing.T) {
 		{"long exec option", "cat > /tmp/a.go <<'EOF'\n// lark-cli im +messages-send\nEOF\ngo test --exec sh ./..."},
 		{"long toolexec option", "cat > /tmp/a.go <<'EOF'\n// lark-cli im +messages-send\nEOF\ngo test --toolexec sh ./..."},
 	} {
-		t.Run(tc.name, func(t *testing.T) { assertAssistantBypassClassification(t, tc.command, 1) })
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.name == "fifo" && fifo == "" || tc.name == "symbolic link" && link == "" {
+				t.Skip("platform fixture unavailable")
+			}
+			assertAssistantBypassClassification(t, tc.command, 1)
+		})
 	}
 }
