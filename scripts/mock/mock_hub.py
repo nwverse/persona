@@ -6264,6 +6264,42 @@ if MOCK_TASKS:
         _base = min(x["seq"] for x in ITEMS[ASK1])
         for _i, _x in enumerate(ITEMS[ASK1]):
             _x["seq"] = _base + _i
+    # MOCK_PLACE_MAP=1 (with MOCK_TASKS=1): "where am I" and "coffee near me" answered with the phone's location tools,
+    # drawn as map cards under their work lines (#5543); the places are made up.
+    if os.environ.get("MOCK_PLACE_MAP") == "1":
+        _cafes = [("街角咖啡", 31.2318, 121.4752, 180), ("安静书房咖啡", 31.2291, 121.4769, 340),
+                  ("老弄堂咖啡馆", 31.2335, 121.4711, 420), ("河边烘焙咖啡", 31.2276, 121.4702, 610)]
+        ITEMS[ASK1] += (
+            [it("user", "text", 1.6, text="我现在在哪")]
+            + tool("mcp__persona__phone_location_current", {},
+                   json.dumps({"latitude": 31.2304, "longitude": 121.4737, "accuracy_meters": 12, "altitude_meters": 4,
+                               "timestamp": ago(minutes=1.6), "timezone": "Asia/Shanghai",
+                               "address": {"city": "上海市", "district": "黄浦区", "formatted": "上海市黄浦区人民大道"}},
+                              ensure_ascii=False), 1.55)
+            + [it("assistant", "text", 1.5, text="你在上海市黄浦区人民大道附近。")]
+            + [it("user", "text", 1.2, text="附近有安静点的咖啡馆吗")]
+            + tool("mcp__persona__phone_maps_search_nearby", {"query": "安静 咖啡馆"},
+                   json.dumps({"query": "安静 咖啡馆", "center": {"latitude": 31.2304, "longitude": 121.4737, "from": "current_location"},
+                               "radius_meters": 1500, "count": len(_cafes),
+                               "places": [{"name": n, "address": "上海市黄浦区", "latitude": la, "longitude": lo,
+                                           "distance_meters": d, "category": "MKPOICategoryCafe"} for n, la, lo, d in _cafes],
+                               "source": "Apple Maps (MapKit local search)",
+                               "note": "Opening hours are not available from Apple Maps to apps."}, ensure_ascii=False), 1.15)
+            + [it("assistant", "text", 1.1, text="找到 4 家：最近的是 1 号街角咖啡，180 米；想安静些可以去 2 号安静书房咖啡，340 米。营业时间苹果地图不提供，去之前最好确认一下。")]
+            # Directions to the second café handed to Maps (#5545): the hand-off's card is the conversation's last.
+            + [it("user", "text", 0.8, text="去 2 号，走过去")]
+            + tool("mcp__persona__phone_maps_navigate",
+                   {"latitude": 31.2291, "longitude": 121.4769, "name": "安静书房咖啡", "mode": "walking"},
+                   json.dumps({"opened": "maps", "destination": "安静书房咖啡", "latitude": 31.2291, "longitude": 121.4769,
+                               "mode": "walking",
+                               "note": "Directions are open in the Maps app; navigation runs there, not in Persona."},
+                              ensure_ascii=False), 0.75)
+            + [it("assistant", "text", 0.7, text="去安静书房咖啡的步行路线已经在地图 App 里打开了，导航在地图里进行。")]
+        )
+        ITEMS[ASK1].sort(key=lambda x: x["ts"])
+        _base = min(x["seq"] for x in ITEMS[ASK1])
+        for _i, _x in enumerate(ITEMS[ASK1]):
+            _x["seq"] = _base + _i
     # MOCK_MARKDOWN=1 (with MOCK_TASKS=1, and MOCK_EXCHANGES=1 for the exchanges): the words as Agents and Persona write them,
     # with **bold**, `code` and a heading (#2363), in Persona's message to the task, the task's report and the release
     # notes receipt: drawn rendered, never as raw marks.
