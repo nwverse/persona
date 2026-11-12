@@ -119,7 +119,10 @@ func (s *Service) audioSocket(w http.ResponseWriter, r *http.Request) {
 		p.fail(codeTranscriptionFinal) // its live pass is over
 		return
 	}
-	run.attach(p)
+	if code := run.attach(p); code != "" {
+		p.fail(code)
+		return
+	}
 	ended := false
 	defer func() { run.detach(p, ended) }()
 	helpers.Add(1)

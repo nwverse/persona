@@ -30,6 +30,12 @@ func (s *Service) recordingRoutes(engine func(http.ResponseWriter, *http.Request
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
+		meeting := strings.EqualFold(strings.TrimSpace(u.Kind), kb.RecordingMeeting)
+		if meeting {
+			// Whether hub transcription is ready is asked under the knowledge base's locks (the first upload naming the
+			// hub): read now, so a stale answer is probed here and not there.
+			s.transcriptionReadyNow()
+		}
 		put, err := e.PutRecording(r.PathValue("id"), u, time.Now())
 		status := put.Status
 		var full kb.DayFullError
@@ -66,7 +72,7 @@ func (s *Service) recordingRoutes(engine func(http.ResponseWriter, *http.Request
 		}
 		// The transcription mode in effect (meeting_transcribe.go): on every meeting upload, and on another kind that
 		// asked for the hub (not_meeting); only an older manager leaves it out, and the phone then stays on the device.
-		if strings.EqualFold(strings.TrimSpace(u.Kind), kb.RecordingMeeting) || put.TranscriptionProblem != "" {
+		if meeting || put.TranscriptionProblem != "" {
 			out["transcription"] = put.Transcription
 			if put.TranscriptionProblem != "" {
 				out["transcription_problem"] = put.TranscriptionProblem

@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"math"
@@ -70,9 +71,10 @@ type hubRun struct {
 	ctx  context.Context
 	end  context.CancelFunc
 
-	mu      sync.Mutex
-	e       *kb.Engine
-	stopped bool
+	mu       sync.Mutex
+	e        *kb.Engine
+	stopped  bool
+	stopCode string // what the run ended with (a socket's fatal error code, "" for none)
 
 	// The phone's socket (nil while down); started: one sent start; downSince: since when it is down (from the first
 	// hub-mode upload while none ever started); ended: the phone sent end.
@@ -285,22 +287,28 @@ func (r *hubRun) phoneSendLocked(v any) {
 	}
 }
 
-// meetingRoleNow is the role at the live edge, for what only goes out while the meeting is attended.
+// roleNowLocked is the role at the live edge, for what only goes out while the meeting is attended.
 func (r *hubRun) roleNowLocked() string {
 	return r.timeline.RoleAt(float64(r.edge)/kb.AudioRate, r.role)
 }
 
 // ---- the phone's socket ----
 
-// attach makes p the recording's socket; the one before it is replaced (the fatal error replaced, closed).
-func (r *hubRun) attach(p *phoneSocket) {
+// attach makes p the recording's socket; the one before it is replaced (the fatal error replaced, closed). A run
+// ended meanwhile takes none: the code it ended with.
+func (r *hubRun) attach(p *phoneSocket) (refused string) {
 	r.mu.Lock()
+	if r.stopped {
+		r.mu.Unlock()
+		return cmp.Or(r.stopCode, codeTranscriptionFinal)
+	}
 	old := r.phone
 	r.phone = p
 	r.mu.Unlock()
 	if old != nil && old != p {
 		old.fail(codeReplaced)
 	}
+	return ""
 }
 
 // begin is the phone's start on socket p: its timeline joins the union; the socket is up from now (the fallback's
@@ -587,7 +595,7 @@ func (r *hubRun) stop(code string) {
 	if !gone {
 		r.putHubLocked()
 	}
-	r.stopped = true
+	r.stopped, r.stopCode = true, code
 	phone, job := r.phone, r.job
 	r.phone, r.job = nil, nil
 	r.notifyLocked()

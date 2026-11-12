@@ -175,6 +175,11 @@ func TestHubInterimAndEvents(t *testing.T) {
 		}
 		return slices.Contains(parts, kb.PartLines) && slices.Contains(parts, kb.PartInterim) && slices.Contains(parts, kb.PartTranscription)
 	})
+	interimShown = 0 // a caption older than interimShown is not shown
+	if out := h.do("GET", livePath(meetingRec), "", nil, http.StatusOK); out["interim"] != nil {
+		t.Fatalf("an old caption: %v", out["interim"])
+	}
+	interimShown = time.Minute
 	p.send(map[string]any{"type": "role", "at": 0, "attendance": "off"})
 	waitFor(t, "no interim while off", func() bool {
 		return h.do("GET", livePath(meetingRec), "", nil, http.StatusOK)["interim"] == nil

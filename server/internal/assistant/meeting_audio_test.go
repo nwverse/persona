@@ -65,6 +65,17 @@ func TestTranscriptionModeOnUpload(t *testing.T) {
 	if tr := h.transcription(meetingRec); tr["mode"] != "hub" || tr["state"] != "live" || tr["gaps"] == nil {
 		t.Fatalf("hub mode's transcription: %v", tr)
 	}
+	// POST …/live of a device-mode meeting says its transcription too (once a mode was named); detail.meta has it.
+	device := "14141414-1414-4414-8414-141414141414"
+	h.upload(device, 1, map[string]any{"attendance": "listener", "transcription": "device"})
+	out := h.do("POST", livePath(device), "", `{"from":0,"segments":[{"start":1,"end":2,"text":"Hello"}]}`, http.StatusOK)
+	if tr, _ := out["transcription"].(map[string]any); tr["mode"] != "device" || out["revs"] != nil {
+		t.Fatalf("POST …/live: %v", out)
+	}
+	d, err := h.engine().Get(kb.KindRecording, meetingRec, 0)
+	if err != nil || !strings.Contains(string(d.Meta), `"transcription":{"mode":"hub","state":"live","gaps":[]}`) {
+		t.Fatalf("detail.meta: %s %v", d.Meta, err)
+	}
 }
 
 // Before the upgrade only the caller (403) and the knowledge base (503) refuse the socket.
