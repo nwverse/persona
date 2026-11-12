@@ -48,6 +48,7 @@ def features():
                 ["sessions_list", "sessions_lookup", "sessions_hierarchy"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
                 ["preview"] if os.environ.get("MOCK_PREVIEW") else []) + (
                 ["task_cron"] if os.environ.get("MOCK_CRON") == "1" else []) + (
+                [] if os.environ.get("MOCK_TODO_SEEN") == "off" else ["todo_seen"]) + (
                 [] if os.environ.get("MOCK_LOOK_UPLOADS") == "off" else ["look_uploads"])
 
 
@@ -945,6 +946,31 @@ if os.environ.get("MOCK_WORKTREES") == "1":
         sess("macbook", "a1f3c2d4-0000-4000-8000-0000000000c3", "整理读书笔记", "/Users/me/code/notes",
              "idle", "idle", "notes", 4, "1", 1, 60 * 48, "按主题整理好了，每本书一页。", seen_at=ago(days=2)),
     ]
+
+# MOCK_SHARED_FOLDER=1 (#5715): one folder two repositories claim, on Mac Studio. Three Claude desktop chats (one finished
+# and unseen, two idle) have /Users/me/code/atlas as their main checkout; a finished Codex App chat in the same folder
+# names its Codex project, /Users/me/code, as its repository. By Repository lists the three under atlas's working tree
+# (the two idle ones behind their fold) and the Codex chat under code's, each tree's count matching its rows.
+if os.environ.get("MOCK_SHARED_FOLDER") == "1":
+    _atlas, _herdr = "/Users/me/code/atlas", ("space_kind", "space_id", "space_name", "space_index", "slot_id", "slot_name",
+                                              "slot_index", "pane_id", "tab_id", "workspace_id")
+
+    def _desktop(sid, title, status, state, minutes, last, agent="claude", **kw):
+        s = {k: v for k, v in sess("studio", sid, title, _atlas, status, state, "", 0, "", 0, minutes, last, agent=agent).items()
+             if k not in _herdr}
+        s.update(worktree=_atlas, branch="feat/tiles", agent_surface="desktop", **kw)
+        return s
+
+    SESSIONS += [
+        _desktop("a1f3c2d4-0000-4000-8000-00000000571%d" % i, title, *(("done", "unread") if i == 1 else ("idle", "idle")),
+                 40 + 20 * i, last, repo_root=_atlas, source_kind="claude_desktop",
+                 **({} if i == 1 else {"seen_at": ago(minutes=30 + 20 * i)}))
+        for i, (title, last) in enumerate([("地图瓦片缓存", "瓦片缓存改成按缩放级别分目录了。"),
+                                           ("离线包大小评估", "离线包压到 180 MB，列了三种取舍。"),
+                                           ("标注图层的点击区域", "点击区域放大到 44 pt，补了测试。")], 1)
+    ] + [_desktop("a1f3c2d4-0000-4000-8000-000000005719", "总结这周的地图反馈", "done", "unread", 8,
+                  "反馈分成三类：加载慢、离线包太大、标注难点，各附了例子。", agent="codex", repo_root="/Users/me/code",
+                  source_kind="codex_history", space_kind="codex_app", space_id="codex-project:/Users/me/code", space_name="code")]
 
 
 # MOCK_MACHINES=1: the machine pages' edge cases (MachinePagesTests): a fourth machine that is offline with an ssh
@@ -21553,6 +21579,19 @@ class H(BaseHTTPRequestHandler):
                         push_machine(mid)
                         push_todos()
                         return self.send_json({"ok": True})
+        # PUT / DELETE /api/v1/todos/{id}/seen (#5707, server/internal/assistant/todo_seen.go): Got it and its Undo. Not
+        # activity: updated_at stays. MOCK_TODO_SEEN=off is a hub without it (no feature, 404 here).
+        if p.startswith("/api/v1/todos/") and p.endswith("/seen") and p.count("/") == 5 and self.command in ("PUT", "DELETE") \
+                and os.environ.get("MOCK_TODO_SEEN") != "off":
+            if is_read_only(self): return self.send_json({"error": "只读角色不能修改待办"}, 403)
+            t = next((x for x in TODOS if x["id"] == p.split("/")[4]), None)
+            if not t: return self.send_json({"error": "待办不存在"}, 404)
+            if self.command == "PUT":
+                t["seen_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            else:
+                t.pop("seen_at", None)
+            push_todos()
+            return self.send_json({"todo": format_todo(t)})
         if p.startswith("/api/v1/todos/") and "/agents/" in p:
             if is_read_only(self): return self.send_json({"error": "只读角色不能修改待办"}, 403)
             parts = p.split("/")  # ['', 'api', 'v1', 'todos', id, 'agents', mid, sid]

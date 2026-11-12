@@ -124,11 +124,8 @@ private fun SpaceCard(
 ) {
     var menu by remember { mutableStateOf(false) }
     val session = row.session
-    val state = when {
-        row.waitsInBackground -> CoreText.of(CoreText.Key.StateBackgroundWaiting).text()
-        row.asksYou && !muted -> CoreText.of(CoreText.Key.StateAwaitingReply).text()
-        else -> row.state.label
-    }
+    // iOS `stateLabel(muted:)`: Awaiting reply, Waiting in the background and Working (Background) included.
+    val state = row.stateWord(muted).text()
     AgentSlotCard(session.displayTitle, row.state.designStatus, state, onOpen, Modifier.fillMaxHeight(),
         stateTone = row.rowStatus(muted), tab = session.slotLabel, pane = tab?.paneName(row), agent = session.agentLabel,
         starter = tab?.launcher?.id == row.id, pending = requests, preview = session.rowLine(card, now, muted)?.text(),

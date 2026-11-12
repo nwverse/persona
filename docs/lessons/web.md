@@ -691,6 +691,11 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 
 ### Terminal (xterm.js)
 
+- A Linux Fontconfig preference can substitute a missing desktop family such as Menlo with a proportional face
+  (#5768). Check W and i widths through the entire computed stack. Add explicit Linux monospace faces before
+  platform fallbacks. Put the unicode-range-limited CJK face first so substituted named fonts cannot shadow its
+  size adjustment. Verify the actual xterm row spacing after asynchronous CJK loading in both terminal surfaces.
+
 - DOM-renderer Chinese gaps come from `DomRendererRowFactory`: `spacing = width * cellWidth - measured glyph width`, written as `letter-spacing`. Make Chinese glyphs measure exactly two cells to eliminate gaps. `FontFace` `size-adjust`
   scales only this fallback font; restrict `unicode-range` to CJK, leaving English cell width unchanged.
 - xterm 6 public API has no cursor-hidden state (DECTCEM). When drawing the screen ourselves, read `_core.coreService.isCursorHidden`; if unavailable, draw no cursor.
