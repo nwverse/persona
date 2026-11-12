@@ -3,14 +3,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Outgoing } from "./Composer";
 import type { Item, Session } from "../../lib/types";
 import { getFeedState, setRoute } from "../../lib/feed";
+import { outboxKey, type OutboxEntry } from "../../lib/outbox";
 import { toast } from "../../ui/atoms";
 import { t } from "../../i18n";
-import { ChatView, ComposerFooter, footerRows } from "./ChatView";
+import { ChatView, ComposerSource, footerRows } from "./ChatView";
 
 const captured = vi.hoisted(() => ({
   onSend: undefined as ((out: Outgoing) => Promise<boolean>) | undefined,
   session: { machine_id: "hub", session_id: "c1", title: "Conversation", cwd: "/code", status: "idle" } as Session,
   items: [] as Item[],
+  /** The chat's outbox (lib/outbox.ts), by outboxKey. */
+  outbox: {} as Record<string, OutboxEntry[]>,
   error: "",
   loading: false,
   /** Set: the hub could not say what this chat is (useRuntimeSession's notice, no row). */
@@ -38,7 +41,7 @@ vi.mock("../../lib/store", async (importOriginal) => {
   return {
     ...store,
     getSession: () => captured.session,
-    useStore: <T,>(select: (s: ReturnType<typeof store.getState>) => T) => select({ ...store.getState(), sessions: { hub: [captured.session] } }),
+    useStore: <T,>(select: (s: ReturnType<typeof store.getState>) => T) => select({ ...store.getState(), sessions: { hub: [captured.session] }, outbox: captured.outbox }),
   };
 });
 vi.mock("../../lib/runtime-session", async (importOriginal) => {
@@ -64,6 +67,18 @@ vi.mock("../../lib/router", async (importOriginal) => ({
   useRoute: () => ({ name: "session", mid: "hub", id: "c1" }),
 }));
 vi.mock("../assistant/Persona", () => ({ usePersona: () => ({ name: "Persona" }) }));
+// a reply's Forward and Use as context drawn in the page: they are in its menus (the bar's ⋯ since #5314), which open
+// on a click, so the chat's actions are read here as those menus read them
+vi.mock("./MessageActions", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./MessageActions")>();
+  const { useChatActions } = await import("./chat-actions");
+  function MessageActions(p: Parameters<typeof real.MessageActions>[0]) {
+    const chat = useChatActions();
+    const pick = p.itemId ? { itemId: p.itemId, text: p.text, isUser: false } : undefined;
+    return <>{p.children}{real.messageContextActions(p.text, chat, pick).map((a) => <button key={a.key} type="button" aria-label={a.label} />)}{p.bar && <div data-reply-bar="" />}</>;
+  }
+  return { ...real, MessageActions };
+});
 vi.mock("../assistant/AssistantChat", () => ({
   AssistantFace: () => null,
   CompactionStrip: () => null,
@@ -91,6 +106,7 @@ beforeEach(() => {
   setRoute("c1", null);
   captured.onSend = undefined;
   captured.items = [];
+  captured.outbox = {};
   captured.error = "";
   captured.loading = false;
   delete captured.session.source_kind;
@@ -153,8 +169,24 @@ describe("ChatView message context availability", () => {
   });
 });
 
+// #5314: a message of yours on its way draws the turn it answers finished for a moment (the live line steps aside):
+// its last words get no reply bar until the chat's work is over, so the bar does not come and go.
+describe("the reply bar while a message is sent", () => {
+  it("is held back on the last exchange while the chat is at work, and there once it is idle", () => {
+    captured.items = [
+      { id: "u1#0", seq: 1, kind: "text", role: "user", text: "Look at it" },
+      { id: "a2#0", seq: 2, kind: "text", role: "assistant", text: "It is fine." },
+    ];
+    expect(renderToStaticMarkup(<ChatView mid="hub" sid="c1" />)).toContain("data-reply-bar");
+    captured.outbox = { [outboxKey("hub", "c1")]: [{ id: "m1", text: "And the tests?", images: [], at: Date.now(), state: "sending" }] };
+    const html = renderToStaticMarkup(<ChatView mid="hub" sid="c1" />);
+    expect(html).toContain("It is fine.");
+    expect(html).not.toContain("data-reply-bar");
+  });
+});
+
 describe("Agent context usage", () => {
-  it("leaves the header and appears in the row below the composer, with no empty row when unknown", () => {
+  it("leaves the header and appears in the row below the composer, at the right of the folder; no empty row when there is neither", () => {
     const was = captured.session;
     try {
       captured.session = { ...was, agent: "claude", context_tokens: 78000, context_window: 200000 };
@@ -164,7 +196,12 @@ describe("Agent context usage", () => {
       expect(html).toContain('data-composer-usage');
       expect(html).toContain('aria-valuenow="61"');
       expect(html.indexOf('data-testid="composer"')).toBeLessThan(html.indexOf("data-composer-usage"));
+      expect(html.indexOf("data-composer-source")).toBeLessThan(html.indexOf('aria-valuenow="61"'));
       captured.session = { ...was, agent: "claude", context_tokens: undefined, context_window: undefined };
+      const unknown = renderToStaticMarkup(<ChatView mid="hub" sid="c1" />);
+      expect(unknown).toContain("data-composer-source");
+      expect(unknown).not.toContain("aria-valuenow");
+      captured.session = { ...was, agent: "claude", cwd: "", context_tokens: undefined, context_window: undefined };
       expect(renderToStaticMarkup(<ChatView mid="hub" sid="c1" />)).not.toContain('data-composer-usage');
     } finally {
       captured.session = was;
@@ -209,27 +246,23 @@ it("keeps a remembered Agent chat on screen when its refresh fails", () => {
   expect(html).not.toContain(t("chat-chatview.retry"));
 });
 
-describe("composer footer rows (#3533)", () => {
+describe("the line under the composer (#3533, #5324)", () => {
   it("lists the folder in full, labelled; the launcher and model are the model pill's (#5032)", () => {
     const s = { machine_id: "m", session_id: "s", launcher: "claude", model: "anthropic/claude-opus-5-5", cwd: "/Users/me/code/weather" } as Session;
     expect(footerRows(s).map((r) => [r.key, r.label, r.hint])).toEqual([["folder", "~/code/weather", t("chat-sessiondialogs.folder")]]);
   });
-  it("an Agent's footer keeps the permission chip and the folder, without the launcher, the model or an effort chip (#5032)", () => {
+  it("the line under the box keeps the folder and where it comes from, without the launcher or the model (#5032, #5324)", () => {
     const s = { machine_id: "m", session_id: "s", status: "idle", agent: "claude", launcher: "gateway-cc", model: "claude-opus-5-5", effort: "high", permission_mode: "plan", cwd: "/Users/me/code/weather" } as Session;
-    const html = renderToStaticMarkup(<ComposerFooter session={s} />);
-    expect(html).toContain(`title="${t("chat-sessiondialogs.permission_mode")}"`);
-    expect(html).not.toContain(`title="${t("chat-sessiondialogs.effort")}"`);
+    const html = renderToStaticMarkup(<ComposerSource session={s} />);
+    expect(html).toContain("data-composer-source");
     expect(html).toContain("~/code/weather");
+    expect(html).toContain('title="/Users/me/code/weather"');
     expect(html).not.toContain("gateway-cc");
     expect(html).not.toContain("opus");
-    // a Codex thread (effort only): its effort is on the pill, the footer has no chip at all
-    const codex = renderToStaticMarkup(<ComposerFooter session={{ ...s, agent: "codex", source_kind: "codex_app_server", capabilities: { send: true }, efforts: ["low", "high"] } as Session} />);
-    expect(codex).not.toContain("<button type=\"button\" title=");
-    // a Persona conversation: its permission chip too, its launcher, model and effort on its pill (#5033)
-    const persona = renderToStaticMarkup(<ComposerFooter session={{ ...s, assistant: true }} assistant />);
-    expect(persona).toContain(`title="${t("chat-sessiondialogs.permission_mode")}"`);
-    expect(persona).not.toContain(`title="${t("chat-sessiondialogs.effort")}"`);
-    expect(persona).not.toContain("gateway-cc");
+    // the permission picker is in the composer's toolbar now, not on this line
+    expect(html).not.toContain(t("lib-session-actions.mode_plan"));
+    // a Persona conversation shows no folder
+    expect(renderToStaticMarkup(<ComposerSource session={{ ...s, assistant: true }} assistant />)).not.toContain("weather");
   });
   it("leaves out what is missing, and in a Persona conversation the folder too", () => {
     const s = { machine_id: "m", session_id: "s", launcher: "claude", model: "opus", cwd: "/code" } as Session;

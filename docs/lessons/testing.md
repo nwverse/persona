@@ -355,6 +355,15 @@ The `scripts/ci/` lanes are written for the hosted runners; on a Mac developer m
 - A test that needs Postgres skips without `PERSONA_TEST_DATABASE_URL`, and a plain `go test` prints `ok` for its package. #5031 changed what `task_plan` answers and checked `internal/hub` without a database, so `TestSupervisedTaskOverTheBus`, which drives that answer end to end, never ran and went red on `main` (#5182). Before a change that touches what a database test covers, run its package with `scripts/test/test-server.sh <package>`, or `go test -v` and check for `SKIP` lines.
 - Allocation budgets are set from numbers measured on the hub machine (linux/amd64). The same tests read about 2 KB lower on an arm64 Mac, so #5150 passed `TestReindexOneRevAllocation` and `TestIndexWholeListAllocation` there and failed them on the hub (#5188). Judge a budget only from a `test-server.sh` run. To find where a regression comes from, compare `allocated(...)` in a probe at both commits; the Mac shows the same difference, so a `pprof -sample_index=alloc_space` profile of the measured call can be taken there.
 
+## "Not listed" holds for a transcript the list never shows (2026-11-12, #5054)
+
+The node's list leaves out offline Claude transcripts under 2 KB (a hook probe's, `scanOffline`), and the fixtures of
+the launcher switch tests (`finishedTurn`) are about 400 bytes. A test that a session is left out of the list once it is
+no longer running passes with such a transcript whatever the code does: the engine switch's "the old session is not
+listed" did, and its title check (the row takes the old session's title, read off that session's row) failed until the
+transcript was long enough to be listed (`longTurn`). Before asserting a row is absent, assert it is there in the same
+setup.
+
 ## The mock hub does not enforce device roles (2026-11-12, #4869)
 
 `scripts/mock/mock_hub.py` answers every request whatever the credential, so a watch feature checked only in a simulator against it can be refused on a real hub. The watch's Milk Frog shipped that way: its art requests got 403 from `allowed()` (the watch's `answer` token reads only `answerReads`), and the frog never appeared on a real watch. A new request from the watch (or any `answer`, `link` or extension credential) needs its path in the hub's allowlist, a case in `TestAnswerRoleOnlyWhatTheWatchDoes`, and one end-to-end call with a real token through `h.routes()` (`TestDeviceTokens`).
@@ -796,6 +805,10 @@ The test binary does not recognize `voice`, reruns the whole package recursively
 ## Stop test programs before their temporary directories go (2026-11-11, #4104)
 
 `t.TempDir` removes all of a test's temporary directories in one cleanup, added at its first call, and cleanups run last added, first called. A test that first calls it after starting extension programs (`extensionTestHub` adds the cleanup that stops them) has its directories removed while the programs still run. A program the test's last change restarted (a provider switched back on restarts the extensions holding its references) then writes into a directory being removed, and the run fails with only `TempDir RemoveAll cleanup: … directory not empty`, about one run in three. `startTestExtensions` therefore calls `t.TempDir` before adding its cleanup. Anything else that starts processes writing into a test's directories must also add its stop cleanup after the first `t.TempDir` call.
+
+## A stub PATH and HOME do not hide fixed paths a script checks (2026-11-12, #5434)
+
+`install.sh` and `ensure-herdr.sh` look for herdr in `PATH`, `$HOME/.local/bin`, `$HOME/bin` and the fixed `/opt/homebrew/bin` and `/usr/local/bin`. Their tests set a stub `PATH` and a temporary `HOME`, so they passed on hosted runners but failed on any Mac with herdr from Homebrew: the scripts found the real one and never ran the fake installer. A test of a shell script that looks at absolute paths runs a copy pointing those paths into its temporary root, asserting the rewritten text is found exactly once so a moved path fails loudly instead of quietly testing the real machine again (`InstallHerdrTests` in `scripts/deploy/test_compressed_publish.py`). Keep anything the script finds relative to itself (`$(dirname "$0")/../persona_identity.py`) at the same relative place in the copy.
 
 ## Web screenshots on Linux unsupported by Playwright (2026-11-06, #3140)
 

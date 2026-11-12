@@ -519,7 +519,8 @@ struct AssistantView: View {
                                                 effort: starterEffort.isEmpty ? nil : starterEffort,
                                                 main: makesMain, space: space, opID: op)
             }
-            if makesMain { await model.refreshAssistant() }
+            // The accepted conversation is visible before a follow-up configuration refresh.
+            if makesMain { Task { await model.refreshAssistant() } }
             Haptics.success()
             model.began(s, text: text, images: images) // the message stays on screen until claude has written it
             withAnimation(Theme.Motion.standard) {
@@ -587,7 +588,7 @@ struct FirstMessagePending: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .chatMark("chat.outbox.sending.start")
-                TypingIndicator(text: String(localized: "\(name) is getting ready…"))
+                TypingIndicator(text: String(localized: "Sending…"))
             }
         }
         .padding(.horizontal, Theme.Space.l) // the chat's list margins
@@ -944,6 +945,7 @@ struct StarterComposer: View {
     @State private var showFiles = false
     @State private var showCamera = false
     @State private var showGlasses = false // Glasses Photo (Persona/Glasses), only when MetaGlasses.isBuiltIn
+    @State private var showScan = false // Scan Document (#3720), only where the device can scan
     #if os(iOS)
     /// Add as Context › (#3721): the kind whose picker is open.
     @State private var contextPick: ContextPickKind?
@@ -1009,11 +1011,19 @@ struct StarterComposer: View {
 
     private func add(_ img: UIImage) { MessagePhotos.add(img, to: &draft.held.images, model: model) }
 
+    /// A scan's pages: the next message's photos while they fit, else one PDF uploaded as a picked file is (#3720).
+    private func addScan(_ pages: [UIImage]) {
+        #if os(iOS)
+        DocumentScanner.deliver(pages, room: MessagePhotos.limit - images.count, model: model, add: { add($0) }, upload: { upload($0) })
+        #endif
+    }
+
     #if os(iOS)
     /// What + offers besides photos and files, as in a conversation (`AttachMoreSection.common`): no voice call before
     /// the conversation exists, and an agent's quick commands are not Persona's.
     private var moreSections: [AttachMoreSection] {
         var sections = AttachMoreSection.common(voice: nil, camera: CameraPicker.isAvailable ? { showCamera = true } : nil,
+                                                scan: DocumentScanner.isAvailable ? { showScan = true } : nil,
                                                 glasses: MetaGlasses.isBuiltIn ? { showGlasses = true } : nil, mention: { typeMention() },
                                                 context: { contextPick = $0 })
         if let prompts = AttachMoreSection.prompts(declarations.prompts, fill: { prompt in
@@ -1155,7 +1165,7 @@ struct StarterComposer: View {
         .modifier(attachHost)
         // The Photos library warmed off the main thread, as a conversation's composer does (#4250).
         .task { if attachOpener != nil { AttachLibrary.prewarm() } }
-        .modifier(ComposerCaptureSheets(camera: $showCamera, glasses: $showGlasses) { add($0) })
+        .modifier(ComposerCaptureSheets(camera: $showCamera, glasses: $showGlasses, scan: $showScan, pages: { addScan($0) }) { add($0) })
         .sheet(item: $contextPick) { kind in
             ContextPickerSheet(kind: kind) { ref in
                 if !quotes.contains(where: { $0.title == ref.title && $0.text == ref.text }) { quotes.append(ref) }
@@ -1351,6 +1361,14 @@ struct BeautifulStarterComposer: View {
 struct AssistantToolsRow: View {
     var steps: [ToolStep]
     @State private var open = false
+    @State private var unfold = Unfolding()
+    @Environment(\.chatPin) private var pin
+    /// The line stays where it is in the chat while its steps open under it, folded ones fetched a moment later (#3757).
+    private var pinKey: String { "tools-" + (steps.first?.id ?? "") }
+
+    private func toggle() {
+        toggleInPlace(pin, pinKey, animation: Theme.Motion.standard, unfold: $unfold, closing: open) { open.toggle() }
+    }
 
     private var calls: [ToolCall] { steps.compactMap { if case .call(let c) = $0 { c } else { nil } } }
 
@@ -1361,9 +1379,7 @@ struct AssistantToolsRow: View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             if AppStyle.current.usesBeautifulUI {
                 // BeautifulUI's chip run, as in an agent's chat: one chip per kind of tool (a spinner while one runs).
-                Button {
-                    withAnimation(Theme.Motion.standard) { open.toggle() }
-                } label: {
+                Button(action: toggle) {
                     ToolChipGroup(ToolRunSummary.chips(calls), isOpen: open, isRunning: running)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .contentShape(.rect)
@@ -1371,9 +1387,7 @@ struct AssistantToolsRow: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("\(count) tool calls: \(sources(calls))")
             } else {
-                Button {
-                    withAnimation(Theme.Motion.standard) { open.toggle() }
-                } label: {
+                Button(action: toggle) {
                     HStack(spacing: Theme.Space.sm) {
                         if running {
                             ProgressView().controlSize(.mini)
@@ -1404,8 +1418,10 @@ struct AssistantToolsRow: View {
                     case .thought: EmptyView()
                     }
                 }
+                .unfolding(unfold)
             }
         }
+        .chatPinned(pinKey)
     }
 
     /// Which kinds of data were touched, in plain words.

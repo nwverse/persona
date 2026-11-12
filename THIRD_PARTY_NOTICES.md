@@ -502,6 +502,42 @@ The changed-files card (`web/src/views/chat/TurnChanges.tsx`, #5157) and the err
 are ported from cindy's `TurnChangesCard.tsx` and `components/ui/error-notice.tsx` with changes: their layout, sizes and
 states; the counting, review targets and fold data are Persona's own.
 
+The web chat's bar under a turn's last reply (`web/src/views/chat/ReplyBar.tsx`, #5314) is ported from cindy's
+`MessageActionBar.tsx` with changes: which reply has it, the order of its actions, its sizes, the linger before it fades
+and when its copy check resets. `web/src/lib/relative-time.ts` is ported from cindy's `hooks/useRelativeTime.ts` with
+changes (the wording of the time and its exact form); the actions behind the buttons are Persona's own.
+
+The web composer follows cindy's design at the owner's request (2026-11-12): the toolbar, the + / @ panel and the
+permission picker (`web/src/views/chat/Composer.tsx`, `ComposerPanel.tsx`, `PermissionPicker.tsx`, after cindy's
+`ChatInput`, `ExtraDirsButton`, `AtMentionPanel`, `PermissionSelector` and `SendButton`), the `/` palette
+(`SlashPalette.tsx`, after `SlashCommandPalette`) and the queued messages (`QueuePanel.tsx`, after `PendingQueuePanel`):
+layout, states and wording, with the permission mode names and the placeholders' tone taken from cindy's English
+strings. No code is copied for those.
+
+The web chat's run status bar (`web/src/views/chat/RunningStatusBar.tsx` and its speed card
+`web/src/views/chat/RunningSpeedCard.tsx`, #5312) is ported from cindy's `RunningStatusBar` (in `CCAgentSessionView.tsx`)
+and `RunningTokenRatePopover.tsx` with changes: their layout, state words, the Done pop and the card's sparkline. The
+speed history (`web/src/lib/token-rate.ts`) is ported from `packages/maker-shared/src/runningTokenRateHistory.ts` and
+`formatRecentOutputTokenRate`, with tests from cindy's, changed to measure generation from the status line's token count
+over time; the state words follow `localizeAgentStatus.ts` and `workingStatus.ts`, and are worked out from Persona's own
+transcript items (`web/src/lib/run-step.ts`).
+
+The web chat's top bar and its background work follow cindy's design at the owner's request (2026-11-12, #5421): the
+top bar (`Header` in `web/src/views/chat/ChatView.tsx`, after cindy's `SessionContentHeader`, `AgentDeviceIndicator`,
+`SessionRenameInput` and `GitContextBadge`), the goal bar over the composer (`web/src/views/chat/GoalBar.tsx`, after
+`GoalIndicator`) and the Background tasks side panel (`web/src/views/chat/BackgroundPanel.tsx`, after the right sidebar's
+`background-tasks` plugin, `BackgroundTasksBody` and `openBackgroundTasksTab`): layout, states, wording and how they
+open. No code is copied for those. The "on another computer" arc on an Agent's mark (`RemoteSignal` in
+`web/src/ui/AgentMark.tsx`) takes its path and placement from cindy's `components/icons/RemoteSourceMark.tsx`.
+
+The handoff note an Agent session's conversation carries when it switches between Claude Code and Codex
+(`server/internal/node/engine_handoff_build.go`, read by `server/internal/node/engine_handoff.go`, with its words in
+`server/internal/prompts/agents/engine_handoff.md`, `engine_handoff_command.md` and `engine_handoff_speaker.md`) is
+ported from cindy's `apps/desktop/src/main/maker-ipc/agentHandoff.ts` with changes: the same sections, framing and
+bounds (the work ledger, the index of earlier turns, the latest turns word for word, the 16000-character cap), read
+from Persona's transcript items; the transcript files on the computer take the place of cindy's history tools, and the
+cap squeezes the data instead of cutting the text.
+
 https://github.com/makecindy/cindy
 
 Licensed under the Apache License, Version 2.0 (the "License"); you may not use these files except in compliance with

@@ -1270,16 +1270,29 @@ struct RecordingDayIntakeTests {
         let original = RecordingDayReceiver.requestCatchUp
         RecordingDayReceiver.requestCatchUp = {}
         defer { RecordingDayReceiver.requestCatchUp = original }
+        func settle(_ want: Int) async throws {
+            for _ in 0..<200 where passes != want { try await Task.sleep(for: .milliseconds(10)) }
+        }
         _ = try store.store(header: f.header(0), audio: f.audio(0))
         receiver.arrived(f.id)
+        try await settle(1)
         #expect(passes == 1)
         clock = anchor.addingTimeInterval(RecordingDayReceiver.retentionInterval - 1)
         receiver.arrived(f.id)
+        try await Task.sleep(for: .milliseconds(100))
         #expect(passes == 1)
         clock = anchor.addingTimeInterval(RecordingDayReceiver.retentionInterval)
         receiver.arrived(f.id)
+        try await settle(2)
+        #expect(passes == 2)
+        // A new launch within the hour (the in-memory gate starts over) still skips it: the store remembers the pass.
+        clock = anchor.addingTimeInterval(RecordingDayReceiver.retentionInterval + 60)
+        let relaunched = makeReceiver(f, store, library: RecordingLibrary(root: f.root), now: { clock }, retain: { passes += 1 })
+        relaunched.arrived(f.id)
+        try await Task.sleep(for: .milliseconds(100))
         #expect(passes == 2)
         await receiver.rowsAdopted()
+        await relaunched.rowsAdopted()
     }
 
     /// Chunks of a day deleted here change nothing, so they never pass through `arrived`: the delete still waiting goes

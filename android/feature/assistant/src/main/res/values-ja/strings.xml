@@ -89,7 +89,7 @@
     <string name="assistant_no_match">一致するチャットはありません</string>
     <string name="assistant_no_match_detail">別のキーワードでお試しください。</string>
     <string name="assistant_more">その他</string>
-    <string name="assistant_home">ホームに戻る</string>
+    <string name="assistant_back_to_main">メインチャットに戻る</string>
     <string name="assistant_todos">ToDo</string>
     <string name="assistant_open_settings">設定</string>
     <string name="assistant_make_leader">常駐にする</string>
