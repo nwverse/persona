@@ -99,6 +99,7 @@
     <string name="designsystem_core_agents_no_todo">ToDoなし</string>
     <string name="designsystem_core_agents_manual">手動で開いた</string>
     <string name="designsystem_core_agents_quiet_spaces">アイドル中のスペース</string>
+    <string name="designsystem_core_agents_started_tab">起動元</string>
     <plurals name="designsystem_core_count_needs_you">
         <item quantity="other">%1$d件が要対応</item>
     </plurals>

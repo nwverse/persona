@@ -287,6 +287,10 @@ internal fun AgentsScreen(
                 page.settings.query.isEmpty() && page.settings.quick == AgentQuickFilter.All && !page.pagination.paged
             })
     }
+    // Rows outside the tree name their computer while the list mixes computers, By To-do's their host while it mixes
+    // hosts (iOS `rowMachine`, `mixedHosts`; #4338 A9).
+    val mixesComputers = remember(page.list, page.settings.machineFilter) { page.list.mixesComputers(page.settings.machineFilter) }
+    val showHost = remember(page.list, page.preferences.grouping) { page.preferences.grouping == AgentGrouping.Todo && page.list.mixesHosts() }
     val spacesById = page.spacesById
     // By Repository on Glass draws iOS's tree (#4338 A7): each repository a card, its header and working trees' lines in it,
     // the agents' rows under their line. Brief and Board keep their headings (decision 8).
@@ -573,7 +577,8 @@ internal fun AgentsScreen(
                                 onOpen = { openRow(row) }, menuItems = { rowMenu(row, entry.nested) },
                                 onClose = closeSwipe(row, operations.busy) { operationDialog = AgentOperationDialog.Close(row.session) },
                                 launcher = entry.launcher, branch = entry.branch, hideState = entry.inStateSection,
-                                requestCount = cardCounts[row.session.key] ?: 0, card = requestCards[row.session.key])
+                                requestCount = cardCounts[row.session.key] ?: 0, card = requestCards[row.session.key],
+                                mixesComputers = mixesComputers, showHost = showHost)
                         }
                     }
                     is TreeChildrenEntry -> item(entry.key, contentType = "children") {
@@ -821,7 +826,9 @@ internal fun SectionTitle(text: String) { JSectionHeader(text) }
 
 /**
  * A session row of the tree and the space page. [located] rows sit outside the computer tree, so they say which
- * computer and space they run in; rows under a space do not repeat it.
+ * computer and space they run in; rows under a space do not repeat it. On Glass the row is iOS's Avatar row (#4338 A9):
+ * its line 2 word and line 3 come from core/domain's `rowContent`, the computer named only while the list
+ * [mixesComputers], the host while By To-do mixes hosts ([showHost]). Brief and Board keep their facts line.
  */
 @Composable
 internal fun SlotRow(
@@ -836,10 +843,18 @@ internal fun SlotRow(
     card: Interaction? = null,
     /** Its By Status section names its state, so the row does not ([TreeRowEntry.inStateSection]). */
     hideState: Boolean = false,
+    /** The list holds more than one computer's agents (`mixesComputers`): a [located] row names its computer. */
+    mixesComputers: Boolean = false,
+    /** By To-do while the list mixes hosts (`mixesHosts`): the row names its host (botmux, Orca, Tern). */
+    showHost: Boolean = false,
 ) {
     var menu by remember { mutableStateOf(false) }
     val session = row.session
     val source = session.source
+    val glass = PersonaTheme.style == AppStyle.Glass
+    val content = row.rowContent(AgentRowContext(located = located, machine = machine.takeIf { mixesComputers }, host = showHost,
+        // Under its tab's row the agent is named by its agent and whether it started the tab; the tab's row names the tab.
+        pane = if (launcher || branch) AgentPane(session.agentLabel, launcher) else null, slot = slotLabel, stateSection = hideState), muted)
     val links = androidx.compose.ui.platform.LocalUriHandler.current
     // "Lark groups" / "Terminal" under the time (#3132, #3043); a botmux session's tag opens its Feishu topic when it has one.
     val origin = session.agentSource?.takeIf { !session.assistant }?.let { kind ->
@@ -857,19 +872,22 @@ internal fun SlotRow(
         preview = session.rowLine(card, now, muted)?.text(), time = relativeTime(agentResources(), row.updatedAt, now),
         // Codex, a compatible CLI or what the hub calls a runtime's agent ("DSH"); a session with a source names it in its facts instead.
         agent = session.agentLabel.takeIf { !session.isClaude && source == null },
-        statusText = row.rowStatusText(muted).takeUnless { hideState },
+        statusText = content.stateWord?.text(),
         facts = buildList {
             // Where its closeout stands on merged and deployed (#3612), first: the facts' line is cut at its end.
             session.closeoutFacts.forEach { add(RowFact(it.text.text(), caution = it.contradicted)) }
-            // Where a Codex thread or a runtime's session comes from, and when the phone can only read it.
-            source?.let { add(RowFact(listOfNotNull(it.label, it.agentName).joinToString(" / "))) }
-            if (source?.readOnly == true) add(RowFact(stringResource(R.string.agents_row_view_only), caution = true))
-            if (located) listOfNotNull(machine, session.spaceName?.takeIf { it.isNotBlank() } ?: session.folderName.takeIf { it.isNotBlank() })
-                .joinToString(" / ").takeIf { it.isNotBlank() }?.let { add(RowFact(it)) }
-            // The model it runs on, as iOS's row names it (#4338 A9): the session's model, else its launcher's.
-            (session.model ?: session.launcher)?.trim()?.takeIf(String::isNotEmpty)?.let { add(RowFact(it)) }
-            session.todo?.let { add(RowFact(stringResource(R.string.agents_row_todo, it.title))) }
-            slotLabel?.let { add(RowFact(it)) }
+            // Glass says where it runs, its model and its to-do on its third line ([place]).
+            if (!glass) {
+                // Where a Codex thread or a runtime's session comes from, and when the phone can only read it.
+                source?.let { add(RowFact(listOfNotNull(it.label, it.agentName).joinToString(" / "))) }
+                if (source?.readOnly == true) add(RowFact(stringResource(R.string.agents_row_view_only), caution = true))
+                if (located) listOfNotNull(machine, session.spaceName?.takeIf { it.isNotBlank() } ?: session.folderName.takeIf { it.isNotBlank() })
+                    .joinToString(" / ").takeIf { it.isNotBlank() }?.let { add(RowFact(it)) }
+                // The model it runs on, as iOS's row names it (#4338 A9): the session's model, else its launcher's.
+                (session.model ?: session.launcher)?.trim()?.takeIf(String::isNotEmpty)?.let { add(RowFact(it)) }
+                session.todo?.let { add(RowFact(stringResource(R.string.agents_row_todo, it.title))) }
+                slotLabel?.let { add(RowFact(it)) }
+            }
             if (requestCount > 0) add(RowFact(pluralStringResource(R.plurals.agents_row_requests, requestCount, requestCount), caution = true))
             session.loop?.let { add(RowFact(it.nextRunLabel(agentResources(), now))) }
             // a running workflow is in background too: counted once (#2935)
@@ -891,7 +909,8 @@ internal fun SlotRow(
             // Claude Code's ultracode on (#582, iOS UltracodeMark): the workflow mark right after the title.
             if (ultracodeMark(session)) add(RowFlag(stringResource(R.string.agents_row_ultracode), PersonaIcons.workflow, ai = true))
             if (pinned) add(RowFlag(stringResource(R.string.agents_row_pinned), PhIcons.PushPin))
-            if (muted) add(RowFlag(stringResource(R.string.agents_row_muted), PhIcons.Prohibit))
+            // Glass rings the bell at the third line's end instead.
+            if (muted && !glass) add(RowFlag(stringResource(R.string.agents_row_muted), PhIcons.Prohibit))
             // Its closeout (#3612): the hub found a claim untrue (the line says which), or the turn is not finished.
             when (session.closeoutMark) {
                 CloseoutMark.Contradicted -> add(RowFlag(stringResource(R.string.agents_row_closeout_contradicted), PhIcons.Warning, caution = true))
@@ -899,9 +918,13 @@ internal fun SlotRow(
                 null -> Unit
             }
         },
-        launcher = launcher, branch = branch, source = origin,
-        // Which agent runs there and in which client (#6390): its mark before the state mark.
+        // Glass says "Started it" on the third line instead of the tag after the title.
+        launcher = launcher && !glass, branch = branch, source = origin,
+        // Which agent runs there and in which client (#6390): its mark before the state mark (Glass: in its well).
         agentMark = session.agentMark,
+        place = if (glass && content.hasPlaceLine)
+            RowPlace(CoreText.joined(" · ", content.place).text(), content.model, content.todo, content.muted) else null,
+        waiting = row.waitsInBackground && !muted,
         // Its running Workflows (#2935) stay structured until the row lays them out beside critical facts (#3435).
         note = WorkflowSummary.lineFields(session, now)?.let { RowNote(it, WorkflowIcon) },
     )
@@ -1061,19 +1084,13 @@ internal val AgentState.label: String @Composable get() = designStatus.localized
 /** A row's state colour: Awaiting Reply (#5096) takes Unread's, since it waits on the user as much; a muted one is just Seen. */
 internal fun AgentSession.rowStatus(muted: Boolean): Status = if (asksYou && !muted) Status.Unread else state.designStatus
 
-/** A row's state words: "Awaiting your reply" for a seen agent waiting on the user's answer; none for a plain seen one. */
-@Composable
 /**
- * The row's state in words, as iOS's default row (#4338 A9): only what its dot does not say alone, Needs you (unless
- * muted), Awaiting reply and Waiting in the background. Working, Unread and the rest are the dot's; TalkBack still
- * hears the state ([AgentRow]).
+ * The row's state in words, as iOS's default row (#4338 A9, `rowStateWord`): only what its dot does not say alone, Needs
+ * you (unless muted), Awaiting reply and Waiting in the background. Working, Unread and the rest are the dot's; TalkBack
+ * still hears the state ([AgentRow]).
  */
-internal fun AgentSession.rowStatusText(muted: Boolean): String? = when {
-    state == AgentState.NeedsYou && !muted -> state.label
-    asksYou && !muted -> CoreText.of(CoreText.Key.StateAwaitingReply).text()
-    waitsInBackground && !muted -> CoreText.of(CoreText.Key.StateBackgroundWaiting).text()
-    else -> null
-}
+@Composable
+internal fun AgentSession.rowStatusText(muted: Boolean): String? = rowStateWord(muted)?.text()
 @Composable
 internal fun StateDot(state: AgentState, breathe: Boolean = false) {
     JStatusMark(state.designStatus, animated = breathe)
