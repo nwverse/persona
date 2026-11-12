@@ -14,7 +14,10 @@ import persona.core.domain.modelShortName
  * opened, where it runs, the model, its to-do, the bell of a muted one.
  */
 data class AgentRowContent(
-    /** Before the latest words: Needs you, Awaiting reply or Waiting in the background; null where its mark says it alone. */
+    /**
+     * Before the latest words: Needs you, Awaiting reply or Waiting in the background; null where its mark says it alone.
+     * State Cards spell every state but Seen out at the card's foot instead ([cardStateWord]).
+     */
     val stateWord: CoreText?,
     /** Where it was opened, the tag line 3 starts with (iOS `sourceLabel`): a Lark group's topic or a terminal pane. */
     val source: AgentSource?,
@@ -66,8 +69,15 @@ data class AgentRowContext(
     val stateSection: Boolean = false,
 )
 
-/** What [AgentRowContent] says for this session, drawn in [context]; [muted]: it or its space is muted. */
-fun AgentSession.rowContent(context: AgentRowContext = AgentRowContext(), muted: Boolean = false): AgentRowContent {
+/**
+ * What [AgentRowContent] says for this session, drawn in [context] in the list's [display]; [muted]: it or its space is
+ * muted.
+ */
+fun AgentSession.rowContent(
+    context: AgentRowContext = AgentRowContext(),
+    muted: Boolean = false,
+    display: AgentListDisplay = AgentListDisplay.Avatar,
+): AgentRowContent {
     val s = session
     val place = mutableListOf<CoreText>()
     val pane = context.pane
@@ -85,7 +95,7 @@ fun AgentSession.rowContent(context: AgentRowContext = AgentRowContext(), muted:
     }
     if (context.located) context.machine?.takeIf(String::isNotBlank)?.let { place += CoreText.plain(it) }
     return AgentRowContent(
-        stateWord = rowStateWord(muted).takeUnless { context.stateSection },
+        stateWord = (if (display.rowParts.stateAtFoot) cardStateWord(muted) else rowStateWord(muted)).takeUnless { context.stateSection },
         source = s.agentSource?.takeIf { !s.assistant },
         place = place,
         model = s.rowModel,
