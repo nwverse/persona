@@ -18,6 +18,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
@@ -193,29 +194,8 @@ type assistantDataState struct {
 }
 
 // AssistantDataView is one data contribution as the extension and the apps see it (assistant.data_status,
-// GET /api/v1/extensions/{id}/-/assistant-data).
-type AssistantDataView struct {
-	Contribution string `json:"contribution"` // its id, as the manifest has it
-	Kind         string `json:"kind"`         // instructions | skills
-	Path         string `json:"path"`         // its file or directory in the data directory
-	Limit        int    `json:"limit"`        // bytes
-	Bytes        int    `json:"bytes"`        // what it weighs now (all files of skills)
-	// State is what the assistant reads of it (dataState*), Reason why that is not the content as it is now
-	// (data* reasons; empty when it is), Detail the rest of a file's problem.
-	State  string `json:"state"`
-	Reason string `json:"reason,omitempty"`
-	Detail string `json:"detail,omitempty"`
-	// Hash is the digest of the content as it is now (instructions cleaned; skills all their files); AdoptedHash and
-	// AdoptedAt that of the instructions the assistant reads, and when they were adopted (kept for an extension or
-	// contribution switched off: what it read last). NextAdoptAt: a pending version is adopted by then at the
-	// latest, sooner if the hub's own instructions change or the user applies it.
-	Hash        string     `json:"hash,omitempty"`
-	AdoptedHash string     `json:"adopted_hash,omitempty"`
-	AdoptedAt   *time.Time `json:"adopted_at,omitempty"`
-	NextAdoptAt *time.Time `json:"next_adopt_at,omitempty"`
-	// Skills are the data skills sent (kind skills).
-	Skills []string `json:"skills,omitempty"`
-}
+// GET /api/v1/extensions/{id}/-/assistant-data): State one of dataState*, Reason one of the data* reasons.
+type AssistantDataView = assistantwire.AssistantDataItem
 
 // dataKey is a contribution's key in assistantDataState.Adopted.
 func dataKey(ext, contribution string) string { return ext + "/" + contribution }
@@ -314,15 +294,14 @@ func (ps *extensions) dataInstructionsOf(p *extension.Extension, st *assistantDa
 		}
 		v.State = dataStateNone
 		if found || changed {
-			at := next.AdoptedAt
-			v.AdoptedHash, v.AdoptedAt = next.Hash, &at
+			v.AdoptedHash, v.AdoptedAt = next.Hash, assistantwire.FormatDataTime(next.AdoptedAt)
 			adopted[it.ID] = next.Text
 			switch {
 			case err != nil && next.Text != "":
 				v.State = dataStateKept
 			case err == nil && v.Hash != next.Hash:
-				due := next.AdoptedAt.Add(dataAdoptEvery)
-				v.State, v.Reason, v.NextAdoptAt = dataStatePending, dataRateLimited, &due
+				due := assistantwire.FormatDataTime(next.AdoptedAt.Add(dataAdoptEvery))
+				v.State, v.Reason, v.NextAdoptAt = dataStatePending, dataRateLimited, due
 			case next.Text != "":
 				v.State = dataStateAdopted
 			}
@@ -417,8 +396,7 @@ func (ps *extensions) assistantDataStatus(ctx context.Context, id string, force 
 		}
 		v := off(AssistantDataView{Contribution: it.ID, Kind: extension.PromptInstructions, Path: it.File, Limit: dataInstructionsMost})
 		if a, ok := st.Adopted[dataKey(p.Record.ID, it.ID)]; ok {
-			at := a.AdoptedAt
-			v.AdoptedHash, v.AdoptedAt = a.Hash, &at
+			v.AdoptedHash, v.AdoptedAt = a.Hash, assistantwire.FormatDataTime(a.AdoptedAt)
 		}
 		instr = append(instr, v)
 	}

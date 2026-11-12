@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/connector/proc"
@@ -1114,12 +1115,12 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 			return ps.extensionAssistantCall(ctx, id, method, params)
 		case "model.complete": // assistantwire.MethodModelComplete (extension_model_calls.go)
 			return ps.extensionModelCall(ctx, id, params)
-		case "assistant.data_status": // its own data contributions only, no scope (extension_assistant_data.go)
+		case assistantwire.MethodAssistantDataStatus: // its own data contributions only, no scope (extension_assistant_data.go)
 			items := ps.assistantDataStatus(ctx, id, false)
 			if items == nil {
 				items = []AssistantDataView{}
 			}
-			return map[string]any{"items": items}, nil
+			return assistantwire.AssistantDataStatusResult{Items: items}, nil
 		case connector.MethodSentRecord:
 			return ps.extensionSentRecord(ctx, id, params)
 		case "cli.call":
