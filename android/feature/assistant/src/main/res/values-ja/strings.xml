@@ -132,6 +132,9 @@
     <plurals name="assistant_needs_you_more">
         <item quantity="other">受信トレイにあと%1$d件</item>
     </plurals>
+    <plurals name="assistant_needs_you_more_agents">
+        <item quantity="other">ほかに%1$d件の要対応</item>
+    </plurals>
     <string name="assistant_home_setup_lead">あと一歩で始められます。</string>
     <string name="assistant_suggest_local_detail">説明を開く</string>
     <string name="assistant_suggest_needs_calendar">スマホのカレンダーを使います</string>

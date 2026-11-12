@@ -19,6 +19,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // A connector's inbox thread opened as a conversation (connector.Threads, docs/extensions/connectors.md "Interfaces: one manifest, dispatched by declaration"): a
@@ -41,7 +42,7 @@ func (h *Manager) threadConnector(w http.ResponseWriter, r *http.Request) (conne
 	}
 	th, ok := connector.As[connector.Threads](c)
 	if !ok {
-		writeErr(w, http.StatusConflict, fmt.Errorf("%s has no conversations to open", c.Name()))
+		writeErrCode(w, http.StatusConflict, "conversations_unsupported", fmt.Errorf("%s has no conversations to open", c.Name()))
 		return nil, nil, false
 	}
 	if !h.threadUsable(w, r.Context(), c) {
@@ -69,6 +70,21 @@ func (h *Manager) threadUsable(w http.ResponseWriter, ctx context.Context, c con
 
 // threadFailed writes a connector's failure: as a rate limit when the connector is waiting one out now.
 func (h *Manager) threadFailed(w http.ResponseWriter, ctx context.Context, c connector.Connector, err error) {
+	var readError *rpc.Error
+	if errors.As(err, &readError) {
+		switch readError.Code {
+		case "rate_limited":
+			writeErrCode(w, http.StatusTooManyRequests, readError.Code, err)
+			return
+		case "no_permission":
+			writeErrCode(w, http.StatusForbidden, readError.Code, err)
+			return
+		case "not_signed_in":
+			// Source login is separate from the app device token; 401 would sign the app out.
+			writeErrCode(w, http.StatusConflict, "unavailable", err)
+			return
+		}
+	}
 	if connector.StatusOf(ctx, c).State == connector.StateRateLimited {
 		writeErrCode(w, http.StatusTooManyRequests, "rate_limited", err)
 		return

@@ -85,6 +85,8 @@ class NoHomePageShotsTest {
             NeedsYouLine.Agent(SessionKey("mac", "agent"), "r1", "plan", null, who = "weather-app", what = "Plan ready"),
             NeedsYouLine.Inbox("i1", lark = false, itemKind = "mail", who = "Alex", what = "Re: Q4 budget"),
         ), more = 1)
+        // Glass draws them over the composer (#4339 C17), all of them, as many as fit.
+        val shellNeeds = needs.lines + NeedsYouLine.Inbox("i2", lark = false, itemKind = "mail", who = "Sam", what = "Lunch on Friday?")
         rule.setContent {
             PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
                 val configuration = Configuration(LocalConfiguration.current).apply {
@@ -100,7 +102,7 @@ class NoHomePageShotsTest {
                     Box(Modifier.testTag("shot").width(400.dp).height(900.dp).background(PersonaTheme.palette.background)) {
                         key(round) {
                             AssistantScreen(navigator, hub, hub, hub::start, composerService = null, mainConversationSender = hub,
-                                requestedSession = side, needsYou = needs, onOpenNeed = {}, onOpenInbox = {},
+                                requestedSession = side, needsYou = needs, shellNeedsYou = shellNeeds, onOpenNeed = {}, onOpenInbox = {},
                                 machines = listOf(Machine("mbp", name = "MacBook Pro", online = true)), phoneToolsAvailable = true,
                                 chatContent = { key -> StandInChat(key) })
                         }

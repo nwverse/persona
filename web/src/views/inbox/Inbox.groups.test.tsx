@@ -249,14 +249,17 @@ describe("Done's day counts from the hub (#2969)", () => {
   });
 
   it("the list's last days are not complete on their own: Today loads what the list leaves out (#5549)", async () => {
-    // the list carries only the newest done items: three more were done today, and only the history has them
+    // the list carries only the newest done items (one of today's): three more were done today, only the history has them
+    calls.items.push(lark("lt", { done_at: ago(0, 2), done_by: "user" }));
     calls.history.push(...[1, 2, 3].map((i) => lark(`t${i}`, { done_at: ago(0, 4 + i), done_by: "user" })));
     calls.days = true;
     await remount();
-    expect(head("done", "today").textContent).toContain("今天3");
+    expect(head("done", "today").textContent).toContain("今天4");
     await click(toggle("done", "just").closest("section")?.querySelector('button[aria-haspopup="menu"]'));
     await click([...document.querySelectorAll('[role="menuitem"]')].find((el) => el.textContent?.includes("今天")));
-    expect(historyAsks().at(-1)!.get("before")).toBeNull(); // Today's first page is the history's first
+    // Today's first page starts past the oldest done item the list holds, not with rows the list has
+    const ask = historyAsks().at(-1)!;
+    expect([ask.get("before"), ask.get("before_id")]).toEqual([ago(0, 2), "lt"]);
     expect(["t1", "t2", "t3"].map((id) => Boolean(head("done", "today").querySelector(`[data-item="${id}"]`)))).toEqual([true, true, true]);
     // a row only the history has opens like a listed one
     act(() => root.render(<Inbox id="t2" onToggleSidebar={() => {}} />));
@@ -289,9 +292,9 @@ describe("Done's day counts from the hub (#2969)", () => {
     // nothing of 7+ days is loaded yet: only Lark's done item of the list shows
     expect(groups("done")).toEqual([]);
     expect(host.querySelector('[data-section="done"]')?.textContent).toContain("1+");
-    // Today first: the list carries only the newest done items (#5549), so its days page in too
+    // Today first: the list carries only the newest done items (#5549), so its days page in too, past what it holds
     await click(button("加载更早的"));
-    expect(historyAsks().at(-1)!.get("before")).toBeNull();
+    expect(historyAsks().at(-1)!.get("before_id")).toBe("d1");
     await click(button("加载更早的"));
     expect(historyAsks().at(-1)!.get("before")).toBe(midnight(6).toISOString());
     expect(head("done", "week").textContent).toContain("7 天前2"); // h10 and h12, Lark's; the week is complete
