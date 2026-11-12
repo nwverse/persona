@@ -26,9 +26,11 @@ final class TodoStageBarUITests: XCTestCase {
             ("chat", ["-tab", "assistant", "-dev.openChat", "", "-openAssistant", "server/b2e4d6f8-0000-4000-8000-000000000001"]),
             ("todo", ["-tab", "assistant", "-openAssistantPage", "todos", "-openTodoTitled", "天气 App 发 1.3 版"]), // i18n-ignore: the mock's to-do
         ]
-        for (language, languageArgs) in languages {
-            for size in ["default", "largest"] {
-                for scheme in ["light", "dark"] {
+        // The look outermost: the app icon follows it, and the system's alert about that comes only when it changes.
+        var first = true, lastScheme = ""
+        for scheme in ["light", "dark"] {
+            for (language, languageArgs) in languages {
+                for size in ["default", "largest"] {
                     for (place, placeArgs) in places {
                         let name = "\(place)-\(language)-\(size)-\(scheme)"
                         let largest = size == "largest" ? ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] : []
@@ -36,7 +38,11 @@ final class TodoStageBarUITests: XCTestCase {
                         app.launchArguments = ["-pairURL", url, "-ui.scheme", scheme] + placeArgs + languageArgs + largest
                         app.launchPinned()
                         let board = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-                        for label in ["允许", "Allow"] where board.buttons[label].waitForExistence(timeout: 3) { board.buttons[label].tap() }
+                        // The notification prompt comes once per install: waited for only at the first launch.
+                        for label in ["允许", "Allow"] where first ? board.buttons[label].waitForExistence(timeout: 3) : board.buttons[label].exists {
+                            board.buttons[label].tap()
+                        }
+                        first = false
 
                         let bar = app.descendants(matching: .any)["todo.stage"].firstMatch
                         XCTAssertTrue(bar.waitForExistence(timeout: 30), "\(name): no stage bar:\n\(app.debugDescription)")
@@ -52,13 +58,14 @@ final class TodoStageBarUITests: XCTestCase {
                         }
                         if let dir = env["PERSONA_SHOTS"] {
                             // The app icon follows the color scheme, and the system says so in an alert over the page: closed first.
-                            if board.alerts.firstMatch.waitForExistence(timeout: 2) {
+                            if scheme != lastScheme ? board.alerts.firstMatch.waitForExistence(timeout: 3) : board.alerts.firstMatch.exists {
                                 for label in ["OK", "好"] where board.alerts.buttons[label].exists { // i18n-ignore: the system's own button
                                     board.alerts.buttons[label].tap(); sleep(1); break
                                 }
                             }
                             try app.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: "\(dir)/stagebar-\(name).png"))
                         }
+                        lastScheme = scheme
                         app.terminate()
                     }
                 }
