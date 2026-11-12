@@ -748,7 +748,7 @@ model and effort, its status and time; opened, its prompt, latest words and last
 
 **The plan card and pill** (web, #5156; the owner asked on 2026-11-12 that the plan follow cindy's `InlinePlanCard` and
 `TodoListCard` exactly, which replaces the one-line card and the side panel's Plan). One card per exchange, where its
-latest TodoWrite of two or more items was written (`PlanCard`, `planCardStep`); earlier updates and lists of one item are ordinary rows. A
+latest TodoWrite of two or more items was written (`PlanCard`, `planCardStep`); earlier updates and lists of one item are ordinary rows (cindy drops them; super rule 2 keeps every call inspectable). A
 12 px rounded, 1 px `line`-bordered `surface` card; its head (14 × 10 px padding, 8 px gaps) is a 14 px chevron in
 `tool-ink`, a 16 px `todo` icon, done / total in 13 px monospace medium, a `tool-ink` dot and the step in progress (else
 the last) on one line. It starts open on the whole list (rows at least 30 px, 10 px gaps, 13/1.45 text that wraps):

@@ -9,7 +9,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Item } from "../../lib/types";
 import type { Segment, UserMessage } from "../../lib/turns";
 import type { Todo } from "../../lib/work-groups";
+import { emptyTaskIndex } from "../../lib/tasks";
+import { ChatContext, type ChatContextValue } from "./chat-context";
+import { forgetExpanded } from "./expanded";
 import { latestPlan, PlanCard, planCardStep, PlanPill, usePlanClosed } from "./PlanCard";
+import { SegmentView } from "./SegmentView";
 
 const todos: Todo[] = [
   { content: "读代码", status: "completed" },
@@ -231,6 +235,43 @@ describe("Close Plan", () => {
     expect(pill()).not.toBeNull();
     await render(<Dock chat="m/b" plan={{ id: "tw#0", todos }} />);
     expect(pill()).toBeNull();
+  });
+});
+
+describe("an exchange's plan in its summary", () => {
+  // cindy draws only a plan's latest list and drops the calls before it; super rule 2 keeps every tool call
+  // inspectable, so those stay ordinary rows (#5156)
+  const call = (n: number, name: string, input: Record<string, unknown>): Segment["steps"][number] => ({
+    kind: "tool", id: `t${n}#0`,
+    use: { id: `t${n}#0`, seq: n, role: "assistant", kind: "tool_use", tool_name: name, tool_use_id: `c-${n}`, tool_input: input } as Item,
+    result: { id: `t${n}-r#0`, seq: n, role: "user", kind: "tool_result", tool_use_id: `c-${n}`, text: "ok" } as Item,
+    images: [],
+  });
+  const answer: Segment["steps"][number] = { kind: "text", id: "a9#0", item: { id: "a9#0", seq: 9, role: "assistant", kind: "text", text: "做完了。" } as Item };
+
+  it("the latest list of two or more items is the card; an earlier one and a list of one are action rows", async () => {
+    forgetExpanded();
+    const steps = [
+      call(1, "TodoWrite", { todos: todos.slice(0, 2) }),
+      call(2, "Bash", { command: "echo 1" }),
+      call(3, "TodoWrite", { todos }),
+      call(4, "TodoWrite", { todos: todos.slice(0, 1) }),
+      answer,
+    ];
+    const seg: Segment = { id: "seg", steps, tools: 4, thoughts: 0, replies: 1, folds: [] };
+    const ctx: ChatContextValue = { tasks: emptyTaskIndex(), subagents: [], scope: "plan:", lineStyle: "agents" };
+    await render(<ChatContext.Provider value={ctx}><SegmentView seg={seg} live={false} mid="m" sid="s" expandFold={async () => {}} /></ChatContext.Provider>);
+    // folded: no card drawn
+    expect(host.querySelector("[data-plan-card]")).toBeNull();
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>("[data-work-group] > button")!.click();
+      await vi.dynamicImportSettled();
+    });
+    const cards = [...host.querySelectorAll("[data-plan-card]")];
+    expect(cards.map((c) => c.getAttribute("data-plan-id"))).toEqual(["t3#0"]);
+    expect(cards[0].querySelectorAll("[data-todo]")).toHaveLength(5);
+    const rows = [...host.querySelectorAll('[data-action-row="TodoWrite"]')];
+    expect(rows.map((r) => r.getAttribute("data-tool-use"))).toEqual(["c-1", "c-4"]);
   });
 });
 
