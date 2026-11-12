@@ -322,3 +322,71 @@ func TestHubUsage(t *testing.T) {
 		t.Fatalf("lines %q", p.texts())
 	}
 }
+
+// attachedPhone waits until recording id's run has a socket other than before (a new one attached, not started).
+func (h *hubFixture) attachedPhone(id string, before *phoneSocket) *phoneSocket {
+	h.t.Helper()
+	var p *phoneSocket
+	waitFor(h.t, "the socket attached", func() bool {
+		r := h.s.hubRunOf(id)
+		if r == nil {
+			return false
+		}
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		p = r.phone
+		return p != nil && p != before
+	})
+	return p
+}
+
+// A socket gets nothing before ready: a problem that changes while it waits for its start goes out once, after ready.
+func TestHubNothingBeforeReady(t *testing.T) {
+	h := newHubFixture(t)
+	h.hubUpload(meetingRec, 1, nil)
+	p := dialPhone(t, h.sockets, meetingRec)
+	h.attachedPhone(meetingRec, nil)
+	r := h.s.hubRunOf(meetingRec)
+	r.mu.Lock()
+	r.setUpstreamLocked(problemUpstreamFailed)
+	r.mu.Unlock()
+	p.send(map[string]any{"type": "start", "at": 0})
+	p.wait("problem", 1)
+	p.mu.Lock()
+	frames := slices.Clone(p.frames)
+	p.mu.Unlock()
+	if len(frames) != 2 || frames[0]["type"] != "ready" || frames[1]["type"] != "problem" || frames[1]["code"] != problemUpstreamFailed {
+		t.Fatalf("frames %v", frames)
+	}
+}
+
+// A socket that never sends start counts as down: the fallback comes fallbackAfter after the first hub-mode upload
+// while it waits for its start, and its end leaves the time the socket is down from as it was.
+func TestHubSocketNeverStartedCountsAsDown(t *testing.T) {
+	h := newHubFixture(t)
+	h.hubUpload(meetingRec, 1, map[string]any{"segments": phoneSegs(fakeLine{0, 3, "Phone line one."})})
+	r := h.s.hubRunOf(meetingRec)
+	r.mu.Lock()
+	since := r.downSince
+	r.mu.Unlock()
+	p := dialPhone(t, h.sockets, meetingRec)
+	sock := h.attachedPhone(meetingRec, nil)
+	waitFor(t, "the fallback", func() bool { return h.transcription(meetingRec)["fallback"] == true })
+	r.mu.Lock()
+	still := r.phone == sock
+	r.mu.Unlock()
+	if !still {
+		t.Fatal("the fallback waited for the socket that never started to end")
+	}
+	_ = p.c.CloseNow()
+	waitFor(t, "the socket gone", func() bool {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		return r.phone == nil
+	})
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.downSince.Equal(since) {
+		t.Fatalf("down since %v, was %v", r.downSince, since)
+	}
+}

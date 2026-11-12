@@ -163,9 +163,7 @@ func (s *Service) audioSocket(w http.ResponseWriter, r *http.Request) {
 	if gaps == nil {
 		gaps = [][2]float64{}
 	}
-	l, _, _ := e.LiveRead(rid)
-	p.send(map[string]any{"type": "ready", "from": from, "gaps": gaps, "next": len(l.Segments)})
-	run.begin(p, tl)
+	run.begin(p, tl, from, gaps) // ready, then the standing problem
 
 	// The audio and the frames, acknowledged about every audioAckEvery.
 	pos := int64(math.Round(from * kb.AudioRate))

@@ -63,7 +63,7 @@ func (r *hubRun) fallbackCheckLocked(now time.Time) {
 	if r.fallback || r.stopped || r.ended {
 		return
 	}
-	down := r.phone == nil && !r.downSince.IsZero() && now.Sub(r.downSince) >= fallbackAfter
+	down := !r.phoneReady && !r.downSince.IsZero() && now.Sub(r.downSince) >= fallbackAfter
 	standing := r.upstream != "" && now.Sub(r.upstreamAt) >= fallbackAfter
 	if !down && !r.fatal && !standing {
 		return

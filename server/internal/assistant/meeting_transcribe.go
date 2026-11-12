@@ -76,12 +76,14 @@ type hubRun struct {
 	stopped  bool
 	stopCode string // what the run ended with (a socket's fatal error code, "" for none)
 
-	// The phone's socket (nil while down); started: one sent start; downSince: since when it is down (from the first
-	// hub-mode upload while none ever started); ended: the phone sent end.
-	phone     *phoneSocket
-	started   bool
-	downSince time.Time
-	ended     bool
+	// The phone's socket (nil while down); phoneReady: it sent start and was answered ready (frames go to it only from
+	// then on); started: one sent start; downSince: since when it is down (from the first hub-mode upload while none
+	// ever started; a socket that never sent start counts as down); ended: the phone sent end.
+	phone      *phoneSocket
+	phoneReady bool
+	started    bool
+	downSince  time.Time
+	ended      bool
 
 	// The live job (nil while none), when one may be opened again, whether the last one dropped.
 	job        *liveJob
@@ -275,9 +277,10 @@ func (r *hubRun) notifyLocked() {
 	r.wake = make(chan struct{})
 }
 
-// phoneSendLocked sends the phone's socket frame v, when one is up.
+// phoneSendLocked sends the phone's socket frame v, when one is up and was answered ready (a socket waiting for its
+// start gets nothing before ready, and the standing problem right after it).
 func (r *hubRun) phoneSendLocked(v any) {
-	if r.phone != nil {
+	if r.phone != nil && r.phoneReady {
 		r.phone.send(v)
 	}
 }
@@ -298,7 +301,7 @@ func (r *hubRun) attach(p *phoneSocket) (refused string) {
 		return cmp.Or(r.stopCode, codeTranscriptionFinal)
 	}
 	old := r.phone
-	r.phone = p
+	r.phone, r.phoneReady = p, false
 	r.mu.Unlock()
 	if old != nil && old != p {
 		old.fail(codeReplaced)
@@ -306,14 +309,19 @@ func (r *hubRun) attach(p *phoneSocket) (refused string) {
 	return ""
 }
 
-// begin is the phone's start on socket p: its timeline joins the union; the socket is up from now (the fallback's
-// "down" ends). The standing problem goes out after ready (sent by the caller first).
-func (r *hubRun) begin(p *phoneSocket, t *kb.Timeline) {
+// begin is the phone's start on socket p: it is answered ready (from, the end of the latest audio held; gaps, the
+// spans missing before it; next, the live log's length, read under the run's lock so that every line appended later
+// goes out after ready), its timeline joins the union, the socket is up from now (the fallback's "down" ends) and the
+// standing problem goes out.
+func (r *hubRun) begin(p *phoneSocket, t *kb.Timeline, from float64, gaps [][2]float64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.phone != p || r.stopped {
 		return
 	}
+	l, _, _ := r.e.LiveRead(r.id)
+	p.send(map[string]any{"type": "ready", "from": from, "gaps": gaps, "next": len(l.Segments)})
+	r.phoneReady = true
 	r.started, r.downSince, r.ended = true, time.Time{}, false
 	if t != nil {
 		r.mergeTimelineLocked(*t)
@@ -331,13 +339,16 @@ func (r *hubRun) detach(p *phoneSocket, ended bool) {
 	if r.phone != p {
 		return
 	}
-	r.phone = nil
+	wasReady := r.phoneReady
+	r.phone, r.phoneReady = nil, false
 	r.clearInterimLocked()
 	if ended {
 		r.ended = true
 		return
 	}
-	r.downSince = time.Now()
+	if wasReady || r.downSince.IsZero() {
+		r.downSince = time.Now() // a socket that never started leaves the time it is down from as it was
+	}
 }
 
 // socketOpen: a socket is up that has not sent end.
@@ -628,7 +639,7 @@ func (r *hubRun) stop(code string) {
 	}
 	r.stopped, r.stopCode = true, code
 	phone, job := r.phone, r.job
-	r.phone, r.job = nil, nil
+	r.phone, r.phoneReady, r.job = nil, false, nil
 	r.notifyLocked()
 	r.mu.Unlock()
 	close(r.quit)
@@ -694,7 +705,7 @@ func (s *Service) hubInterim(id string) *liveInterim {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	in := r.interim
-	if in == nil || r.phone == nil || r.ended || time.Since(in.At) > interimShown ||
+	if in == nil || !r.phoneReady || r.ended || time.Since(in.At) > interimShown ||
 		r.timeline.RoleAt(in.Start, r.role) == kb.AttendanceOff {
 		return nil
 	}
