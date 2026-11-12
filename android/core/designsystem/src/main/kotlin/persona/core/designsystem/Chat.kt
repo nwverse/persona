@@ -621,15 +621,17 @@ fun JumpToLatest(count: Int, onClick: () -> Unit, modifier: Modifier = Modifier)
 /**
  * Above the composer while the latest plan card is out of view (web `PlanPill`): a ring with how far along it is and
  * "Step N/M" (a check once all are done); a tap scrolls back to the card. Shaped like [JumpToLatest] in each style.
+ * [spoken] and [onClickLabel] say what it does when the tap does something else (Glass opens the plan sheet).
  */
 @Composable
-fun PlanPill(step: Int, total: Int, done: Int, onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun PlanPill(step: Int, total: Int, done: Int, onClick: () -> Unit, modifier: Modifier = Modifier,
+             spoken: String? = null, onClickLabel: String? = null) {
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
     val shape = if (style == AppStyle.Board) RoundedCornerShape(8.dp) else RoundedCornerShape(50)
     val ink = if (style == AppStyle.Brief) palette.onAction else palette.ink
     val allDone = total in 1..done
-    val spoken = stringResource(R.string.designsystem_plan_pill_spoken, step, total)
+    val description = spoken ?: stringResource(R.string.designsystem_plan_pill_spoken, step, total)
     Row(
         modifier.heightIn(min = 44.dp)
             .then(when (style) {
@@ -637,8 +639,8 @@ fun PlanPill(step: Int, total: Int, done: Int, onClick: () -> Unit, modifier: Mo
                 AppStyle.Brief -> Modifier.clip(shape).background(palette.action)
                 AppStyle.Board -> Modifier.clip(shape).background(palette.surface).border(1.dp, palette.line, shape)
             })
-            .clickable(role = Role.Button, onClick = onClick)
-            .semantics { contentDescription = spoken; progressBarRangeInfo = ProgressBarRangeInfo(done.toFloat(), 0f..total.toFloat().coerceAtLeast(1f)) }
+            .clickable(onClickLabel = onClickLabel, role = Role.Button, onClick = onClick)
+            .semantics { contentDescription = description; progressBarRangeInfo = ProgressBarRangeInfo(done.toFloat(), 0f..total.toFloat().coerceAtLeast(1f)) }
             .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),

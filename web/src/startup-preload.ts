@@ -183,9 +183,13 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * first-screen code changed: #5310 +255 B, which failed main's build, #5193 +138 B, the two merged -321 B, #5320 +29 B.
  * Counted so, ja is 589,323 B on main at c7164e477e (595,073 B the old way; en 585,737 B, zh-Hans 586,565 B), and the
  * same within 1 B at 1c78a837d6, 482f3b93df and 4b72a763c8. The budget is that, with 0 B of room: the 175 B main had,
- * #5193's 98 B among them, are taken back. Raise it on purpose, in the change that needs it.
+ * #5193's 98 B among them, are taken back. And 529 B for the error banner over the composer (#5313: ja 589,852 B
+ * against 589,323 B on main at fc16299dd: which error a chat stopped on and the rules that keep it there or in the chat,
+ * its dismissal kept per conversation, a Retry that did not go bringing it back, the banner scrolled into view in its
+ * box once, the keyboard back to the composer, the notice's ✕ and 28 px buttons, the failure note and the refused-send
+ * card drawn as the same notice, and their words). Raise it on purpose, in the change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 589_323;
+export const FIRST_SCREEN_BUDGET = 589_852;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").

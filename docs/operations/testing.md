@@ -64,7 +64,7 @@ self-hosted capacity as part of these controls.
 
 Server keeps four independent shards (at most two concurrent runners): browser/node, hub/voice/assistant, all other packages, and
 formatting/vet/build/Windows/SDK checks. Every package from `go list ./...` belongs to exactly one test shard, including future packages.
-Browser tests remain isolated from other packages. Go module/build caches are keyed by exact Go version, shard, dependency sums and
+Browser tests remain isolated from other packages. `internal/node` runs its roughly 2,400 serial tests in two concurrent `go test -run '^(…)$'` partitions, split round-robin from `go test -list`; every test runs in exactly one, and each partition keeps `-p 1` and `-timeout=10m`. `scripts/test/go_partitions.py` holds the split for both the node shard and the release build (`scripts/release/build_hub_release.py`), so they cannot drift; one serial run had outgrown both ten-minute limits (#5328). Go module/build caches are keyed by exact Go version, shard, dependency sums and
 source inputs, with same-shard fallback keys; `-count=1` keeps test execution uncached. Test-event summaries report the slowest real
 tests, rather than inferring runtime from `Sleep` inside fake-clock tests. The full scripts suite splits complete sorted discovery
 across two independently isolated jobs, scheduled one at a time; each has its own synthetic HOME and mock ports.
