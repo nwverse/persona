@@ -46787,6 +46787,29 @@
       },
       "extractionState" : "manual"
     },
+    "Couldn't take the recommendation" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没能按推荐来"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't take the recommendation"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "おすすめで進められませんでした"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Couldn't send to “%@”: %@" : {
       "localizations" : {
         "zh-Hans" : {
