@@ -352,23 +352,20 @@ rather than asking SwiftUI's `ScrollPosition`:
 
 ### Every other jump (#5076)
 
-The chat's other animated jumps run the same way on iPhone and iPad (`ChatJumpRun.start(_:to:done:)`, `ChatJump.path`),
-not through SwiftUI's animated `ScrollPosition`, which drew every text on screen again on every frame (in a long Chinese
-answer, most of each frame: docs/lessons/ios.md「Animated jumps redraw every text they pass」):
+The chat's other animated jumps to its newest end run the same way on iPhone and iPad (`ChatJumpRun`), not through
+SwiftUI's animated `ScrollPosition`, which drew every text on screen again on every frame (in a long Chinese answer,
+most of each frame: docs/lessons/ios.md「Animated jumps redraw every text they pass」):
 
 - To the newest end, animated (`scrollToEnd(animated: true)`): a message sent while reading the history, following
   catching up more than a screen away, a held row let go. As ↓: the position is forgotten first, the jump runs, the
   geometry is read once there and looked at again 0.3 s later.
-- To a line already on screen (`bringToMiddle`): the edge navigator's line, a quote's message, a call. SwiftUI places
-  the line first, on the same frame, without drawing it (`window.layoutIfNeeded()` after a non-animated
-  `scrollTo(id:anchor: .center)`), which gives its offset; that request is replaced by the point where the list is and
-  forgotten, and the list glides there; then the line lights up as before. Once there SwiftUI is asked for the line
-  again, without animation, so it rests exactly where it used to.
-- To a line not on screen: SwiftUI's animated `scrollTo(id:)` as before. Placing a far line and leaping on one frame
-  made that frame longer than SwiftUI's own worst one (docs/lessons/ios.md「Animated jumps redraw every text they pass」).
+- To a line (the edge navigator's line, a quote's message, a call): SwiftUI's animated `scrollTo(id:anchor: .center)`
+  as before. Run on the list, a far one cost a longer frame than SwiftUI's own worst there, and even one on screen was
+  slower (docs/lessons/ios.md「Animated jumps redraw every text they pass」).
 - Offsets stay on whole pixels on the way; the last frame is the exact target. Reduce Motion: there at once.
-- `-showSwiftUIJumps YES` (DEBUG) keeps SwiftUI's animated scroll for all of them, to measure against in one build
-  (`-showJumpPerf`, `-showAutoScroll`; docs/operations/testing.md「Long Agent answer (#4970)」). The Mac keeps it (frozen).
+- `-showSwiftUIJumps YES` (DEBUG) keeps SwiftUI's animated scroll for these too, to measure against in one build
+  (`-showJumpPerf`, `-showAutoScroll`'s sweep, which runs on the list by default; docs/operations/testing.md「Long Agent
+  answer (#4970)」). The Mac keeps SwiftUI's (frozen).
 
 ↓ acts the moment the finger lands, a glide or not: a UIKit view laid over the button takes the touch
 (`JumpArrowTouch`; a tap on the SwiftUI `Button` during a glide did nothing on phones,

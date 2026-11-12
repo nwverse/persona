@@ -442,8 +442,8 @@ Use an invalidation revision as the task key and handle the flag after completio
   `max(bottom of one, top of the next)` and a list or quote takes the largest margins inside it. Check spacing by pixels against the whole answer in a
   window (`AnswerPartsLookTests`), not `ImageRenderer`: one pass of it draws the blocks before their margins arrive.
   - Parts trade the opening freeze for drawing as they come into view: the lazy stack drops a part's layers once it scrolls far away, and drawing
-    many distinct CJK glyphs is most of the main thread's work in programmatic jumps; jumps to the newest end and to a
-    line on screen now run on the list itself (「Animated jumps redraw every text they pass」, #5076). Finger scrolling stays in budget.
+    many distinct CJK glyphs is most of the main thread's work in programmatic jumps; jumps to the newest end now run
+    on the list itself (「Animated jumps redraw every text they pass」, #5076). Finger scrolling stays in budget.
   - Whatever acted on the row acts on the message, not the part (#5221): with each part's long press lifting its own words, the lifted card showed a
     fragment of the answer and Select Text selected only it, while Copy (the bar's text) still took all of it. The part's press lifts a copy of every
     part (`AnswerPartsLift`), lazily: a copy laying out every part at once would bring back the cost the parts took out of the chat. Its words
@@ -1306,15 +1306,16 @@ When a computer disconnects, hub marks sessions unknown, not offline; `AgentStat
   animated jump over Chinese text rendered every glyph on screen anew on every frame.
 - **Fix**: the chat's animated jumps to its newest end (sending, following, a held row let go) run like ↓ (#3027) on
   the list itself, `ChatJumpRun` on a display link, on whole pixels: far away the list is put a screen short first and
-  the last screen glides, so the rows between are never drawn. A jump to a line already on screen glides there the same
-  way. `-showSwiftUIJumps YES` keeps the old way to measure against in one build; `-showJumpPerf YES` measures ↓, send,
-  quote, call and near jumps; `MOCK_LONG_REPORT=cjk` is a public fixture with a real report's glyph variety.
-- **Far jumps to a line keep SwiftUI's animated scroll**: tried on the list too (SwiftUI places the line on the frame of
-  the tap, then the leap), they put SwiftUI's layout of the far line, three evaluations of the page and the leap's
-  drawing on one frame: 206–252 ms against SwiftUI's own worst frame of 112–169 ms there (a quote of the report's start,
-  the oldest tool call). Landing far away has to lay that place out either way; spread over SwiftUI's animation it
-  costs more in total but less on any one frame.
-- **Where a line is, before the frame is drawn**: a lazy list knows a far row's offset only once it lays it out. A
+  the last screen glides, so the rows between are never drawn. `-showSwiftUIJumps YES` keeps the old way to measure
+  against in one build; `-showJumpPerf YES` measures ↓, send, quote, call and near jumps; `MOCK_LONG_REPORT=cjk` is a
+  public fixture with a real report's glyph variety.
+- **Jumps to a line keep SwiftUI's animated scroll**: tried on the list too (SwiftUI places the line on the frame of
+  the tap, below), a far one put SwiftUI's layout of the far line, three evaluations of the page and the leap's drawing
+  on one frame: 206–252 ms against SwiftUI's own worst frame of 112–169 ms there (a quote of the report's start, the
+  oldest tool call). Landing far away has to lay that place out either way; spread over SwiftUI's animation it costs
+  more in total but less on any one frame. A line already on screen was slower too in the real report (longest frame
+  117 ms median, 163 worst, against SwiftUI's 17 and 42): the placing adds two layout passes to the tap's frame.
+- **Where a line is, before the frame is drawn** (tried, not used): a lazy list knows a far row's offset only once it lays it out. A
   non-animated `position.scrollTo(id:anchor:)` followed by `window.layoutIfNeeded()` makes SwiftUI place it at once, and
   the list's `contentOffset` is then the target. Putting the offset back does not hold: SwiftUI keeps the list on the
   requested row and moves it there again on the next frame, even after the position is forgotten. Replacing the request
@@ -1327,7 +1328,7 @@ When a computer disconnects, hub marks sessions unknown, not offline; `AgentStat
   (`SIMCTL_CHILD_DYLD_INSERT_LIBRARIES` on `simctl launch`) read and raised the cache limit and counted the layers'
   draws, and command-line programs run with `simctl spawn` timed CoreGraphics alone. None of it is in the app.
 - **Remaining**: a finger's first pass over parts never drawn still renders their glyphs once (about 85–95 ms/s at
-  2000 pt/s in a Debug build); a far jump draws the screen it lands on; far jumps to a line still animate SwiftUI's
+  2000 pt/s in a Debug build); a far jump draws the screen it lands on; jumps to a line still animate SwiftUI's
   scroll position.
 
 ## Context compaction as a divider (2026-11-04, #1064)

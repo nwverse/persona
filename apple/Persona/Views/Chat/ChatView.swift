@@ -2207,41 +2207,10 @@ struct ChatView: View {
         entry = nil
         setFollow { $0.read() }
         Task { @MainActor in
-            bringToMiddle(id)
+            withAnimation(Theme.Motion.standard) { position.scrollTo(id: id, anchor: .center) }
             try? await Task.sleep(for: .milliseconds(250))
             quoteFlash = QuoteFlashMark(line: id)
         }
-    }
-
-    /// Brings a line to the middle of the list: the navigator's, a quote's and a call's jump. On the phone a line already on
-    /// screen is glided to on the list itself, as ↓ goes (`ChatJumpRun`, on whole pixels): SwiftUI's animated scroll drew
-    /// every text on screen again on every frame, and in a long Chinese answer that was most of each frame (#5076). A line
-    /// that is not on screen keeps SwiftUI's animated scroll: its offset is known only once SwiftUI lays it out, and doing
-    /// that and the leap on one frame made that frame longer than SwiftUI's own first frame there (measured, #5076).
-    private func bringToMiddle(_ id: String) {
-        #if os(iOS) || os(visionOS)
-        if let list = pin.list, let window = list.window, !Self.swiftUIJumps, scratch.drawnLines.contains(id) {
-            if pin.holding { pin.release() }
-            jumpRun.cancel()
-            list.setContentOffset(list.contentOffset, animated: false) // a glide stops where it is
-            let from = list.contentOffset.y
-            // Where SwiftUI puts the line, worked out now, before this frame is drawn (it is laid out already).
-            position.scrollTo(id: id, anchor: .center)
-            window.layoutIfNeeded()
-            let to = list.contentOffset.y
-            // That request is replaced by the place the list is: kept to a line, SwiftUI would hold the list on it from
-            // the next frame on. Then forgotten, as ↓ forgets it (#4788).
-            position.scrollTo(point: CGPoint(x: scratch.offsetX, y: from - ChatJumpRun.newest(list)))
-            window.layoutIfNeeded()
-            position = ScrollPosition(idType: String.self)
-            jumpRun.start(list, to: .offset(to)) { arrived in
-                // Exactly where SwiftUI puts the line, as before: a row on the way may have been taller than guessed.
-                if arrived { position.scrollTo(id: id, anchor: .center) }
-            }
-            return
-        }
-        #endif
-        withAnimation(Theme.Motion.standard) { position.scrollTo(id: id, anchor: .center) }
     }
 
     /// From a quote in a sent bubble to the message it quotes (#986): brought to the middle of the list and lit up
@@ -2276,7 +2245,7 @@ struct ChatView: View {
         setFollow { $0.read() }
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(120)) // an opened work line's steps are laid out first
-            bringToMiddle(target)
+            withAnimation(Theme.Motion.standard) { position.scrollTo(id: target, anchor: .center) }
             try? await Task.sleep(for: .milliseconds(250))
             quoteFlash = QuoteFlashMark(line: target)
         }
@@ -2331,7 +2300,7 @@ struct ChatView: View {
         Haptics.tap()
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(120)) // the opened work line's steps are laid out first
-            bringToMiddle(target)
+            withAnimation(Theme.Motion.standard) { position.scrollTo(id: target, anchor: .center) }
         }
     }
 

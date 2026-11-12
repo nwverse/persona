@@ -2,8 +2,10 @@
 import PersonaKit
 import UIKit
 
-/// The chat's animated jumps, run on its scroll view itself: ↓ Jump to Latest (#3027), and since #5076 every other jump
-/// too (to the newest end after sending, to a line, a quote or a call). It stops a glide where it is, puts the list a
+/// The chat's animated jumps to its newest end, run on its scroll view itself: ↓ Jump to Latest (#3027), and since #5076
+/// the others too (after sending, following, a held row let go; DEBUG `-showAutoScroll`'s sweep goes to offsets the same
+/// way). Jumps to a line, a quote or a call keep SwiftUI's animated scroll (docs/apple/ios-state.md「Every other jump
+/// (#5076)」). It stops a glide where it is, puts the list a
 /// screen short of the target when it is far (`ChatJump`), and moves it the rest of the way frame by frame, on whole
 /// pixels, so it starts the moment the tap lands, takes as long as `ChatJump` says and says when it is over.
 /// SwiftUI's `ScrollPosition` is not asked: during a glide it may still hold the newest end from the last time the app
@@ -12,7 +14,7 @@ import UIKit
 /// frame (docs/lessons/ios.md「Animated jumps redraw every text they pass」). A finger taking the list ends it where it is.
 @MainActor final class ChatJumpRun: NSObject {
     /// Where a jump goes: the newest end of the flipped list (read again every frame: an inset that changes moves it),
-    /// or a content offset (kept within the list).
+    /// or a content offset (kept within the list; `-showAutoScroll`'s sweep).
     enum Goal: Equatable {
         case newest
         case offset(CGFloat)

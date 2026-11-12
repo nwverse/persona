@@ -1212,8 +1212,8 @@ glide back) and the chat's own `-showAutoScroll` (its sweep is programmatic anim
 
 `MOCK_LONG_REPORT=cjk` (#5076) serves the same chat with a report as varied in its Chinese characters as a real one (about 10,900 of them,
 some 800 distinct; `MOCK_LONG_REPORT=1` repeats one sentence and has about 100): what CoreGraphics' 1 MB glyph cache has to hold. The chat's
-animated jumps run on its list (`ChatJumpRun`); DEBUG `-showSwiftUIJumps YES` animates SwiftUI's scroll position instead, as before #5076, so
-one build measures both. `-showAutoScroll` has a `hop` segment after the sweep (eight jumps of 600 pt, `frames-hop.json`), and
+animated jumps to the newest end and `-showAutoScroll`'s sweep run on its list (`ChatJumpRun`); DEBUG `-showSwiftUIJumps YES` animates
+SwiftUI's scroll position instead, as before #5076, so one build measures both (jumps to a line animate SwiftUI's either way). `-showAutoScroll` has a `hop` segment after the sweep (eight jumps of 600 pt, `frames-hop.json`), and
 `-showJumpPerf YES` measures the jumps a user makes, three of each (`frames-jump-<end|send|quote|call|near>-<n>.json`, and
 `jump-perf.txt` with where each left the list): ↓ and sending from 8000 pt into the history, and from the newest end to a quote of the longest
 answer, to the oldest tool call (`MOCK_LONG_REPORT=cjk` has a plain call before its subagents) and to the oldest line on screen.
