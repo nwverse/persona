@@ -77,11 +77,12 @@ struct PushRegistrarTests {
 
     /// The prompt's answer makes the app active again before the launch's request has its answer: the check waits for
     /// that request, so one answer registers once.
-    @Test func anOpenPromptIsNotAnsweredTwice() async {
+    @Test func anOpenPromptIsNotAnsweredTwice() async throws {
         let fake = FakeSystem()
         let (r, health) = registrar(fake)
         let launch = r.registerIfPossible()
-        while fake.prompt == nil { await Task.yield() }
+        for _ in 0..<100 where fake.prompt == nil { await Task.yield() }
+        try #require(fake.prompt != nil)
 
         fake.answer(true)
         let back = r.foreground()
@@ -97,8 +98,12 @@ struct PushRegistrarTests {
     @Test func returningNeverPrompts() async {
         let fake = FakeSystem()
         let (r, health) = registrar(fake)
-        await r.foreground()?.value
-        #expect(fake.requests == 0 && fake.registrations == 0)
+        let back = r.foreground()
+        for _ in 0..<100 where fake.prompt == nil { await Task.yield() }
+        #expect(fake.requests == 0 && fake.prompt == nil)
+        fake.closePrompt() // a prompt shown by mistake would hold the check forever
+        await back?.value
+        #expect(fake.registrations == 0)
         #expect(health.health.notificationsAllowed == nil)
     }
 
