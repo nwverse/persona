@@ -74,6 +74,22 @@ struct SourcesGraphTests {
         #expect(m.picked == nil)
     }
 
+    /// The view's task restarts when subscriptions change: the load it cancels shows no failure, the next one the graph.
+    @Test func aReplacedLoadIsNoFailure() async throws {
+        let graph = try JSONDecoder().decode(SourcesGraph.self, from: Data(Self.answer.utf8))
+        let m = SourcesGraphModel(deps: .init(load: {
+            try await Task.sleep(for: .seconds(30))
+            return graph
+        }))
+        let first = Task { await m.load() }
+        first.cancel()
+        await first.value
+        #expect(m.failed == nil && m.graph == nil)
+        let failing = SourcesGraphModel(deps: .init(load: { throw URLError(.timedOut) }))
+        await failing.load()
+        #expect(failing.failed != nil, "a load that fails on its own still says so")
+    }
+
     @Test func onlyThePagesOpenTheView() throws {
         let url = try #require(URL(string: "persona://sources-graph"))
         #expect(SubscriptionsUI.isGraph(url))

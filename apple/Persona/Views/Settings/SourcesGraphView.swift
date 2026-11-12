@@ -145,7 +145,8 @@ extension APIClient {
             failed = nil
             if let p = picked, graph?.sources.contains(where: { $0.id == p }) != true { picked = nil }
         } catch {
-            if graph == nil { failed = error.localizedDescription }
+            // a load a newer one replaced (the view's task restarts) is no failure
+            if graph == nil, !Task.isCancelled { failed = error.localizedDescription }
         }
     }
 
@@ -206,17 +207,25 @@ struct SourcesGraphView: View {
         }
         .themedGroupedPage()
         .detailTitle(String(localized: "Source Relationships"))
-        .task {
-            if model == nil {
-                let api = app.api?.currentAssistantSettings()
-                model = SourcesGraphModel(deps: .init(load: {
-                    guard let api else { throw URLError(.notConnectedToInternet) }
-                    return try await api.sourcesGraph()
-                }))
+        // Loads when shown and again after subscriptions change: a burst of their broadcasts reloads once, as the entry
+        // rows do (SubscriptionsEntry.swift).
+        .task(id: SubscriptionsRefresh.shared.revision) {
+            if let model {
+                if model.graph != nil {
+                    try? await Task.sleep(for: .seconds(1))
+                    guard !Task.isCancelled else { return }
+                }
+                await model.load()
+                return
             }
-            await model?.load()
+            let api = app.api?.currentAssistantSettings()
+            let made = SourcesGraphModel(deps: .init(load: {
+                guard let api else { throw URLError(.notConnectedToInternet) }
+                return try await api.sourcesGraph()
+            }))
+            model = made
+            await made.load()
         }
-        .onChange(of: SubscriptionsRefresh.shared.revision) { Task { await model?.load() } }
     }
 }
 
