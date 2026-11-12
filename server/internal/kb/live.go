@@ -7,12 +7,13 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Attending a meeting (docs/assistant/meeting-minutes.md "Attending a meeting"): a meeting recording uploaded with a
@@ -660,7 +661,7 @@ func LiveClock(r Recording, sec float64, loc *time.Location) string {
 }
 
 // highlightSaidAt is H:MM or HH:MM, hours 0 to 23.
-var highlightSaidAt = regexp.MustCompile(`^([01]?[0-9]|2[0-3]):[0-5][0-9]$`)
+var highlightSaidAt = lazyre.New(`^([01]?[0-9]|2[0-3]):[0-5][0-9]$`)
 
 // highlightMinute is the minute said (a said_at) names, as LiveClock writes it ("9:05" is "09:05"), brackets and
 // spaces around it dropped; false when it is not H:MM or HH:MM.
@@ -714,8 +715,8 @@ func (e *Engine) HighlightsSet(rawID string, said []HighlightSaid, loc *time.Loc
 	if err != nil {
 		return false, err
 	}
-	if loc == nil {
-		loc = time.Local
+	if loc == nil { // the caller's zone is the batches' (s.location); without one, the archive's (never the machine's)
+		loc = e.Store.Zone()
 	}
 	changed := false
 	_, err = e.LiveUpdate(rawID, func(l *Live, r Recording) error {
