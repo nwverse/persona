@@ -1110,28 +1110,87 @@ function waitsLabel(todo: Todo, status: TodoStatus): string {
 
 /** One row of Needs you (lib/assistant-entries): a task or an Agent with the cards it asks, a plan to start, a task to
  *  decide on or review, a message to send. */
-function NeedsYouRow({ item }: { item: NeedsYouItem }) {
+/** A decision or review the task waits on, as the row has it (a decision with options, or a review only the user can settle). */
+function isDecision(todo: Todo): boolean {
+  return openAsk(todo)?.outcome === "decide" || todo.supervision?.state === "needs_user";
+}
+
+/** What a Needs you row says folded (#5569): its mark, the title and, under it, what it waits for, with the kind at the
+ *  end. None for the rows that are one line already (an Agent with no question, a task that only waits, a failed start). */
+function foldedRow(item: NeedsYouItem): { title: string; line?: string; kicker: string } | undefined {
+  if (item.kind === "plan") {
+    const first = item.plan.tasks[0]?.title ?? t("assistant-tasks.plan_single");
+    return { title: item.plan.tasks.length > 1 ? t("assistant-tasks.needs_more", { title: first, count: item.plan.tasks.length - 1 }) : first, kicker: t("assistant-tasks.plan_waiting") };
+  }
+  if (item.kind === "message") return { title: [field(item.item, "sender"), field(item.item, "chat")].filter(Boolean).join(" · ") || t("assistant-tasks.task_fallback"), line: field(item.item, "text"), kicker: stateName("needs_you") };
+  if (item.kind === "agent") return item.asks.length ? { title: sessionTitle(item.session), line: cardLine(item.asks[0]), kicker: interactionKicker(item.asks[0]) } : undefined;
+  if (item.asks.length) return { title: item.todo.title, line: cardLine(item.asks[0]), kicker: interactionKicker(item.asks[0]) };
+  const ask = openAsk(item.todo);
+  if (isDecision(item.todo) || ask) return { title: item.todo.title, line: ask?.verdict, kicker: stateName("needs_you") };
+  return undefined;
+}
+
+/** A Needs you row. The ones with something to answer are folded to a line until opened; a click on the line, or its
+ *  chevron, opens the whole card where it is, and the card leaves with the answer. */
+function NeedsYouRow({ item, open, onToggle }: { item: NeedsYouItem; open: boolean; onToggle: () => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const opened = useRef(open);
+  useEffect(() => {
+    if (open && !opened.current) ref.current?.scrollIntoView?.({ block: "nearest" });
+    opened.current = open;
+  }, [open]);
+  const folded = foldedRow(item);
+  if (!folded) return <NeedsYouBody item={item} />;
+  const head = (
+    <button
+      type="button"
+      data-needs-row={open ? undefined : item.key}
+      aria-expanded={open}
+      onClick={onToggle}
+      className={cx("flex w-full min-w-0 items-center gap-2 rounded-control px-3 py-2 text-left text-sm hover:bg-hover", open ? "" : "bg-field")}
+    >
+      <StatusMark state="needs_you" />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate font-semibold">{folded.title}</span>
+        {!open && folded.line && <span className="block truncate text-xs text-ink-2">{folded.line}</span>}
+      </span>
+      {!open && <span className="max-w-[40%] shrink-0 truncate text-right text-xs text-attention">{folded.kicker}</span>}
+      <Icon name="chevronRight" size={14} className="shrink-0 text-ink-3 transition-transform duration-150 motion-reduce:transition-none" style={{ transform: open ? "rotate(90deg)" : "none" }} />
+    </button>
+  );
+  if (!open) return head;
+  return (
+    <div ref={ref} data-needs-row={item.key} data-needs-open className="flex flex-col gap-1">
+      {head}
+      <NeedsYouBody item={item} nested />
+    </div>
+  );
+}
+
+/** The whole card of a Needs you row, or the one line it is. `nested`: inside its opened row, which carries the row's key. */
+function NeedsYouBody({ item, nested = false }: { item: NeedsYouItem; nested?: boolean }) {
+  const rowKey = nested ? undefined : item.key;
   if (item.kind === "plan") return <PlanCard plan={item.plan} />;
   if (item.kind === "message") return <MessageCard item={item.item} />;
   if (item.kind === "agent") {
     const { session, asks } = item;
     const open = () => openAgent(session.machine_id, session.session_id);
-    if (!asks.length) return <button type="button" data-needs-row={item.key} onClick={open} className="flex items-center gap-2 rounded-control bg-field px-3 py-2 text-left text-sm"><StatusMark state="needs_you" /><span className="min-w-0 flex-1 truncate">{sessionTitle(session)}</span><span className="shrink-0 text-xs text-ink-2">{stateName("needs_you")}</span></button>;
-    return <div data-needs-row={item.key}><button type="button" onClick={open} className="block max-w-full truncate px-1 text-left text-sm font-semibold hover:underline">{sessionTitle(session)}</button>{asks.map((ix) => <InteractionCard key={ix.id} ix={ix} />)}</div>;
+    if (!asks.length) return <button type="button" data-needs-row={rowKey} onClick={open} className="flex items-center gap-2 rounded-control bg-field px-3 py-2 text-left text-sm"><StatusMark state="needs_you" /><span className="min-w-0 flex-1 truncate">{sessionTitle(session)}</span><span className="shrink-0 text-xs text-ink-2">{stateName("needs_you")}</span></button>;
+    return <div data-needs-row={rowKey}>{!nested && <button type="button" onClick={open} className="block max-w-full truncate px-1 text-left text-sm font-semibold hover:underline">{sessionTitle(session)}</button>}{asks.map((ix) => <InteractionCard key={ix.id} ix={ix} />)}</div>;
   }
   const { todo, asks, status } = item;
-  if (asks.length) return <div data-needs-row={item.key}><button type="button" onClick={() => openTask(todo.id)} className="block max-w-full truncate px-1 text-left text-sm font-semibold hover:underline">{todo.title}</button>{asks.map((ix) => <InteractionCard key={ix.id} ix={ix} />)}</div>;
+  if (asks.length) return <div data-needs-row={rowKey}>{!nested && <button type="button" onClick={() => openTask(todo.id)} className="block max-w-full truncate px-1 text-left text-sm font-semibold hover:underline">{todo.title}</button>}{asks.map((ix) => <InteractionCard key={ix.id} ix={ix} />)}</div>;
   const ask = openAsk(todo);
   // Both structured decisions and older review-only decisions have the same deferral controls.
-  if (ask?.outcome === "decide" || todo.supervision?.state === "needs_user")
+  if (isDecision(todo))
     return (
-      <Suspense fallback={<div data-needs-row={item.key} className="truncate rounded-control bg-field px-3 py-2.5 text-[12px] text-ink-2">{todo.title}</div>}>
-        <TaskDecision key={todo.id + (todo.supervision?.reviews?.at(-1)?.at || todo.decision_review?.review_at || ask?.asked_at)} rowKey={item.key} todo={todo} />
+      <Suspense fallback={<div data-needs-row={rowKey} className="truncate rounded-control bg-field px-3 py-2.5 text-[12px] text-ink-2">{todo.title}</div>}>
+        <TaskDecision key={todo.id + (todo.supervision?.reviews?.at(-1)?.at || todo.decision_review?.review_at || ask?.asked_at)} rowKey={rowKey} todo={todo} />
       </Suspense>
     );
-  if (ask) return <div data-needs-row={item.key}><AcceptRow stacked key={todo.id + ask.asked_at} row={{ id: todo.id, title: todo.title, waited_s: Math.max(0, (Date.now() - Date.parse(ask.asked_at)) / 1000), outcome: ask.outcome, verdict: ask.verdict, recommend: ask.recommend, asked_at: ask.asked_at }} /></div>;
+  if (ask) return <div data-needs-row={rowKey}><AcceptRow stacked key={todo.id + ask.asked_at} row={{ id: todo.id, title: todo.title, waited_s: Math.max(0, (Date.now() - Date.parse(ask.asked_at)) / 1000), outcome: ask.outcome, verdict: ask.verdict, recommend: ask.recommend, asked_at: ask.asked_at }} /></div>;
   if (status === "failed") return <FailedTaskRow rowKey={item.key} todo={todo} />;
-  return <button type="button" data-needs-row={item.key} onClick={() => openTask(todo.id)} className="flex items-center gap-2 rounded-control bg-field px-3 py-2 text-left text-sm"><Icon name="hand" className="shrink-0 text-attention" /><span className="min-w-0 flex-1 truncate">{todo.title}</span><span className="shrink-0 text-xs text-ink-2">{waitsLabel(todo, status)}</span></button>;
+  return <button type="button" data-needs-row={rowKey} onClick={() => openTask(todo.id)} className="flex items-center gap-2 rounded-control bg-field px-3 py-2 text-left text-sm"><Icon name="hand" className="shrink-0 text-attention" /><span className="min-w-0 flex-1 truncate">{todo.title}</span><span className="shrink-0 text-xs text-ink-2">{waitsLabel(todo, status)}</span></button>;
 }
 
 /** A task whose Agent did not start, in Needs you: why, and Retry / Remove where it is (#5096: no panel to open for them;
@@ -1197,10 +1256,18 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
   const [tray, setTrayNow] = useState<AssistantTray | null>(null);
   // the open tray filling the chat column (#4656), for going through many cards; closing or switching trays undoes it
   const [expanded, setExpanded] = useState(false);
+  // the Needs you rows opened in place (#5569), by key; every row is folded again when the tray changes
+  const [openRows, setOpenRows] = useState<ReadonlySet<string>>(new Set());
   const setTray = (next: AssistantTray | null) => {
     setTrayNow(next);
     setExpanded(false);
+    setOpenRows(new Set());
   };
+  const toggleRow = (key: string) => setOpenRows((rows) => {
+    const next = new Set(rows);
+    if (!next.delete(key)) next.add(key);
+    return next;
+  });
   const [board, setBoard] = useState(false);
   const [showShelved, setShowShelved] = useState(false);
   const trayId = useId();
@@ -1278,13 +1345,13 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
             {showShelved && entries.shelved.map((item) => item.kind === "task" && <ProgressTaskRow key={item.key} card={item.card} conversation={conversation} activity={item.activity} />)}
           </div>}
           {tray === "needs" && <div className="flex flex-col gap-2 p-2">
-            {asking.map((item) => <NeedsYouRow key={item.key} item={item} />)}
+            {asking.map((item) => <NeedsYouRow key={item.key} item={item} open={openRows.has(item.key)} onToggle={() => toggleRow(item.key)} />)}
             {ownAsks.map((ix) => <OwnAskRow key={ix.id} ix={ix} onOpen={() => openOwn(ix.id)} />)}
-            {rest.map((item) => <NeedsYouRow key={item.key} item={item} />)}
+            {rest.map((item) => <NeedsYouRow key={item.key} item={item} open={openRows.has(item.key)} onToggle={() => toggleRow(item.key)} />)}
             {groups.slice(1).map((group) => (
               <section key={group.supervisor} data-needs-supervisor={group.supervisor} aria-label={supervisorTitle(group.supervisor)} className="flex flex-col gap-2">
                 <h3 className="truncate px-1 pt-1 text-xs text-ink-2">{supervisorTitle(group.supervisor)}</h3>
-                {[...group.items.filter(isAsking), ...group.items.filter((item) => !isAsking(item))].map((item) => <NeedsYouRow key={item.key} item={item} />)}
+                {[...group.items.filter(isAsking), ...group.items.filter((item) => !isAsking(item))].map((item) => <NeedsYouRow key={item.key} item={item} open={openRows.has(item.key)} onToggle={() => toggleRow(item.key)} />)}
               </section>
             ))}
             {!counts.needs && <p className="px-1 py-2 text-sm text-ink-2">{t("assistant-tasks.tray_empty_pending")}</p>}

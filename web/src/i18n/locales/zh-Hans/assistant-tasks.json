@@ -60,6 +60,7 @@
   "unknown_reason": "原因不明",
   "starting_agent": "正在开 Agent",
   "status_starting": "启动中",
+  "needs_more": "{title} 等 {count} 个",
   "no_activity": "还没有动静",
   "list_separator": "、",
   "retrying": "正在重试",

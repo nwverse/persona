@@ -53,7 +53,7 @@ def main() -> int:
             page.wait_for_selector("[data-assistant-actionbar] [data-tray-entry]", timeout=20000)
             page.wait_for_timeout(800)
             opened = 0
-            for tray, rows in (("needs", "[data-needs-row] > button, button[data-needs-row]"), ("running", "[data-task-slot], [data-running-agent]")):
+            for tray, rows in (("needs", "button[data-needs-row]:not([aria-expanded])"), ("running", "[data-task-slot], [data-running-agent]")):
                 entry = page.locator(f'[data-assistant-actionbar] [data-tray-entry="{tray}"]')
                 for i in range(30):
                     if entry.get_attribute("aria-expanded") != "true":

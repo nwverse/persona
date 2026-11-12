@@ -16,7 +16,7 @@ import { DecisionRow } from "./DecisionRow";
 
 type Review = NonNullable<Todo["decision_review"]>;
 
-export function TaskDecision({ todo, rowKey }: { todo: Todo; rowKey: string }) {
+export function TaskDecision({ todo, rowKey }: { todo: Todo; rowKey?: string }) {
   const ask = openAsk(todo);
   const review = latestReview(todo.supervision);
   const round = decisionRound(todo);

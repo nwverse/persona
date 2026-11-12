@@ -29,6 +29,12 @@ const menuWords = {
   ja: ["任せます", "頼んだことと違います", "先に背景を教えて"],
 };
 
+/** The Needs you rows are folded to a line until opened (#5569): open every one that still is. */
+async function openFolded(page) {
+  const folded = page.locator('button[data-needs-row][aria-expanded="false"]');
+  while (await folded.count() > 0) await folded.first().click();
+}
+
 function todos() {
   // a deadline later today in the browser's zone, so the row says a time of day
   const deadline = new Date();
@@ -139,6 +145,8 @@ async function run(browser, size, theme, language) {
   try {
     await page.goto(`${base}/`);
     await page.locator('[data-tray-entry="needs"]').click();
+    await page.locator('button[data-needs-row]').first().waitFor();
+    await openFolded(page);
     const rows = page.locator("[data-decision-row]");
     await rows.first().waitFor();
     assert.equal(await rows.count(), 2);
@@ -233,6 +241,7 @@ async function run(browser, size, theme, language) {
     await page.reload();
     await page.locator('[data-tray-entry="needs"]').click();
     await rollout.waitFor();
+    await openFolded(page);
     await rollout.locator("[data-decision-actions]").scrollIntoViewIfNeeded();
     await page.screenshot({ path: name("structured-before") });
     dismissalGate = new Promise((resolve) => { releaseDismiss = resolve; });

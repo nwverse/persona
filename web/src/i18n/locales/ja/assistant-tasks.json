@@ -60,6 +60,7 @@
   "unknown_reason": "原因不明",
   "starting_agent": "エージェントを起動中",
   "status_starting": "起動中",
+  "needs_more": "{title} ほか {count} 件",
   "no_activity": "まだ動きがありません",
   "list_separator": "、",
   "retrying": "再試行中",

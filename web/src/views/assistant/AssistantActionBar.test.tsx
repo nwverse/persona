@@ -76,6 +76,9 @@ afterEach(() => {
 const entries = () => [...host.querySelectorAll<HTMLButtonElement>("[data-assistant-actionbar] [data-tray-entry]")];
 const entry = (key: string) => host.querySelector<HTMLButtonElement>(`[data-assistant-actionbar] [data-tray-entry="${key}"]`)!;
 
+/** Opens the Needs you rows the tray folds to a line (#5569); a row with its key opens that one. */
+const openRows = (key?: string) => act(async () => host.querySelectorAll<HTMLButtonElement>(`button[data-needs-row${key ? `="${key}"` : ""}][aria-expanded="false"]`).forEach((b) => b.click()));
+
 const label = { needs: t("assistant-tasks.tray_needs_you"), running: t("assistant-tasks.tray_running") };
 // where a click went as a page (set to Full page, #5096); the side panel, the default, says so itself (getPanel)
 const opened = () => location.pathname + location.search;
@@ -242,6 +245,7 @@ describe("Assistant Needs you / In progress trays", () => {
     todo = { ...todo, ask: firstRound, supervision: { ...todo.supervision!, state: "needs_user" } };
     await act(async () => putTodo(todo));
     await act(async () => { entry("needs").click(); await import("./TaskDecision"); });
+    await openRows();
     expect(host.querySelectorAll('[data-brief-row="accept"]')).toHaveLength(1);
     expect(host.textContent).not.toContain(t("assistant-tasks.review_needs_user"));
     const first = [...host.querySelectorAll("button")].find((button) => button.textContent?.trim() === t("assistant-brief.take"))!;
@@ -264,6 +268,7 @@ describe("Assistant Needs you / In progress trays", () => {
     todo = { ...todo, ask, supervision: { ...todo.supervision!, state: "needs_user" } };
     await act(async () => putTodo(todo));
     await act(async () => { entry("needs").click(); await import("./TaskDecision"); });
+    await openRows();
     const row = host.querySelector('[data-brief-row="accept"]')!;
     expect([...row.querySelectorAll("button")].map((b) => b.textContent?.trim())).toEqual([t("assistant-brief.open"), t("assistant-brief.finish"), t("assistant-brief.take")]);
     const read = vi.mocked(fetch).getMockImplementation()!;
@@ -295,6 +300,8 @@ describe("Assistant Needs you / In progress trays", () => {
       await import("./MessageDraft");
       await import("./TaskDecision");
     });
+    expect(host.querySelector('[data-testid="message-card"]')).toBeNull(); // folded until opened
+    await openRows();
     expect(host.querySelector('[data-testid="message-card"]')).not.toBeNull();
     expect(host.textContent).toContain(t("assistant-tasks.review_needs_user"));
     const draftCard = host.querySelector('[data-testid="message-card"]')!;
@@ -320,6 +327,24 @@ describe("Assistant Needs you / In progress trays", () => {
     const row = host.querySelector('[data-needs-row="task:tray-task"]')!;
     expect(row.textContent).toContain("Demo task");
     expect(row.textContent).toContain("Which port?");
+    // a line until opened (#5569): the question under the title, no card, no answer buttons
+    const head = row as HTMLButtonElement;
+    expect(head.tagName).toBe("BUTTON");
+    expect(head.getAttribute("aria-expanded")).toBe("false");
+    expect(host.querySelector("[data-card]")).toBeNull();
+    // it opens where it is (a real button: Enter and Space do the same as the click), and a click on the head folds it again
+    act(() => head.click());
+    const opened = host.querySelector('[data-needs-row="task:tray-task"]')!;
+    expect(opened.hasAttribute("data-needs-open")).toBe(true);
+    expect(opened.querySelector("button[aria-expanded=true]")).not.toBeNull();
+    expect(opened.textContent).toContain("8080");
+    act(() => opened.querySelector<HTMLButtonElement>("button[aria-expanded=true]")!.click());
+    expect(host.querySelector('[data-needs-row="task:tray-task"]')!.tagName).toBe("BUTTON");
+    // every row is folded again when the tray is closed and opened
+    act(() => host.querySelector<HTMLButtonElement>('button[data-needs-row="task:tray-task"]')!.click());
+    act(() => entry("needs").click());
+    act(() => entry("needs").click());
+    expect(host.querySelector('[data-needs-row="task:tray-task"]')!.tagName).toBe("BUTTON");
     // the agent is not a row of its own in either tray (the chat's hand-off card names it)
     expect(trays()).not.toContain("Demo agent");
     moreInteractions = [];
@@ -458,6 +483,13 @@ describe("Assistant Needs you / In progress trays", () => {
       act(() => entry("needs").click());
       expect(entry("needs").getAttribute("aria-expanded")).toBe("true");
       expect(host.querySelector("section")?.textContent).toContain("Diet card");
+      // folded: the plan's first task and how many more; Start is not on the screen until the row is opened
+      expect(host.querySelector("section")?.textContent).toContain(t("assistant-tasks.needs_more", { title: "Diet card", count: 1 }));
+      const plan = host.querySelector<HTMLButtonElement>("button[data-needs-row]")!;
+      expect(plan.getAttribute("aria-expanded")).toBe("false");
+      expect(host.querySelector("[data-plan-actions]")).toBeNull();
+      act(() => plan.click());
+      expect(host.querySelector("[data-needs-open]")).not.toBeNull();
       expect(host.querySelector("section")?.textContent).toContain("Fix the supervisor");
       expect([...host.querySelectorAll("section button")].some((button) => button.textContent?.includes(t("assistant-tasks.plan_start_n", { count: 2 })))).toBe(true);
       // once it is started or dismissed it leaves Needs you

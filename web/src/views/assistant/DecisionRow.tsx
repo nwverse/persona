@@ -86,7 +86,7 @@ function useFitting(count: number, round: string) {
   return { row, fit: Math.min(fit, count) };
 }
 
-export function DecisionRow({ todo, ask, rowKey, admission, onBusyChange, blocked = false, footer }: { todo: Pick<Todo, "id" | "title">; ask: TodoAsk; rowKey: string; admission?: { current: boolean }; onBusyChange?: (busy: boolean) => void; blocked?: boolean; footer?: ReactNode }) {
+export function DecisionRow({ todo, ask, rowKey, admission, onBusyChange, blocked = false, footer }: { todo: Pick<Todo, "id" | "title">; ask: TodoAsk; rowKey?: string; admission?: { current: boolean }; onBusyChange?: (busy: boolean) => void; blocked?: boolean; footer?: ReactNode }) {
   const options = askOptions(ask);
   const responses = askResponses(ask);
   const [answering, setAnswering] = useState<Answering>({ state: "idle" });

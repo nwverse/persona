@@ -66,6 +66,7 @@
   "unknown_reason": "unknown reason",
   "starting_agent": "Starting the agent",
   "status_starting": "Starting",
+  "needs_more": "{title} +{count}",
   "no_activity": "Nothing yet",
   "list_separator": ", ",
   "retrying": "Retrying",
