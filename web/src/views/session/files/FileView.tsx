@@ -243,6 +243,7 @@ export function FileView({
   onBack,
   onClose,
   onOpenPath,
+  onShowInFolder,
 }: {
   mid: string;
   /** The session whose message box takes the comments made on this file's lines (else the box last used). */
@@ -255,6 +256,8 @@ export function FileView({
   onBack?: () => void;
   onClose: () => void;
   onOpenPath: (path: string) => void;
+  /** Show in Files (#5827): the Files panel at the file's folder with the file marked. */
+  onShowInFolder?: (path: string) => void;
 }) {
   const doc = useFileDoc(mid, path, cwd);
   const f = doc.file;
@@ -338,6 +341,7 @@ export function FileView({
       {kind === "html" && <Segmented label={t("session-files-fileview.view_mode")} value={mode} onChange={setMode} options={[["rendered", t("session-files-fileview.mode_preview")], ["source", t("session-files-fileview.mode_source")]]} />}
       {kind === "notebook" && notebook?.nb && <Segmented label={t("session-files-fileview.view_mode")} value={mode} onChange={setMode} options={[["rendered", t("session-files-fileview.mode_notebook")], ["source", t("session-files-fileview.mode_source_file")]]} />}
       {kind === "sheet" && typeof f?.text === "string" && <Segmented label={t("session-files-fileview.view_mode")} value={mode} onChange={setMode} options={[["rendered", t("session-files-fileview.mode_sheet")], ["source", t("session-files-fileview.mode_source_file")]]} />}
+      {onShowInFolder && kind !== "directory" && <IconButton icon="folder" label={t("files-nav.show_in_files")} onClick={() => onShowInFolder(f?.path || path)} />}
       <IconButton icon="copy" label={t("session-files-fileview.copy_path")} onClick={() => copyText(f?.path || path)} />
       {kind !== "directory" && <IconButton icon="arrowDown" label={saving ? t("session-files-fileview.downloading") : t("session-files-fileview.download")} onClick={download} disabled={!f || saving || doc.changed} />}
     </>

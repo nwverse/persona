@@ -9,6 +9,9 @@ struct PersonaWidgetsBundle: WidgetBundle {
     }
 
     var body: some Widget {
+        AgentsHomeWidget()
+        InboxHomeWidget()
+        RecordHomeWidget()
         ExtensionSystemWidget()
         FleetLiveActivity()
         CompatibleFleetLiveActivity()
