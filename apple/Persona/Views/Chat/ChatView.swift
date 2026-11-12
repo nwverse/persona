@@ -805,6 +805,7 @@ struct ChatView: View {
         .environment(\.viewImages, actions.viewImages)
         .environment(\.imageZoom, imageZoom)
         .environment(\.openTools, openTools)
+        .environment(\.plainRefusals, session?.assistant == true) // a Persona conversation: plain words (#5202)
         .fullScreenCover(item: $viewingImages) { v in
             Group {
                 if let viewed = v.viewed {
