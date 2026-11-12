@@ -404,3 +404,5 @@ leader and read an answer full of its own labels. A leader's `todo_create` now o
 tree shows pieces no Agent has worked on as `planned`. Two traps found on the way: such a piece has an `origin`, so the
 To-dos SOP shelves it after 48 h untouched like any agent-made to-do (it leaves the tree; the leader touching it keeps it),
 and the stuck rule must not count a piece that never started, or every planned piece older than a day reported stuck.
+
+- Match Inbox PR/issue comments by full task URLs before the AI twin gate (#5578). A to-do may record its link only in `pr_url`, its title or its notes. Keep host, repository and PR/issue kind in the identity, leave ambiguous matches to the judge, and use a separate per-message signal cursor: the twin's `Of` cursor tracks handling, which does not run while it is off. Persist associations before forwarding them, and retain the existing supervision opt-in and exclusions.
