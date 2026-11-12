@@ -562,6 +562,16 @@ export interface FoldImage {
   height?: number;
 }
 
+/** A file a folded run's successful edits changed (proto.FoldChange): its lines added and removed as the chat counts an
+ *  edit's diff; `exact` false when an edit's text was clipped for good. A fold from a node that counts them always has
+ *  the list (empty when nothing was edited); one without it leaves the run's edits unknown. */
+export interface FoldChange {
+  path: string;
+  add: number;
+  del: number;
+  exact: boolean;
+}
+
 export interface Item {
   id: string;
   seq: number;
@@ -577,7 +587,7 @@ export interface Item {
   queued?: boolean;
   wake?: boolean;
   task?: TaskNote;
-  fold?: { items: number; tools: number; thoughts: number; until?: string; through_seq: number; through_id?: string; images?: FoldImage[]; tasks?: FoldTaskSnapshot[]; latest_thinking?: Item; supervision_user?: boolean };
+  fold?: { items: number; tools: number; thoughts: number; until?: string; through_seq: number; through_id?: string; images?: FoldImage[]; tasks?: FoldTaskSnapshot[]; latest_thinking?: Item; supervision_user?: boolean; changes?: FoldChange[] | null };
   image?: { mime: string; data?: string; lazy?: boolean; size?: number; width?: number; height?: number };
   /** Sent by another Claude session (cross-session messaging), not typed by you: its name. */
   from?: string;

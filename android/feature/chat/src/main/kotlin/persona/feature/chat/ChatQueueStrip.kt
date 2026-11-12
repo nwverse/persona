@@ -28,7 +28,7 @@ internal fun queueKeep(size: Int, index: Int): List<Int> = (0 until size).filter
 
 /**
  * The `keep` of POST …/queue that moves the message at [index] [step] places (-1 up, 1 down) and re-queues them all in
- * the new order (iOS `QueueOrder.moved`, #6088); null when that is past either end.
+ * the new order (iOS `QueueOrder.moved`; `docs/protocol/protocol.md`, POST …/queue); null when that is past either end.
  */
 internal fun queueMoved(size: Int, index: Int, step: Int): List<Int>? {
     val to = index + step
@@ -67,10 +67,11 @@ internal fun sendNowFailure(error: Throwable, resources: Resources): String {
 private val SEND_NOW_REFUSALS = setOf("nothing_queued", "send_now_unsupported", "send_now_unrecognized", "send_now_in_doubt", "node_outdated")
 
 /**
- * Queue strip (iOS QueueStrip): what was typed while the agent works and not taken yet, right above the composer, folded
- * to its one line until tapped. Tapping a message offers "Take back to edit" (back into the box, after the draft on a new
- * line), "Copy" and "Delete"; for Claude in a terminal pane (`Session.steersQueue`) also "Move up" / "Move down", and the
- * line's "Send now", after a confirmation that says what happens to what the agent is doing. Editing and moving go
+ * Queue strip (iOS QueueStrip): what was typed while the agent works and not taken yet, right above the composer (on
+ * Glass folded to its one line until tapped). Tapping a message offers "Take back to edit" (back into the box, after the
+ * draft on a new line), "Copy" and "Delete"; for Claude in a terminal pane (`Session.steersQueue`) also "Move up" /
+ * "Move down", and on Glass the line's "Send now", after a confirmation that says what happens to what the agent is
+ * doing. Editing and moving go
  * through the node's session.queue.edit (POST …/queue {keep}): it pulls the whole queue out of the agent and puts the
  * kept ones back in the order given, and answers with what was queued, so a pulled-back message is read from that
  * answer. Send now is POST …/queue/send-now. Only for a session the phone may send to. [initiallyExpanded]: opened from
@@ -128,7 +129,7 @@ internal fun ChatQueueStrip(
         onNotice(resources.getString(R.string.chat_queue_sent_now))
     }
     val sendNowLabel = stringResource(R.string.chat_queue_send_now)
-    // A new session's queue starts folded, as each chat's does on iOS.
+    // A new session's queue starts folded (Glass), as each chat's does on iOS.
     key(session.key) {
         QueueStrip(queueTitle(queued.size, session.agentLabel, resources), queued.map { composerMessagePreview(it) },
             onItem = { index -> queued.getOrNull(index)?.let { picked = index to it } }, busy = busy, enabled = enabled,
