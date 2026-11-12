@@ -214,10 +214,14 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * layout is unchanged by this accounting). And 194 B for a refusal in plain words in a Persona conversation (#5202:
  * ja 593,305 B against 592,937 B on main at 5790ee8be3, +368 B, of which 214 B fit the room main had, plus 40 B of room:
  * the refusal line's one sentence with the model's short name and its closed Details, the fallback card's one-line
- * title, its Details and the short name while going back, their words). Raise it on purpose, in the change that needs
- * it.
+ * title, its Details and the short name while going back, their words). And 283 B for Resume in terminal (#5521: ja
+ * 593,628 B against 593,438 B on main at 2f66a0222, +190 B: the rule that offers it in an Agent's ⋯ or disables it where its
+ * computer has no terminal engine, the item and its two strings, the one action it shares with the stopped line's
+ * Resume, Codex threads counted as stopped Agents, and a stable Terminal handler so the header still draws only when it
+ * changes; and the 93 B main was already over, the minifier's renaming moving the count, #5760). Raise it on purpose, in
+ * the change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 593_345;
+export const FIRST_SCREEN_BUDGET = 593_628;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
