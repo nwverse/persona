@@ -51418,6 +51418,52 @@
       },
       "extractionState" : "manual"
     },
+    "Didn’t hear you ask for this just now, so it wasn’t sent" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Didn’t hear you ask for this just now, so it wasn’t sent"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "直前にこの依頼を聞き取れなかったため、送信していません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "刚才没听到你要做这件事，所以没发出去"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Didn’t hear you ask for this just now, so it wasn’t sent: “%@”" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Didn’t hear you ask for this just now, so it wasn’t sent: “%1$@”"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "直前にこの依頼を聞き取れなかったため、送信していません：「%1$@」"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "刚才没听到你要做这件事，所以没发出去：『%1$@』"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Diff View" : {
       "localizations" : {
         "zh-Hans" : {
@@ -94746,6 +94792,29 @@
         }
       }
     },
+    "Only Send What I Just Said" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Only Send What I Just Said"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "直前の発言だけ送信"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只发送我刚说的话"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Only applies to the background supervisor, the conversation that follows up tasks for the main chat. Empty fields follow Main Chat. Changing the provider clears the previous model and thinking effort. Choose Follow Main Chat and save to clear the independent settings." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -119003,6 +119072,29 @@
           }
         }
       }
+    },
+    "Send Anyway" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Send Anyway"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このまま送信"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仍然发送"
+          }
+        }
+      },
+      "extractionState" : "manual"
     },
     "Send Back [Notification Actions a20f13]" : {
       "localizations" : {
@@ -159937,6 +160029,29 @@
         }
       }
     },
+    "When on, Persona sends a request only right after you speak, so an agent’s results read aloud can’t give instructions for you. Turn it off if it keeps holding back your own requests." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "When on, Persona sends a request only right after you speak, so an agent’s results read aloud can’t give instructions for you. Turn it off if it keeps holding back your own requests."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オンにすると、Persona はあなたが話した直後にだけ依頼を送信するので、読み上げたエージェントの結果があなたに代わって指示を出すことはありません。自分の依頼が何度も保留されるときはオフにしてください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开时，Persona 只在你刚说完话后才发送请求，这样朗读出来的 Agent 结果就无法替你下指令。如果它总是拦下你自己的请求，可以把它关掉。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "When on, new versions install themselves once the assistant and all agents are idle, and you get a notification afterward." : {
       "localizations" : {
         "en" : {
@@ -162727,29 +162842,6 @@
           }
         }
       }
-    },
-    "You didn’t say this, so it wasn’t sent" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "You didn’t say this, so it wasn’t sent"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "あなたの発言ではないため、送信しませんでした"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "这条不是你说的，没有发出去"
-          }
-        }
-      },
-      "extractionState" : "manual"
     },
     "You don't have access to this doc." : {
       "localizations" : {
