@@ -53,7 +53,7 @@ It is returned by the model-configuration list and detail endpoints, never store
 | --- | --- | --- | --- |
 | `assistant`, `schedule`, `task.*`, `assistant.supervise`, `inbox.agent`, `lark.agent` | `launcher` | `headless` | Background process, without a terminal panel |
 | `agent.new` | `launcher` | `engine` | Interactive Agent in the target computer's terminal host |
-| `kb`, `inbox.triage`, `agent.delegate`, other API purposes, `extension.*` | `api` | omitted | HTTP requests sent directly by the assistant |
+| `kb`, `inbox.triage`, `agent.delegate`, other API purposes, `extension.*` | `api` | omitted | HTTP requests sent directly by the assistant; with a Claude Code launcher that has no Messages gateway picked, one `claude -p` run per request on the main chat's computer (#5823) |
 | `plugin.*` | `plugin` | omitted | The plugin's own model service |
 
 Non-launcher purposes always have an empty launch value, even if their parent is a launcher.
@@ -108,6 +108,44 @@ before this setting.
 - **Which computers**: only a direct API connection (`kind: "api"`), and only a computer this manager carries (another
   manager's machines are not its to call). Others are 400. Changing it clears the connection's recorded failures.
 
+## Running API purposes on a launcher (#5823)
+
+Many users have no API key, only Claude Code or Codex logged in on a computer (a subscription), which is what runs their
+main chat and Agents. An API purpose (`kb`, `inbox.triage`, `agent.delegate`, their uses, `extension.*`) may therefore
+pick a launcher provider too: each request then runs that launcher's CLI headless, once, on a computer and returns its
+final text. Nothing reads, copies or re-serves the login (#4220 is a different thing): only the prompt and the answer travel.
+
+- **Which providers**: a launcher whose CLI is Claude Code (plain `claude`, a `~/.zshrc` or `PATH` launcher, a managed
+  launcher that does not speak Messages), on that computer and in its scope. A managed launcher that speaks Messages
+  keeps being called over HTTP with its own address and key, as before; direct API connections are unchanged. Codex is
+  not offered: `codex exec` has no switch that turns off all its tools (its shell reads any file even in the read-only
+  sandbox, and the user's MCP servers, apps and plugins come along), and a request's text may be anyone's (a mail, an
+  extension). A launcher deleted since it was picked fails with "can't call this provider", never a run.
+- **Which computer**: the main chat's (Settings › Assistant), which the purpose's `machine_id` in
+  `GET /api/v1/model-config` names. With none set, the purpose says so.
+- **What is sent**: the manager resolves the purpose as always, then sends one `model.run` call to that computer's node
+  (`docs/protocol/protocol.md`, "hub ↔ node RPC") with the launcher, the chosen model and effort (empty: the launcher's
+  own), the system prompt and the conversation. A single user turn goes as it is; several are rendered as one transcript
+  (`prompts/tools/launcher_run_input.md`). The answer is the run's final text.
+- **How it runs**: the node runs the launcher as a start does (`personad launch` for a managed one, the login shell's
+  function or alias otherwise, with its environment, settings and default model), in a fresh temporary directory that
+  is removed afterwards. Claude Code runs as `-p --output-format json --max-turns 1 --no-session-persistence` with
+  `--tools ""`, `--strict-mcp-config` (no MCP servers), hooks disabled and the system prompt from a file. No tools, no
+  session left behind, no file written in the user's projects.
+- **Concurrency and time**: at most two runs at a time on one computer; others wait for a slot within their own time.
+  The call's deadline goes along as `timeout_ms` (2 minutes without one, at most 10); when the manager stops waiting it
+  sends `rpc.cancel` and the node kills the run. Each run pays a CLI start (seconds) on top of the answer, so this suits
+  background work.
+- **Purposes that call tools**: no API purpose uses the provider's native tool calling. Inbox event grouping
+  (`inbox_group.go`) asks for its tools in its JSON answer and the manager runs them, so it works unchanged, each step
+  within its 45 seconds; a step that runs out of time falls back to the rule grouping, as any failed model call does.
+- **Errors**: an offline computer fails at once with "<computer> is offline", without a fallback. A CLI that is not
+  logged in, a run past its time and a node too old for `model.run` (capability `model_run`) each say so, localized.
+  Other failures carry the end of what the CLI printed, without keys, URLs or addresses.
+- **What does not change**: the automatic fallback of an unconfigured API purpose still picks only HTTP connections;
+  "Send through" (#4775) belongs to HTTP connections and is not involved; the upstream rate-limit gate does not apply
+  (the CLI's own subscription limits do).
+
 ## Editing and inheritance
 
 Each category shows both “In Effect” and “Model Settings”:
@@ -123,7 +161,7 @@ For launcher purposes without a bound machine (such as Agents), saving a specifi
 
 For API purposes (triage, assessment, drafting, translation, knowledge processing, titles), when there is no override or legacy `ai` configuration in the manager's `manager.json`, automatically choose a connection directly callable from the hub: first the first `kind: api` entry, then the first Persona-managed launcher with a key and Messages protocol (excluding hidden entries or those missing an address / default model / key). Use its default model. “Inherited From” shows “Automatic selection”; no override is written, and later selections here still take priority. Automatic selection by these built-in categories alone does not block provider deletion when another eligible connection can take over: the next eligible connection takes over, while an explicit provider choice (or deleting the last provider that leaves no eligible connection) still returns 409. If none exists, status and errors explain where to configure one (#388, 2026-11-02: with only “Claude Code default” configured, reply drafting immediately returned no model configured). Both Responses and Messages protocols support thinking effort configuration; Information screening (`inbox.triage`) defaults to no thinking (`effort: "off"`), including after a provider-only selection, while explicit effort levels are preserved. The caller maps `off` to Responses `none` and the model's supported Messages no-thinking mode (`thinking: {"type":"disabled"}`, or `between_tools` for Sonnet 5.5); Messages models that cannot disable thinking use `output_config.effort: "low"` instead.
 
-Launchers such as “Claude Code default” are only CLIs on computers, without an API address or key, so they cannot be called directly and are not offered for API purposes.
+Launchers such as “Claude Code default” are only CLIs on computers, without an API address or key, so automatic selection never picks them. Chosen explicitly, they run each request headless on the main chat's computer (“Running API purposes on a launcher”); `off` / `none` effort then leaves the launcher's own.
 
 ## Lark /agent override (#5921)
 

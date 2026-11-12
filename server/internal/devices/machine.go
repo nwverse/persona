@@ -538,6 +538,10 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 		// An older node would answer "unknown method": an API connection that sends through it says to update it.
 		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_model_http")}
 	}
+	if method == proto.MethodModelRun && !nodeHas(info, nodeproto.ModelRun) {
+		// The same for an API purpose that runs on a launcher there.
+		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_model_run")}
+	}
 	if method == proto.MethodSecretRun && !nodeHas(info, nodeproto.SecretRun) {
 		// An older node would answer "unknown method"; this says what to do about it before the user types anything.
 		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_secret_run")}
