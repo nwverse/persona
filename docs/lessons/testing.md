@@ -930,3 +930,13 @@ To check that a failure is this, move `dev.json` aside in the app's data contain
   by clicking. A window's rounded corner clips a marker drawn in it: keep markers inset.
 - An agent's shell is not the login session: the login keychain is locked there and `security … -w` exits 36 (no user
   interaction allowed). A secret the user stored in the keychain can't be read; use a 0600 file outside the repository.
+
+## A throw-away HOME also hides the Go settings (2026-11-12, #5191)
+
+- `testhome.Main` gives a test binary an empty `HOME`. The Go defaults hang off the home directory: the env file
+  `go env -w` writes (`GOENV`, where settings such as `GOPROXY` live), `GOPATH` and so the module cache, and the build
+  cache. A `go list` the hub's architecture guard started lost all of them, went to the default proxy with an empty
+  cache and failed after a minute with only `exit status 1`, on `main` too, so it looked like someone else's breakage.
+- `testhome` now resolves `GOENV`, `GOPATH`, `GOMODCACHE` and `GOCACHE` with the real home before swapping it and pins
+  them. Anything else that reads the home directory for its own config (git, ssh, a CLI's login) has the same problem
+  under testhome: pin what the child needs, or give the test its own config.
