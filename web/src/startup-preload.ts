@@ -155,14 +155,13 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * child card and what it reads when opened load with the card). And 256 B for a launcher switch that waits (#5035 added
  * 77 B to ja as counted, 593,746 B to 593,823 B: the pill's waiting state, the Agent chat sending the switch with the
  * user's message and keeping the words in the box when it is refused; the panel's switch code and words load with the
- * panel). And 1,222 B for the changed-files card and the error notices (#5157 added 1,532 B to ja as counted, 593,720 B
- * at 2aa50311d to 595,252 B, 310 B of it in the room left: the card at the end of a finished Agent exchange and its
- * review and file targets, the count of its own edits without drawing their diffs (lib/turn-changes.ts) and of a fold's
- * `changes`, the store read of the session's folder, the feed cache's check of `changes`, the shared ErrorNotice the
- * model-error and usage-limit lines become, their two marks and their words; the room is 0 B). Raise it on purpose, in
- * the change that needs it.
+ * panel). And 13 B for the background supervisor (#5082: ja counts 594,043 B with it, built on main at a5747f46b; the
+ * rest of what it adds fits the room main had: lib/background-supervisor.ts, which the sidebar, the conversation menu,
+ * the chat's header and its review line read, the store's re-read of the assistant for a supervisor made since, the
+ * line's reviewer, and its name and "Built-in"; the switch, the model row and their words are in the lazy Settings
+ * page). Raise it on purpose, in the change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 595_252;
+export const FIRST_SCREEN_BUDGET = 594_043;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
