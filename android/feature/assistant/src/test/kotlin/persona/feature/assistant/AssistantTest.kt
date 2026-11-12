@@ -102,7 +102,7 @@ class AssistantTest {
         val result = conversationGroups(snapshot, "", named)
         assertEquals("bg", result.background)
         assertEquals(listOf(background, scheduled, mine), result.others)
-        assertEquals(listOf(mine), result.recent)
+        assertEquals(listOf(scheduled, mine), result.recent)
         assertTrue(result.directions.isEmpty())
         // whatever the leaders or its origin say, it is no direction and no recent chat of the user's
         val odd = snapshot.copy(leaders = listOf("bg"), conversations = listOf(main, mine, background.copy(origin = null)))
@@ -139,13 +139,31 @@ class AssistantTest {
     @Test fun theHistoryRowMenu() {
         fun labels(leader: Boolean, live: Boolean, act: Boolean, end: Boolean) =
             conversationActions(resources, leader, live, if (act) ({}) else null, {}, if (end) ({}) else null).map { it.label }
-        assertEquals(listOf("设为常驻", "拷贝会话 ID", "结束对话"), labels(leader = false, live = true, act = true, end = true))
+        assertEquals(listOf("设为常驻", "拷贝会话 ID", "结束…"), labels(leader = false, live = true, act = true, end = true))
         assertEquals(listOf("取消常驻", "拷贝会话 ID"), labels(leader = true, live = false, act = true, end = true))
-        assertEquals("the main conversation is no leader", listOf("拷贝会话 ID", "结束对话"), labels(leader = false, live = true, act = false, end = true))
+        assertEquals("the main conversation is no leader", listOf("拷贝会话 ID", "结束…"), labels(leader = false, live = true, act = false, end = true))
         assertEquals(listOf("拷贝会话 ID"), labels(leader = false, live = true, act = false, end = false))
         assertTrue(conversationActions(resources, false, true, null, {}, {}).last().destructive)
-        assertEquals(listOf("设为常驻", "拷贝会话 ID", "归档", "结束对话"),
-            conversationActions(resources, false, true, {}, {}, {}, onArchive = {}).map { it.label })
+        // C12 (#4339): iOS's items in iOS's order (`AssistantSidebar.row`), End… last, apart and red.
+        val all = conversationActions(resources, false, true, {}, {}, {}, onArchive = {}, onRename = {}, onDiagnostics = {})
+        assertEquals(listOf("设为常驻", "重命名…", "归档", "拷贝会话 ID", "拷贝诊断", "结束…"), all.map { it.label })
+        assertEquals(listOf(false, false, false, false, false, true), all.map { it.destructive })
+        assertTrue(all.last().separatorBefore)
+        // Each action is the one passed for it.
+        val ran = mutableListOf<String>()
+        conversationActions(resources, true, true, { ran += "pin" }, { ran += "copy" }, { ran += "end" }, onArchive = { ran += "archive" },
+            onRename = { ran += "rename" }, onDiagnostics = { ran += "diagnostics" }).forEach { it.onClick() }
+        assertEquals(listOf("pin", "rename", "archive", "copy", "diagnostics", "end"), ran)
+    }
+
+    /** Copy diagnostics (C12): the conversation's structure, never its words. */
+    @Test fun diagnosticsCarryTheStructureAndNoWords() {
+        val session = Session(machineId = "hub", sessionId = "s1", title = "周末去哪儿", status = "idle", state = "working",
+            lastText = "去海边吧", updatedAt = "2026-11-12T09:00:00Z", origin = "user", pendingInteractions = 2,
+            queued = listOf("先订酒店"), turnErrorCode = "auth_failed")
+        val text = conversationDiagnostics(session)
+        assertTrue(text, "session=hub/s1" in text && "state=working" in text && "pending=2 queued=1" in text && "turn_error_code=auth_failed" in text)
+        listOf("周末去哪儿", "去海边吧", "先订酒店").forEach { assertFalse(it, it in text) }
     }
 
     @Test fun firstConversationBecomesMainAndSendUsesOutbox() = runTest {
@@ -161,21 +179,32 @@ class AssistantTest {
         assertEquals("整理日程", repository.assistant.value.conversations.single { it.key == main }.lastText)
     }
 
-    /** #4922 (web `recentConversations`, iOS `AssistantSidebarGroups.recent`): the drawer's Recent. */
-    @Test fun recentIsTheUsersOwnNewestFiveWithoutMainLeadersOrPersonasOwn() {
+    /** #5196 (web `recentConversations`, iOS `AssistantSidebarGroups.recent`): every eligible chat in the drawer's Recent. */
+    @Test fun recentIsEveryNewestFiveWithoutMainLeadersArchivedOrBackground() {
         fun chat(id: String, minutes: Long, origin: String? = null, archived: Boolean = false) = Session(machineId = "demo", sessionId = id,
             updatedAt = Instant.parse("2026-11-11T12:00:00Z").minusSeconds(minutes * 60).toString(), origin = origin, archived = archived)
         val main = chat("main", 0)
-        val chats = listOf(main, chat("lead", 1), chat("inbox", 2, "inbox"), chat("task", 2, "task"), chat("lark", 2, "lark_agent"),
+        val chats = listOf(main, chat("lead", 1), chat("background", 0, "task"), chat("inbox", 2, "inbox"), chat("task", 2, "task"), chat("lark", 2, "lark_agent"),
             chat("spawned", 2, "spawned"), chat("ext", 2, "extension"), chat("future", 2, "something_new"), chat("gone", 2, archived = true),
             chat("b", 3, "user"), chat("a", 3, "channel"), chat("c", 4, ""), chat("d", 5), chat("e", 6), chat("f", 7))
-        val snapshot = AssistantSnapshot(main.key, chats + chats.last(), leaders = listOf("lead"))
-        assertEquals("newest first, equal times by session id, at most 5", listOf("a", "b", "c", "d", "e"), recentConversations(snapshot).map { it.sessionId })
+        val snapshot = AssistantSnapshot(main.key, chats + chats.last(), leaders = listOf("lead"), backgroundSupervisor = "background")
+        assertEquals("automatic chats included; newest first, equal times by session id, at most 5",
+            listOf("ext", "future", "inbox", "lark", "spawned"), recentConversations(snapshot).map { it.sessionId })
         assertEquals("ending the leader lets it back in", "lead", recentConversations(snapshot.copy(leaders = emptyList())).first().sessionId)
         val groups = conversationGroups(snapshot, "", words)
-        assertEquals(listOf("a", "b", "c", "d", "e"), groups.recent.map { it.sessionId })
+        assertEquals(listOf("ext", "future", "inbox", "lark", "spawned"), groups.recent.map { it.sessionId })
         assertTrue("All chats still lists them", groups.others.map { it.sessionId }.containsAll(listOf("a", "b", "inbox")))
         assertTrue("no Recent while searching", conversationGroups(snapshot, "x", words).recent.isEmpty())
-        assertTrue("nothing qualifies: no Recent", recentConversations(AssistantSnapshot(main.key, listOf(main, chat("inbox", 1, "inbox")))).isEmpty())
+        assertTrue("only the main chat: no Recent", recentConversations(AssistantSnapshot(main.key, listOf(main))).isEmpty())
+    }
+
+    @Test fun automaticConversationOriginsHaveOneAccessibleMapping() {
+        listOf(null, "", "user", "channel", " user ").forEach { origin ->
+            assertNull("the user's own origin has no source mark: $origin", automaticConversationOrigin(origin))
+        }
+        val origins = listOf("inbox", "task", "lark_agent", "spawned", "extension", "something_new")
+        assertEquals(AssistantConversationOrigin.entries.toList(), origins.map { automaticConversationOrigin(it) })
+        assertEquals(listOf("收件箱", "定时任务", "来自 飞书 /agent", "对话派生", "来自扩展", "其他"),
+            AssistantConversationOrigin.entries.map { it.accessibilityLabel(resources) })
     }
 }

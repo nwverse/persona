@@ -1,7 +1,8 @@
 // What the agent is waiting on (questions, plans, permissions, terminal dialogs, MCP forms and links), as Beautiful UI's Approval Card.
-import { createContext, Fragment, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createContext, Fragment, Suspense, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { answerCard, usePendingLine } from "../../lib/card-answer";
 import { cardKeyAction, focusComposer } from "../../lib/card-keys";
+import { lazyPage } from "../../lib/lazy-page";
 import { delegateLines, isDelegating, recommendedLabels, type DelegatedAnswer } from "../../lib/delegate";
 import { Choice, DigitHint } from "./Choice";
 import { DelegatedCard } from "./Delegated";
@@ -47,7 +48,7 @@ export async function resolve(ix: Interaction, body: Record<string, unknown>) {
  * to the composer and never answers. `focused` is when — and only when — the card's key hints (option digits, the Enter
  * badge) are drawn: a card at rest looks exactly as before. Spread `root` on the card's root element (Card does).
  */
-function useCardKeys({ enter, digit }: { enter?: () => boolean | void; digit?: (n: number) => boolean } = {}) {
+export function useCardKeys({ enter, digit }: { enter?: () => boolean | void; digit?: (n: number) => boolean } = {}) {
   const ref = useRef<HTMLDivElement | null>(null);
   const [focused, setFocused] = useState(false);
   const at = useRef({ enter, digit });
@@ -106,7 +107,7 @@ const SendingAnswer = createContext("");
  *  says so for every kind but a tool approval, whose body already has that line (PermissionBody). */
 const AskedFrom = createContext("");
 
-function Card({ title, kicker, onDismiss, busy, children, footer, looking = false, cardKeys }: { title: string; kicker: string; onDismiss?: () => void; busy?: boolean; children: React.ReactNode; footer: React.ReactNode; looking?: boolean; cardKeys?: CardKeys }) {
+export function Card({ title, kicker, onDismiss, busy, children, footer, looking = false, cardKeys }: { title: string; kicker: string; onDismiss?: () => void; busy?: boolean; children: React.ReactNode; footer: React.ReactNode; looking?: boolean; cardKeys?: CardKeys }) {
   const asked = useContext(AskedByVoice);
   const sending = useContext(SendingAnswer);
   const from = useContext(AskedFrom);
@@ -160,7 +161,7 @@ function Card({ title, kicker, onDismiss, busy, children, footer, looking = fals
 }
 
 /** A terminal dialog's option: its words without the "(Recommended)" suffix, the "Recommended" tag instead. */
-function OptionLabel({ label }: { label: string }) {
+export function OptionLabel({ label }: { label: string }) {
   const shown = optionDisplay(label);
   return (
     <span className="block text-[13px] text-ink">
@@ -501,12 +502,14 @@ const CODE_BOX = "max-h-48 overflow-auto rounded-[8px] bg-inset px-2.5 py-2 font
 const FROM_MAX = 48;
 
 /** "From subagent · <type>" for a subagent's card, its type on one line and cut to FROM_MAX; for a child session's card
- *  on its parent's page (#5120, `folded_under`), the child's title the same way; empty otherwise. */
-export function permissionFrom(ix: Pick<Interaction, "agent_id" | "agent_type" | "folded_under" | "session_title">): string {
+ *  on its parent's page (#5120, `folded_under`), the child's title the same way, and "From worker · <title>" for a lead's
+ *  worker's (#5180, `folded_as`); empty otherwise. */
+export function permissionFrom(ix: Pick<Interaction, "agent_id" | "agent_type" | "folded_under" | "folded_as" | "session_title">): string {
   const oneLine = (s: string | undefined) => (s ?? "").replace(/\s+/g, " ").trim();
   const name = ix.folded_under ? oneLine(ix.session_title) || t("chat-subagentcard.untitled_task") : ix.agent_id?.trim() ? oneLine(ix.agent_type) : "";
   if (!name || (!ix.folded_under && name.toLowerCase() === "main")) return "";
-  return t("lib-elicitation.from_subagent", { agent: name.length > FROM_MAX ? `${name.slice(0, FROM_MAX - 1)}…` : name });
+  const agent = name.length > FROM_MAX ? `${name.slice(0, FROM_MAX - 1)}…` : name;
+  return ix.folded_under && ix.folded_as === "worker" ? t("lib-elicitation.from_worker", { agent }) : t("lib-elicitation.from_subagent", { agent });
 }
 
 function PermissionBody({ ix }: { ix: Interaction }) {
@@ -718,7 +721,7 @@ function SecretHandoffCard({ ix }: { ix: Interaction }) {
   );
 }
 
-function CloseBlockedAgent({ ix, disabled }: { ix: Interaction; disabled: boolean }) {
+export function CloseBlockedAgent({ ix, disabled }: { ix: Interaction; disabled: boolean }) {
   const session = useStore(() => getSession(ix.machine_id, ix.session_id));
   const [confirming, setConfirming] = useState(false);
   const [closing, setClosing] = useState(false);
@@ -740,7 +743,17 @@ function CloseBlockedAgent({ ix, disabled }: { ix: Interaction; disabled: boolea
   </div>;
 }
 
+/** Claude Code asking to run a command (#5266), said in plain words: its own chunk, loaded only when a command card
+ *  appears, since most chats never show one. Until it is in, the card is the terminal's question as before. */
+const CommandScreenCard = lazyPage(() => import("./CommandScreenCard").then((m) => m.CommandScreenCard));
+
 function ScreenCard({ ix }: { ix: Interaction }) {
+  // The hub sets `command` only on a shell command's permission prompt (one choice, no free-text field).
+  const plain = <PlainScreenCard ix={ix} />;
+  return ix.dialog?.command ? <Suspense fallback={plain}><CommandScreenCard ix={ix} /></Suspense> : plain;
+}
+
+function PlainScreenCard({ ix }: { ix: Interaction }) {
   const input = useRef<HTMLInputElement>(null);
   useLayoutEffect(() => {
     const el = input.current;

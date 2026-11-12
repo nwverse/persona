@@ -1,5 +1,19 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- Proven `prompt` source can describe either a terminal tool label or a first-message fallback (#5269).
+  Ordinary Claude inventory falls back to the first message for a bare tool label but not its spinner-prefixed
+  form, so spinner normalization alone still lets a generated name disappear. Accept recognizable bad fallback
+  changes only with explicit Claude runtime and prompt provenance; reject other tool/runtime names, meaningful
+  titles, manual/custom titles and unknown sources. Apply this comparison at display and late-result boundaries,
+  and test both directions plus service reconstruction without a new model call or counter reset.
+
+- Terminal spinner frames are presentation, not native-title changes (#5254). Comparing a saved `raw_title`
+  byte for byte with a later inventory hid a successful automatic name while leaving its one-shot count spent.
+  Use the same leading-spinner/whitespace comparison for display decoration and the model-result recheck.
+  Preserve exact substantive-title differences, manual/custom protection and unknown-provenance skips; never
+  clear counters or call the model again just to repair display. Test every frame, a stopped label and a frame
+  change during the request, alongside genuine title changes and manual/unknown sources.
+
 - Automatic Agent names need title provenance, not a string heuristic alone (#4812). A user can deliberately choose
   a tool-looking name, and an old custom-title record can fall outside a quick tail window. Treat native custom titles
   as protected and unknown provenance as ineligible. Keep automatic names in the manager's own ledger, persist manual
@@ -62,6 +76,7 @@
 
 - Schedule admission must be durable before dispatch (#1287). Save a separate candidate task list while holding the schedule lock, then publish it and broadcast only after success. A failed user edit or due-run marker leaves the prior tasks recoverable. Results and conversation ownership from work already sent are different: keep them in memory when persistence fails, preserve their history IDs so watchers can still update them, and retry the current lists on later saves. A late result still belongs only to its run; it must neither overwrite a newer run's status nor recreate a deleted task.
 
+- A list bounded by a retention window is not bounded (2026-11-12, #5549). `GET /api/v1/inbox` listed every item done within three days, so one Clean up all of a few thousand items made it about 10,000 items and 21 MB: every app downloaded it again on each `inbox` push, and Android's bounded reader (4 MiB, 100,000 structural tokens) turned it down. Cap the done side by count on a deterministic key (`done_at`, then id, the history's order: a just-filed item is always kept, and the same items give the same bytes for the merged validator), let the delta report what falls past the cut as `removed`, keep it reachable by id and through the history, and test with more items than the cap. Clients that took the window as complete without a page (iOS `listDoneSpan`, the web's former `LIST_DONE_MS`) under-show until they page it too.
 - A one-at-a-time background pass guarded by `TryLock` must not drop the calls made while it runs (2026-11-07, #64). `handInbox` returned when a pass was running, and every caller is an event: a group event that told an event's conversation of the other side's answer called it while a pass was past its delivery step, so the note waited for the next unrelated event (and `TestInboxSuggestionConfirmReply` failed most runs under `-race`). Mark the request, let the goroutine holding the lock run passes while the mark is set, and check the mark again after unlocking.
 
 - Keep task receipts ahead of completion judgment (#4893). Moving `autoFinishTask` before the receipt adds a model call to its latency and sends supervision signals before the receipt. The review hint names who follows up next, not a `pending_review` verdict: `superviseJudged` signals Persona for finished work (`sigReview`) or unfinished work (`sigIdle`); a task already in `needs_user` is waiting on the user. Read the latest to-do at receipt time and include the hint for an open supervised task unless `Supervision.state` is `needs_user`. That helper treats reopened accepted/cancelled tasks as ongoing. Test that the receipt precedes judgment, including zero criteria, and that ordinary, completed, failed and interrupted tasks do not get the hint.

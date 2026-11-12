@@ -522,6 +522,9 @@ func (s *Service) startMain(ctx context.Context, p StartParams) (proto.Session, 
 		}
 	}
 	s.settingsChanged(ctx)
+	if handoff.From != "" {
+		s.handOverMainTasks(context.WithoutCancel(ctx), handoff.From, sess.SessionID) // its open tasks follow (main_handover.go)
+	}
 	return sess, nil
 }
 
@@ -766,6 +769,11 @@ func (s *Service) startRoutes() {
 			ReportTasks bool `json:"report_tasks"`
 			// Guest: a guest conversation (guest.go): only these connector tools, nothing of the assistant's.
 			Guest *GuestSpec `json:"guest"`
+			// Via: how the user's app sent its first message when not typed in the app itself: "intent" (Siri,
+			// Shortcuts, an App Intent, which may run on a locked phone), "share" (the share sheet) or "card" (a card's
+			// button that wrote it). Such a message never counts as the user's own words (secret_handoff.go
+			// handoffUserTurn, the decision on #3962).
+			Via string `json:"via"`
 		}
 		if err := decodeLargeBody(w, r, &in, 32<<20); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
@@ -819,7 +827,7 @@ func (s *Service) startRoutes() {
 		ctx, note := withLauncherNote(ctx)
 		sess, err := s.Start(ctx, StartParams{Text: in.Prompt, Images: in.Images, Launcher: in.Launcher, Model: in.Model, PermissionMode: in.PermissionMode,
 			Effort: in.Effort, Purpose: in.Purpose, MachineID: in.MachineID, Main: in.Main, Space: in.Space, Origin: origin, OriginRef: ref,
-			OpenedBy: requestOpener(r), GuestTools: guestTools, Human: own && assistantwire.HumanStartOf(r.Context())})
+			OpenedBy: requestOpener(r), GuestTools: guestTools, Human: own && in.Via == "" && assistantwire.HumanStartOf(r.Context())})
 		var refused *pickError
 		switch {
 		case errors.As(err, &refused):
@@ -953,10 +961,18 @@ func (s *Service) messageParams(ctx context.Context, p SendParams, owner bool) (
 	}
 	sent, _ := p.Params["text"].(string)
 	id, _ := p.Params["client_msg_id"].(string)
+	// How the user's app sent it when not typed in the app itself ("intent", "share"): it never counts as their own
+	// words (secret_handoff.go handoffUserTurn), and is not passed on.
+	via, marked := p.Params["via"]
+	if text, ok := via.(string); via == nil || ok && text == "" {
+		marked = false // a mark of any other kind still marks it
+	}
+	delete(p.Params, "via")
 	params, own, err := s.sendParamsOwn(ctx, p)
 	switch {
-	case !p.Human || !own: // anyone else's id, or a person's carrying another's words (a mail handed on, the old main
-		// conversation's), never counts, nor does a person's id once another sent it (secret_handoff.go)
+	case !p.Human || !own || marked: // anyone else's id, a person's carrying another's words (a mail handed on, the
+		// old main conversation's) or sent by Siri or the share sheet, never counts, nor does a person's id once
+		// another sent it (secret_handoff.go)
 		s.humanSent.voidSend(p.SessionID, id)
 	case err == nil: // the hub's word: a person's own app sent it (handoffUserTurn)
 		s.humanSent.note(p.SessionID, id, sent)
