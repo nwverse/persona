@@ -81,6 +81,17 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			WorkspaceID: a.WorkspaceID, AgentName: a.Name, Title: a.Title, Agent: a.Agent,
 			ExternalURL: a.ExternalURL, Chat: a.Chat, Topic: a.Topic, Dispatched: a.Dispatched,
 		}
+		if a.Agent == "codex" && isCodexWaitID(id) { // opened with no first message: no thread, no transcript yet (codex_waiting.go)
+			n.placeIn(&s, a)
+			codexWaitRow(&s, a)
+			if w := n.codexWaitByID(id); w != nil {
+				s.UpdatedAt = w.began.UTC()
+			}
+			n.decorateIn(&s, pass)
+			out = append(out, s)
+			seen[id] = true
+			continue
+		}
 		viaBotmux := host.ParsePane(a.PaneID).Kind == host.Botmux
 		switch {
 		case viaBotmux && (a.Agent == "codex" || a.Agent == traexAgent):
@@ -216,6 +227,11 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		out = append(out, s)
 		seen[s.SessionID] = true
 	}
+	for _, s := range n.switches().listed(seen) { // an agent moving to another launcher, between its two (switch_share.go)
+		n.decorateIn(&s, pass)
+		out = append(out, s)
+		seen[s.SessionID] = true
+	}
 	// Runtimes (runtimes.go): listed as they say, appended straight into the list and dropped there when already seen.
 	from := len(out)
 	out = n.runtimes.appendSessions(out)
@@ -345,6 +361,13 @@ func (n *Node) decorateIn(s *proto.Session, pass *codexListPass) {
 	}
 	if st, ok := n.decorateState(s); ok {
 		s.Compaction = st.Compaction
+		s.PendingSwitch = st.PendingSwitch // launcher_switch.go
+	}
+	if s.PendingSwitch == nil {
+		s.PendingSwitch = n.unrecordedSwitch(s.SessionID)
+	}
+	if ps := s.PendingSwitch; ps != nil && time.Since(ps.At) > switchMaxAge {
+		s.PendingSwitch = nil // dropped by the next message that would carry it out: not shown as waiting meanwhile
 	}
 	if s.Launcher == "" {
 		s.Launcher = n.inferLauncher(s.SessionID)

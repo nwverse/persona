@@ -757,7 +757,7 @@ struct ThinkingRow: View {
             isWorking: false,
             doneTitle: open ? String(localized: "Thinking [Message Views a62acb]") : ToolPresentation.firstLine(text),
             rows: [BeautifulUI.ThinkingRow(id: item.id, text)],
-            isExpanded: Binding(get: { open }, set: { v in toggleInPlace(pin, pinKey, animation: Theme.Motion.standard) { open = v } }),
+            isExpanded: Binding(get: { open }, set: { v in toggleInPlace(pin, pinKey, animation: Theme.Motion.standard, closing: !v) { open = v } }),
             maxWidth: .infinity
         )
         .chatPinned(pinKey) // the trace's header is its top
@@ -797,7 +797,7 @@ struct CompactDivider: View {
         VStack(spacing: Theme.Space.s) {
             Button {
                 let opening = !open
-                toggleInPlace(pin, "compact-" + item.id, animation: Theme.Motion.state) { open.toggle() }
+                toggleInPlace(pin, "compact-" + item.id, animation: Theme.Motion.state, closing: open) { open.toggle() }
                 // The divider as the last row: the notes open under it, past the composer on a short screen.
                 guard opening, let pin else { return }
                 Task { @MainActor in
@@ -851,7 +851,8 @@ struct NoticeRow: View {
     @Environment(\.chatPin) private var pin
 
     var body: some View {
-        if item.compact != nil { CompactDivider(item: item) }
+        if let r = item.modelRefusal { RefusalNotice(refusal: r) } // an upstream refusal (#4489)
+        else if item.compact != nil { CompactDivider(item: item) }
         else if item.wake == true { wake } else if item.task != nil { TaskNoteRow(item: item) } else if Self.isShort(item.text ?? "") { plain } else { long }
     }
 
@@ -861,7 +862,7 @@ struct NoticeRow: View {
 
     private var long: some View {
         Button {
-            toggleInPlace(pin, "notice-" + item.id, animation: Theme.Motion.state) {
+            toggleInPlace(pin, "notice-" + item.id, animation: Theme.Motion.state, closing: expanded) {
                 if let openTools { openTools.set("notice-" + item.id, !expanded) } else { expandedHere.toggle() }
             }
         } label: {

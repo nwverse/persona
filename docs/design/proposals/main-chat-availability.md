@@ -1,7 +1,8 @@
 # Proposal: the main chat stays available to the owner while background work grows
 
 Status: proposal (#4757). The owner took decisions 1 to 5 of section 7 as recommended; decision 6 is open. The server
-steps M1, F1, F2, B1, Q1, R1 and R2 are in review (#4924 to #4930); B2, R3 and K1 are not started. Covers the assistant
+steps M1, F1, F2, B1, Q1, R1 and R2 are in review (#4924 to #4930); B2 is built for the web (#5082) and the Apple apps
+(#5083) and Android (#5084); K1 is built (#5086); R3 is not started. Covers the assistant
 manager and its prompts; the clients change only where a step says so.
 
 ## 1. Goal
@@ -100,6 +101,18 @@ work out as today; it no longer receives supervision messages for it.
   unchanged, lets the off switch move every open task at once and leaves no task naming a conversation that is gone.
   Asks climb through it only with leaders configured, as today. A `needs_user` writes the `escalated` entry leaders
   write, and that entry is a supervision message to the main chat, so it is one folded main-chat round, not none.
+- **As built (step B2 on the web, #5082)**, where it differs from "Shown where" (`docs/web/web.md` "Background
+  supervisor" has the whole of it): the web sidebar has had no group of automatic conversations since #4331, so the
+  conversation is listed under All chats › Scheduled, marked built in, not in a sidebar group. The main chat draws
+  each `review` entry marked `by: "background"` (the mark #5084 added) as one line. The model
+  purpose `assistant.supervise` stays out of the catalog `GET /api/v1/model-config` returns and is read by its own id
+  beside it.
+- **As built on Android (step B2, #5084)** (`docs/android/android.md` "The background supervisor (#5084)"): that app's
+  drawer has no group of its own for scheduled tasks' conversations (they are under All chats), so the conversation is
+  under All chats with them. The feed's `review` entry did not say who wrote it, so this step adds `by: "background"`
+  to the entry of a review the background supervisor wrote (`reviewFeedBody.By`), and the app draws exactly those as one
+  line; against a hub without the mark every review stays in the background record as before. The hub's model catalog
+  leaves `assistant.supervise` out, so the app asks for it by its ID to list it.
 
 Alternatives considered:
 
@@ -179,6 +192,14 @@ by 11 hours before the deadline, or within 24 hours.
 The weekly briefing gains one block when the numbers support it: which switch in 2b would have removed how many of last
 week's asks or background rounds, each with its cost in one sentence and a link to its setting. The block is computed,
 not written by the model, and each suggestion is shown at most once a month. Nothing is turned on for the owner.
+
+As built (R3, #5085; `docs/assistant/assistant.md` "Recommended setup" is authoritative and defines every number):
+there is no weekly briefing, so the block goes with the first briefing with `facts` on that reaches the owner in a
+week. The triage's own switch is never suggested (nothing is recorded about a stopped turn while it is off) and its
+three actions are counted only while it is on; a transient error is continued by `transient_retry` by default, so
+`auto_continue` counts usage-limit stops continued by hand. The tier-down suggestion of section 9c is left out until
+K1's numbers exist. The block is drawn on the Lark card and on the web app's briefing card (the `brief` item's
+`setup`) and given to the model as facts; the iOS and Android apps do not draw it yet.
 
 ## 5. Measurement
 
@@ -303,4 +324,26 @@ Two notes on the table:
 - The read of section 5 gains, per supervisor model and effort: tasks accepted, tasks reopened after acceptance,
   rework rounds per task and tokens per accepted task. That is the chart the guides ask for; the weekly block (4c)
   suggests a tier change only when a cheaper point on it did not review worse.
+
+As built (K1, #5086; `docs/assistant/model-config.md` "Models for each role" and `docs/assistant/assistant.md`
+"Supervision by model" are authoritative):
+
+- The table is in `docs/assistant/model-config.md` with the tiers named first and the Claude models as examples. Every
+  built-in purpose carries a one-sentence `description` from the manager in three languages; no app draws it yet (the
+  web keeps its own sentence for the background supervisor), so "in Model Settings" is the hub's half only.
+- The main chat's rule speaks of tiers, not models, and covers the task-leader row too. It knows tiers only from the
+  Agent presets of the model profile in use or from what the owner said; when it cannot tell them apart it leaves the
+  tier, the model and the effort empty and what the owner set in Model Settings applies. A preset it picks runs in
+  place of the Agents binding for that task, which is a changed start for well-scoped work on an install whose presets
+  say where they stand.
+- **Tokens per accepted task is not reported.** Nothing recorded attributes a supervisor's tokens to a task, so the
+  read gives, per day and supervisor conversation, its output tokens (output only, the conversation's whole output)
+  next to the tasks it accepted that day. Accepted, reopened and rework rounds are per model and effort as proposed:
+  reopened is within 24 hours of the acceptance and over the acceptances at least that old (`settled`), so models in
+  use for different lengths of time compare; rework rounds are those since the task's previous acceptance; a task
+  leader's agent is counted by its model too.
+- `assistant.supervise` stays out of the catalog `GET /api/v1/model-config` returns. The web, the Apple apps and
+  Android as of B2 each skip their own request's row when the catalog already lists the purpose, so adding it would
+  not break them; an app from before B2 has no words for the row, and the catalog's list is also what a provider's
+  "in use" check reads, so it is left as B1 built it.
 

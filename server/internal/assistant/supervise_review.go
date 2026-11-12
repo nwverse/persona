@@ -223,6 +223,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	if a.Verdict == reviewRework { // after the judge's done, a wrong "done" in the work stats (agents_work_wrong_done.go)
 		s.workEvent("", "", reviewReworkEvent, map[string]any{"todo": t.ID, "judged_done": judgedDone})
 	}
+	if verdict != reviewAccepted { // by the reviewer's model and effort; an acceptance once it closed the task (below)
+		s.taskReviewed(ctx, self, t.ID, verdict, v)
+	}
 	if verdict == reviewRework || verdict == reviewNeedsUser || a.UserCheck || a.Outcome == outcomeCannot {
 		s.setTaskStageKind(ctx, t.ID, "unverified", "", "", false)
 	}
@@ -242,6 +245,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	if verdict == reviewParked { // what it waits for is what the line says; an older app shows it as the note
 		body.Note, body.Until, body.WaitingOn = cmp.Or(note, park.Reason), park.Until, park.WaitingOn
 	}
+	if background { // it took no turn of t.Origin: the apps may draw this entry there as the only word of it
+		body.By = reviewByBackground
+	}
 	_, _ = s.appendFeed(ctx, t.Origin, feedReview, t.ID, body)
 	if verdict != reviewNeedsUser && verdict != reviewAccepted {
 		s.dropDecision(ctx, t.ID) // the review moved on: a decision still waiting on the owner is over (conclusion.go)
@@ -254,29 +260,35 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 			reason = "取消：" + cmp.Or(clip(oneLine(note), 80), "不做了")
 		}
 		carded := false
-		if t.DoneAt == nil {
+		if t.DoneAt == nil || t.StartError != "" {
 			closed, err := s.reviewDoneTodo(ctx, t.ID, reason, verdict == reviewAccepted)
 			if err != nil {
 				return "", err
 			}
-			switch {
-			case closed && ledger && verdict == reviewAccepted && a.UserCheck:
-				// The owner is to look themselves: a "Please verify" asks them (one still waiting stays; one the assistant
-				// passed when the work was deployed gives way to a new one).
-				s.dropTaskReport(t.ID)
-				if cur, ok := s.todoNow(t.ID); ok {
-					ag := lastAgent(cur)
-					s.askAcceptanceRound(cur, ag.MachineID, ag.SessionID, reviewReply(note, checks), true)
+			if t.DoneAt == nil {
+				if closed && verdict == reviewAccepted { // accepted and closed (availability_supervision.go)
+					s.taskReviewed(ctx, self, t.ID, verdict, v)
 				}
-			case closed && ledger && verdict == reviewAccepted:
-				// The conclusion is the one push about it: its card, not a line in the task report (#1226).
-				s.dropTaskReport(t.ID)
-				if cur, ok := s.todoNow(t.ID); ok {
-					conclusion.Verified = supervisorVerified(cur)
-					carded = s.askConclusion(ctx, cur, conclusion)
+				// A failed start was closed already: its review clears the error without inventing completion effects.
+				switch {
+				case closed && ledger && verdict == reviewAccepted && a.UserCheck:
+					// The owner is to look themselves: a "Please verify" asks them (one still waiting stays; one the assistant
+					// passed when the work was deployed gives way to a new one).
+					s.dropTaskReport(t.ID)
+					if cur, ok := s.todoNow(t.ID); ok {
+						ag := lastAgent(cur)
+						s.askAcceptanceRound(cur, ag.MachineID, ag.SessionID, reviewReply(note, checks), true)
+					}
+				case closed && ledger && verdict == reviewAccepted:
+					// The conclusion is the one push about it: its card, not a line in the task report (#1226).
+					s.dropTaskReport(t.ID)
+					if cur, ok := s.todoNow(t.ID); ok {
+						conclusion.Verified = supervisorVerified(cur)
+						carded = s.askConclusion(ctx, cur, conclusion)
+					}
+				case closed:
+					s.taskClosedReport(t, reason) // the bot's task report says it is closed, as for the judge's (reports.go)
 				}
-			case closed:
-				s.taskClosedReport(t, reason) // the bot's task report says it is closed, as for the judge's (reports.go)
 			}
 		}
 		if verdict == reviewCancelled {
@@ -430,12 +442,18 @@ func reworkChecks(list []ReviewCheck) []prompts.SuperviseCheck {
 // feedReview is a review in the conversation's feed: ref the todo id, body reviewFeedBody.
 const feedReview = "review"
 
+// reviewByBackground is reviewFeedBody.By of a review the background supervisor wrote.
+const reviewByBackground = "background"
+
 type reviewFeedBody struct {
 	Title   string        `json:"title"`
 	Verdict string        `json:"verdict"`
 	Round   int           `json:"round,omitempty"`
 	Note    string        `json:"note,omitempty"`
 	Checks  []ReviewCheck `json:"checks,omitempty"`
+	// By: reviewByBackground when the background supervisor wrote it (supervise_background.go); "" for the review of
+	// the conversation that handed the task out, a leader's, the main conversation's and a sampled acceptance.
+	By string `json:"by,omitempty"`
 	// A parked review's (parked.go): until when it waits and on what kind of thing; Note says for what.
 	Until     time.Time `json:"until,omitzero"`
 	WaitingOn string    `json:"waiting_on,omitempty"`
@@ -477,7 +495,7 @@ func (s *Service) reviewDoneTodo(ctx context.Context, id, reason string, accepte
 	}
 	var before Todo
 	_, doneKeys, ok := s.setTodoRow(id, row, func(t *Todo) bool {
-		if t.DoneAt == nil || s.supervisionDB() != nil {
+		if t.DoneAt == nil || t.StartError != "" || s.supervisionDB() != nil {
 			before = copyTodoLocked(t) // its agents as they worked on it, before done releases them
 			return true
 		}
@@ -487,12 +505,15 @@ func (s *Service) reviewDoneTodo(ctx context.Context, id, reason string, accepte
 	if ok {
 		s.todoRowSet(ctx, doneKeys)
 	}
-	if ok && accepted && row.DoneAt != nil {
-		s.goRecordTaskOutcome(before, *row.DoneAt)
-	}
-	if t, now := s.todoNow(id); ok && now {
-		// A side conversation's task the main conversation supervised: the planning conversation hears it ended (#4669).
-		go s.taskEndedNotice(context.WithoutCancel(ctx), t, accepted, reason)
+	// Recording an outcome and telling the planning conversation belong to a newly closed open task, not a failed start.
+	if ok && before.DoneAt == nil {
+		if accepted && row.DoneAt != nil {
+			s.goRecordTaskOutcome(before, *row.DoneAt)
+		}
+		if t, now := s.todoNow(id); ok && now {
+			// A side conversation's task the main conversation supervised: the planning conversation hears it ended (#4669).
+			go s.taskEndedNotice(context.WithoutCancel(ctx), t, accepted, reason)
+		}
 	}
 	return ok, nil
 }

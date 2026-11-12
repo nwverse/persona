@@ -159,9 +159,9 @@ describe("the card in the chat", () => {
     expect(q("[data-task-status]")!.dataset.taskStatus).toBe("running");
     expect(text("[data-task-status]")).toBe("运行中");
     expect(q("[data-task-status] svg")).toBeNull(); // a spinner, not an outcome's icon
-    expect([...host.querySelectorAll("[data-task-meta] > *")].map((e) => e.textContent)).toEqual(["Workflow", "12.3k tokens", "37 次工具调用", "已运行 1 分 55 秒"]);
+    expect([...host.querySelectorAll("[data-task-meta] > *")].map((e) => e.textContent)).toEqual(["Workflow", "12.3k tokens", "37 次工具调用", "已运行 1m 55s"]);
     act(() => vi.advanceTimersByTime(2000));
-    expect(text("[data-task-elapsed]")).toBe("已运行 1 分 57 秒"); // ticks each second
+    expect(text("[data-task-elapsed]")).toBe("已运行 1m 57s"); // ticks each second
     expect(text("[data-workflow-progress-line]")).toBe("Verify · 4/5 Agent");
     expect([...host.querySelectorAll<HTMLElement>("[data-workflow-strip] [data-cell]")].map((c) => c.dataset.cell)).toEqual(["done", "done", "done", "done", "running"]);
     expect(q("[data-workflow-strip]")!.getAttribute("aria-hidden")).toBe("true");
@@ -173,7 +173,7 @@ describe("the card in the chat", () => {
 
   it("leaves out what the hub does not say, and says the time it took once the run has ended", () => {
     drawCard([ended()]);
-    expect([...host.querySelectorAll("[data-task-meta] > *")].map((e) => e.textContent)).toEqual(["Workflow", "1 分 35 秒"]);
+    expect([...host.querySelectorAll("[data-task-meta] > *")].map((e) => e.textContent)).toEqual(["Workflow", "1m 35s"]);
     expect(text("[data-workflow-progress-line]")).toBe("5/5 Agent"); // no phase once it ended
     expect(q("[data-task-elapsed]")).toBeNull();
   });
@@ -585,7 +585,7 @@ describe("the running bar while a workflow keeps the agent working", () => {
     act(() => root.render(<RunningStatusView live={null} working startedAt={at(0)} background={{ run, more: 0, since: run.started_at, guessed: false }} clock={false} />));
     expect(text("[data-running-verb]")).toBe("后台 workflow · Verify · 4/5+");
     expect(q("[data-running-background]")!.dataset.runningBackground).toBe("workflow");
-    expect(text("[data-running-elapsed]")).toBe("1 分 55 秒"); // from the run's start (5 s in), not the turn's
+    expect(text("[data-running-elapsed]")).toBe("1m 55s"); // from the run's start (5 s in), not the turn's
     expect(host.textContent).not.toContain("运行中");
   });
 
@@ -599,25 +599,25 @@ describe("the running bar while a workflow keeps the agent working", () => {
 
   it("times a run that does not say when it started from the turn, not from when the bar appeared", () => {
     act(() => root.render(<RunningStatusView live={null} working startedAt={at(60)} background={{ run: running({ started_at: undefined }), more: 0, guessed: false }} />));
-    expect(text("[data-running-elapsed]")).toBe("1 分钟"); // the turn began a minute before now
+    expect(text("[data-running-elapsed]")).toBe("1m 0s"); // the turn began a minute before now
   });
 
-  it("an older hub's guess yields to a turn of the agent's own: its status line, its subagents, or its work line's clock", () => {
+  it("an older hub's guess yields to a turn of the agent's own: its status line, a call it waits on, or its work line's clock", () => {
     const run = running();
     const bg = { run, more: 0, since: run.started_at, guessed: true };
     act(() => root.render(<RunningStatusView live={{ verb: "Frosting" }} working background={bg} />));
-    expect(text("[data-running-verb]")).toBe("Frosting…");
-    // subagents it launched in the foreground and still waits on (#5602): the bar names them
-    act(() => root.render(<RunningStatusView live={null} working startedAt={at(0)} background={bg} agents={{ count: 2, doing: ["Reading a.go"] }} />));
-    expect(text("[data-running-verb]")).toBe("2 个子 Agent 在工作 — Reading a.go…");
+    expect(text("[data-running-verb]")).toBe("正在思考…");
+    // a subagent it launched in the foreground and still waits on: the bar is the turn's
+    act(() => root.render(<RunningStatusView live={null} working startedAt={at(0)} background={bg} step={{ kind: "tool", tool: "Agent" }} />));
+    expect(text("[data-running-verb]")).toBe("Agent 运行中…");
     expect(q("[data-running-background]")).toBeNull();
-    // the chat's "Working…" ticks: the bar is the turn's, without a second clock
+    // the chat's "Working…" ticks: the bar is the turn's, with its own time beside it (cindy, #5312)
     act(() => root.render(<RunningStatusView live={null} working startedAt={at(0)} background={bg} clock={false} />));
-    expect(text("[data-running-verb]")).toBe("运行中");
-    expect(q("[data-running-elapsed]")).toBeNull();
+    expect(text("[data-running-verb]")).toBe("正在思考…");
+    expect(text("[data-running-elapsed]")).toBe("2m 0s");
     // nothing of its own shows: the workflow, with its clock
     act(() => root.render(<RunningStatusView live={null} working startedAt={at(0)} background={bg} />));
     expect(text("[data-running-verb]")).toBe("后台 workflow · Verify · 4/5+");
-    expect(text("[data-running-elapsed]")).toBe("1 分 55 秒");
+    expect(text("[data-running-elapsed]")).toBe("1m 55s");
   });
 });

@@ -144,9 +144,10 @@ with one test, a full credential with a device (`personSent` in `server/internal
 token, an extension's, a computer link's or the watch's), for two requests: a message for an assistant chat
 (`assistant.send_params` marked `human`) and a new conversation's start with its first message (`POST
 /api/v1/assistant/conversations`, the relayed request's own `human` field, never a header). The manager keeps those messages'
-`client_msg_id`s, with the start of their words, for a day, in memory; a start's first message gets an id from the manager
-(`humanStart`, beginning `start:`, which the hub refuses on any app's send), which the node ties to the new conversation's
-first line (`assistant.send` with `client_msg_id` and no `new_session_id`). A message that carries a context block an app put
+`client_msg_id`s, with the start of their words, for a day, in memory. A start's first message gets no id of the manager's own
+(#5200): the node would tag its line with it, and the iPhone app, which matches its pending bubble by the id a line carries,
+showed it twice. So that first turn gets the card, until it is tied without an id the apps can see; the `start:` prefix stays
+reserved (the hub refuses it on any app's send). A message that carries a context block an app put
 in it is not the user's own words, whoever sent it (`fillWorkspaces`): a mail or Lark message handed on from the Inbox to a new or
 an existing chat, a page's selection used as context or for an AI edit, another conversation's message, a document, a to-do's
 decisions. Only a workspace mention the manager resolves is theirs: at the start of the message, every `kind` it names is
@@ -218,11 +219,18 @@ holds every answer to it before it reaches the manager:
   (`needsFieldValues`). An extension's secret offers **Use a reference** where the hub has `extension_secret_references`; a
   secret that holds one says **From <provider>** with the item under its title. A provider's page lists **Used by** (the
   settings that hold its references) and **Always for Agents** (its rules, each removed after a confirm).
+- **iPhone** (`apple/Persona/Views/Interactions/SecretHandoffForm.swift`, `apple/Persona/Views/Settings/ExtensionsViews.swift`):
+  the same card, extension secrets and provider page, an Always rule removed after a confirm.
+- **Model provider keys** on the web (`web/src/views/settings/ProviderFields.tsx` `KeyField`): where the hub has
+  `launcher_secret_references`, a provider's key, a preset's key and each computer's own key offer **Use a reference**; a
+  stored reference opens with it on and says **From <provider>** with its item, as the provider's page does. A reference
+  is never sent to the connection test or the model list, which would hand its value to the address in the request: while
+  one is typed, both wait for the save (a stored one is probed by the provider's name, as a stored key is), and a preset's
+  key given as a reference skips its key test and is checked when it is saved.
 
 ## What comes next (#3962)
 
-1. The iPhone app: "Use a reference" in secret fields, the hand-off card, and the provider's page listing who uses its
-   references and its Always rules; then launcher keys as references in both apps. Android's part is #3986, which lists the interfaces it needs; until then an Android phone
-   shows the card as the hub sends it and cannot approve it.
+1. Model provider keys as references on iPhone, as on the web. Android's part is #3986, which lists the interfaces it
+   needs; until then an Android phone shows the card as the hub sends it and cannot approve it.
 2. The 1Password extension's side (`secrets.used` on its own page; `secrets.describe` names the item and field as the title
    and only the vault as the detail, which the host cuts at 40 characters anyway).

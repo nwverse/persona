@@ -1,17 +1,18 @@
-// The chat's ⋯ menu dialogs: session info, rename (the agent / its space), delete, close, and the run-mode chips under the composer.
+// The chat's ⋯ menu dialogs: session info, rename (the agent / its space), delete, close, and the header's permission mode.
 import { useEffect, useRef, useState } from "react";
 import { api, enc, errorText, sessionPath } from "../../lib/api";
 import { ago, externalLink, resumeCommand, sessionCan, sessionTitle, shortPath, tabLabel } from "../../lib/format";
 import { openLink } from "../../lib/links";
-import { BYPASS_MODE, BYPASS_WARNING, effortOptions, effortTitle, modeTitle, renameBody } from "../../lib/session-actions";
+import { effortTitle, modeTitle, renameBody } from "../../lib/session-actions";
 import { headerIcon, headerTone, modeMenuItems, modesChangeable, type ModeTone } from "../../lib/header-mode";
+import { sessionLauncher } from "../../lib/model-switch";
 import { href, navigate, parse, showsSession } from "../../lib/router";
 import { stripBase } from "../../lib/base";
 import { dropSession, getSession, refresh, refreshAssistant, upsertSession } from "../../lib/store";
 import type { Session } from "../../lib/types";
 import { Button, copyText, cx, Dialog, Loading, Menu, Spinner, Switch, toast, useMenu } from "../../ui/atoms";
 import { removeAgentWorktree, worktreeLoss, worktreeStatus, type WorktreeStatus } from "../../lib/worktree";
-import { Icon, type IconName } from "../../ui/icons";
+import { Icon } from "../../ui/icons";
 import { t } from "../../i18n";
 import { AlwaysPermissions } from "./AlwaysPermissions";
 import { DelegatedHistory } from "./Delegated";
@@ -252,91 +253,48 @@ function Field({ label, value, onChange, autoFocus }: { label: string; value: st
   );
 }
 
-// The chips under the composer, like Claude Code's bottom bar: the permission mode, and on a Persona conversation the
-// thinking effort (POST …/modes). An Agent's effort is on the composer's model pill with its model (#5032,
-// ModelPill.tsx); a Persona conversation keeps its effort chip and launcher chip until they move to the pill (#5033). A
-// Persona conversation may also switch to "Allow everything" (#2416).
-export function ModeChips({ session, assistant, withInfo }: { session: Session; assistant?: boolean; withInfo?: boolean }) {
-  const modeMenu = useMenu();
-  const effortMenu = useMenu();
-  const { set, latest } = useModeSet(session);
-  const speedTitle = (id: string, name: string) => id === "default" ? t("chat-sessiondialogs.speed_standard") : id === "priority" ? t("chat-sessiondialogs.speed_fast") : name;
-  const speedChoices = session.service_tiers ?? [];
-  const currentSpeed = speedChoices.find((tier) => tier.id === session.service_tier);
-  const mode = session.permission_mode;
-  const danger = mode === BYPASS_MODE;
-  return (
-    // A Persona conversation has its launcher chip after these and no text to give way: these keep their width up to
-    // the row less 5.5rem (the row's 0.5rem gap and 5rem of launcher chip), so that chip truncates first (#3575). At
-    // phone width that chip is an icon (#4142): 3rem leaves its 2.5rem and the gap, 5rem also the footer's 22px ⓘ
-    // button and its gap (`withInfo`, #3533). An agent's chip keeps its width on a wide screen, where the path beside it
-    // truncates first; at phone width (the path hidden) it may shrink, its label truncating, so the ⓘ after it never
-    // slides under the composer's model pill, stop or send button.
-    <span className={cx("flex shrink-0 items-center gap-1", assistant && "min-w-0 max-w-[calc(100%-5.5rem)]", assistant && (withInfo ? "max-sm:max-w-[calc(100%-5rem)]" : "max-sm:max-w-[calc(100%-3rem)]"), !assistant && "max-sm:min-w-0 max-sm:shrink")}>
-      <Chip label={mode ? modeTitle(mode) : t("chat-sessiondialogs.permission_default")} narrow={{ icon: "shield", label: modeShort(mode) }} danger={danger} onClick={modeMenu.open} active={Boolean(modeMenu.anchor)} title={danger ? BYPASS_WARNING : t("chat-sessiondialogs.permission_mode")} />
-      {assistant && (
-        <Chip
-          label={session.effort ? t("chat-sessiondialogs.effort_chip", { effort: effortTitle(session.effort) }) : t("chat-sessiondialogs.effort_default")}
-          narrow={{ icon: "gauge", label: session.effort ? effortTitle(session.effort) : t("chat-sessiondialogs.short_default") }}
-          onClick={effortMenu.open}
-          active={Boolean(effortMenu.anchor)}
-          title={t("chat-sessiondialogs.effort")}
-        />
-      )}
-      {modeMenu.anchor && (
-        <Menu
-          anchor={modeMenu.anchor}
-          onClose={modeMenu.close}
-          side="top"
-          width={300}
-          header={t("chat-sessiondialogs.permission_mode")}
-          // the header's rows (#3956): into "Allow all" in red and asked again (#1379), out of it asked where it can't come back
-          items={modeMenuItems(session, (m) => void set({ permission_mode: m }), { assistant })}
-        />
-      )}
-      {effortMenu.anchor && assistant && (
-        <Menu
-          anchor={effortMenu.anchor}
-          onClose={effortMenu.close}
-          side="top"
-          width={280}
-          header={t("chat-sessiondialogs.effort")}
-          items={[
-            ...effortOptions(session).map((m) => ({ key: m.id, label: m.title, detail: m.detail, radio: true, checked: session.effort === m.id, onSelect: () => void set({ effort: m.id }) })),
-            ...(speedChoices.length ? [{
-              key: "speed", label: t("chat-sessiondialogs.speed"),
-              hint: currentSpeed ? speedTitle(currentSpeed.id, currentSpeed.name) : t("chat-sessiondialogs.speed_unknown"),
-              divider: true, onSelect: () => {},
-              // Speed controls load on intent
-              children: () => import("./CodexSpeed").then((module) => module.codexSpeedOptions(latest.current)),
-            }] : []),
-          ]}
-        />
-      )}
-    </span>
-  );
+/** POST …/modes with a patch, drawn at once and put back if it fails (the error toasted). `latest` is the session as it is
+ *  now: a pick applies the model and then the effort, and the second must build on the session the first changed. */
+export async function applyModes(latest: () => Session, patch: { permission_mode?: string; effort?: string; model?: string }): Promise<boolean> {
+  const base = latest();
+  const before = { permission_mode: base.permission_mode, effort: base.effort, model: base.model };
+  upsertSession({ ...base, ...patch });
+  try {
+    await api(`${sessionPath(base.machine_id, base.session_id)}/modes`, { method: "POST", json: patch });
+    return true;
+  } catch (e) {
+    upsertSession({ ...latest(), ...Object.fromEntries(Object.keys(patch).map((k) => [k, before[k as keyof typeof before]])) });
+    toast(t("chat-sessiondialogs.change_failed", { error: errorText(e) }), "error");
+    return false;
+  }
 }
 
-/** POST …/modes with a patch, drawn at once and put back if it fails (the error toasted): the composer's chips and model
- *  pill, the header's mode. `latest`: a pick applies the model and then the effort, and the second must build on the
- *  session the first changed. */
+/** applyModes for one session: the composer's permission picker and model pill, the header's mode. */
 export function useModeSet(session: Session) {
   const latest = useRef(session);
   latest.current = session;
-  const set = async (patch: { permission_mode?: string; effort?: string; model?: string }): Promise<boolean> => {
+  const set = (patch: { permission_mode?: string; effort?: string; model?: string }): Promise<boolean> => applyModes(() => latest.current, patch);
+  /** POST …/modes {launcher, from, model?, effort?} (#5035): another launcher records a switch that the user's next
+   *  message carries out, the session's own drops one; `from` is the launcher the pick was made against, so one made on
+   *  a session that switched meanwhile is refused (`switch_stale`). The pending switch shows at once (the pill's clock)
+   *  and goes back to what it was if the hub says no, with its words. */
+  const switchLauncher = async (step: { launcher: string; from?: string; model?: string; effort?: string }): Promise<boolean> => {
     const base = latest.current;
-    const before = { permission_mode: base.permission_mode, effort: base.effort, model: base.model };
-    upsertSession({ ...base, ...patch });
+    const before = base.pending_switch;
+    const pending = { launcher: step.launcher, model: step.model, effort: step.effort, at: new Date().toISOString() };
+    const next: Session = { ...base, pending_switch: step.launcher === sessionLauncher(base) ? undefined : pending };
+    upsertSession(next);
+    latest.current = next; // a step after this one builds on it before the push draws it
     try {
-      await api(`${sessionPath(base.machine_id, base.session_id)}/modes`, { method: "POST", json: patch });
+      await api(`${sessionPath(base.machine_id, base.session_id)}/modes`, { method: "POST", json: step });
       return true;
     } catch (e) {
-      upsertSession({ ...latest.current, ...Object.fromEntries(Object.keys(patch).map((k) => [k, before[k as keyof typeof before]])) });
+      upsertSession({ ...latest.current, pending_switch: before });
       toast(t("chat-sessiondialogs.change_failed", { error: errorText(e) }), "error");
       return false;
     }
   };
-  return { set, latest };
+  return { set, latest, switchLauncher };
 }
 
 /** POST …/modes {service_tier}: Codex's speed (the Speed submenu, the model pill). Nothing is drawn ahead of it: the
@@ -360,8 +318,8 @@ const MODE_LOOK: Record<ModeTone, string> = {
 };
 
 /** The permission mode at the end of an Agent's header (#3956, iOS `HeaderModeButton` from #3719): the mode's symbol in its
- *  tone, no words (they are its accessible name, its tooltip and its menu). Ask First is never hidden, so the control stays
- *  in one place. Its menu is the composer chip's (`modeMenuItems`); a spinner stands in for the symbol while a change is on
+ *  tone, no words (they are its accessible name, its tooltip and its menu). Default permissions is never hidden, so the control stays
+ *  in one place. Its menu is the composer picker's (`modeMenuItems`); a spinner stands in for the symbol while a change is on
  *  its way. */
 export function HeaderModeButton({ session }: { session: Session }) {
   const menu = useMenu();
@@ -403,47 +361,6 @@ export function HeaderModeButton({ session }: { session: Session }) {
         />
       )}
     </>
-  );
-}
-
-// The permission chip's word below 340 px (#4316): enough to tell whether the agent asks first.
-const MODE_SHORT: Record<string, string> = {
-  default: "chat-sessiondialogs.mode_short_default",
-  acceptEdits: "chat-sessiondialogs.mode_short_accept_edits",
-  plan: "chat-sessiondialogs.mode_short_plan",
-  auto: "chat-sessiondialogs.mode_short_auto",
-  [BYPASS_MODE]: "chat-sessiondialogs.mode_short_bypass",
-};
-
-export function modeShort(mode?: string): string {
-  if (!mode) return t("chat-sessiondialogs.short_default");
-  return MODE_SHORT[mode] ? t(MODE_SHORT[mode]) : modeTitle(mode);
-}
-
-/** `phoneIcon`: at phone width the label gives way to this icon (still read out, and in full in the menu it opens), so
- *  the chips beside it keep their words (#4142); wider, the chip is as before.
- *  `narrow`: below 340 px (a 320 px phone, #4316) the label gives way to this icon and short word, which still say the
- *  setting (the chevron goes, for room); the full label stays for screen readers. From 340 px up the chip is as before. */
-export function Chip({ label, onClick, active, danger, title, phoneIcon, narrow }: { label: string; onClick: (e: React.MouseEvent<HTMLElement>) => void; active?: boolean; danger?: boolean; title: string; phoneIcon?: IconName; narrow?: { icon: IconName; label: string } }) {
-  return (
-    <button
-      type="button"
-      title={title}
-      aria-haspopup="menu"
-      onClick={onClick}
-      className={cx(
-        // min-w-0 / max-w-full: on a phone the row has less room than the labels; the label truncates and the chevron
-        // stays inside the box, clear of the send button (#3575)
-        "touch-hit flex h-5.5 min-w-0 max-w-full items-center gap-0.5 whitespace-nowrap rounded-full px-2 text-[11px] font-medium transition-colors",
-        danger ? "bg-red-tint text-red" : active ? "bg-hover text-ink" : "bg-field text-ink-2 hover:bg-hover hover:text-ink",
-      )}
-    >
-      {phoneIcon && <Icon name={phoneIcon} size={12} className="shrink-0 sm:hidden" />}
-      {narrow && <Icon name={narrow.icon} size={12} className="shrink-0 xs:hidden" />}
-      {narrow && <span aria-hidden className="min-w-0 truncate xs:hidden">{narrow.label}</span>}
-      <span className={cx("min-w-0 truncate", phoneIcon && "max-sm:sr-only", narrow && "max-xs:sr-only")}>{label}</span>
-      <Icon name="chevron" size={9} stroke={2.4} className={cx("shrink-0", narrow && "max-xs:hidden")} />
-    </button>
   );
 }
 

@@ -125,8 +125,15 @@
     </plurals>
     <!-- A herdr tab of several agents (#2320) -->
     <string name="designsystem_tab_launcher">起点</string>
+    <!-- An Agents row's third line on Glass (#4338 A9): the to-do chip and the muted bell, for TalkBack -->
+    <string name="designsystem_row_todo">ToDo：%1$s</string>
+    <string name="designsystem_row_muted">通知はミュート中</string>
     <plurals name="designsystem_tab_agents">
         <item quantity="other">%1$d個のエージェント</item>
+    </plurals>
+    <string name="designsystem_space_card_starter">%1$s・起動元</string>
+    <plurals name="designsystem_space_card_pending">
+        <item quantity="other">%1$s・未処理%2$d件</item>
     </plurals>
     <string name="designsystem_group_expand">グループを展開</string>
     <string name="designsystem_group_collapse">グループを折りたたむ</string>
@@ -136,10 +143,26 @@
     <string name="designsystem_machine_monitor">マシンモニター</string>
     <string name="designsystem_details">詳細</string>
     <string name="designsystem_space">スペース</string>
+    <string name="designsystem_repository">リポジトリ</string>
+    <string name="designsystem_main_worktree">メインのワークツリー</string>
+    <string name="designsystem_worktree">ワークツリー</string>
+    <string name="designsystem_worktree_primary">メイン</string>
+    <string name="designsystem_worktree_detached">Detached HEAD</string>
+    <string name="designsystem_worktree_offline">このコンピューターは現在オフラインです</string>
+    <string name="designsystem_worktree_idle">アイドル</string>
     <string name="designsystem_expand_named">%1$sを展開</string>
     <string name="designsystem_collapse_named">%1$sを折りたたむ</string>
     <plurals name="designsystem_idle_more">
         <item quantity="other">ほかに待機中%1$d件</item>
+    </plurals>
+    <plurals name="designsystem_idle_count">
+        <item quantity="other">アイドル%1$d件</item>
+    </plurals>
+    <plurals name="designsystem_idle_hide">
+        <item quantity="other">アイドルの%1$d個を折りたたむ</item>
+    </plurals>
+    <plurals name="designsystem_idle_show">
+        <item quantity="other">アイドル中の%1$d個のエージェントを展開</item>
     </plurals>
     <string name="designsystem_folded">折りたたみ済み</string>
     <string name="designsystem_attachment_uploading">アップロード中</string>

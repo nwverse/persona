@@ -52,6 +52,7 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 				break // a meeting's batch: a side exchange, neither the turn tracker's nor a task's or the Agents' (meeting_turns.go)
 			}
 			s.takeTaskAnswerRetry(machine, sess.SessionID)
+			s.suggestDrop(machine, sess.SessionID) // a new turn: the last one's suggestion goes, a call on its way is cancelled
 			s.turnsBook().working(key, now)
 			s.replyWorked(machine, sess.SessionID) // answered: a question it asks next is a new one (agents_reply.go)
 			ref := SessionRef{MachineID: machine, SessionID: sess.SessionID}
@@ -65,6 +66,7 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 				break
 			}
 			s.notifyFinished(machine, sess.SessionID, s.turnsBook().ended(key, now, backgroundRunning(sess)))
+			s.suggestTurnEnded(machine, sess) // the next message, when nothing else suggests it (suggest_next.go)
 			// A new assistant conversation is named after its first turn; a task from one may be done. After the
 			// items of the turn (a channel's answer is read from them).
 			s.inOrder(func() { go s.TurnEnded(context.Background(), ref) })
@@ -291,6 +293,7 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 	dir := m.assistantCwd() // once, not a path.Join for each row
 	asks := s.fleet.asks.reader(machine, complete)
 	defer asks.done()
+	suggested := s.hubSuggestions(machine)
 	for i := range list {
 		list[i].MachineID = machine
 		list[i].PendingInteractions = counts[list[i].SessionID]
@@ -311,6 +314,7 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 			list[i].Archived = shown[list[i].SessionID].Archived
 			v := shown[list[i].SessionID]
 			list[i].Origin, list[i].OriginRef, list[i].OpenedBy = v.Origin, v.OriginRef, v.OpenedBy // origins.go
+			list[i].ModelPick = v.ModelPick                                                         // what its next messages run on (model_pick.go)
 			// Messages from other conversations wait in the assistant while it runs: shown like typed-ahead input, after
 			// the user's own (the node's), and counted so the apps leave them alone: the assistant delivers them when the
 			// turn ends, and the queue's actions are claude's (#4342).
@@ -341,6 +345,7 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 		}
 		s.decorateWork(machine, &list[i], asking)
 		decorateAwaits(&list[i], asks)
+		decorateSuggestion(&list[i], suggested)
 	}
 	s.decorateTodos(machine, list)
 	for i := range list {

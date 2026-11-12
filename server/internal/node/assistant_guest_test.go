@@ -150,6 +150,7 @@ func TestGuestRefusesOtherRuntimes(t *testing.T) {
 // MCP server. No built-in tools or user settings are loaded.
 func TestGuestAgentSDKStart(t *testing.T) {
 	f := sdkTest(t)
+	f.n.hubPersonaContracts.Store(true)
 	id, err := f.n.assistantSend(withGuest(context.Background(), []string{"larkbridge_docs"}), "", t.TempDir(), "claude", "search", nil, "", "",
 		sdkExec(proto.AssistantRuntimeAgentSDK))
 	if err != nil {
@@ -168,7 +169,7 @@ func TestGuestAgentSDKStart(t *testing.T) {
 	if _, plain := o["mcpServers"].(map[string]any)["persona"]; plain {
 		t.Fatalf("guest config must go through the SDK proxy: %v", o)
 	}
-	if got, _ := o["allowedTools"].([]any); len(got) != 2 || got[0] != "mcp__persona__larkbridge_docs" || got[1] != "mcp__jarvis__larkbridge_docs" {
+	if got, _ := o["allowedTools"].([]any); len(got) != 1 || got[0] != "mcp__persona__larkbridge_docs" {
 		t.Fatalf("allowed tools: %#v", o["allowedTools"])
 	}
 }
