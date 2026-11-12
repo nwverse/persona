@@ -133,36 +133,46 @@ final class FolderEdits {
     }
 }
 
-/// Where Move puts things: the browser's folders from its top (`cwd`), opened on the one shown; Move Here takes the
-/// folder open. The folders being moved can't be opened (nothing goes into itself).
+/// Where Move puts things: folders from `root` (the session's folder, the home or `/`, whichever the folder shown is
+/// in), opened on the one shown (`at`); Move Here takes the folder open. The folders being moved can't be opened
+/// (nothing goes into itself).
 struct FolderPicker: View {
     @Environment(\.dismiss) private var dismiss
     let machineID: String
     var group: String
     let cwd: String
+    let root: String
     /// The full paths being moved.
     let moving: [String]
     let pick: (String) -> Void
-    /// The folders opened below cwd, each as its full path.
+    /// The folders opened below root, each as its full path.
     @State private var opened: [String]
 
-    init(machineID: String, group: String, cwd: String, start: [String], moving: [String], pick: @escaping (String) -> Void) {
+    init(machineID: String, group: String, cwd: String, root: String, at: String, moving: [String], pick: @escaping (String) -> Void) {
         self.machineID = machineID
         self.group = group
         self.cwd = cwd
+        self.root = root
         self.moving = moving
         self.pick = pick
-        var paths: [String] = [], at = cwd
-        for name in start {
-            at = (at as NSString).appendingPathComponent(name)
-            paths.append(at)
+        _opened = State(initialValue: Self.opened(from: root, to: at))
+    }
+
+    /// The folders from root down to at (root itself not among them); none when at is not under root.
+    nonisolated static func opened(from root: String, to at: String) -> [String] {
+        let base = root == "/" ? "" : root
+        guard at != root, at.hasPrefix(base + "/") else { return [] }
+        var paths: [String] = [], cur = base
+        for name in at.dropFirst(base.count + 1).split(separator: "/") {
+            cur += "/" + name
+            paths.append(cur)
         }
-        _opened = State(initialValue: paths)
+        return paths
     }
 
     var body: some View {
         NavigationStack(path: $opened) {
-            level(cwd)
+            level(root)
                 .navigationDestination(for: String.self) { level($0) }
         }
     }

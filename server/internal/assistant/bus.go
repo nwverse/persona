@@ -133,7 +133,7 @@ func NewBusHub(o BusOptions) *BusHub {
 				"deploy": o.Deploy, "version": o.Version, "capabilities": []string{assistantwire.CapabilityConfigOwn, assistantwire.CapabilityAgentSessionArchives,
 					assistantwire.CapabilityAgentSessionArchiveClose, assistantwire.CapabilityAgentNaming, assistantwire.CapabilityMachinesOwn,
 					assistantwire.CapabilityMeetingAttendance, assistantwire.CapabilityMeetingConversation, assistantwire.CapabilityMeetingPhotos, assistantwire.CapabilityMeetingLiveView,
-					assistantwire.CapabilityRecordingDay,
+					assistantwire.CapabilityMeetingHighlights, assistantwire.CapabilityRecordingDay,
 					devicewire.SharingCapability}}
 		},
 		OnHello: b.onHello,

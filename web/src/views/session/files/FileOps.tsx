@@ -8,6 +8,7 @@ import { onManagerChoice, shownManager, useShownManager } from "../../../lib/man
 import { t } from "../../../i18n";
 import {
   FILE_EDIT_FEATURE,
+  FILE_ZIP_FEATURE,
   isNameTaken,
   moveEntries,
   nameProblem,
@@ -19,6 +20,7 @@ import {
   UPLOAD_DIR_FEATURE,
   uploadToDir,
   within,
+  zipEntries,
   type Conflict,
   type FileCredential,
   type UploadCredential,
@@ -28,7 +30,7 @@ import { baseName, bytes, shortPath } from "../../../lib/format";
 import { hubHas, useStore } from "../../../lib/store";
 import { contextMenuProps } from "../../../ui/context-menu";
 import type { MenuAt, MenuItem } from "../../../ui/menu-model";
-import { Button, copyText, cx, Dialog, IconButton, Loading, type ToastAction } from "../../../ui/atoms";
+import { Button, copyText, cx, Dialog, IconButton, Loading, toast, type ToastAction } from "../../../ui/atoms";
 import { Icon } from "../../../ui/icons";
 import { FileGlyph } from "./parts";
 
@@ -84,6 +86,8 @@ export interface FileOps {
   scope: object;
   canUpload: boolean;
   canEdit: boolean;
+  /** The hub zips (`file_zip`): several items or a folder download as one zip. */
+  canZip: boolean;
   /** Sends files into `dir` (dropped or chosen). */
   upload: (files: File[], dir: string) => void;
   /** Opens the file chooser for `dir`. */
@@ -356,20 +360,32 @@ export function useFileOps({ mid, cwd, path = cwd, workspace = cwd, onChanged }:
     }
   }, [activeTrash, currentOwner, currentWorkspace, say]);
 
+  const canZip = hubHas(features, FILE_ZIP_FEATURE);
   const download = useCallback(
     (targets: OpTarget[]) => {
-      // one link each: the browser saves them (a folder has no download)
-      for (const x of targets.filter((x) => !x.dir)) {
+      const save = (path: string, name: string) => {
         const a = document.createElement("a");
-        a.href = fileDownloadURL(mid, x.path, cwd);
-        a.download = x.name;
+        a.href = fileDownloadURL(mid, path, cwd);
+        a.download = name;
         a.rel = "noopener";
         document.body.append(a);
         a.click();
         a.remove();
+      };
+      if (targets.length === 1 && !targets[0].dir) return save(targets[0].path, targets[0].name);
+      if (!canZip) {
+        // an older hub: one link each, folders left out
+        for (const x of targets.filter((x) => !x.dir)) save(x.path, x.name);
+        return;
       }
+      // several items or a folder: one zip the computer makes in a temporary folder, then downloaded (#5828)
+      const name = targets.length === 1 ? `${targets[0].name}.zip` : t("files-ops.archive_name");
+      toast(t("files-ops.zipping", { count: targets.length }));
+      zipEntries(mid, targets.map((x) => x.path), cwd, name)
+        .then((z) => save(z.path, name))
+        .catch((e) => !isAbort(e) && toast(t("files-ops.zip_failed", { error: opErrorText(e) }), "error"));
     },
-    [mid, cwd],
+    [mid, cwd, canZip],
   );
 
   const rowItems = useCallback(
@@ -377,6 +393,7 @@ export function useFileOps({ mid, cwd, path = cwd, workspace = cwd, onChanged }:
       let renaming = false;
       const items: MenuItem[] = [{ key: "open", label: x.dir ? t("files-ops.open_folder") : t("files-ops.open"), icon: x.dir ? "folder" : "file", onSelect: open }];
       if (!x.dir) items.push({ key: "download", label: t("files-ops.download"), icon: "download", onSelect: () => download([x]) });
+      else if (canZip) items.push({ key: "download", label: t("files-ops.download_zip"), icon: "download", onSelect: () => download([x]) });
       if (x.dir && canUpload) items.push({ key: "upload", label: t("files-ops.upload_here"), icon: "upload", onSelect: () => choose(x.path) });
       if (canEdit) {
         items.push(
@@ -413,7 +430,7 @@ export function useFileOps({ mid, cwd, path = cwd, workspace = cwd, onChanged }:
       if (canEdit) items.push({ key: "trash", label: t("files-ops.trash"), icon: "trash", danger: true, divider: true, onSelect: () => openTrash([x]) });
       return items;
     },
-    [canUpload, canEdit, download, choose, currentOwner, mutationOwner, openMove, openTrash],
+    [canUpload, canEdit, canZip, download, choose, currentOwner, mutationOwner, openMove, openTrash],
   );
 
   const visibleMove = moving?.owner === mutationOwner && currentOwner(moving.owner) ? moving : null;
@@ -467,7 +484,7 @@ export function useFileOps({ mid, cwd, path = cwd, workspace = cwd, onChanged }:
     </>
   );
 
-  return { scope: mutationOwner, canUpload, canEdit, upload, choose, rowItems, move: openMove, trash: openTrash, download, ui };
+  return { scope: mutationOwner, canUpload, canEdit, canZip, upload, choose, rowItems, move: openMove, trash: openTrash, download, ui };
 }
 /** The uploads at the panel's foot: each with its progress and a cancel; a failed one says why and can go again. */
 function UploadTray({ uploads, onCancel, onRetry }: { uploads: Upload[]; onCancel: (u: Upload) => void; onRetry: (u: Upload) => void }) {
@@ -740,7 +757,7 @@ function TrashDialog({ targets, busy, onClose, onTrash }: { targets: OpTarget[] 
 
 /** The bar a selection brings: how many, and what can be done to them all. */
 export function SelectionBar({ ops, selected, onClear }: { ops: FileOps; selected: OpTarget[]; onClear: () => void }) {
-  const files = selected.filter((x) => !x.dir);
+  const files = ops.canZip ? selected : selected.filter((x) => !x.dir);
   return (
     <div role="toolbar" aria-label={t("files-ops.selection")} className="flex h-10 shrink-0 items-center gap-1 border-b border-line bg-inset px-2">
       <IconButton icon="x" label={t("files-ops.clear_selection")} onClick={onClear} iconSize={14} />
