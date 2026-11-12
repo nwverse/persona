@@ -366,6 +366,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // That group's hub (`hub_id`, the key); unknown: every group.
         let group = AppModel.shared.pushGroup(info)
         AppModel.shared.wakeLinks(group)
+        #if os(iOS)
+        HomeWidgetData.shared.refresh() // the calendar, Health and the usage the widgets show, when due
+        #endif
         nonisolated(unsafe) let done = completionHandler
         DispatchQueue.main.asyncAfter(deadline: .now() + 25) {
             #if os(iOS)
