@@ -46,6 +46,7 @@ type remoteFixture struct {
 	// backgroundReply overrides the versioned inventory fixture's terminal response.
 	backgroundReply map[string]any
 	backgroundPages map[string]map[string]any
+	response        func(string, map[string]any) (any, bool)
 }
 
 func (f *remoteFixture) serve(w http.ResponseWriter, r *http.Request) {
@@ -77,6 +78,7 @@ func (f *remoteFixture) serve(w http.ResponseWriter, r *http.Request) {
 		if f.active {
 			status = map[string]any{"type": "active", "activeFlags": []string{}}
 		}
+		response := f.response
 		f.mu.Unlock()
 		if code == 0 {
 			code = -32600
@@ -117,6 +119,12 @@ func (f *remoteFixture) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		if effort != "" {
 			d["reasoningEffort"] = effort
+		}
+		if response != nil {
+			if value, handled := response(m.Method, p); handled {
+				f.push(map[string]any{"id": m.ID, "result": value})
+				continue
+			}
 		}
 		switch m.Method {
 		case "initialize":

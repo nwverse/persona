@@ -665,6 +665,31 @@ An extension's token is never shown a private card, one of the health space, or 
 `resolution.values` (what was filled into its fields on the phone, such as a password) is left out (see "Never shown to
 extensions"). A page may then hold fewer cards than `limit` while the cursor still says there is more.
 
+#### Recommendations and who decided
+
+To learn how the user usually decides, and how often they take what was recommended, read these on the assistant's own questions
+(`tool_name: "ask_user"`; `docs/protocol/protocol.md` "Decision fields" and "Who answered a card"):
+
+| Where | Field | Meaning |
+| --- | --- | --- |
+| `interaction` | `deadline` | When an unanswered question takes its recommendation by default (or is reminded, when it cannot be undone) |
+| `interaction` | `reversible` | Whether going ahead can be undone, as the assistant said it; absent when it did not say |
+| `interaction.questions[]` | `recommend` | The recommended option's label; absent when there was none |
+| `resolution` | `answered_by` | Absent: the user. `assistant`: the assistant answered for the user. `default`: nobody answered; the recommendation was taken at the deadline |
+| `resolution` | `late` | The answer came after the card expired (on the to-do it became, or at its deadline); the card's `status` stays `expired` |
+
+None of them is filled in for cards from before they were kept: a missing field is unknown, not `false` or "no recommendation".
+Taken-or-not is `resolution.answers[q] == questions[].recommend` for the user's answers (`answered_by` absent); a `default` answer
+was not the user's choice.
+
+A finished task's decision for the owner (a supervised task's `needs_user` review) is not a card. While it waits, `GET /api/v1/todos`
+(`todos.read`) lists it on its to-do as `ask`: `recommend`, `options` (the recommended first), `deadline`, and `default` (`taken`: the
+recommendation is taken at the deadline, which only a reversible decision does; `never`: it never is). The review itself stays on the
+to-do, decided or not (`supervision.reviews[]`, the last 20, with `verdict: "needs_user"`, `recommend`, `options`, and `deadline` and
+`reversible` as the supervisor gave them, absent when it gave none or on reviews from before they were kept). Once decided,
+`GET /api/v1/todos/{id}/decisions` has the outcome: `source: "manual"` for the user's choice, `source: "agent"` with the deadline's
+`reason` for the default.
+
 #### Folded work
 
 The other half of "where did it go wrong" is a chat's own items, read with `agents.read` too: `GET

@@ -120,6 +120,14 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
                         navigator.navigate(if (action == persona.core.designsystem.ReadinessActionId.EditProvider)
                             launcher?.takeIf(String::isNotBlank)?.let { persona.core.navigation.ModelProviderRoute(it) } ?: SettingsPageRoute(SettingsPage.Providers)
                         else persona.core.navigation.ModelPurposeRoute("assistant", manager))
+                    },
+                    // A briefing's recommended setup opens the page its mechanism is turned on at, and changes nothing (#5085).
+                    onOpenSetup = { page, manager ->
+                        navigator.navigate(when (page) {
+                            persona.core.contracts.BriefSetupPage.SessionTriage -> SettingsPageRoute(SettingsPage.Triage)
+                            persona.core.contracts.BriefSetupPage.SupervisorModel ->
+                                persona.core.navigation.ModelPurposeRoute(persona.core.contracts.api.BackgroundSupervisor.PURPOSE, manager)
+                        })
                     }),
                 renderStyle = if (assistant) ChatRenderStyle.Assistant else ChatRenderStyle.Agent,
                 composerState = composer, composerService = wiring?.composer,
