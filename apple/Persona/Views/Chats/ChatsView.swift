@@ -2913,7 +2913,8 @@ private struct AgentsList: View {
     /// selection can clear every Agent detail, without rebuilding the list and losing its state.
     @ViewBuilder private func agentNavigationLink<Content: View>(_ key: SessionKey, @ViewBuilder content: () -> Content) -> some View {
         #if os(iOS)
-        if widthClass == .regular {
+        // A split's sidebar can read compact: use the parent page's layout, not the column's width class.
+        if !ownsTop {
             Button { openFromList(key) } label: { content() }
                 .buttonStyle(.plain)
         } else {

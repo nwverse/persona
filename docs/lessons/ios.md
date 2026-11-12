@@ -9,8 +9,9 @@ Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in
   on its first appearance; a previously built Agents page can retain its own detail path instead. Check both paths.
 - A regular-width split sidebar's `NavigationLink(value:)` can own a selection independently of the bound detail path.
   Clearing that path closes a code-opened Agent but not necessarily an Agent opened by a sidebar row. On iOS, route
-  those Agent links through the bound path as well; test native-tab reselection and switching back after a row tap,
-  not just after a launch link. Do not rebuild the whole list to erase this selection and discard its local state.
+  those Agent links through the bound path as well; decide from the parent page's layout (`ownsTop`), because the
+  sidebar itself can read compact. Test native-tab reselection and switching back after a row tap, not just after a
+  launch link. Do not rebuild the whole list to erase this selection and discard its local state.
 - Reset the Agents path and restore marker only at an explicit tab-selection boundary, not in the general tab router:
   notifications and links use that router too and must still open their exact Agent. Reselection needs a generation,
   because the selected tab's value does not change. Deferred restoration/reset callbacks must check that generation and
