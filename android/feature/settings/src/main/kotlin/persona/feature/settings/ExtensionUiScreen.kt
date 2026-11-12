@@ -2,6 +2,7 @@ package persona.feature.settings
 
 import android.app.Activity
 import android.app.KeyguardManager
+import android.content.Intent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
@@ -116,11 +117,13 @@ internal suspend fun extensionNotificationLockedAfterUnlockSettles(
 fun ExtensionUiPage(extensions: ExtensionManagement?, extensionId: String, uiId: String, title: String, onBack: () -> Unit,
                     initialState: String? = null, depth: Int = 0, shown: Boolean = true, availableAdapter: NativeExtensionStreamAdapter? = null,
                     onPush: (ExtensionUiRoute) -> Unit = {}, manager: String? = null, notificationActionToken: String? = null,
+                    notificationIntent: Intent? = null,
                     notificationStore: ExtensionNotificationActionStore = ExtensionNotificationActionStore.shared,
                     notificationLocked: (suspend () -> Boolean)? = null) {
     val notification = if (notificationActionToken == null) null else {
         val context = LocalContext.current
         val activity = context as? Activity
+        val intent = notificationIntent ?: activity?.intent
         val keyguard = remember(context) { context.getSystemService(KeyguardManager::class.java) }
         val lifecycle = LocalLifecycleOwner.current.lifecycle
         var resume by remember(notificationActionToken) { mutableIntStateOf(0) }
@@ -132,8 +135,8 @@ fun ExtensionUiPage(extensions: ExtensionManagement?, extensionId: String, uiId:
             onDispose { lifecycle.removeObserver(observer) }
         }
         produceState<ExtensionNotificationPageResolution?>(initialValue = null, notificationActionToken, notificationStore,
-            activity?.intent, resume) {
-            val text = activity?.intent?.let { RemoteInput.getResultsFromIntent(it) }
+            intent, resume) {
+            val text = intent?.let { RemoteInput.getResultsFromIntent(it) }
                 ?.getCharSequence(EXTENSION_NOTIFICATION_REMOTE_INPUT)?.toString()
             val locked = notificationLocked ?: {
                 try {
@@ -202,9 +205,15 @@ fun ExtensionUiPage(extensions: ExtensionManagement?, extensionId: String, uiId:
     val handle = rememberExtensionView(model, onPush = { push ->
         ExtensionViewText.pushed(extensionId, uiId, title, depth, push, pageManager)?.let { model.covered(); onPush(it) }
     }, onPop = onBack)
+    var notificationActionStarted by remember(model) { mutableStateOf(false) }
     LaunchedEffect(model, notification) {
         val execution = notification?.execution
-        if (execution == null) model.load() else handle.act(persona.core.contracts.api.ExtensionViewAction(execution.action.id), execution.values)
+        if (execution != null) {
+            notificationActionStarted = true
+            handle.act(persona.core.contracts.api.ExtensionViewAction(execution.action.id), execution.values)
+        } else if (!notificationActionStarted) {
+            model.load()
+        }
     }
     // A view with refresh_after is drawn again while this page is on screen (docs/extensions/extensions.md "UI slots" "Refresh"),
     // one the extension invalidated (ui.invalidate) at once or when it shows again, and one back from a page pushed on it.

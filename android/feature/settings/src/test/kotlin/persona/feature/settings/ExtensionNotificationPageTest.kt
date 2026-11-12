@@ -182,20 +182,22 @@ class ExtensionNotificationPageTest {
     }
 
     @Test fun composeReadsRemoteInputAndDoesNotReplayItAfterRecreation() {
+        rule.mainClock.autoAdvance = false
         val record = store.register("alert", "example-gateway", "usage", "state",
             ExtensionNotifyAction("note", "Reply", foreground = true, input = ExtensionNotifyActionInput("Text")), scope)!!
         val api = PageUi(ExtensionUiResult(view = ExtensionView(title = "After")))
         val intent = Intent(rule.activity, ComponentActivity::class.java)
         RemoteInput.addResultsToIntent(arrayOf(RemoteInput.Builder(EXTENSION_NOTIFICATION_REMOTE_INPUT).build()), intent,
             Bundle().apply { putCharSequence(EXTENSION_NOTIFICATION_REMOTE_INPUT, "hello") })
-        rule.runOnIdle { rule.activity.intent = intent }
-        showPage(api, record.token)
-        rule.waitForIdle()
-        assertEquals(listOf(Triple("note", "state", mapOf("text" to "hello"))), api.actions)
+        assertEquals("hello", RemoteInput.getResultsFromIntent(intent)?.getCharSequence(EXTENSION_NOTIFICATION_REMOTE_INPUT)?.toString())
+        showPage(api, record.token, notificationIntent = intent)
+        rule.mainClock.advanceTimeBy(100)
+        assertEquals(1, api.actions.size)
+        assertEquals(Triple("note", "state", mapOf("text" to "hello")), api.actions.single())
 
         rule.activityRule.scenario.recreate()
-        showPage(api, record.token)
-        rule.waitForIdle()
+        showPage(api, record.token, notificationIntent = intent)
+        rule.mainClock.advanceTimeBy(100)
         assertEquals(1, api.actions.size)
     }
 
@@ -239,6 +241,7 @@ class ExtensionNotificationPageTest {
         assertTrue(requests.isEmpty())
         rule.onNodeWithText("HTTP action").assertExists()
 
+        rule.activityRule.scenario.recreate()
         showPage(api, "0".repeat(32), availableAdapter = native.adapter)
         rule.onNodeWithText("Native ordinary page").assertExists()
         assertEquals(0, api.renders)
@@ -251,11 +254,12 @@ class ExtensionNotificationPageTest {
         token: String,
         availableAdapter: NativeExtensionStreamAdapter? = null,
         locked: suspend () -> Boolean = { false },
+        notificationIntent: Intent? = null,
     ) {
         rule.setContent {
             PersonaTheme(reduceMotion = true) {
                 ExtensionUiPage(api, "example-gateway", "usage", "Page", onBack = {},
-                    availableAdapter = availableAdapter, notificationActionToken = token,
+                    availableAdapter = availableAdapter, notificationActionToken = token, notificationIntent = notificationIntent,
                     notificationStore = store, notificationLocked = locked)
             }
         }
