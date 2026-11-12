@@ -107,6 +107,10 @@ var Features = []string{
 	"launcher_secret_references",
 }
 
+// CodeWorktreeUnsupported: worktree.prepare / worktree.create on an engine that has no checkouts (a runtime such as
+// Paseo or Cindy, or a host without checkout support); the message starts with "unsupported".
+const CodeWorktreeUnsupported = "worktree_unsupported"
+
 // Codes of a failed credential.gh_token (hub → node, node/credential.go).
 const (
 	CodeNoGh        = "no_gh"
