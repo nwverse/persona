@@ -279,7 +279,7 @@ fun ChatComposer(
     val dictation = rememberDictation(onHeard = { state.appendDictation(it) }, onError = onNotice)
     if (!visible) return
     if (AdaptiveProbe.enabled) {
-        AdaptiveComposerProbe(adaptiveProbePage, state.value, state.attachments.map { it.id to it.uploadState.name })
+        AdaptiveComposerProbe(adaptiveProbePage, state.value, state.attachments.map { it.id to it.uploadState.name }, state.draftLoaded)
     }
     LaunchedEffect(state.focusRequest) { if (state.focusRequest > 0) focusRequester.requestFocus() }
     // A read-only session (enabled = false) offers nothing to type with: no +, no mic, no "/" list, no send.

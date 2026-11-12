@@ -48,6 +48,7 @@ internal data class AdaptiveComposerEvidence(
     val selection: AdaptiveSelectionEvidence? = null,
     val focused: Boolean? = null,
     val attachments: List<AdaptiveAttachmentEvidence>? = null,
+    val draftLoaded: Boolean? = null,
 )
 
 @Serializable
@@ -163,13 +164,14 @@ object AdaptiveProbe {
         }
     }
 
-    internal fun publishComposer(page: String, value: TextFieldValue, attachmentStates: List<Pair<String, String>>) {
+    internal fun publishComposer(page: String, value: TextFieldValue, attachmentStates: List<Pair<String, String>>, draftLoaded: Boolean? = null) {
         val draft = value.text.hmac()
         updateComposer(page) { old ->
             old.copy(
                 draftHmac = draft,
                 selection = AdaptiveSelectionEvidence(value.selection.start, value.selection.end),
                 attachments = attachmentStates.map { AdaptiveAttachmentEvidence(it.first, it.second) },
+                draftLoaded = draftLoaded ?: old.draftLoaded,
             )
         }
     }
@@ -288,9 +290,10 @@ fun AdaptiveComposerProbe(
     page: String,
     value: TextFieldValue,
     attachmentStates: List<Pair<String, String>>,
+    draftLoaded: Boolean? = null,
 ) {
     if (!AdaptiveProbe.enabled) return
-    SideEffect { AdaptiveProbe.publishComposer(page, value, attachmentStates) }
+    SideEffect { AdaptiveProbe.publishComposer(page, value, attachmentStates, draftLoaded) }
     DisposableEffect(page) { onDispose { AdaptiveProbe.removeComposer(page) } }
     LaunchedEffect(page) {
         while (true) {
