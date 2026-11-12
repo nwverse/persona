@@ -704,6 +704,7 @@ func (e *Engine) DeleteRecording(rawID string, now time.Time) (bool, error) {
 	st.audioDroppedLocked(id, ErrRecordingDeleted)
 	err := os.RemoveAll(st.path(KindRecording, id))
 	st.recFilesMu.Unlock()
+	st.audioFileClosed(id)
 	if err != nil {
 		return false, err
 	}
@@ -799,6 +800,7 @@ func (e *Engine) pruneRecordings(now time.Time) int {
 		st.audioDroppedLocked(r.ID, ErrNotFound)
 		err := os.RemoveAll(st.path(KindRecording, r.ID))
 		st.recFilesMu.Unlock()
+		st.audioFileClosed(r.ID)
 		if err == nil {
 			e.unlinkRecording(r.ID, r.Projects)
 			st.notify(KindRecording, r.ID, "metadata")

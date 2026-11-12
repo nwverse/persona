@@ -116,6 +116,21 @@ func (s *Store) audioDroppedLocked(id string, why error) {
 	}
 }
 
+// audioFileClosed closes the chunk file recording id's audio has open for writing, if any: after a gap upload, and
+// after a delete, a prune or the trim removed the directory (an open file would keep the unlinked audio on disk). The
+// caller holds no recFilesMu (audioRec.mu comes before it).
+func (s *Store) audioFileClosed(id string) {
+	s.audioMapMu.Lock()
+	rec := s.audioRecs[id]
+	s.audioMapMu.Unlock()
+	if rec == nil {
+		return
+	}
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	_ = rec.closeFileLocked() // synced before (AudioPut), or removed already
+}
+
 // audioFinal notes that recording id's final pass has started: its audio takes no more writes.
 func (s *Store) audioFinal(id string) { s.audioRec(id).final.Store(true) }
 
@@ -650,6 +665,9 @@ func (e *Engine) AudioPut(rawID string, at float64, pcm []byte) ([][2]float64, e
 		return nil, err
 	}
 	st := e.Store
+	// A gap upload leaves no chunk file open: a delete or the trim removes the directory without closing it, and an
+	// unlinked file still open would keep the audio on disk (and its descriptor) until the manager restarts.
+	defer st.audioFileClosed(id)
 	_, werr := st.audioWrite(id, rec, s, pcm)
 	if werr != nil && !errors.Is(werr, ErrAudioFull) {
 		return nil, werr

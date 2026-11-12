@@ -503,3 +503,80 @@ func TestAudioWritesRacingTheDelete(t *testing.T) {
 		}
 	}
 }
+
+// openChunk is the chunk file recording id's audio has open for writing (nil: none).
+func openChunk(e *Engine, id string) *os.File {
+	rec := e.Store.audioRec(id)
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	return rec.f
+}
+
+// A gap upload leaves no chunk file open, and neither does a delete, a prune or the trim of a recording whose socket
+// left one open: an open file would keep the unlinked audio on disk (and its descriptor) past the delete.
+func TestAudioLeavesNoChunkOpen(t *testing.T) {
+	now := time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone)
+	e, _ := hubEngine(t, nil)
+	hubMeeting(t, e, recID, now)
+	if _, err := e.AudioPut(recID, 0, pcmAt(0, secs(1))); err != nil {
+		t.Fatal(err)
+	}
+	if f := openChunk(e, recID); f != nil {
+		t.Fatalf("a gap upload left %s open", f.Name())
+	}
+	if _, err := e.DeleteRecording(recID, now); err != nil {
+		t.Fatal(err)
+	}
+	if f := openChunk(e, recID); f != nil {
+		t.Fatalf("the delete left %s open", f.Name())
+	}
+
+	// A socket's writer leaves its chunk open while it writes; the delete and the trim close it.
+	const deleted, trimmed = "5b6c3f4a-1d2e-4f80-9a1b-2c3d4e5f6a7b", "6c7d4e5b-2e3f-4a91-8b2c-3d4e5f6a7b8c"
+	for _, id := range []string{deleted, trimmed} {
+		putRecording(t, e, id, hubUpload(1, now.Add(-time.Hour), true, nil, "一句"), now)
+		w, err := e.AudioOpen(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = w.Close() })
+		if err := w.Write(0, pcmAt(0, 100)); err != nil {
+			t.Fatal(err)
+		}
+		if openChunk(e, id) == nil {
+			t.Fatal("no chunk open while writing")
+		}
+	}
+	if _, err := e.DeleteRecording(deleted, now); err != nil {
+		t.Fatal(err)
+	}
+	putMeetingMinutes(t, e, trimmed, Minutes{Version: 1, Title: "Design review", When: "w"})
+	if _, _, err := e.Store.trimRecording(recordingNow(t, e, trimmed), now); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{deleted, trimmed} {
+		if f := openChunk(e, id); f != nil {
+			t.Fatalf("%s: %s still open after its audio went", id, f.Name())
+		}
+	}
+
+	// The prune of a recording past recording_days.
+	const pruned = "7d8e5f6c-3f40-4b02-9c3d-4e5f6a7b8c9d"
+	old := now.AddDate(0, 0, -20)
+	putRecording(t, e, pruned, hubUpload(1, old, true, nil, "一句"), old)
+	w, err := e.AudioOpen(pruned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+	if err := w.Write(0, pcmAt(0, 100)); err != nil {
+		t.Fatal(err)
+	}
+	e.PruneRecordings(now)
+	if _, ok := e.Store.Recording(pruned); ok {
+		t.Fatal("not pruned")
+	}
+	if f := openChunk(e, pruned); f != nil {
+		t.Fatalf("the prune left %s open", f.Name())
+	}
+}

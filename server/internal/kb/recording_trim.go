@@ -44,6 +44,7 @@ func (s *Store) trimRecording(r *Recording, now time.Time) (changed, photos bool
 	if s.readOnly {
 		return false, false, ErrReadOnly
 	}
+	defer s.audioFileClosed(r.ID) // once recFilesMu is let go (audioRec.mu comes before it)
 	zone := s.Zone()
 	s.recFilesMu.Lock()
 	defer s.recFilesMu.Unlock()
