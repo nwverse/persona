@@ -40,6 +40,7 @@ extensions.call:{id} /api/v1/extensions/{id}/
 -                    DELETE /api/v1/admin/devices/{credential_id}/owner
 -                    DELETE /api/v1/admin/devices/{id}
 -                    DELETE /api/v1/admin/extensions/{id}
+-                    DELETE /api/v1/admin/extensions/{id}/egress/allow
 -                    DELETE /api/v1/admin/machines/{id}
 -                    DELETE /api/v1/admin/peers/{hub_id}
 -                    DELETE /api/v1/admin/usage-sources/{id}
@@ -226,6 +227,7 @@ machines.read        GET /api/v1/machines/{id}/usage
 -                    GET /api/v1/machines/{mid}/clipboard
 -                    GET /api/v1/machines/{mid}/clipboard/settings
 -                    GET /api/v1/machines/{mid}/codex-settings
+-                    GET /api/v1/machines/{mid}/codex/{sid}/takeover
 -                    GET /api/v1/machines/{mid}/computer
 -                    GET /api/v1/machines/{mid}/computer/apps
 -                    GET /api/v1/machines/{mid}/computer/clipboard
@@ -320,6 +322,7 @@ todos.write          PATCH /api/v1/todos/{id}
 -                    POST /api/v1/admin/doctor
 -                    POST /api/v1/admin/extensions/install
 -                    POST /api/v1/admin/extensions/preview
+-                    POST /api/v1/admin/extensions/{id}/egress/allow
 -                    POST /api/v1/admin/extensions/{id}/rollback
 -                    POST /api/v1/admin/extensions/{id}/upgrade
 -                    POST /api/v1/admin/login
@@ -448,6 +451,7 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/machines/{id}/reject
 -                    POST /api/v1/machines/{mid}/browser/cookies
 -                    POST /api/v1/machines/{mid}/browser/{action}
+-                    POST /api/v1/machines/{mid}/codex/{sid}/takeover
 -                    POST /api/v1/machines/{mid}/computer/clipboard
 -                    POST /api/v1/machines/{mid}/computer/{action}
 -                    POST /api/v1/machines/{mid}/deploy
