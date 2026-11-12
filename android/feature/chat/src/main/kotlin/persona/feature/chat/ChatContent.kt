@@ -351,7 +351,7 @@ internal fun ChatLineContent(
                 // waits: no "Working", no clock, no spinner, as the header says "Waiting for you".
                 val waits = waiting && line.live
                 val now by rememberNow(1_000, enabled = line.live && !waits)
-                WorkGroup(workSummary(res, line, recordedDuration, now.takeIf { line.live }, waiting = waits), line.open,
+                WorkGroup(workSummary(res, line, recordedDuration, now.takeIf { line.live }, waiting = waits, names = LocalToolNames.current), line.open,
                     { onToggle(line.id) }, running = line.live && !waits,
                     onTerminal = onTerminal?.takeIf { ChatTerminalPlaces.onWorkLine(line.live, PersonaTheme.style) },
                     terminalLabel = stringResource(R.string.chat_screen_open_terminal)) {}
@@ -436,7 +436,7 @@ private fun WorkStep(step: WorkItem, session: SessionKey, loader: ImageLoader, o
                 PlanStep(plan, running)
                 return
             }
-            val presentation = toolPresentation(LocalResources.current, call.use.item)
+            val presentation = toolPresentation(LocalResources.current, call.use.item, LocalToolNames.current)
             val taskBadge = if (call.results.any { it.task?.kind == "agent" })
                 LocalChatTaskIndex.current.badge(call.use.item.toolUseId, concise = true)?.text?.text() else null
             Column(Modifier.fillMaxWidth()) {
@@ -461,10 +461,13 @@ private fun WorkStep(step: WorkItem, session: SessionKey, loader: ImageLoader, o
                 // Right of the rail on Glass, under the step's words (iOS's timeline, `detailLeading`).
                 if (open) Column(Modifier.fillMaxWidth().workDetail(Tokens.Space.m),
                     verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+                    // A tool that operates a Mac says its steps in words on Glass, its output and picture with them (iOS ComputerToolDetail).
+                    val computer = PersonaTheme.style == AppStyle.Glass && persona.core.domain.ComputerSteps.isComputerTool(call.name)
                     if (diff != null) {
                         toolPath(call.use.item)?.let { DiffHeader(it, diff.added, diff.removed) }
                         DiffView(diff, call.id)
-                    } else if (todos == null) ToolInputDetail(call.use.item, call.result?.item)
+                    } else if (computer) ComputerToolDetail(call, session, loader)
+                    else if (todos == null) ToolInputDetail(call.use.item, call.result?.item)
                     // A truncated output opens in full from "Raw output" below. An edit's own result only says it worked; an
                     // answered ask_user's result repeats the ticked choices above in the model's words (iOS ToolViews).
                     val agentReports = call.results.any { it.task?.kind == "agent" }
@@ -483,14 +486,15 @@ private fun WorkStep(step: WorkItem, session: SessionKey, loader: ImageLoader, o
                             }
                         }
                     } else call.result?.item?.let { result ->
-                        if (todos == null && (diff == null || call.failed) && (!PersonaTools.isAskUser(call.name) || call.failed))
+                        if (!computer && todos == null && (diff == null || call.failed) && (!PersonaTools.isAskUser(call.name) || call.failed))
                             CodeText(result.text.orEmpty(), stringResource(R.string.chat_content_output))
                     }
                     // A dev server saying where it listens (docs/operations/ports.md).
                     if (call.name == "Bash") call.result?.text?.let { PortBadges(it) }
-                    call.images.forEach { ChatPicture(session, it.item, loader) }
+                    if (!computer) call.images.forEach { ChatPicture(session, it.item, loader) }
                     ToolReaderActions(call.use.item.toolInput?.toString(), call.result?.text?.takeUnless { agentReports },
-                        call.result?.item?.takeIf { !agentReports && it.fullSize != null }?.let { result -> { onFullText(result) } })
+                        call.result?.item?.takeIf { !agentReports && it.fullSize != null }?.let { result -> { onFullText(result) } },
+                        rawInput = !drawsRawInput(call.use.item))
                 }
             }
         }

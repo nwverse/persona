@@ -359,6 +359,7 @@
     <string name="chat_reader_empty">没有内容</string>
     <string name="chat_reader_open">看全文</string>
     <string name="chat_reader_raw_input">原始输入</string>
+    <string name="chat_tool_hide_raw_input">收起原始输入</string>
     <string name="chat_reader_full_output">完整输出</string>
     <string name="chat_reader_raw_output">原始输出</string>
     <string name="chat_reader_copy_both">全部复制</string>

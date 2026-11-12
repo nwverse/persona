@@ -977,6 +977,9 @@ private fun ChatPage(
     }
     // A task's notice jumps to the call that started it through the task bar's navigation (ChatTasks).
     val callJumps = remember(key) { ChatCallJumps() }
+    // The Macs a computer tool's `machine` is, by name (the list changes with every report, its names seldom); Glass's
+    // rows also keep some tools' words as the title with the subject under them (#4339 C1).
+    val toolNames = remember(machines.map { it.id to it.name }, key.machineId, glass) { ToolNames(machines, key.machineId, glass = glass) }
     // Whose the conversation is, for what its links open (docs/assistant/managers.md "Clients"): its session's manager, else
     // for an assistant conversation the one whose page listed it.
     val linkManager = session?.manager ?: if (renderStyle == ChatRenderStyle.Assistant)
@@ -984,7 +987,7 @@ private fun ChatPage(
     CompositionLocalProvider(LocalChatMarkdownCache provides markdownCache, LocalChatRowActions provides rowActions,
         LocalContentColor provides PersonaTheme.palette.ink, LocalChatPorts provides chatPorts,
         persona.core.designsystem.LocalAssistantCards provides cardsHost, LocalChatSubagents provides subagentLinks, LocalSubagentFolds provides subagentFolds, LocalChatWorkflows provides workflowCards,
-        LocalChatTaskIndex provides projection.tasks, LocalChatJumpToCall provides callJumps::jump) {
+        LocalChatTaskIndex provides projection.tasks, LocalChatJumpToCall provides callJumps::jump, LocalToolNames provides toolNames) {
         // Under the files pane or the terminal's cover: hidden from screen readers too.
         ChatLinkHost(Modifier.fillMaxSize().background(PersonaTheme.palette.background)
             .then(if (embedded) Modifier else Modifier.imePadding())

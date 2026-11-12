@@ -1126,11 +1126,14 @@ user's starts another turn.
 A tool row names its tool in words on iOS, the web and Android (#2986; Android `ToolNaming.kt`, #4339): Claude Code's tools have verbs of their own, another
 server's MCP tool reads "<Server> · <Tool>" ("GitHub · Create issue"), and any other name is humanized. What the call is
 about follows, picked from its input by the field that says the most (`ToolNaming.subject`; Android, whose rows show no
-verb, puts it under the name). Opened, a tool
-no table knows shows its arguments as `key: value` lines, with the JSON one tap away under Raw Input (`RawInputToggle`,
-shared with computer tools; Android draws the list on Glass, `ToolArguments`, with the JSON in Raw input's reader, and
-Brief and Board keep the input as code). The cases both platforms follow are in `spec/fixtures/tool-names`. Details in
-`docs/lessons/ios.md`.
+verb, puts it under the name where the tool's own icon doesn't say it). Two subjects are words of their own: several
+findings by their count ("2 findings") and a wake-up with no reason by its delay ("5 min"). A computer tool names the Mac
+as the user knows it ("MacBook", not the `macbook` the tool wrote). Opened, a tool
+no table knows shows its arguments as `key: value` lines, and a tool that operates a Mac its steps in words ("Click AC →
+6 → ×") with what the driver answered and the picture it brought back, each with the JSON one tap away under Raw Input
+(`RawInputToggle`; Android draws both on Glass, `ToolArguments` and `ComputerToolDetail`, with the same inline toggle,
+and Brief and Board keep the input as code with the reader's Raw input button). The cases both platforms follow are in
+`spec/fixtures/tool-names`. Details in `docs/lessons/ios.md`.
 
 A tool row says what its call came to when the node sends `outcome` (#4303, `docs/protocol/protocol.md` "Tool
 outcomes"). Only a call that ran and failed turns the row and its chip red, and its result says "Exit code N". A call

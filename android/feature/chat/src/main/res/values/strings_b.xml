@@ -367,6 +367,7 @@
     <string name="chat_reader_empty">No content</string>
     <string name="chat_reader_open">View full text</string>
     <string name="chat_reader_raw_input">Raw input</string>
+    <string name="chat_tool_hide_raw_input">Hide raw input</string>
     <string name="chat_reader_full_output">Full output</string>
     <string name="chat_reader_raw_output">Raw output</string>
     <string name="chat_reader_copy_both">Copy all</string>
