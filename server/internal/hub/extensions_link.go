@@ -144,15 +144,10 @@ func (h *Hub) features() []string {
 	out = append(out, h.meetingPhotosFeatures()...)
 	out = append(out, h.meetingLiveViewFeatures()...)
 	out = append(out, h.recordingDayFeatures()...)
-	// The assistant's card interfaces that answer now (docs/assistant/assistant-views.md): assistant_views is declarative actions
-	// (expected_version), live cards and transcript cards; assistant_html_bridge is …/html-actions with both switches
-	// on. Neither says a client may run HTML: that is each platform's own security sign-off, else fallback.
-	if views, bridge := h.assistantCards(); views {
-		out = append(out, "assistant_views")
-		if bridge {
-			out = append(out, "assistant_html_bridge")
-		}
-	}
+	// The assistant's card interfaces, always on (docs/assistant/assistant-views.md, #5509): assistant_views is declarative
+	// actions (expected_version), live cards and transcript cards; assistant_html_bridge is …/html-actions. Neither says
+	// a client may run HTML: that is each platform's own security sign-off, else fallback.
+	out = append(out, "assistant_views", "assistant_html_bridge")
 	for _, f := range h.extReport().Features {
 		switch f {
 		case featureAgentSessionArchives, featureAgentSessionArchiveClose, featureMeetingAttendance, featureMeetingConversation,

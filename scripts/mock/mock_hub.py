@@ -6446,6 +6446,33 @@ if MOCK_TASKS:
         _base = min(x["seq"] for x in ITEMS[ASK1])
         for _i, _x in enumerate(ITEMS[ASK1]):
             _x["seq"] = _base + _i
+    # MOCK_PLACE_MAP=1 (with MOCK_TASKS=1): "where am I" and "coffee near me" answered with the phone's location tools,
+    # drawn as map cards under their work lines (#5543); the places are made up.
+    if os.environ.get("MOCK_PLACE_MAP") == "1":
+        _cafes = [("街角咖啡", 31.2318, 121.4752, 180), ("安静书房咖啡", 31.2291, 121.4769, 340),
+                  ("老弄堂咖啡馆", 31.2335, 121.4711, 420), ("河边烘焙咖啡", 31.2276, 121.4702, 610)]
+        ITEMS[ASK1] += (
+            [it("user", "text", 1.6, text="我现在在哪")]
+            + tool("mcp__persona__phone_location_current", {},
+                   json.dumps({"latitude": 31.2304, "longitude": 121.4737, "accuracy_meters": 12, "altitude_meters": 4,
+                               "timestamp": ago(minutes=1.6), "timezone": "Asia/Shanghai",
+                               "address": {"city": "上海市", "district": "黄浦区", "formatted": "上海市黄浦区人民大道"}},
+                              ensure_ascii=False), 1.55)
+            + [it("assistant", "text", 1.5, text="你在上海市黄浦区人民大道附近。")]
+            + [it("user", "text", 1.2, text="附近有安静点的咖啡馆吗")]
+            + tool("mcp__persona__phone_maps_search_nearby", {"query": "安静 咖啡馆"},
+                   json.dumps({"query": "安静 咖啡馆", "center": {"latitude": 31.2304, "longitude": 121.4737, "from": "current_location"},
+                               "radius_meters": 1500, "count": len(_cafes),
+                               "places": [{"name": n, "address": "上海市黄浦区", "latitude": la, "longitude": lo,
+                                           "distance_meters": d, "category": "MKPOICategoryCafe"} for n, la, lo, d in _cafes],
+                               "source": "Apple Maps (MapKit local search)",
+                               "note": "Opening hours are not available from Apple Maps to apps."}, ensure_ascii=False), 1.15)
+            + [it("assistant", "text", 1.1, text="找到 4 家：最近的是 1 号街角咖啡，180 米；想安静些可以去 2 号安静书房咖啡，340 米。营业时间苹果地图不提供，去之前最好确认一下。")]
+        )
+        ITEMS[ASK1].sort(key=lambda x: x["ts"])
+        _base = min(x["seq"] for x in ITEMS[ASK1])
+        for _i, _x in enumerate(ITEMS[ASK1]):
+            _x["seq"] = _base + _i
     # MOCK_MARKDOWN=1 (with MOCK_TASKS=1, and MOCK_EXCHANGES=1 for the exchanges): the words as Agents and Persona write them,
     # with **bold**, `code` and a heading (#2363), in Persona's message to the task, the task's report and the release
     # notes receipt: drawn rendered, never as raw marks.
@@ -7351,6 +7378,35 @@ if os.environ.get("MOCK_SCREEN_DIALOG"):
                         {"key": "1", "label": "Yes", "keys": ["1"]},
                         {"key": "2", "label": "Yes, and don't ask again for git push commands in /Users/me/code/weather", "keys": ["2"]},
                         {"key": "3", "label": "No, and tell Claude what to do differently (esc)", "keys": ["3"]}]}})
+
+# MOCK_SCREEN_DANGER=before|after: Claude Code 2.1.322's safety check on a command (bypass mode, #5265 / #5266) with
+# its countdown, on the review agent. "before": as a hub before #5265 read it at a narrow width (the command missing,
+# the wrapped countdown in detail); "after": as a hub reads it now (command, description, the warning and what it is
+# about, the countdown and when it runs out, 1:44 from the mock's start).
+if os.environ.get("MOCK_SCREEN_DANGER") in ("before", "after"):
+    _danger_cmd = ('cd ./dist && F=(${(f)"$(grep -oE \'(src|href)="\\./assets/[^"]+\\.js"\' index.html | sed -E '
+                   '\'s/.*="\\.\\///; s/"$//\' | sort -u)"}); echo "${#F[@]} files"; for k in alpha_name beta_name gamma_name; '
+                   'do echo "$k: $(cat "${F[@]}" | grep -o "$k" | wc -l | xargs)"; done')
+    _danger_desc = "Count the example names in first-screen chunks"
+    _danger_warning = "Dangerous rm operation not ruled out — the shell may read this command differently than it was parsed"
+    _danger_deadline = "Claude Code will automatically block this request in 1:44, to avoid holding up an unattended session"
+    _danger = {"question": "Do you want to proceed?", "rev": "7c2e9a41d0b3", "options": [
+        {"key": "1", "label": "Yes", "keys": ["1"]}, {"key": "2", "label": "No", "keys": ["2"]}]}
+    if os.environ["MOCK_SCREEN_DANGER"] == "before":
+        _danger.update(detail="Bash command\n" + _danger_desc + "\n⚠ Claude Code will automatically block this request in\n"
+                       "1:44, to avoid holding up an unattended session",
+                       warning=_danger_cmd + " " + _danger_warning)
+    else:
+        _danger.update(detail="Bash command\n" + _danger_desc + "\n" + _danger_cmd, warning=_danger_warning,
+                       deadline=_danger_deadline, command=_danger_cmd, description=_danger_desc, risk="delete",
+                       deadline_action="deny",
+                       deadline_at=(datetime.now(timezone.utc) + timedelta(seconds=104)).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    INTERACTIONS.append(
+        {"id": "scr_macbook_review_7c2e9a41d0b3", "machine_id": "macbook", "session_id": REVIEW, "session_title": "检查 PR #42 的改动",
+         "cwd": "/Users/me/code/weather", "kind": "screen", "created_at": ago(minutes=1), "expires_at": later(hours=24),
+         "screen": " Bash command\n " + _danger_desc + "\n │ " + _danger_cmd + "\n │ " + _danger_warning + "\n ⚠ " + _danger_deadline
+                   + "\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n\n Esc to cancel · Tab to amend",
+         "dialog": _danger})
 
 # MOCK_SCREEN_MULTI=1: a multi-select AskUserQuestion read off the terminal (Claude Code 2.1.316), the second of
 # three questions: two boxes already ticked at the computer, a few words in its free-text field, "Next" to send it.
@@ -8696,6 +8752,39 @@ if os.environ.get("MOCK_IMESSAGE_INBOX"):
                        "rule_tier": "action"}},
     ]
 
+
+# MOCK_SUBSCRIPTION_INBOX=1 (#5537): an item a source subscription delivered (a mail subscription's notice): its source is
+# the subscription's id, not a connector's, and its content is the whole of it. Its thread request answers as the hub
+# does now, a page that is no conversation (`chat.kind: none`); =old as hubs before #5537 did, 404 "no connector".
+# GET /mock/subscription_inbox?mode=old|1 switches it for the next requests. Only with ?sources=all, like connectors' items.
+SUBSCRIPTION_INBOX = os.environ.get("MOCK_SUBSCRIPTION_INBOX", "")
+if SUBSCRIPTION_INBOX:
+    INBOX[1:1] = [
+        {"id": "sub_example01:t1", "source": "sub_example01", "kind": "sub_update", "account": "sub_example01", "account_name": "示例邮件",
+         "title": "11 月 16 日园区东门临时交通管理通知", "sender": "示例物业", "preview": "11 月 16 日上午 8:00–9:00 东门只允许登记车辆通行",
+         "count": 1, "started_at": ago(minutes=40), "updated_at": ago(minutes=40), "tier": "fyi",
+         "summary": "园区东门 11 月 16 日早上临时交通管理", "reason": "订阅的通知", "read": False,
+         "context": "11 月 16 日园区东门临时交通管理通知\n示例物业 · 11-12 15:33\n\n各位同事：\n\n"
+                    "11 月 16 日（周一）园区有活动。为保障交通秩序，当天上午 8:00–9:00 东门只允许登记车辆通行，"
+                    "其他车辆请从北门进出。\n\n停车场 A、B 区当天上午临时关闭，下午恢复。\n\nhttps://mail.example.com/notice/1116",
+         "connector": {"thread": "sub:sub_example01:t1", "label": "示例邮件", "url": "https://mail.example.com/notice/1116"}},
+    ]
+
+
+def subscription_thread_area(h, method, p):
+    """A subscription's thread request (MOCK_SUBSCRIPTION_INBOX) and /mock/subscription_inbox; True when it answered."""
+    global SUBSCRIPTION_INBOX
+    if not SUBSCRIPTION_INBOX or method != "GET":
+        return False
+    if p == "/mock/subscription_inbox":
+        SUBSCRIPTION_INBOX = parse_qs(urlparse(h.path).query).get("mode", [SUBSCRIPTION_INBOX])[0] or "1"
+        return h.send_json({"mode": SUBSCRIPTION_INBOX}) or True
+    if p != "/api/v1/connectors/sub_example01/thread":
+        return False
+    if SUBSCRIPTION_INBOX == "old":
+        return h.send_json({"error": 'no connector "sub_example01"'}, 404) or True
+    thread = parse_qs(urlparse(h.path).query).get("thread", [""])[0]
+    return h.send_json({"chat": {"id": thread, "name": "", "kind": "none"}, "messages": []}) or True
 
 # What each item can be muted by (the row's menu: "Mute this repository" / "Conversation" / "Sender"), as the hub lists it (`mutes`).
 ITEM_MUTES = {
@@ -11239,6 +11328,8 @@ def machine_launchers(mid=""):
     if os.environ.get("MOCK_MODEL_PANEL_USAGE"):
         out += [{"name": "cc_main", "model": "opus"}, {"name": "cc_team", "model": "example-pro"}]
     if NEW_AGENT_PANEL and mid == "studio":
+        out = [l for l in out if l["name"] != "codex"]
+    if mid and mid in os.environ.get("MOCK_NO_CODEX", "").split(","):  # computers without a Codex launcher (#5275)
         out = [l for l in out if l["name"] != "codex"]
     if MOCK_PROVIDERS:
         out += [{k: l[k] for k in ("name", "display_name", "base_url", "model", "source") if l.get(k)}
@@ -14199,6 +14290,21 @@ def fold_changes(run):
     return out
 
 
+def fold_usage(run):
+    """transcript.FoldWork's Fold.Usage (#5426): the folded items' tokens summed per model and speed; a subagent's report
+    (an entry with an id) kept as it is, so the web still counts it once."""
+    sums, out = {}, []
+    for x in run:
+        for u in x.get("usage") or []:
+            if u.get("id"):
+                out.append(dict(u)); continue
+            key = (u.get("model", ""), bool(u.get("fast")))
+            have = sums.setdefault(key, {k: v for k, v in (("model", key[0]), ("fast", True if key[1] else None)) if v})
+            for k in ("in", "out", "cache_read", "cache_write", "cache_write_1h"):
+                if u.get(k): have[k] = have.get(k, 0) + u[k]
+    return list(sums.values()) + out
+
+
 def fold_work(items):
     """transcript.FoldWork: each run of tool calls (with their results) and thoughts becomes one fold item."""
     uses = {x.get("tool_use_id") for x in items if x["kind"] == "tool_use"}
@@ -14231,12 +14337,13 @@ def fold_work(items):
                     preview["full_size"] = max(latest.get("full_size", 0), len(preview["text"].encode()))
                     preview["text"] = preview["text"][:511] + "…"
                 narration["latest_thinking"] = preview
+            usage = fold_usage(run)
             out.append({"id": "fold:" + run[0]["id"], "seq": run[0]["seq"], "ts": run[0]["ts"], "role": "assistant", "kind": "fold",
                         "fold": {"items": len(run), "tools": sum(x["kind"] == "tool_use" for x in run),
                                  "thoughts": sum(x["kind"] == "thinking" and bool((x.get("text") or "").strip()) for x in run),
                                  "until": run[-1]["ts"], "through_seq": run[-1]["seq"], "through_id": run[-1]["id"],
                                  **({"tasks": tasks} if tasks else {}), **({"images": images} if images else {}), **narration,
-                                 "changes": fold_changes(run)}})
+                                 "changes": fold_changes(run), **({"usage": usage} if usage else {})}})
         i = j
     return out
 
@@ -19825,6 +19932,7 @@ VOICE_VOICES = {
 }
 # What --help lists after the options.
 MOCK_HELP = [
+    "MOCK_TURN_USAGE=1|multi|unpriced  What a finished exchange cost, after the reply's time: \"菜谱搜索按用时排序\" on Opus 5.5 (1), with a Sonnet 5.5 subagent (multi), or on Haiku 5.5 without a price (unpriced: its tokens); the main conversation's last exchange the same (#5426)",
     "MOCK_CF_ACCESS=<client id>:<client secret>  The hub behind Cloudflare Access: /api/ requests without those two CF-Access-Client-* headers get a 302 to an Access login (no token) or Access's 403 page (wrong token) (#3502)",
     "MOCK_KB_TOPICS=1  Knowledge base: five topics of knowledge points from the example projects and chats (Topics tab, a topic's page, the knowledge map)",
     "MOCK_KB_SELECTION=missing|future|fail  Settings › Knowledge selection: a hub from before it (404) / a document with a field clients don't know / a save the hub refuses (503)",
@@ -20870,6 +20978,7 @@ class H(BaseHTTPRequestHandler):
         if kb_selection_route(self, "GET", p, b""): return
         if wechat_area(self, "GET", p, b""): return
         if github_thread_area(self, "GET", p, b""): return
+        if subscription_thread_area(self, "GET", p): return
         if github_area(self, "GET", p, b""): return
         if p == "/api/v1/connectors":  # Settings › Connectors › GitHub; MOCK_GITHUB=signed_out: its gh login has expired
             listed = [GITHUB_CONNECTOR, {k: v for k, v in _imessage_connector().items() if v is not None}] + ([telegram_connector()] if TELEGRAM_MODE else [])
@@ -25478,6 +25587,65 @@ if MODEL_FALLBACK:
             if _s["session_id"] == _sid:
                 _s.update(model_fallback=dict(_refusal), turn_error=_error, turn_error_code="model_fallback_unavailable",
                           status="done", state="idle", last_text=_error, updated_at=ago(minutes=1.8))
+
+
+# MOCK_TURN_USAGE=1|multi|unpriced (#5426): what a finished exchange's model requests used (Item.usage as the node
+# attaches it: a Claude Code request's on the first item it wrote, a finished subagent's on its result with an `id`), so
+# the reply bar says what the exchange cost after the time. "菜谱搜索按用时排序" is an Agent session whose last exchange
+# ran on Opus 5.5 (1: "Worth $…" and its card), with a subagent on Sonnet 5.5 too (multi: the card lists each model's
+# cost), or on Haiku 5.5, which the catalog has no price for (unpriced: "… tokens" and the tooltip). Its run of work
+# folds, so fold_work sums those items' usage into fold.usage. The main conversation's last exchange ran on the same
+# models: "≈ $…" (1, multi with each model's share), nothing at all on Haiku (unpriced). A cost needs the catalog's
+# cache_write prices (server/internal/assistant/models_catalog.json); without them a turn that wrote to the cache
+# shows its tokens.
+MOCK_TURN_USAGE = os.environ.get("MOCK_TURN_USAGE", "")
+TURN_USAGE = "a1f3c2d4-0000-4000-8000-000000005426"
+
+
+def _usage(model, i, o, read, write=0, write1h=0, **kw):
+    u = {"model": model, "in": i, "out": o, "cache_read": read}
+    if write: u["cache_write"] = write
+    if write1h: u["cache_write_1h"] = write1h
+    return [dict(u, **kw)]
+
+
+def mock_turn_usage(mode):
+    model = "claude-haiku-5-5" if mode == "unpriced" else "claude-opus-5-5"
+    w = "/Users/me/code/recipes"
+    r = [it("user", "text", 31, text="搜索功能做好了吗？"), it("assistant", "text", 30.8, text="做好了，支持按食材和用时筛选。",
+                                                           usage=_usage(model, 4, 96, 0, 15_400, 15_400))]
+    r.append(it("user", "text", 28, text="结果再按用时从短到长排一下"))
+    r.append(it("assistant", "thinking", 27.9, text="先看看搜索结果是在哪里排序的。", usage=_usage(model, 3, 412, 18_240, 6_120)))
+    r += tool("Grep", {"pattern": "sort", "path": w + "/src"}, "src/search.ts:31:  return hits", 27.8)
+    r[-2]["usage"] = _usage(model, 1, 96, 24_360, 310)
+    r += tool("Read", {"file_path": w + "/src/search.ts"}, "export function search(q: Query) { … return hits }", 27.6)
+    r[-2]["usage"] = _usage(model, 1, 88, 24_670, 1_920)
+    r += tool("Edit", {"file_path": w + "/src/search.ts", "old_string": "return hits", "new_string": "return hits.sort(byTime)"}, "ok", 27.3)
+    r[-2]["usage"] = _usage(model, 1, 1_380, 26_590, 2_050)
+    if mode == "multi":
+        r += tool("Agent", {"description": "检查排序的边界情况", "subagent_type": "general-purpose",
+                            "prompt": "看看用时相同、缺少用时的菜谱排在哪里"},
+                  "用时相同的按收藏数排；缺少用时的排在最后。\nagentId: usagesort (use SendMessage with to: 'usagesort' to continue this agent)", 27)
+        r[-2]["usage"] = _usage(model, 1, 160, 28_640, 380)
+        r[-1].update(task={"kind": "agent", "status": "completed", "task_id": "usagesort", "tool_use_id": r[-2]["tool_use_id"]},
+                     usage=_usage("claude-sonnet-5-5", 14, 2_840, 61_200, 9_800, id="agent:usagesort"))
+    r.append(it("assistant", "text", 26.5, text="排好了：用时短的菜谱排在前面，同样用时的按收藏数，缺少用时的排在最后。",
+                usage=_usage(model, 1, 214, 28_960, 1_400)))
+    ITEMS[TURN_USAGE] = r
+    SESSIONS.append(sess("macbook", TURN_USAGE, "菜谱搜索按用时排序", w, "done", "read", "", 0, "", 0, 26.5, r[-1]["text"],
+                         space_kind=None, space_id=None, space_name=None, slot_id=None, slot_name=None))
+    # the main conversation's last exchange: each of its model requests on its first item, its subagent with multi
+    main = ITEMS.get(ASK1, [])
+    last = max((i for i, x in enumerate(main) if x["role"] == "user" and x["kind"] == "text"), default=-1)
+    replies = [x for x in main[last + 1:] if x["role"] == "assistant"]
+    for k, x in enumerate(replies):
+        x["usage"] = _usage(model, 2, 180 + 60 * k, 21_000 + 1_800 * k, 2_400 if k == 0 else 600)
+    if mode == "multi" and replies:
+        replies[-1]["usage"] = replies[-1]["usage"] + _usage("claude-sonnet-5-5", 9, 1_260, 30_400, 5_200, id="agent:mainhelper")
+
+
+if MOCK_TURN_USAGE in ("1", "multi", "unpriced"):
+    mock_turn_usage(MOCK_TURN_USAGE)
 
 
 if __name__ == "__main__":

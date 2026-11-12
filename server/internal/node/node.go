@@ -1223,6 +1223,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "session.send":
 		var opts sendOpts
 		_ = json.Unmarshal(params, &opts)
+		ctx = context.WithValue(ctx, sendTraceKey{}, opts.ClientMsgID)
 		return ok(n.sends.once(opts.ClientMsgID, func() error {
 			var after int
 			if opts.ClientMsgID != "" {
@@ -1495,10 +1496,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return f.UserInputs(ctx)
 		}
 		// Items are kept without their image data; a caller that did not ask for lazy images (an older hub) gets it.
+		// Finished subagents' results carry what they used (agent_usage.go).
 		items := func(items []proto.Item) []proto.Item {
 			if !p.LazyImages {
 				items = f.WithImages(items)
 			}
+			agentUsage(f, items)
 			return nonNil(n.echoed(p.SessionID, f, items))
 		}
 		limit := p.Limit

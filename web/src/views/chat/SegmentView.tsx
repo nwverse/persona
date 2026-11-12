@@ -7,6 +7,7 @@ import { agentStatus, isNestedSubagentStep, nestedSubagentStatus, nestingKey, su
 import { turnImages } from "../../lib/turn-images";
 import { TurnImages } from "./TurnImages";
 import { exchangeSteps, segmentIdentity, isLoopTick, isOwnMessage, type Context, type Segment, type UserMessage } from "../../lib/turns";
+import { usageKey } from "../../lib/turn-usage";
 import type { Item } from "../../lib/types";
 import { ENGINE_SWITCH_KIND } from "../../lib/engine-switch";
 import { planCardStep, workBlocks, type ToolStep, type WorkNode } from "../../lib/work-groups";
@@ -43,6 +44,7 @@ import { TurnChanges, turnChangesHeight } from "./TurnChanges";
 import { turnChanges } from "../../lib/turn-changes";
 import { useCallSeeker } from "./jump";
 import { t } from "../../i18n";
+import { useMessageFeedback } from "../../lib/message-send";
 
 /** A message longer than this many lines folds to ten of them (FOLDED), with "Expand" under it (the reference client's UserMessage). */
 export const BUBBLE_MAX_LINES = 14;
@@ -91,6 +93,7 @@ export function segmentHeight(user: UserMessage | undefined, nodes: WorkNode[], 
  *  the transcript to go back to). */
 export function UserBubble({ msg, mid, sid, pending, sendState, starting, onDelete }: { msg: UserMessage; mid: string; sid: string; pending?: boolean; sendState?: "sending" | "sent" | "failed"; starting?: boolean; onDelete?: () => void }) {
   const own = isOwnMessage(msg);
+  const feedback = useMessageFeedback(mid, sid, msg.client_msg_id ?? msg.id?.replace(/^(pending:|outbox:)/, "") ?? "");
   // the chat's last message keeps its time on screen under the bubble (#5285); a hover shows the others' beside it
   const pinned = useIsLatestMessage(msg.ts) && !pending && !starting;
   // the message an extension opened the conversation with (#3758)
@@ -123,7 +126,7 @@ export function UserBubble({ msg, mid, sid, pending, sendState, starting, onDele
           </MessageActions>
         ))}
       {pinned && <span className="text-[11px] text-ink-3 tabular-nums" data-latest-time>{clock(msg.ts)}</span>}
-      {(pending || msg.queued) && <span className="text-[11px] text-ink-3">{pending ? t("chat-segmentview.sending") : t("chat-segmentview.queued")}</span>}
+      {(pending || starting || msg.queued) && feedback !== "" && <span className="text-[11px] text-ink-3 whitespace-nowrap">{feedback === "processing" ? t("chat-segmentview.processing") : feedback === "unknown" ? t("lib-outbox.delivery_unknown") : pending || starting ? t("chat-segmentview.sending") : t("chat-segmentview.queued")}</span>}
       {!pending && !starting && <ChannelSource clientMsgId={msg.client_msg_id} openedBy={openedBy} />}
     </div>
   );
@@ -225,7 +228,7 @@ const ANSWER = "[&_.prose-j]:text-[length:var(--chat-body)]! [&_.prose-j]:leadin
  *  it); only a finished turn's last reply has the bar under it (`bar`, #5314).
  *  Memo'd: the chat context changes with every streamed item, so each SegmentView re-renders; a finished answer's
  *  props stay the same and it is skipped (#3024). */
-export const Answer = memo(function Answer({ item, streaming, mid, sid, fade, noCloseout, bar, cut }: {
+export const Answer = memo(function Answer({ item, streaming, mid, sid, fade, noCloseout, bar, cut, usage, usageMs }: {
   item?: Item;
   streaming?: string;
   mid?: string;
@@ -237,6 +240,9 @@ export const Answer = memo(function Answer({ item, streaming, mid, sid, fade, no
   bar?: boolean;
   /** Its turn ended in a model error or an interruption right after these words (Segment.cut): cindy's line above them. */
   cut?: boolean;
+  /** With `bar`: what its exchange used (lib/turn-usage.ts usageKey, a string so the memo holds) and its work time. */
+  usage?: string;
+  usageMs?: number;
 }) {
   // a long answer the hub cut for the page: its start, and "View full text" under it
   const full = useFullText(streaming === undefined ? item : undefined, mid, sid);
@@ -253,7 +259,7 @@ export const Answer = memo(function Answer({ item, streaming, mid, sid, fade, no
     );
   }
   return (
-    <MessageActions text={text} ts={item?.ts} itemId={item?.id} bar={bar}>
+    <MessageActions text={text} ts={item?.ts} itemId={item?.id} bar={bar} usage={bar ? usage : undefined} usageMs={bar ? usageMs : undefined}>
       {cut && <p className="mb-1 text-[13px] leading-[1.384615] text-ink-2" data-cut-short>{t("chat-messageactions.cut_short")}</p>}
       <div className={ANSWER} data-answer data-items={item?.id}>
         {/* the cards in it are this item's blocks (ui/AssistantCard.tsx): `<item id>/<n>` */}
@@ -271,10 +277,11 @@ export const Answer = memo(function Answer({ item, streaming, mid, sid, fade, no
 /** Freshness reaches only the single visible persisted text, not every paragraph hidden in its execution summary: it
  *  reads its own id (fresh-words.ts), so a new reply renders these words, not every exchange. `done`: its turn is over,
  *  so the words have the bar under them (cindy: never while the turn runs). */
-const LatestAnswer = memo(function LatestAnswer({ item, streaming, mid, sid, noCloseout, done, cut }: { item?: Item; streaming?: string; mid: string; sid: string; noCloseout?: boolean; done?: boolean; cut?: boolean }) {
+const LatestAnswer = memo(function LatestAnswer({ item, streaming, mid, sid, noCloseout, done, cut, usage, usageMs }: { item?: Item; streaming?: string; mid: string; sid: string; noCloseout?: boolean; done?: boolean; cut?: boolean; usage?: string; usageMs?: number }) {
   const persisted = streaming === undefined ? item?.id : undefined;
   const fresh = useFreshWords(mid, sid, persisted);
-  return <Answer item={item} streaming={streaming} mid={mid} sid={sid} fade={persisted ? fresh : undefined} noCloseout={noCloseout} bar={Boolean(done && persisted) || undefined} cut={cut} />;
+  const bar = Boolean(done && persisted);
+  return <Answer item={item} streaming={streaming} mid={mid} sid={sid} fade={persisted ? fresh : undefined} noCloseout={noCloseout} bar={bar || undefined} cut={cut} usage={bar ? usage : undefined} usageMs={bar ? usageMs : undefined} />;
 });
 
 export const SegmentView = memo(function SegmentView({
@@ -366,6 +373,10 @@ export const SegmentView = memo(function SegmentView({
   // the session's folder from the store, so the card follows it when it comes in after the transcript
   const cwd = useStore(() => (counted ? getSession(mid, sid)?.cwd : undefined));
   const changes = useMemo(() => (counted ? turnChanges(own, cwd) : null), [counted, own, cwd]);
+  // what the finished exchange used, for its reply bar (#5426): the work summary's time when it has one summary
+  const usage = !live && !trace ? usageKey(seg.usage) : undefined;
+  const groups = usage ? nodes.filter((n) => n.kind === "group") : [];
+  const usageMs = groups.length === 1 ? groups[0].durationMs : undefined;
   const switched = Boolean(seg.engineSwitch);
   const guess = useMemo(() => (offscreen ? ({ "--seg-est": `${segmentHeight(seg.user, nodes, divided, switched) + (changes ? 12 + turnChangesHeight(changes) : 0)}px` } as CSSProperties) : undefined), [offscreen, seg.user, nodes, divided, switched, changes]);
   return (
@@ -384,7 +395,7 @@ export const SegmentView = memo(function SegmentView({
       {imageStrip}
       {!live && <Fragment key="before-words">{beforeWords}</Fragment>}
       {streaming !== undefined && liveRow}
-      {(latestItem || streaming !== undefined) && !onlyCloseout && <div key="latest-text" data-latest-text><LatestAnswer item={latestItem} streaming={streaming} mid={mid} sid={sid} noCloseout={noCloseout || undefined} done={(!live && !busy) || undefined} cut={(!live && seg.cut) || undefined} /></div>}
+      {(latestItem || streaming !== undefined) && !onlyCloseout && <div key="latest-text" data-latest-text><LatestAnswer item={latestItem} streaming={streaming} mid={mid} sid={sid} noCloseout={noCloseout || undefined} done={(!live && !busy) || undefined} cut={(!live && seg.cut) || undefined} usage={usage} usageMs={usageMs} /></div>}
       {changes && <TurnChanges key="turn-changes" changes={changes} mid={mid} sid={sid} cwd={cwd} />}
     </section>
   );

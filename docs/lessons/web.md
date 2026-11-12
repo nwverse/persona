@@ -10,6 +10,28 @@ and adds its import and export lists. Put what a lazy page needs from such a mod
 (`lib/secret-reference.ts`). To find the file that moved, build main and the branch with the budget at 1 (the build then
 prints every language's count), and compare the first-screen files' brotli sizes with hashes blanked out.
 
+## Feedback cache eviction must not cancel a send (#5258)
+
+A bounded UI cache owns only the progress projection, not the request's lifetime. Using its entry identity as an
+`isAuthContextCurrent` fence rejects still-authorized queued messages when the first overlay is evicted. Keep credential,
+manager and explicit attempt retirement separate from cache membership; process the durable HTTP result even if the
+projection is gone. Test a queue longer than the cache limit, not only one send and one retry. For visible timing,
+inspect ancestor display/opacity and the viewport, then wait for frames: a DOM mutation can precede a delayed fade and
+an image labelled Sending can still be blank. Keep these browser estimates distinct from physical GPU timing.
+
+Completed-ID observations belong to the same credential/manager generation as the flight. Apply that scope check
+at every cache read, including transcript-driven completion: after a manager switch, an empty items snapshot must
+not finish a new same-ID message using the previous manager's completed record. Test switching to another manager
+and switching back; neither the manager name alone nor a current flight proves ownership of an old observation.
+
+## A deferred dialog's caller labels must stay cold-ready (#5258)
+
+Making ChatSearch lazy does not reduce its translations while `chat-chatsearch` stays in the startup catalog.
+Keep menu, jump, return and load-result labels in the already-startup `chat-chatview` namespace, copying their
+three-language values unchanged; leave the dialog-only namespace deferred. Test both the built startup/rest
+catalogs and the actual menu, search hit and return flow. A primary page must not read a deferred key before
+`i18nRest` finishes; the existing lazy-import guard waits for that resource before running the dialog.
+
 ## A size budget over built files must not count their content hashes (#5164)
 
 The first-screen budget added up the brotli copies of files that import and preload each other by content-hashed name.
@@ -28,6 +50,17 @@ every later alias moves on by one, the list reorders and every first-screen impo
 grew 9 B, but the ja count grew 255 B and `main` failed the build, with no first-screen code changed. `firstScreenBytes`
 now counts imported names as one fixed string and export lists as empty ones. To check a surprising move, compare the
 number of entries in each first-screen chunk's `export{…}` between the two builds.
+
+## An idle-contracted chunk's growth raises the idle budget, it cannot move to on-intent (#5386)
+
+`code-views-lazy.test` asserts that `ExtensionChart` loads with `{ idle: true }`, so adding the single-category share
+bar to that chunk grew the idle tier 183 gzip bytes and failed `IDLE_TIER_BUDGET` (the headroom was 58 B). Moving the
+renderer to its own on-intent chunk was not an option: the test pins the loading mode on purpose, and splitting the
+module just moves the same bytes into another file the idle tier still pulls. Measure the real baseline before touching
+the constant — a clean main build measured 43,782 B against the 43,840 B limit — then raise `IDLE_TIER_BUDGET` to the
+new measured value and record both numbers and the reason in the comment above it, as the constant's own convention
+requires ("raise it on purpose, in the change that needs it"). A build whose only failure is the startup-preload budget
+still exits non-zero even when the last log lines look like warnings; always check the plugin error text.
 
 ## A new list of sessions folds child sessions too (#5120)
 
@@ -1038,3 +1071,12 @@ recovery that publishes fewer rows than are on screen moves the reader.
 - **CSP doesn't stop a `<meta http-equiv="refresh">` in a sandboxed `allow-scripts` frame**: the frame navigates itself (one request). Only never drawing a `meta` (or any HTML from the card) stops it. Chromium also opens a connection, without a request, for an `<iframe src>` its CSP refuses. A check of the frame by itself shows both (`web/e2e/html-runtime-security.mjs`, raw mode).
 - **A sync bridge needs its "asking" slot taken synchronously**: a card that calls `persona.reply` 200 times in one turn gets all 200 through a check on React state set in the same tick. Take the slot in the call, not in the render.
 
+## Connector context is not a conversation (#856)
+
+A collected context string loses message boundaries, individual timestamps and
+direction. Do not recover them by splitting on sender names or colons: descriptions
+can contain both. Use `Threads` for structured pages and retain a literal fallback
+for old items. Parse a textual card envelope only inside one source message, and
+keep incomplete or unknown card shapes readable. Capability errors need their own
+code; a 409 without `Threads` is different from a temporary failure or lost access.
+A failed page refresh must not erase a loaded page or its pending reply draft.
