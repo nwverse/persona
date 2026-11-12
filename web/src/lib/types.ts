@@ -107,6 +107,14 @@ export interface Subagent {
   tokens?: number;
 }
 
+/** Session.pending_switch (#5035). */
+export interface PendingSwitch {
+  launcher: string;
+  model?: string;
+  effort?: string;
+  at?: string;
+}
+
 export interface SessionCapabilities {
   read?: boolean;
   send?: boolean;
@@ -231,6 +239,11 @@ export interface Session {
   /** The client the agent runs in: "desktop" (its desktop app) or "cli" (its command line); absent when unknown (#6390). */
   agent_surface?: string;
   launcher?: string;
+  /** A switch of this running Claude Code Agent to another launcher (feature `launcher_switch`, #5035) that its next
+   *  message carries out: the launcher, the model and effort picked (absent: the launcher's default, the effort it runs
+   *  with now). `launcher` above stays the one it runs on until then (docs/protocol/protocol.md "Switching a running Agent
+   *  to another provider"). */
+  pending_switch?: PendingSwitch;
   model?: string;
   permission_mode?: string;
   effort?: string;

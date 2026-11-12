@@ -70,14 +70,14 @@ class BackgroundSupervisorMockTests(unittest.TestCase):
         feed = call(base, "/api/v1/assistant/conversations/" + a["main"] + "/feed")["items"]
         reviews = [i for i in feed if i["kind"] == "review"]
         self.assertTrue(reviews)
-        self.assertTrue(all(i["body"]["by"] == "background_supervisor" for i in reviews))
+        self.assertTrue(all(i["body"]["by"] == "background" for i in reviews))
 
     def test_one_review_without_the_reports(self):
         base, process, log = start({"MOCK_BACKGROUND_SUPERVISOR": "1", "MOCK_TASKS": "1"})
         self.addCleanup(stop, process, log)
         main = call(base, "/api/v1/assistant")["main"]
         reviews = [i for i in call(base, "/api/v1/assistant/conversations/" + main + "/feed")["items"] if i["kind"] == "review"]
-        self.assertEqual([(i["body"]["verdict"], i["body"]["by"]) for i in reviews], [("accepted", "background_supervisor")])
+        self.assertEqual([(i["body"]["verdict"], i["body"]["by"]) for i in reviews], [("accepted", "background")])
 
     def test_model_purpose_follows_main_chat_until_set(self):
         base, process, log = start({})

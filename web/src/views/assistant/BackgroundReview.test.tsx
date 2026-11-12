@@ -37,7 +37,7 @@ const line = () => host.querySelector('[data-testid="review-line"]');
 
 describe("the main chat's line for a background supervisor's review (#5082)", () => {
   it("says who reviewed, the task and the verdict, and opens the task", () => {
-    act(() => root.render(<FeedLineView simplified item={review({ title: "整理发布说明", verdict: "accepted", note: "7 个 PR 都在", by: "background_supervisor" })} />));
+    act(() => root.render(<FeedLineView simplified item={review({ title: "整理发布说明", verdict: "accepted", note: "7 个 PR 都在", by: "background" })} />));
     expect(line()?.querySelector('[data-testid="review-by"]')?.textContent).toBe("后台督办");
     expect(line()?.textContent).toContain("整理发布说明");
     expect(line()?.textContent).toContain("已验收");
@@ -48,14 +48,14 @@ describe("the main chat's line for a background supervisor's review (#5082)", ()
 
   it("keeps the title the entry was written with for a task the page no longer lists, with nothing to open", () => {
     hub.todos = [];
-    act(() => root.render(<FeedLineView simplified item={review({ title: "修小组件横屏崩溃", verdict: "rework", round: 2, by: "background_supervisor" })} />));
+    act(() => root.render(<FeedLineView simplified item={review({ title: "修小组件横屏崩溃", verdict: "rework", round: 2, by: "background" })} />));
     expect(line()?.textContent).toContain("修小组件横屏崩溃");
     expect(line()?.textContent).toContain("返工第 2 轮");
     expect([...line()!.querySelectorAll("button")].some((b) => b.textContent === "修小组件横屏崩溃")).toBe(false);
   });
 
   it("draws it in the full feed too, and the main chat's own review there without a reviewer", () => {
-    act(() => root.render(<FeedLineView item={review({ verdict: "accepted", by: "background_supervisor" })} />));
+    act(() => root.render(<FeedLineView item={review({ verdict: "accepted", by: "background" })} />));
     expect(line()?.querySelector('[data-testid="review-by"]')).not.toBeNull();
     act(() => root.render(<FeedLineView item={review({ verdict: "accepted" })} />));
     expect(line()).not.toBeNull();
@@ -67,7 +67,7 @@ describe("the main chat's line for a background supervisor's review (#5082)", ()
     expect(host.innerHTML).toBe("");
     act(() => root.render(<FeedLineView simplified item={review({ verdict: "accepted", by: "someone_newer" })} />));
     expect(host.innerHTML).toBe("");
-    act(() => root.render(<FeedLineView simplified item={review({ verdict: "accepted", by: "background_supervisor" }, "something_newer")} />));
+    act(() => root.render(<FeedLineView simplified item={review({ verdict: "accepted", by: "background" }, "something_newer")} />));
     expect(host.innerHTML).toBe("");
   });
 });

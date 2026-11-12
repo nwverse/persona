@@ -239,11 +239,11 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		result = s.recordBriefResult(ctx, t, checks, a.AlsoDone, "", verdict)
 	}
 	body := reviewFeedBody{Title: t.Title, Verdict: verdict, Round: v.Round, Note: note, Checks: checks, Result: result}
-	if background { // the main conversation took no turn for it: the apps draw the entry as its line there (#5082)
-		body.By = reviewByBackground
-	}
 	if verdict == reviewParked { // what it waits for is what the line says; an older app shows it as the note
 		body.Note, body.Until, body.WaitingOn = cmp.Or(note, park.Reason), park.Until, park.WaitingOn
+	}
+	if background { // it took no turn of t.Origin: the apps may draw this entry there as the only word of it
+		body.By = reviewByBackground
 	}
 	_, _ = s.appendFeed(ctx, t.Origin, feedReview, t.ID, body)
 	if verdict != reviewNeedsUser && verdict != reviewAccepted {
@@ -433,25 +433,25 @@ func reworkChecks(list []ReviewCheck) []prompts.SuperviseCheck {
 // feedReview is a review in the conversation's feed: ref the todo id, body reviewFeedBody.
 const feedReview = "review"
 
+// reviewByBackground is reviewFeedBody.By of a review the background supervisor wrote.
+const reviewByBackground = "background"
+
 type reviewFeedBody struct {
 	Title   string        `json:"title"`
 	Verdict string        `json:"verdict"`
 	Round   int           `json:"round,omitempty"`
 	Note    string        `json:"note,omitempty"`
 	Checks  []ReviewCheck `json:"checks,omitempty"`
+	// By: reviewByBackground when the background supervisor wrote it (supervise_background.go); "" for the review of
+	// the conversation that handed the task out, a leader's, the main conversation's and a sampled acceptance.
+	By string `json:"by,omitempty"`
 	// A parked review's (parked.go): until when it waits and on what kind of thing; Note says for what.
 	Until     time.Time `json:"until,omitzero"`
 	WaitingOn string    `json:"waiting_on,omitempty"`
 	// Result: an accepted or cancelled review against the task's brief (task_brief_result.go): each criterion met,
 	// not_met, unchecked or dropped, then what was done beyond it.
 	Result *BriefResult `json:"result,omitempty"`
-	// By: who reviewed, when it was not the conversation the entry is in: reviewByBackground for the background
-	// supervisor's review of a task whose ledger names the main conversation (supervise_background.go). Left out otherwise.
-	By string `json:"by,omitempty"`
 }
-
-// reviewByBackground is reviewFeedBody.By for a review the background supervisor made.
-const reviewByBackground = "background_supervisor"
 
 // reviewDoneTodo closes todo id after its review (done_by review or cancelled, with reason); false when it was done already. An
 // accepted task's outcome is recorded, as when it closes by itself or the user closes it (todo_outcome.go, #2820); a

@@ -7,8 +7,8 @@ import { t } from "../i18n";
 import type { FeedItem } from "./feed";
 import type { AssistantInfo, Session } from "./types";
 
-/** `by` on a review's chat-activity entry the background supervisor made (docs/protocol/protocol.md, FeedItem "review"). */
-export const REVIEW_BY_BACKGROUND = "background_supervisor";
+/** `by` on a review's chat-activity entry the background supervisor made (#5084, docs/protocol/protocol.md, FeedItem "review"). */
+export const REVIEW_BY_BACKGROUND = "background";
 
 /** The purpose its conversation runs under (docs/assistant/model-config.md); it follows Main chat until it has its own. */
 export const SUPERVISE_PURPOSE = "assistant.supervise";
