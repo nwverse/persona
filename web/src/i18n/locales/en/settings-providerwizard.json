@@ -51,7 +51,7 @@
   "advanced": "Advanced",
   "advanced_badge": "Tier models, subagents, headers, proxy, timeout, context",
   "custom": "Custom compatible gateway",
-  "custom_detail": "A relay, a company gateway or another Anthropic Messages compatible service. You enter the address and how it signs in.",
+  "custom_detail": "A relay, a company gateway or another Anthropic Messages compatible service. You enter the address and the key.",
   "provider_type": "Providers",
   "models": "Models",
   "checked_count": "{checked} of {total} selected",

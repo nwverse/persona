@@ -50,7 +50,7 @@
   "advanced": "高级",
   "advanced_badge": "档位模型、子代理、请求头、代理、超时、上下文",
   "custom": "自定义兼容网关",
-  "custom_detail": "中转站、公司网关或其他兼容 Anthropic Messages 的服务，自己填地址和鉴权方式。",
+  "custom_detail": "中转站、公司网关或其他兼容 Anthropic Messages 的服务，自己填地址和 Key。",
   "provider_type": "供应商",
   "models": "模型",
   "checked_count": "已选 {checked} / {total}",

@@ -50,7 +50,7 @@
   "advanced": "詳細設定",
   "advanced_badge": "ティアモデル、サブエージェント、ヘッダー、プロキシ、タイムアウト、コンテキスト",
   "custom": "カスタム互換ゲートウェイ",
-  "custom_detail": "中継サービス、社内ゲートウェイなど Anthropic Messages 互換のサービス。アドレスと認証方式を自分で入力します。",
+  "custom_detail": "中継サービス、社内ゲートウェイなど Anthropic Messages 互換のサービス。アドレスとキーを自分で入力します。",
   "provider_type": "プロバイダー",
   "models": "モデル",
   "checked_count": "{checked}/{total}を選択中",
