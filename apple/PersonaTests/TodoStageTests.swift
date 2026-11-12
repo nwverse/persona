@@ -16,6 +16,17 @@ struct TodoStageTests {
         #expect(TodoStage.stepCount == 6)
     }
 
+    /// At the accessibility text sizes the bar names only the current step, in a line under the dots, and VoiceOver
+    /// reads every dot in full: its name, its place, and done / current / still ahead (#5892).
+    @Test func atTheAccessibilitySizesTheLineNamesTheCurrentStepAndEveryDotSaysItAll() {
+        #expect(TodoStageBar.summary(.develop) == "第 2 步，共 6 步 · 开发") // i18n-ignore: the app's zh-Hans words
+        #expect(TodoStageBar.summary(.verify) == "第 6 步，共 6 步 · 已验证") // i18n-ignore
+        #expect(TodoStageBar.dotLabel(.plan, current: .develop) == "方案，第 1 步，共 6 步，已完成") // i18n-ignore
+        #expect(TodoStageBar.dotLabel(.develop, current: .develop) == "开发，第 2 步，共 6 步，当前步骤") // i18n-ignore
+        #expect(TodoStageBar.dotLabel(.review, current: .develop) == "审查，第 3 步，共 6 步，还没到") // i18n-ignore
+        #expect(TodoStageBar.dotLabel(.verify, current: .verify) == "已验证，第 6 步，共 6 步，当前步骤") // i18n-ignore
+    }
+
     @Test func aStageTheHubNamesIsReadAndAnythingElseIsNone() {
         #expect(TodoStage(hub: "review") == .review)
         #expect(TodoStage(hub: "verify")?.stepNumber == 6)

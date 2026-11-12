@@ -126355,6 +126355,98 @@
       },
       "extractionState" : "manual"
     },
+    "Step %lld of %lld · %@ [Todo Stage Bar]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Step %1$lld of %2$lld · %3$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$lldステップ中%1$lld · %3$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "第 %1$lld 步，共 %2$lld 步 · %3$@"
+          }
+        }
+      }
+    },
+    "%@, step %lld of %lld, done [Todo Stage Bar]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@, step %2$lld of %3$lld, done"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@、%3$lldステップ中%2$lld、完了"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@，第 %2$lld 步，共 %3$lld 步，已完成"
+          }
+        }
+      }
+    },
+    "%@, step %lld of %lld, current step [Todo Stage Bar]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@, step %2$lld of %3$lld, current step"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@、%3$lldステップ中%2$lld、現在のステップ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@，第 %2$lld 步，共 %3$lld 步，当前步骤"
+          }
+        }
+      }
+    },
+    "%@, step %lld of %lld, still ahead [Todo Stage Bar]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@, step %2$lld of %3$lld, still ahead"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@、%3$lldステップ中%2$lld、これから"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@，第 %2$lld 步，共 %3$lld 步，还没到"
+          }
+        }
+      }
+    },
     "Staged" : {
       "localizations" : {
         "en" : {
