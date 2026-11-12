@@ -68,6 +68,69 @@ struct AssistantReadinessTests {
         #expect(steps([("computer", "todo", "no_machine")], mode: "chat_only").blockingStep == nil)
     }
 
+    @Test func usageLimitCardDismissalSurvivesTheSameReadinessRefresh() throws {
+        let limited = try decode(#"""
+        {"version":1,"mode":"full","ready":true,"launcher":"claude","steps":[
+          {"id":"computer","state":"ok"},{"id":"claude","state":"ok"},
+          {"id":"model","state":"problem","code":"rate_limited","launcher":"claude","title":"Claude is limited","detail":"Try again after the reset."}
+        ]}
+        """#)
+        let m = AssistantReadinessModel()
+        m.reset(limited)
+        #expect(m.homeCardStep?.code == "rate_limited")
+
+        m.dismissHomeCard()
+        #expect(m.homeCardStep == nil)
+        #expect(m.current?.cardStep?.code == "rate_limited", "dismissal must not erase the recorded launcher failure")
+        m.land(limited) // the production refresh path repeats the same failure occurrence
+        #expect(m.homeCardStep == nil)
+    }
+
+    @Test func recoveryAllowsANewUsageLimitOccurrenceAndAnotherLauncherDoesNotInheritDismissal() throws {
+        let limited = try decode(#"""
+        {"version":1,"mode":"full","ready":true,"launcher":"claude","steps":[
+          {"id":"computer","state":"ok"},{"id":"claude","state":"ok"},
+          {"id":"model","state":"problem","code":"rate_limited","launcher":"claude","title":"Claude is limited","detail":"Try again after the reset."}
+        ]}
+        """#)
+        let recovered = try decode(#"""
+        {"version":1,"mode":"full","ready":true,"launcher":"claude","steps":[
+          {"id":"computer","state":"ok"},{"id":"claude","state":"ok"},{"id":"model","state":"ok","launcher":"claude"}
+        ]}
+        """#)
+        let m = AssistantReadinessModel()
+        m.reset(limited)
+        m.dismissHomeCard()
+        m.land(recovered)
+        #expect(m.homeCardStep == nil)
+        m.land(limited) // the same words after a real recovery are a new occurrence, not a repeated read
+        #expect(m.homeCardStep?.code == "rate_limited")
+
+        m.land(limited)
+        m.dismissHomeCard()
+        var codex = limited
+        codex.launcher = "codex"
+        codex.steps[2].launcher = "codex"
+        codex.steps[2].title = "Codex is limited"
+        m.land(codex)
+        #expect(m.homeCardStep?.launcher == "codex")
+    }
+
+    @Test func usageLimitCardNamesDefaultAndActiveLaunchers() throws {
+        let limited = try decode(#"""
+        {"version":1,"mode":"full","ready":true,"launcher":"claude","steps":[
+          {"id":"computer","state":"ok"},{"id":"claude","state":"ok"},
+          {"id":"model","state":"problem","code":"rate_limited","launcher":"claude","title":"Claude is limited","detail":"Try again after the reset."}
+        ]}
+        """#)
+        let step = try #require(limited.step("model"))
+        let scoped = ReadinessHomeCard.scopedDetail(step, activeLauncher: "codex")
+        let format = String(localized: "Default launcher: %@. This conversation uses %@.")
+        let scope = String(format: format, "claude", "codex")
+        #expect(scoped == "Try again after the reset.\n" + scope)
+        #expect(ReadinessHomeCard.scopedDetail(step, activeLauncher: "claude") == step.detail)
+    }
+
     @Test func refreshAndProbeAndDismissRequests() async throws {
         let hub = FakeHub()
         hub.on("GET", "/api/v1/assistant/readiness") { req in Data((req.query["probe"] == "1" ? Self.notLoggedIn : Self.notLoggedIn).utf8) }

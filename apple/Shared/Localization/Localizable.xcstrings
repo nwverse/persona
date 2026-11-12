@@ -49407,6 +49407,29 @@
       },
       "extractionState" : "manual"
     },
+    "Default launcher: %@. This conversation uses %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Default launcher: %1$@. This conversation uses %2$@."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "デフォルトの接続: %1$@。この会話では%2$@を使用しています。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认模型连接：%1$@。当前对话使用 %2$@。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Default: %@" : {
       "localizations" : {
         "en" : {
