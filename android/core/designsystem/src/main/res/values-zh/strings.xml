@@ -73,6 +73,8 @@
         <item quantity="other">电脑离线，状态可能过时（%1$d 分钟前）</item>
     </plurals>
     <string name="designsystem_line_answering">正在回传你的选择…</string>
+    <string name="designsystem_message_sending">发送中</string>
+    <string name="designsystem_message_processing">处理中</string>
     <string name="designsystem_line_sending">正在发送…</string>
     <string name="designsystem_line_unconfirmed">上次操作结果待确认</string>
     <plurals name="designsystem_line_needs_you_count">
