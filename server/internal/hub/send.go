@@ -135,7 +135,7 @@ func (h *Hub) sendMessage(w http.ResponseWriter, r *http.Request, m *Machine) {
 	if isText {
 		r = h.captureHumanSubmission(r, text)
 	}
-	for _, reserved := range []string{"creation_id", "incarnation", "caller", "submission", "share_authority"} {
+	for _, reserved := range []string{"creation_id", "incarnation", "caller", "submission", "share_authority", "skill_owner"} {
 		delete(p, reserved)
 	}
 	var start freshStart

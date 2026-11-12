@@ -138,6 +138,7 @@ leaders.read         GET /api/v1/assistant/leaders
 assistant.ask        GET /api/v1/assistant/reporters
 -                    GET /api/v1/assistant/routines
 -                    GET /api/v1/assistant/runs
+-                    GET /api/v1/assistant/skills
 -                    GET /api/v1/assistant/standing-authorizations
 -                    GET /api/v1/assistant/tasks
 -                    GET /api/v1/assistant/tasks/cron

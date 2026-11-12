@@ -6,6 +6,14 @@ import (
 	"unicode/utf8"
 )
 
+type AssistantSelectedSkill struct {
+	Name, Path, Ref string
+}
+
+func RenderAssistantSelectedSkills(skills []AssistantSelectedSkill) string {
+	return render("assistant/selected_skills", skills)
+}
+
 // AssistantMachine is one computer in the assistant's CLAUDE.md, as seen from where the assistant runs.
 type AssistantMachine struct {
 	Name, ID string
