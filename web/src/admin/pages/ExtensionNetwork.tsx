@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button, cx, Dialog, toast } from "../../ui/atoms";
 import { Switch } from "../../views/settings/SettingsParts";
 import { errorText, setExtensionSandbox } from "../api";
+import { scrollBehavior } from "../../ui/stream/motion";
 import { AdminIcon } from "../icons";
 import type { AdminExtension } from "../types";
 
@@ -24,7 +25,7 @@ export function NetworkBlock({ p, onChanged, linked }: { p: AdminExtension; onCh
     if (!linked || !box.current) return;
     // The markets above load after the list and push it down: keep the block in view while the page settles, until the
     // user scrolls themselves.
-    const show = () => box.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+    const show = () => box.current?.scrollIntoView({ block: "center", behavior: scrollBehavior() });
     let moved = false;
     const mine = () => (moved = true);
     addEventListener("wheel", mine, { once: true, passive: true });
