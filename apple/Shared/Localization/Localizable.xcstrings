@@ -173922,29 +173922,6 @@
         }
       }
     },
-    "These sites will be signed out in ego lite on this Mac. This includes your own sign-ins in ego." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "These sites will be signed out in ego lite on this Mac. This includes your own sign-ins in ego."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "这些网站在这台 Mac 的 ego lite 里会退出登录。你自己在 ego 里的登录也一样。"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "これらのサイトはこのMacのego liteでログアウトされます。ego上でのご自身のログインも同様です。"
-          }
-        }
-      }
-    },
     "Persona checks again when you open this page." : {
       "extractionState" : "manual",
       "localizations" : {
