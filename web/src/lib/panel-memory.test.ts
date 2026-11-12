@@ -5,7 +5,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { closePanel, getPanel, openPanel, type Panel } from "./panel";
-import { KEPT, arriving, belongsTo, leaving, notePlace, useSessionPanels, type PanelMemory, type SessionPanel } from "./panel-memory";
+import { KEPT, arriving, belongsTo, chatKey, leaving, notePlace, useSessionPanels, type PanelMemory, type SessionPanel } from "./panel-memory";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -42,6 +42,11 @@ describe("the memory", () => {
     expect(r.memory).toEqual({ "m1/a": gitA });
   });
 
+  it("keeps the Background tasks panel at its list, not the run it showed (#5421)", () => {
+    const bg: SessionPanel = { kind: "background", mid: "m1", sid: "a", run: "w1" };
+    expect(leaving({}, "m1/a", bg)["m1/a"]).toEqual({ kind: "background", mid: "m1", sid: "a" });
+  });
+
   it("keeps the last few sessions only", () => {
     let m: PanelMemory = {};
     for (let i = 0; i < KEPT + 5; i++) m = leaving(m, `m1/s${i}`, { ...gitA, sid: `s${i}` });
@@ -55,7 +60,8 @@ describe("the memory", () => {
     expect(belongsTo(gitA, B)).toBe(false);
     expect(belongsTo({ kind: "file", mid: "m1", path: "/work/web/a.ts" }, A)).toBe(true);
     expect(belongsTo({ kind: "link", url: "https://example.com" }, A)).toBe(false);
-    expect(belongsTo({ kind: "task", todo: "t1" }, A)).toBe(false);
+    expect(belongsTo({ kind: "background", mid: "m1", sid: "a" }, A)).toBe(true);
+    expect(belongsTo({ kind: "background", mid: "m1", sid: "a" }, B)).toBe(false);
     expect(belongsTo(gitA, null)).toBe(false);
   });
 });
@@ -120,6 +126,15 @@ describe("moving between sessions", () => {
     expect(getPanel()).toEqual(link);
   });
 
+  it("closes A's Background tasks panel on going to B and brings it back at its list on A", () => {
+    show(A);
+    act(() => openPanel({ kind: "background", mid: "m1", sid: "a", run: "w1" }));
+    show(B);
+    expect(getPanel()).toBeNull();
+    show(A);
+    expect(getPanel()).toEqual({ kind: "background", mid: "m1", sid: "a" });
+  });
+
   it("brings it back through a page that is not a session", () => {
     show(A);
     act(() => openPanel(gitA));
@@ -139,8 +154,8 @@ describe("moving between Persona chats", () => {
     return null;
   };
   const show = (chat?: string) => act(() => root.render(createElement(Page, { chat })));
-  const agent: Panel = { kind: "agent", mid: "m1", sid: "s1" };
-  const task: Panel = { kind: "task", todo: "t1" };
+  const agent: Panel = { kind: "preview", mid: "m1", sid: "s1", cwd: "/work/web" };
+  const task: Panel = { kind: "file", mid: "m1", path: "/notes/today.md" };
 
   beforeEach(() => {
     sessionStorage.clear();
@@ -183,6 +198,16 @@ describe("moving between Persona chats", () => {
     act(() => openPanel(link));
     show("B");
     expect(getPanel()).toEqual(link);
+  });
+
+  it("brings back no panel of a kind the page no longer has (the task and Agent panels, #5096; the plan's, #5156)", () => {
+    sessionStorage.setItem("persona.panel.back", JSON.stringify({ [chatKey("A")]: { kind: "task", todo: "t1" }, [chatKey("B")]: task, [chatKey("C")]: { kind: "plan", mid: "m1", sid: "s1" } }));
+    show("A");
+    expect(getPanel()).toBeNull();
+    show("B");
+    expect(getPanel()).toEqual(task);
+    show("C");
+    expect(getPanel()).toBeNull();
   });
 
   it("brings it back through a page that is not a chat", () => {

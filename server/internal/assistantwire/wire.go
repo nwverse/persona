@@ -53,6 +53,9 @@ type Hello struct {
 	// Notify is hub.json's notify: the finished push's timings; HookTimeoutMS, how long a hook's card waits by default,
 	// is manager.json's hook_timeout_minutes, over the hello (the interactions and the pushes are the manager's).
 	Notify NotifyTimings `json:"notify,omitzero"`
+	// SecretHandoffGate: the hub lets only a device that may approve a hand-off card say yes to one, and names it in
+	// HTTPRequest.HandoffApprover. An older hub never sends it; a manager then shows no hand-off card at all.
+	SecretHandoffGate bool `json:"secret_handoff_gate,omitempty"`
 }
 
 // NotifyTimings are hub.json's notify section, and manager.json's hook_timeout_minutes, in milliseconds (0: the
@@ -371,6 +374,8 @@ type SessionView struct {
 	// Direction: the conversation is (or was) a leader, one direction of the owner's work (assistant/directions.go,
 	// #3484); nil for any other.
 	Direction *proto.Direction `json:"direction,omitempty"`
+	// ModelPick: what the user set the conversation to run on (assistant/model_pick.go, #5033); nil follows the default.
+	ModelPick *proto.ModelPick `json:"model_pick,omitempty"`
 }
 
 // ErrStaleSnapshot is manager.snapshot's stale_snapshot: a newer one came in first (two changes reported at once).

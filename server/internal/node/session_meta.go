@@ -14,20 +14,24 @@ import (
 
 // quickMeta is a cheap summary of a transcript read from its head and tail only.
 type quickMeta struct {
-	size     int64
-	mtime    time.Time
-	title    string
-	first    string
-	activity time.Time // last real exchange; zero when unknown
-	queue    []string
-	loop     *proto.LoopInfo
-	toolLoop toolLoopScan
-	goal     *proto.GoalInfo        // from backgroundTasks too: a goal is often set at the start of a long transcript
-	plan     *proto.PlanInfo        // from the same scan (bgPlan): a TodoWrite is often far back in a long turn
-	bg       []proto.BackgroundTask // from backgroundTasks: the tail alone misses tasks started earlier in a long turn
-	bgWait   bool                   // bg and loop are not known yet (a big first read is running)
-	wf       []proto.Workflow       // workflow runs, as the transcript tells them (bgWorkflows)
-	wfScript map[string]string      // their script files by run id
+	size         int64
+	mtime        time.Time
+	title        string
+	titleManual  bool
+	titleSource  string
+	outputTokens int
+	codex        bool
+	first        string
+	activity     time.Time // last real exchange; zero when unknown
+	queue        []string
+	loop         *proto.LoopInfo
+	toolLoop     toolLoopScan
+	goal         *proto.GoalInfo        // from backgroundTasks too: a goal is often set at the start of a long transcript
+	plan         *proto.PlanInfo        // from the same scan (bgPlan): a TodoWrite is often far back in a long turn
+	bg           []proto.BackgroundTask // from backgroundTasks: the tail alone misses tasks started earlier in a long turn
+	bgWait       bool                   // bg and loop are not known yet (a big first read is running)
+	wf           []proto.Workflow       // workflow runs, as the transcript tells them (bgWorkflows)
+	wfScript     map[string]string      // their script files by run id
 	// cwd: where the session runs. An agent's latest directory (Claude Code writes the shell's directory after each
 	// Bash `cd` into every line), but where it started when that latest one is an assistant or health directory; for
 	// a conversation that started in an assistant or health directory, that directory, wherever its `cd`s took it
@@ -35,11 +39,10 @@ type quickMeta struct {
 	cwd string
 	// start: the first directory the transcript's head names, where the session started ("" when the head has none:
 	// a first prompt bigger than the head read).
-	start     string
-	inventory *proto.SessionInventory // start from the opening record, if the head establishes it
-	model     string
-	surface   string // the client it runs in (transcript.Meta.Surface)
-	lastText  string
+	start    string
+	model    string
+	surface  string // the client it runs in (transcript.Meta.Surface)
+	lastText string
 	// answer is the latest turn's answer from its first words on (transcript.Meta.TurnAnswer); "" when the tail read
 	// held none of its words.
 	answer string
@@ -143,6 +146,7 @@ func (n *Node) meta(path string, st os.FileInfo) quickMeta {
 			m.ultracode, m.ultracodeAt = n.bgUltracode(path)
 			m.plan = n.bgPlan(path)
 			n.mergeModelFallback(path, &m)
+			n.mergeNamingMetadata(path, &m)
 			n.mu.Lock()
 			current := n.metas[path]
 			m.toolLoop = current.toolLoop
@@ -172,6 +176,7 @@ func (n *Node) meta(path string, st os.FileInfo) quickMeta {
 	m.ultracode, m.ultracodeAt = n.bgUltracode(path)
 	m.plan = n.bgPlan(path)
 	n.mergeModelFallback(path, &m)
+	n.mergeNamingMetadata(path, &m)
 	n.mu.Lock()
 	current := n.metas[path]
 	m.toolLoop = current.toolLoop
@@ -194,6 +199,9 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 	}
 	defer f.Close()
 	var tm transcript.Meta
+	if prev.titleManual && prev.size <= st.Size() {
+		tm.Title, tm.TitleManual, tm.TitleSource = prev.title, true, "manual"
+	}
 	start := "" // the first cwd: tm.Cwd moves with every `cd` the head's lines record, and the tail's overwrite it
 	// The first prompt is usually in the first 32 KB. A Codex rollout puts its instructions first (the assistant's
 	// AGENTS.md and snapshot: 74 KB in), so up to 256 KB is read while it has not turned up.
@@ -201,9 +209,6 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 	nr, _ := f.Read(head)
 	for {
 		for _, line := range bytes.Split(head[:nr], []byte("\n")) {
-			if m.inventory == nil {
-				m.inventory = recordedSessionStart(line)
-			}
 			if bytes.Contains(line, []byte(`"cwd"`)) || bytes.Contains(line, []byte(`"type":"user"`)) ||
 				bytes.Contains(line, []byte(`"type":"UserMessage"`)) { // Codex rollouts: session_meta, then the first prompt
 				transcript.ParseLine(0, line, &tm)
@@ -280,6 +285,16 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 	if tm.LastText != "" {
 		m.answer = tm.TurnAnswer()
 	}
+	m.codex = tm.Codex
+	m.titleManual, m.titleSource = tm.TitleManual, tm.TitleSource
+	if off == 0 {
+		m.outputTokens = tm.OutputTokens // a whole-file tail; the incremental scan supplies larger files' totals
+		if !tm.Codex && m.titleSource == "" {
+			m.titleSource = "prompt"
+		}
+	} else if !m.titleManual {
+		m.titleSource = "" // a historical custom-title may be outside this bounded read
+	}
 	m.start = start
 	if identity.IsAssistantDir(start) || start != "" && identity.IsAssistantDir(m.cwd) {
 		// An assistant or health conversation is where it started: its space, CLAUDE.md, memory and resume project.
@@ -329,6 +344,36 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 		m.contextTokens, m.contextWindow = prev.contextTokens, prev.contextWindow // no reply in the tail: the last read's stands
 	}
 	return m
+}
+
+// mergeNamingMetadata reuses the existing incremental scan, including when a cold scan finishes without another
+// file append. Never publish a partial tail's automatic provenance before historical manual titles are checked.
+func (n *Node) mergeNamingMetadata(path string, m *quickMeta) {
+	n.mu.Lock()
+	sc := n.bgScans[path]
+	n.mu.Unlock()
+	if sc == nil {
+		return
+	}
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	if sc.pending || sc.off != m.size {
+		if !m.titleManual {
+			m.titleSource = ""
+		}
+		return
+	}
+	m.outputTokens = sc.meta.OutputTokens
+	if sc.meta.TitleManual {
+		m.title, m.titleManual, m.titleSource = sc.meta.Title, true, "manual"
+	} else if sc.meta.TitleSource != "" {
+		m.title, m.titleManual, m.titleSource = sc.meta.Title, false, sc.meta.TitleSource
+	} else if m.codex {
+		// Rollouts do not distinguish a manually chosen thread name from an automatic one.
+		m.titleSource = ""
+	} else if m.titleSource == "" {
+		m.titleSource = "prompt"
+	}
 }
 
 // lastWordsReach: how far before the tail lastWordsBefore looks for an agent's last words.
@@ -384,24 +429,6 @@ func (n *Node) codexTurnOver(id string, now time.Time) bool {
 	return n.meta(p, st).turnClosed && now.Sub(st.ModTime()) > codexStaleWorking
 }
 
-// recordedSessionStart recognizes the opening session record rather than
-// inferring creation from file metadata, the most recent event, or a resume.
-func recordedSessionStart(line []byte) *proto.SessionInventory {
-	codex := bytes.Contains(line, []byte(`"type":"session_meta"`))
-	claude := bytes.Contains(line, []byte(`"parentUuid":null`)) &&
-		bytes.Contains(line, []byte(`"sessionId":`)) &&
-		(bytes.Contains(line, []byte(`"type":"user"`)) || bytes.Contains(line, []byte(`"type":"assistant"`))) &&
-		!bytes.Contains(line, []byte(`"isSidechain":true`)) && !notAPrompt(line)
-	if !codex && !claude {
-		return nil
-	}
-	t := lineTime(line).UTC()
-	if t.IsZero() {
-		return nil
-	}
-	return &proto.SessionInventory{CreatedAt: &t}
-}
-
 // lineTime reads a transcript line's own "timestamp" without decoding it (Claude Code writes it after the message, so
 // the last one; quotes inside the message are escaped and do not match).
 // notAPrompt: a user line that is not a message to the agent whatever its size: a compaction's summary or a meta line.
@@ -455,5 +482,8 @@ func untitled(s *proto.Session, m quickMeta) {
 			r = append(r[:40], '…')
 		}
 		s.Title = string(r)
+		if m.titleSource == "prompt" {
+			s.TitleSource = proto.TitleSourcePrompt
+		}
 	}
 }

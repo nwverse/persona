@@ -1,5 +1,6 @@
 package persona.core.contracts.api
 
+import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -38,6 +39,30 @@ interface AssistantManagement {
      * kept; a new message to it brings it back. The hub refuses the main conversation.
      */
     suspend fun archiveConversation(session: SessionKey): Unit = throw UnsupportedOperationException("Archive unavailable")
+    /** Brings an archived conversation back into the list (POST /api/v1/assistant/conversations/{id}/unarchive). */
+    suspend fun unarchiveConversation(session: SessionKey): Unit = throw UnsupportedOperationException("Unarchive unavailable")
+    /**
+     * The archived conversations, newest first ("Archived (N)", iOS `archivedConversations`): those `GET /api/v1/assistant?archived=1`
+     * marks `archived`, never a health chat. Only the ones their computer still lists (docs/assistant/assistant.md
+     * "Managing its own conversations").
+     */
+    suspend fun archivedConversations(): List<Session> = throw UnsupportedOperationException("Archived chats unavailable")
+    /**
+     * Renames a conversation (POST /api/v1/sessions/{mid}/{sid}/rename with `title`): the hub keeps it as the user's own
+     * title, which automatic titles no longer replace (docs/assistant/assistant.md "Chat titles").
+     */
+    suspend fun renameConversation(session: SessionKey, title: String): Unit = throw UnsupportedOperationException("Rename unavailable")
+    /**
+     * Makes a conversation a leader, 常驻 (POST /api/v1/assistant/directions/{id}/make, #4331): the hub keeps it for every
+     * device, and its row comes and goes with the hub's `directions` message (the drawer reads the tree again). It refuses
+     * the main conversation, a chat that is already one, and any past the most it allows.
+     */
+    suspend fun makeDirection(session: SessionKey): Unit = throw UnsupportedOperationException("Directions unavailable")
+    /**
+     * Ends a conversation's leadership (POST /api/v1/assistant/directions/{id}/end, #4331): it leaves 常驻; the tasks it
+     * handed out keep their supervisor. The conversation itself stays, an ordinary chat now.
+     */
+    suspend fun endDirection(session: SessionKey): Unit = throw UnsupportedOperationException("Directions unavailable")
     /**
      * Puts the main conversation away for a new one (POST /api/v1/assistant/main/new, hub feature `assistant_main_new`):
      * it is renamed and archived, and the next message to the main conversation starts a new one. [carrySummary] brings

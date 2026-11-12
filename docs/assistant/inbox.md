@@ -22,7 +22,9 @@ each mail account's latest page, reading at most 4 accounts concurrently and del
 `settle`, event grouping's `group.tool` / `group.fallback` / `group.append`, read hub triage rules, AI twin configuration, and plugin-provided connectors
 (`inbox.config`), and current translation model (`inbox.translate_fingerprint`). On item changes, the manager emits `inbox.changed`; outside the bus read loop, hub
 sends plugins the `inbox.changed` event and Apps `{"type":"inbox"}` (one slow plugin reader does not block others). Hub asks the manager for items needed by plugin detail slot `inbox_item`,
-items when deleting a source's data, and GitHub Settings' muted repositories (`inbox.item`, `inbox.forget`, `inbox.repo_mutes`).
+items when deleting a source's data, and GitHub Settings' muted repositories (`inbox.item`, `inbox.forget`, `inbox.repo_mutes`). The Inbox Sources
+pages (#5278, `docs/extensions/subscriptions.md` "Pages") list and remove a source's mutes (`inbox.mutes`, `inbox.unmute`) and have the triage model try a
+subscription's dry run on request (`inbox.triage_preview`: nothing kept).
 Hub still enforces its own boundary: reply-only devices (Watch) may send only text, not change document state or send `/agent …` (which starts an Agent when sent as the user).
 Hub rejects these before forwarding (403; the manager checks too). Connector settings, including credentials, remain hub APIs; only muted repositories belong to the manager.
 
@@ -263,10 +265,11 @@ Triage, drafting, AI twin, done state, and retention use hub's generic logic.
   Any notification in the list keeps its thread unread, also one the inbox leaves out (a reason it does not take, a muted repository).
   The time compared is the notification's `updated_at`, kept apart from the thing's time: a CI item the follow-up moved to a later run (GitHub sent no notification of it) is not inferred read while the connector runs, and that run makes a read item unread again (#2149).
   These times are kept in memory only: after a restart the connector rebuilds the item at its notification and may infer that read, which the hub then ignores for an item already at the later run (above).
-  With under one tenth of request quota remaining, poll notifications only and show "Request quota nearly exhausted."
+  With under one tenth of core request quota remaining, poll notifications only and show a localized quota warning with the minutes until reset.
   A rate limit (429, or 403 for a secondary limit or a used-up hour) on any GitHub request pauses the background reads, the poll included: until `Retry-After`; without it, until `X-RateLimit-Reset` only when the hour is used up (`X-RateLimit-Remaining: 0`),
   otherwise for a minute, doubling up to an hour while the limit keeps coming back: within one step of the end of the last such pause, whatever was answered in between (a pause GitHub named is not a step).
   A pause also stops the notification pages still to read. The poll waits it out instead of failing, so the watch is not restarted early.
+  During a pause, the localized status says no content is being read and shows the minutes until the pause ends. This takes precedence over the low-quota notification-only warning, even if the quota resets later.
 - Included `reason`: PRs requesting my review (`review_requested`), mentions (`mention`), team mentions (`team_mention`), new comments / reviews by others on my PRs / issues (`author`),
   CI results (`ci_activity`), assignments (`assign`). Others (`subscribed`, `comment`, `state_change`…) are excluded. One item per PR / issue (`example-org/example-repo#12`).
 - **Noise reduction (2026-11-03, #577)**: the user found it too noisy. A read-only hub count showed all 52 open GitHub items as Needs you, including 42 CI failures on feature / automatic branches (many pushed by Agents using the user's account),
@@ -307,14 +310,16 @@ All sources work alike. Long-press an Inbox row for Done / Reopen plus available
 Muting handles this item and other covered open items in the same source, reason "Muted: <name>," with toast "Muted ‘…’; future items will not enter the Inbox."
 The handling chain says "Muted, done" for existing items, newly admitted items and grouped events; `done_by=read` stays unchanged for compatibility.
 Muted under More at the Inbox's top right lists all mutes (name, source · repository / chat / sender), with swipe-left or long-press Unmute. Unmuting admits only future items; already handled ones stay handled.
+Settings › Inbox Sources (#5278) shows the same mutes per source on each built-in source's page, with Unmute (`inbox.mutes`, `inbox.unmute`).
 
 - **APIs**: `GET /api/v1/inbox/mutes` (creation order, oldest first); `POST /api/v1/inbox/mutes {item_id, tag}` mutes the item's value for `tag` (read from the item,
   not supplied by the client; nonexistent item 404, missing tag 400), returning `{mute, settled}` with additionally handled items. `DELETE /api/v1/inbox/mutes/{id}` unmutes.
   Item `mutes` lists allowed mute targets, which the menu renders.
 
 - **Manager** (`assistant/inbox_mutes.go`): mutes live in `inbox_mutes` settings (source + tag + value + name). Each collection handles covered open items, so future
-  messages arrive already done. Item mute targets (`mutes`): connector `InboxThing.Tags` (`repo`, `chat`, `sender`); Lark chat (`lark.feed_id`)
-  and latest group speaker (`lark.sender_id`); lowercase mail sender address. Lark Docs and Moments items have none.
+  messages arrive already done. Item mute targets (`mutes`): connector `InboxThing.Tags` (`repo`, `chat`, `sender`; a subscription's rows carry
+  their newest item's `sender`, #5306); Lark chat (`lark.feed_id`) and latest group speaker (`lark.sender_id`); lowercase mail sender address.
+  Lark Docs and Moments items have none.
 - **GitHub muted repositories**: formerly GitHub connector setting `muted_repos`, now source `github`, tag `repo` mutes. On manager connection,
   hub migrates old entries through `inbox.repo_mutes` and clears them from GitHub settings. Settings › Connectors › GitHub (and old Apps) still read / write `muted_repos`;
   hub translates through the manager, so both entry points share the same data.
@@ -369,7 +374,8 @@ with a chronological **handling chain**. Additive only: IDs, sources, existing f
 | `recap` | Manager-written summary: background, progress, blockers; plain text, up to 600 characters |
 | `handling` | Bound handling chat: `{owner: "manager", state, machine_id?, session_id?, since, error?}`; `state` is `looking` (AI reviewing) / `agent` (its sub-chat working) / `waiting` (confirmed action sent, awaiting response) / `done` (turn finished with suggestion or conclusion) / `failed` (failure / timeout, returns to Needs you without suggestion) |
 | `suggestion` | At most one current suggestion (see "Handling chats and suggestions") |
-| `chain` | Chronological handling chain, oldest first, latest 50 entries at most |
+| `chain` | Chronological handling chain, oldest first, latest 50 entries at most. A list asked with `chain=last` (`docs/protocol/protocol.md`, "Inbox delta") gives a done item its newest entry alone |
+| `chain_count` | Only in a list asked with `chain=last`: how many entries a done item's chain has, when it has more than the one listed |
 | `related` | Cross-atomic relationships: `[{id, title, source}]`; tap to jump to that item, each retaining its own state |
 
 **Section calculation** (`status()`): collapsed stays collapsed (noise never upgrades); reply / Agent suggestion → Needs you; handling chat reviewing / sub-chat working → Working (urgent stays Needs you);
@@ -587,6 +593,8 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
 - **Filter chips (web)**: sources (Lark, which also holds lark-cli's items; each mail account; each other connector), then kinds: @me (mentions, plus document and Moments mentions), Direct, Group, Bot (a bot's own chat, no longer under Group), Doc comments, Mail, Agent.
 - **Folding**: every group folds to its title and count; folds are kept on this device per manager, section and group (web `inbox.folds`, Apple `@StoredValue("inbox.folds")`).
   Open at first: every group of Needs you, FYI and Collapsed; in Done only Just now and Today. Group titles stick to the top while their rows scroll by.
+  On iOS, Done's title is a list row while Done lists its groups, not the header of an empty section: as that header (with its Jump To menu)
+  it came out washed like a stuck title's, and on an iPhone the scroll edge blurred every row above it once a title stuck (#4218).
   Done's title has Jump To (its groups with counts; picking one unfolds it, loads it if it isn't, and scrolls to its first row, since an iOS `List` can't scroll to a header)
   and Fold all / Unfold all.
 - **Done's history**: past the list's 3 days, Done reads each manager's `GET /api/v1/inbox/done` ("History" under "Lifecycle"; 100 a page; on iOS the default manager's).

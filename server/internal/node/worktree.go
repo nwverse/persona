@@ -13,6 +13,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // "New worktree…" (docs/integrations/terminal.md "New worktree"): a Git worktree of a workspace's repository, opened as a workspace of
@@ -25,13 +26,20 @@ import (
 // maxBranch bounds a branch name (git's own limit on a ref name is far above anything typed).
 const maxBranch = 255
 
-// canWorktree: the host can make worktrees: its own way, or herdr's fallback (git, then a new workspace).
+// canWorktree: the host can make worktrees: its own way, or the herdr/herdr-core fallback (git, then a new workspace).
 func canWorktree(h host.Host) bool {
 	if w, ok := h.(host.Worktreer); ok && w.CanWorktree() {
 		return true
 	}
 	_, launcher := h.(host.Launcher)
-	return launcher && h.Kind() == host.Herdr
+	return launcher && (h.Kind() == host.Herdr || h.Kind() == host.HerdrCore)
+}
+
+// worktreeUnsupported: the engine of kind has no checkouts. The code survives the wire, where errors.Is does not, so
+// the hub can tell "cannot" from a failure (an inferred task then runs in its own directory).
+func worktreeUnsupported(kind string) error {
+	return host.Mark(&rpc.Error{Code: proto.CodeWorktreeUnsupported, Message: fmt.Sprintf("%v: %s cannot do this", host.ErrUnsupported, kind)},
+		host.ErrUnsupported)
 }
 
 // worktreeRepo is the repository a workspace is in.
@@ -47,12 +55,18 @@ func (n *Node) repoOfWorkspace(ctx context.Context, kind, workspace, cwd string)
 	if workspace == "" && cwd == "" {
 		return nil, "", repo, errors.New("workspace_id is required")
 	}
+	if kind == "" {
+		kind = n.defaultKind()
+	}
+	if _, runtime := engineRuntimes[kind]; runtime && n.hosts.Get(kind) == nil {
+		return nil, "", repo, worktreeUnsupported(kind) // Paseo, Cindy: a runtime, not a terminal host with workspaces
+	}
 	h, err := n.hostOfKind(kind)
 	if err != nil {
 		return nil, "", repo, err
 	}
 	if !canWorktree(h) {
-		return nil, "", repo, unsupported(h)
+		return nil, "", repo, worktreeUnsupported(h.Kind())
 	}
 	if workspace == "" {
 		dir := proto.ExpandHome(cwd, n.home)

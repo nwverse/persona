@@ -796,28 +796,9 @@ struct ToolDetail: View {
         }
     }
 
-    /// The file a diff is in: name, folder, +N −N; a tap opens it.
     @ViewBuilder private func diffHeader(_ p: String?, _ diffs: [DiffView]) -> some View {
         if let p, !p.isEmpty {
-            let adds = diffs.reduce(0) { $0 + $1.adds }, dels = diffs.reduce(0) { $0 + $1.dels }
-            let header = HStack(spacing: Theme.Space.sm) {
-                ThemedIcon(FileViewer.symbol(for: p)).font(Theme.Font.label).foregroundStyle(.secondary)
-                Text((p as NSString).lastPathComponent).font(Theme.Font.captionStrong).foregroundStyle(.primary).lineLimit(1)
-                Text((p as NSString).deletingLastPathComponent).font(Theme.Font.caption).foregroundStyle(.secondary)
-                    .lineLimit(1).truncationMode(.head)
-                Spacer(minLength: 4)
-                if adds > 0 { Text("+\(adds)").foregroundStyle(Theme.Diff.add) }
-                if dels > 0 { Text("−\(dels)").foregroundStyle(Theme.Diff.del) }
-                if openFile != nil { ThemedIcon(Theme.Icon.openDocument).font(Theme.Font.label).foregroundStyle(Theme.accent) }
-            }
-            .font(Theme.Font.captionStrong.monospacedDigit())
-            if let openFile {
-                Button { openFile(p) } label: { header.contentShape(.rect) }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("View file \((p as NSString).lastPathComponent), \(adds) added, \(dels) removed")
-            } else {
-                header
-            }
+            DiffFileHeader(path: p, adds: diffs.reduce(0) { $0 + $1.adds }, dels: diffs.reduce(0) { $0 + $1.dels })
         }
     }
 
@@ -842,19 +823,24 @@ struct ToolDetail: View {
     }
 }
 
-/// The Raw Input switch under a tool's detail in words, showing or hiding the JSON the tool was called with.
+/// The Raw Input switch under a tool's detail in words, showing or hiding the JSON the tool was called with. In the chat
+/// it stays under the finger, what it opens under it (`toggleInPlace`, #3757); elsewhere it animates as before.
 struct RawInputToggle: View {
     @Binding var raw: Bool
+    /// Its place for the chat's pin, unique in the chat (from the call's id).
+    var pinKey: String
+    @Environment(\.chatPin) private var pin
 
     var body: some View {
         Button {
-            withAnimation(Theme.Motion.state) { raw.toggle() }
+            toggleInPlace(pin, pinKey, animation: Theme.Motion.state, closing: raw) { raw.toggle() }
         } label: {
             Label(raw ? String(localized: "Hide Raw Input") : String(localized: "Raw Input"), systemImage: raw ? Theme.Icon.collapse : Theme.Icon.expand)
                 .font(Theme.Font.label).lineLimit(1)
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
+        .chatPinned(pinKey)
     }
 }
 
@@ -887,7 +873,7 @@ struct ToolArgumentsDetail: View {
                     }
                 }
                 .accessibilityIdentifier("tool-arguments")
-                RawInputToggle(raw: $raw).accessibilityIdentifier("tool-raw")
+                RawInputToggle(raw: $raw, pinKey: "raw-" + item.id).accessibilityIdentifier("tool-raw")
                 if raw { CodeBlock(text: ToolTextMemo.input(item, scope: scope), maxLines: 14) }
             }
         }
@@ -1046,6 +1032,9 @@ struct CodeBlock: View {
     /// Clipped, the last `maxLines` lines show instead of the first (an output that ends with why it failed).
     var keepsEnd = false
     @State private var full = false
+    @Environment(\.chatPin) private var pin
+    /// What the chat's pin knows the block by: a block has no id of its own, and this view's is kept while it is drawn.
+    @State private var pinKey = "code-" + UUID().uuidString
 
     var body: some View {
         let lines = ToolTextMemo.codeLines(text)
@@ -1063,9 +1052,15 @@ struct CodeBlock: View {
                 MacHoverButton(title: String(localized: "Copy [Readiness Views d37380]"), symbol: Theme.Icon.copy) { MacHover.copy(text) }
             }
             if clipped {
-                Button("Show All \(lines.count) Lines [Tool Views 3aed77]") { withAnimation { full = true } }.font(Theme.Font.labelMedium)
+                // In the chat its top stays where it is and the rest opens under it (#3757): animated, the block grew
+                // around the tap and moved what was above it.
+                Button("Show All \(lines.count) Lines [Tool Views 3aed77]") {
+                    toggleInPlace(pin, pinKey, animation: Theme.Motion.standard) { full = true }
+                }
+                .font(Theme.Font.labelMedium)
             }
         }
+        .chatPinned(pinKey)
     }
 }
 
@@ -1198,6 +1193,37 @@ struct FullOutputSheet: View {
     }
 }
 
+/// The file a diff is in: name, folder, +N −N; a tap opens it where the page opens files (`openFile`). The chat's edits
+/// (`ToolDetail`) and a file tool's permission card (`PermissionDiffView`) draw the same one.
+struct DiffFileHeader: View {
+    var path: String
+    var adds: Int
+    var dels: Int
+    @Environment(\.openFile) private var openFile
+
+    var body: some View {
+        let header = HStack(spacing: Theme.Space.sm) {
+            ThemedIcon(FileViewer.symbol(for: path)).font(Theme.Font.label).foregroundStyle(.secondary)
+            Text((path as NSString).lastPathComponent).font(Theme.Font.captionStrong).foregroundStyle(.primary).lineLimit(1)
+                .layoutPriority(1) // the folder gives way first: at the largest sizes the two cut each other to a letter
+            Text((path as NSString).deletingLastPathComponent).font(Theme.Font.caption).foregroundStyle(.secondary)
+                .lineLimit(1).truncationMode(.head)
+            Spacer(minLength: 4)
+            if adds > 0 { Text("+\(adds)").foregroundStyle(Theme.Diff.add) }
+            if dels > 0 { Text("−\(dels)").foregroundStyle(Theme.Diff.del) }
+            if openFile != nil { ThemedIcon(Theme.Icon.openDocument).font(Theme.Font.label).foregroundStyle(Theme.accent) }
+        }
+        .font(Theme.Font.captionStrong.monospacedDigit())
+        if let openFile {
+            Button { openFile(path) } label: { header.contentShape(.rect) }
+                .buttonStyle(.plain)
+                .accessibilityLabel("View file \((path as NSString).lastPathComponent), \(adds) added, \(dels) removed")
+        } else {
+            header
+        }
+    }
+}
+
 /// The chat's one diff: Edit / MultiEdit / Write (old and new text, compared line by line and word by word with
 /// `LineDiff`, #2915) and Codex's patches (a unified diff), on the Git page's line model (`DiffText.Line`,
 /// `DiffText.parse`; the Git page draws whole files with MonoTextView). Only the sign and the line's background are
@@ -1322,6 +1348,8 @@ struct DiffView: View {
     var lines: [DiffText.Line]
     /// Until Show All (`ToolDiffMemo.Content.short`), at most `maxLines` of it.
     var short: [DiffText.Line]
+    /// The chat's tool rows show 40 rows until Show All; a permission card fewer, so its buttons stay in view.
+    var maxLines = 40
     var adds: Int
     var dels: Int
     /// What the chat's pin knows it by (`chatPinned`): Show All keeps its top where it is on screen.
@@ -1329,7 +1357,6 @@ struct DiffView: View {
     @Environment(\.chatPin) private var pin
     @State private var full = false
     @State private var moreRight = false
-    private static let maxLines = 40
 
     /// Old and new text compared (`LineDiff`): unchanged lines as context, a stretch of more than a few of them folded
     /// into one row until Show All, removed lines before added ones, and in a line changed rather than rewritten, the
@@ -1343,16 +1370,17 @@ struct DiffView: View {
         self.init(ToolDiffMemo.unified(diff), pinKey: pinKey)
     }
 
-    private init(_ content: ToolDiffMemo.Content, pinKey: String) {
+    init(_ content: ToolDiffMemo.Content, pinKey: String, maxLines: Int = 40) {
         lines = content.lines
         short = content.short
         adds = content.adds
         dels = content.dels
         self.pinKey = pinKey
+        self.maxLines = maxLines
     }
 
     var body: some View {
-        let shown = full ? lines : Array(short.prefix(Self.maxLines))
+        let shown = full ? lines : Array(short.prefix(maxLines))
         // Something is left out: lines past the cap, or a folded stretch (folding always takes away a row).
         let clipped = shown.count < lines.count
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
@@ -1655,7 +1683,7 @@ struct ComputerToolDetail: View {
             }
             ForEach(Array(call.images.enumerated()), id: \.offset) { i, img in Base64Image(payload: img, gallery: call.images, index: i) }
             ScreenEntry(call: call)
-            RawInputToggle(raw: $raw).accessibilityIdentifier("computer-raw")
+            RawInputToggle(raw: $raw, pinKey: "raw-" + call.id).accessibilityIdentifier("computer-raw")
             if raw {
                 CodeBlock(text: input, maxLines: 14)
                 if let result = call.result {

@@ -1,5 +1,86 @@
 # Lessons: web UI and interactions
 
+## A lazy page importing a first-screen module can split it into a chunk of its own (#3962)
+
+Step 4c's settings pages imported `referenceState` from `lib/extensions.ts`, which the first screen already loaded inside
+another chunk. Rollup puts each module in the chunk shared by everything that imports it, so the new lazy importers moved
+`lib/extensions.ts` into a chunk of its own, still on the first screen, and the first screen grew 1.5 kB in every
+language (the same delta everywhere is the sign) although no first-screen code changed: a separate file compresses worse
+and adds its import and export lists. Put what a lazy page needs from such a module in a small module of its own
+(`lib/secret-reference.ts`). To find the file that moved, build main and the branch with the budget at 1 (the build then
+prints every language's count), and compare the first-screen files' brotli sizes with hashes blanked out.
+
+## A size budget over built files must not count their content hashes (#5164)
+
+The first-screen budget added up the brotli copies of files that import and preload each other by content-hashed name.
+A change to a lazy chunk, or to strings off the first screen, renames those chunks, and every first-screen file that
+names them gets eight new near-random characters per reference, which brotli cannot shrink: #5145, a strings-only
+change, measured 34 B more for ja (19 B over the budget) while the first screen's code was unchanged. Count a fixed
+string in place of each built file's hash (`firstScreenBytes` in `web/src/startup-preload.ts`), so only a change to what
+the code does moves the number. Any other compressed-size check over Vite's output needs the same.
+
+## A lazy chunk's new import renames a first-screen chunk's exports (#5331)
+
+Rollup gives each export of a shared chunk a minified alias in the chunk's own order (`a`, `b`, …, `eu`, `ev`) and sorts
+the chunk's `export{…}` list by alias. When a lazy page imports a name from a first-screen chunk that the chunk did not
+export yet (#5310's lazy workflow board took `CATALOG_POLL_MS` and `isResumed` from `App`), the chunk gains one export,
+every later alias moves on by one, the list reorders and every first-screen import of those names is renamed: `App`
+grew 9 B, but the ja count grew 255 B and `main` failed the build, with no first-screen code changed. `firstScreenBytes`
+now counts imported names as one fixed string and export lists as empty ones. To check a surprising move, compare the
+number of entries in each first-screen chunk's `export{…}` between the two builds.
+
+## A new list of sessions folds child sessions too (#5120)
+
+Child sessions (`folded_under`) are left out of lists and counts in one place, `foldRows` (`lib/folded-rows.ts`), which
+`useAgentSessions` / `useFullAgentSessions` apply. A view that reads the store's `sessions[mid]` or `sessionSummaries`
+itself (a space's page, a computer's page, the chat header's same-space menu, Forward's list) bypasses it and lists every
+child as an Agent of its own: pass the rows through `foldRows` in its selector (it keeps row identities, so memos hold).
+A count of cards goes by the card's home (`requestHome`, `homeKey`), not its `session_id`. The paged list folds on the
+hub: send `roots=1` on every page and count read while hello lists `sessions_hierarchy`.
+
+## A menu opened from a layer above the menus' own goes inside that layer (#4991)
+
+- `Menu` portals to `document.body` at `z-50`. The image editor is a full-screen `z-[60]` layer, so a menu opened from it
+  drew under it, out of sight. Pass the layer as `container`: the menu is put inside it, above its content, and takes its
+  look (the editor's `dark`).
+- A layer that closes on Esc from a capture-phase `keydown` on the window runs before an open menu's handler (also capture,
+  registered later). It has to leave Esc alone while its menu is open, or Esc closes the editor instead of the menu.
+
+## Review dismissal must not be bypassed by an old runtime error (#5311)
+
+A task can have both a current `needs_user` review and an idle Agent with a transient `turn_error`. The latter makes its
+status `interrupted`; guarding dismissal and Later with `!waits` therefore leaves the decision visible even after a
+successful persisted dismissal. Protect actual Agent input (`asks` or `needs_you`), not every attention status. Hide the
+review round optimistically in the existing local deferral store, replace that mask with the confirmed receipt, and
+remove the mask on failure. Finish loading in `finally`; unmounting is not a completion signal. Regress both note-only
+and structured reviews with a runtime error, delayed writes, stale list reads, failure recovery, Undo and new rounds.
+
+## Review state is not an answerable decision (#4808)
+
+An old task can remain `supervision.state: needs_user` without any acceptance-book `ask`. Render its original review
+explanation and the same dismiss/defer controls as a structured decision, but never invent options or send a review
+timestamp as `asked_at` to acceptance. Dismiss the exact review, not the task: completing it or accepting its recommendation
+changes what the owner asked to ignore. Keep persistence and receipt-scoped Undo on the manager, and Later in the browser
+session. Give all mixed actions one synchronous admission guard, fence late replies against the review and credential
+owner, and exercise both the legacy row and structured choices with a real browser. Load the extra controls lazily;
+the collapsed tray does not need their code on the first screen.
+
+## Bound the navigation range, not only transcript bodies (#4836)
+
+A complete lightweight position index can still render hundreds of marks while the transcript loads only two turns.
+Expose its latest 50 positions first, preserve the full-history ordinal offset, and extend the range when backward
+transcript pages reach earlier inputs. Capture the initial loaded boundary separately: a restored large cache must
+not silently change the initial range, and metadata arrival or hovering must not download old bodies. Test the real
+main conversation as well as session pages with hundreds of genuine inputs and interleaved automated records.
+
+## Viewport ownership must not create a second hover-width peak (#4792)
+
+The user-input rail's viewport-current identity is separate from the pointer or keyboard preview. Apply the existing
+preview-centered bell width to every mark, rather than imposing a minimum width on the current input. Preserve idle
+geometry and current-position accessibility/color. Browser acceptance must hover well away from the current input
+and check all rendered widths against the bell in both themes; a screenshot with both identities on one input hides
+this regression.
+
 ## Profile selections do not follow the catalog revision (#4528)
 
 The model-profile revision versions definitions, not the active selection or rollback. Retire earlier reads, errors,
@@ -489,7 +570,7 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 
 ### Chat page
 
-- Message context actions must target the message's `ChatActions.draftKey`, not the most recently focused composer (2026-11-07, #4528): a side panel can own that focus. Set `canCompose` from both the session's send capability and `!readOnly`; subagent transcript panels have no composer even if their session can send. Handoff to Persona remains available in read-only Agent chats. Use the conversation title for context cards, not `speaker`, which is only the generic quote attribution. Own-message hover bars sit to the left of the bubble: adding direct buttons clips them in narrow mouse windows or side panels. Put additional actions in their existing More menu and check it at narrow widths with mouse input, not only touch emulation.
+- Message context actions must target the message's `ChatActions.draftKey`, not the most recently focused composer (2026-11-07, #4528): a side panel can own that focus. Set `canCompose` from the session's send capability (subagents no longer open as transcripts of their own, #5030). Handoff to Persona remains available in read-only Agent chats. Use the conversation title for context cards, not `speaker`, which is only the generic quote attribution. Own-message hover bars sit to the left of the bubble: adding direct buttons clips them in narrow mouse windows or side panels. Put additional actions in their existing More menu and check it at narrow widths with mouse input, not only touch emulation.
 
 - TypeScript still narrows a closure-mutated `let` to its initial value in an outer loop (`let x: T | null = null` remains `null`, so `x.id` reports `never`); wrap in an object (`const last = { raw: null as T | null }`).
 - `encodeURIComponent` encodes `@` in sub-Agent session IDs as `%40`; real hub (Go `PathValue`) decodes it, but mock routing must `unquote` explicitly.
@@ -865,6 +946,8 @@ A narrow shell can unmount its sidebar list and mount the same list in the Agent
 
 For reply tokenization (#4498), distinguish a bracketed IPv6 authority from surrounding Markdown brackets. A direct URL helper can accept the address while the prose tokenizer drops it, leaving no chip. Exercise scheme links, Markdown/autolinks and existing bare forms through the public chip renderer as well as the helper; keep URL/host admission and delimiter boundaries unchanged.
 
+An HTTP(S) URL also owns addresses embedded in its path, query or fragment (#4716). Keep balanced parentheses/brackets in that envelope and end it at an unmatched closing delimiter; otherwise a foreign URL can produce a local chip and port probe. Apply ownership to both scheme and bare candidates. Regress a genuinely separate bare address immediately after a Markdown link, not just whitespace-separated examples; a blanket until-whitespace mask would hide it too. Leave host/port validation and preview transport at their existing owners.
+
 ## Connection tests must use the form's credential choice (#1903)
 
 A saved credential and an empty input are different from explicitly removing that credential. Send the removal flag through the test API and give it the same precedence as saving, including when a new key was typed before removal was selected. Changing the credential choice invalidates both the displayed test result and any pending result for the old form. Test against a synthetic source and assert that the saved configuration stays unchanged.
@@ -897,6 +980,13 @@ is not done), so the owner saw one task out of four and asked what the others we
 other way and listed every slot ever dispatched, closed ones included. "Open" is a property of the task (`done_at`,
 `start_error`, an open plan), not of its agent: filter on that, sort what needs the user first, and fold the closed ones.
 
+## A deploy is not seen until the open page checks for it (#4331)
+
+A sidebar change was deployed and checked with a fresh load, yet the owner's tab, open since before, kept the old build
+and its old sidebar: the service worker answers navigations with the new shell, but a single-page app that stays open
+never navigates again. "Deployed" meant new for new loads only. The page now compares the shell's entry script with its
+own and reloads when idle (docs/web/web.md "New versions"). When verifying a web deploy, also check a tab that was open
+before it, not only a fresh load.
 ## Workspace identity outlives its Agents
 
 An Agent collection cannot serve as a workspace inventory: empty ancestors disappear, and pinning or filtering can remove the only row carrying a parent edge. Keep discovery independent of the board and count actual Agents separately from catalog containers. Bind actions to credential generation, manager, computer, host and runtime workspace ID; matching paths do not grant ownership. A combined browser fixture must stamp its sessions and discovery with the same manager, or it correctly exercises isolation instead of navigation.
@@ -940,3 +1030,11 @@ first page. A list 300 rows deep became 50, the scroller clamped its offset, and
 every time they reached the bottom. Recover by reading a fresh view as deep as the reader has scrolled plus one page,
 keeping the old rows on screen until it arrives (web `SessionList.reread`, #4431; iOS `SessionListModel.rebaseline`); any
 recovery that publishes fewer rows than are on screen moves the reader.
+
+## Running an assistant's HTML card (2026-11-12, #4215)
+
+- **WebKit runs no listener in a frame without `allow-scripts`, the parent's included**: a listener the page adds to a sandboxed `srcdoc` frame's document never fires in Safari ("Blocked script execution in 'about:srcdoc'"), while Chromium runs it. To hear what the user does in such a frame, the frame needs a script of its own: `sandbox="allow-scripts"` without `allow-same-origin` (an opaque origin), a CSP whose `script-src` is a per-frame nonce, and only that script in it. It must sit at the end of the body: from the head, `document.body` is still null.
+- **QuickJS lets a script redefine a non-configurable data property of the global object** (`Object.defineProperty(globalThis, "x", { value: 1 })` succeeds where a browser throws), but not a non-configurable accessor. Lock a global with a getter.
+- **CSP doesn't stop a `<meta http-equiv="refresh">` in a sandboxed `allow-scripts` frame**: the frame navigates itself (one request). Only never drawing a `meta` (or any HTML from the card) stops it. Chromium also opens a connection, without a request, for an `<iframe src>` its CSP refuses. A check of the frame by itself shows both (`web/e2e/html-runtime-security.mjs`, raw mode).
+- **A sync bridge needs its "asking" slot taken synchronously**: a card that calls `persona.reply` 200 times in one turn gets all 200 through a check on React state set in the same tick. Take the slot in the call, not in the render.
+
