@@ -12,6 +12,7 @@
   "cmd_context_desc": "Show the context",
   "cmd_model_desc": "Switch model",
   "cmd_loop_desc": "Repeat a task on a schedule",
+  "cmd_workflows_desc": "Show background tasks and workflows",
   "cmd_clear_desc": "Clear the chat and start over",
   "cmd_clear_confirm": "Clear this agent's chat? It will forget the earlier context.",
   "replaced": "Replaced what you were typing",

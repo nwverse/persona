@@ -21,7 +21,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
@@ -46,6 +48,10 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import persona.core.contracts.CoreText
+import persona.core.domain.sort.AgentListDisplay
+import persona.core.domain.sort.AgentRowLeading
+import persona.core.domain.sort.AgentRowStyle
+import persona.core.domain.sort.rowParts
 import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PhIcons
 
@@ -92,6 +98,12 @@ private val AvatarMark = Tokens.Space.l + Tokens.Space.xxs / 2
 private val AvatarRim = Tokens.Space.xxs
 /** Between the well and the row's words (iOS's Avatar row: `Theme.Space.m`). */
 private val AvatarGap = Tokens.Space.m
+/** Between Two Lines' dot and its words (iOS style B: `Theme.Space.s`). */
+private val TwoLineGap = Tokens.Space.s
+/** The background-waiting clock against the dot it stands in for (as on the space page's cards). */
+private const val WaitClockScale = 1.7f
+/** A State Card that needs you, tinted in its blue (iOS `StatusPalette.needsYouWash`: the system blue at this opacity). */
+private const val CardWashAlpha = 0.1f
 /** iOS's outlined chip: secondary words in a hairline of the secondary color at this opacity. */
 private const val OutlineAlpha = 0.4f
 
@@ -167,10 +179,11 @@ private fun SectionRule() {
 
 /**
  * Status counts after a heading: a dot and a number for each state that has any; [waiting] (the agents that only wait in
- * the background, #6045) as a clock and a number, before an idle count, as iOS's `StateCounts`. Each is spoken as one.
+ * the background, #6045) as a clock in that state's lighter tone and a number, before an idle count, as iOS's
+ * `StateCounts`. Each is spoken as one. [lighter]: the counted agents only wait in the background, so their dots take that tone.
  */
 @Composable
-private fun StateCounts(counts: List<Pair<Status, Int>>, waiting: Int = 0) {
+private fun StateCounts(counts: List<Pair<Status, Int>>, waiting: Int = 0, lighter: Boolean = false) {
     val palette = PersonaTheme.palette
     @Composable fun count(n: Int, spoken: String, mark: @Composable () -> Unit) {
         Spacer(Modifier.width(Tokens.Space.s + Tokens.Space.xxs))
@@ -185,12 +198,12 @@ private fun StateCounts(counts: List<Pair<Status, Int>>, waiting: Int = 0) {
     counts.filter { it.second > 0 }.forEach { (status, n) ->
         if (status == Status.Idle && waiting > 0 && !clockDrawn) {
             clockDrawn = true
-            count(waiting, waitingWords) { JIcon(persona.core.designsystem.icons.PersonaIcons.backgroundWaiting, null, size = Caret, tint = palette.status(Status.Working).dot, decorative = true) }
+            count(waiting, waitingWords) { JIcon(persona.core.designsystem.icons.PersonaIcons.backgroundWaiting, null, size = Caret, tint = palette.backgroundWaiting.dot, decorative = true) }
         }
-        count(n, "$n ${stringResource(status.labelRes)}") { JStatusDot(status, size = Dot) }
+        count(n, "$n ${stringResource(status.labelRes)}") { JStatusDot(status, size = Dot, waiting = lighter) }
     }
     if (waiting > 0 && !clockDrawn) count(waiting, waitingWords) {
-        JIcon(persona.core.designsystem.icons.PersonaIcons.backgroundWaiting, null, size = Caret, tint = palette.status(Status.Working).dot, decorative = true)
+        JIcon(persona.core.designsystem.icons.PersonaIcons.backgroundWaiting, null, size = Caret, tint = palette.backgroundWaiting.dot, decorative = true)
     }
 }
 
@@ -223,6 +236,11 @@ fun AgentTreeHeader(
     counts: List<Pair<Status, Int>> = emptyList(),
     /** The agents that only wait in the background, drawn apart from [counts] ([StateCounts]). */
     waiting: Int = 0,
+    /**
+     * A section of agents that only wait in the background (By Status, #4338 A5): on Glass its [icon] and its count's dot
+     * take that state's lighter tone ([PersonaPalette.backgroundWaiting]), as iOS's `SectionHeader` takes its section's.
+     */
+    waitsInBackground: Boolean = false,
     onMonitor: (() -> Unit)? = null,
     tag: String? = null,
     onAction: (() -> Unit)? = null,
@@ -231,6 +249,7 @@ fun AgentTreeHeader(
 ) {
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
+    val lighter = waitsInBackground && PersonaTheme.style == AppStyle.Glass
     Column(modifier.fillMaxWidth().padding(top = if (first) Tokens.Space.xs else Tokens.Space.xl)) {
         if (!first) SectionRule()
         Row(
@@ -240,7 +259,7 @@ fun AgentTreeHeader(
         ) {
             JIcon(if (folded) PhIcons.CaretRight else PhIcons.CaretDown, stringResource(if (folded) R.string.designsystem_group_expand else R.string.designsystem_group_collapse), size = Tokens.Space.l, tint = palette.ink3)
             Spacer(Modifier.width(Tokens.Space.s - Tokens.Space.xxs))
-            icon?.let { JIcon(it, null, size = Tokens.Size.iconXS, tint = palette.ink); Spacer(Modifier.width(Tokens.Space.s)) }
+            icon?.let { JIcon(it, null, size = Tokens.Size.iconXS, tint = if (lighter) palette.backgroundWaiting.dot else palette.ink); Spacer(Modifier.width(Tokens.Space.s)) }
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(title, style = type.title.copy(fontWeight = FontWeight.Bold), color = palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis,
@@ -256,7 +275,7 @@ fun AgentTreeHeader(
                 }
                 detail?.let { Text(it, style = type.caption.copy(fontWeight = FontWeight.Normal), color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis) }
             }
-            StateCounts(counts, waiting)
+            StateCounts(counts, waiting, lighter)
             if (onMonitor != null) { Spacer(Modifier.width(Tokens.Space.xs)); HeadingAction(PhIcons.Gauge, stringResource(R.string.designsystem_machine_monitor), onMonitor) }
             if (onAction != null) { Spacer(Modifier.width(Tokens.Space.xs)); HeadingAction(actionIcon ?: PhIcons.CaretRight, actionLabel ?: stringResource(R.string.designsystem_details), onAction) }
         }
@@ -362,7 +381,9 @@ fun AgentShowAllRow(count: Int, expanded: Boolean, onClick: () -> Unit, modifier
  * [stableAlpha], like every dimmed control: a toggled `Modifier.alpha` after clip + background can lose them.
  * Glass draws iOS's Avatar row (#4338 A9): with an [agentMark], the mark in a round well with the state on its corner
  * ([AgentAvatar]); with a [place], a third line that starts with the [source] tag ([PlaceLine]). Compact rows, Brief
- * and Board keep the mark beside the state mark and the tag beside the latest words.
+ * and Board keep the mark beside the state mark and the tag beside the latest words. Glass draws the list's other row
+ * styles ([style], iOS `AgentRowStyle`) as their parts say (`rowParts` in core/domain): Two Lines ([TwoLineRow]) and
+ * State Cards ([StateCardRow]); Brief and Board ignore it.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -395,24 +416,27 @@ fun AgentRow(
     place: RowPlace? = null,
     /** It only waits in the background (#6045): Glass's well shows the clock on its corner instead of the dot. */
     waiting: Boolean = false,
+    /** Glass's row style while not [compact] (iOS `AgentRowStyle`); Brief and Board keep their row. */
+    style: AgentRowStyle = AgentRowStyle.Avatar,
     end: (@Composable () -> Unit)? = null,
 ) {
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
     val board = PersonaTheme.style == AppStyle.Board
     val shown = if (muted) Status.Muted else status
-    val tone = palette.status(shown)
+    val tone = palette.status(shown, waiting)
     val strong = !muted && (status == Status.NeedsYou || status == Status.Unread)
     val glass = PersonaTheme.style == AppStyle.Glass
-    val avatar = glass && !compact && agentMark != null
-    val placeLine = glass && !compact && place != null
+    val parts = AgentListDisplay.of(if (glass) style else AgentRowStyle.Avatar, compact).rowParts
+    val avatar = glass && parts.leading == AgentRowLeading.Well && agentMark != null
+    val placeLine = glass && parts.placeLine && place != null
     val mark = if (avatar) AvatarWell else markSize
     val start = if (board) Step * depth else (Step * depth + (Caret - mark) / 2).coerceAtLeast(None)
     val gap = if (avatar) AvatarGap else Tokens.Space.s - Tokens.Space.xxs
     val hasMetadata = note != null || facts.isNotEmpty()
     val boardMetadata = board && hasMetadata && !compact
     val statusLabel = stringResource(shown.labelRes)
-    val click = Modifier.selectedRow(selected).onSecondaryClick(onLongClick).combinedClickable(role = Role.Button, onClick = onClick, onLongClick = onLongClick)
+    val press = Modifier.onSecondaryClick(onLongClick).combinedClickable(role = Role.Button, onClick = onClick, onLongClick = onLongClick)
         // Compact rows and Board's two-line metadata rows have no visible state line: TalkBack still says it (#3902).
         // Board also keeps the latest message in its merged text without replacing the title or metadata. A row whose
         // state is its dot's alone ([statusText] null, #4338 A9) is told it by name too.
@@ -420,6 +444,17 @@ fun AgentRow(
             stateDescription = statusText ?: statusLabel
             if (boardMetadata && !preview.isNullOrBlank()) text = AnnotatedString(preview.replace('\n', ' '))
         } else if (statusText == null) Modifier.semantics { stateDescription = statusLabel } else Modifier)
+    val click = Modifier.selectedRow(selected).then(press)
+    if (glass && parts.leading == AgentRowLeading.Dot) {
+        TwoLineRow(title, shown, strong, muted, waiting, depth, position, preview, time, statusText, label, launcher, flags, note, facts,
+            source, agentMark, place, branch, modifier.then(click), end)
+        return
+    }
+    if (glass && parts.card) {
+        StateCardRow(title, shown, strong, muted, waiting, depth, preview, time, statusText, label, launcher, flags, note, facts, source,
+            agentMark, place, selected, modifier, press, end)
+        return
+    }
     val text: @Composable ColumnScope.() -> Unit = {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
@@ -514,6 +549,167 @@ fun AgentRow(
             RowMetadata(note, facts, indent, Modifier.padding(start = start, bottom = if (placeLine) None else Tokens.Space.s))
         }
         if (placeLine) PlaceLine(requireNotNull(place), source, Modifier.padding(start = start + mark + gap, top = Tokens.Space.xs, bottom = Tokens.Space.s))
+    }
+}
+
+/** A display's name in the Agents page's ⋯ › Display and in Settings (iOS `AgentListDisplay.title`). */
+val AgentListDisplay.label: String @Composable get() = stringResource(when (this) {
+    AgentListDisplay.Avatar -> R.string.designsystem_row_style_avatar
+    AgentListDisplay.TwoLines -> R.string.designsystem_row_style_two_lines
+    AgentListDisplay.Cards -> R.string.designsystem_row_style_cards
+    AgentListDisplay.CompactList -> R.string.designsystem_row_style_list
+})
+
+/** What a display looks like, under its preview in Settings (iOS `AgentListDisplay.summary`). */
+val AgentListDisplay.summary: String @Composable get() = stringResource(when (this) {
+    AgentListDisplay.Avatar -> R.string.designsystem_row_style_avatar_summary
+    AgentListDisplay.TwoLines -> R.string.designsystem_row_style_two_lines_summary
+    AgentListDisplay.Cards -> R.string.designsystem_row_style_cards_summary
+    AgentListDisplay.CompactList -> R.string.designsystem_row_style_list_summary
+})
+
+/**
+ * The first line of Glass's Two Lines and State Cards rows (iOS `twoLineRow`, `cardRow`): [leading] (Two Lines' dot), the
+ * agent's mark, the title with the tab's [label], the starter's tag and the [flags], then the time.
+ */
+@Composable
+private fun StyledTitleLine(
+    title: String, strong: Boolean, muted: Boolean, label: String?, launcher: Boolean, flags: List<RowFlag>, agentMark: AgentMarkSpec?,
+    time: String?, leading: (@Composable () -> Unit)? = null,
+) {
+    val palette = PersonaTheme.palette
+    val type = PersonaTheme.type
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        leading?.invoke()
+        agentMark?.let { JAgentMark(it, size = Tokens.Size.markS); Spacer(Modifier.width(Tokens.Space.xs)) }
+        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+            LabeledTitle(label, Modifier.weight(1f, fill = false)) {
+                Text(
+                    title, style = type.label.copy(fontWeight = if (strong) FontWeight.SemiBold else FontWeight.Medium),
+                    color = if (muted) palette.ink2 else palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (launcher) { Spacer(Modifier.width(Tokens.Space.xs)); JTag(stringResource(R.string.designsystem_tab_launcher)) }
+            flags.forEach { flag ->
+                Spacer(Modifier.width(Tokens.Space.xs))
+                JIcon(flag.icon, flag.label, size = Caret, tint = when { flag.caution -> palette.cautionText; flag.ai -> palette.ai; else -> palette.ink3 })
+            }
+        }
+        time?.takeIf { it.isNotEmpty() }?.let { Spacer(Modifier.width(Tokens.Space.s)); Text(it, style = type.micro, color = palette.ink3, maxLines = 1) }
+    }
+}
+
+/** A row's state as a dot of its color, or the clock of one that only waits in the background ([waiting]). */
+@Composable
+private fun RowStateDot(status: Status, waiting: Boolean) {
+    if (waiting) JIcon(persona.core.designsystem.icons.PersonaIcons.backgroundWaiting, null, size = Tokens.Size.dotL * WaitClockScale,
+        tint = PersonaTheme.palette.backgroundWaiting.dot, decorative = true)
+    else JStatusDot(status)
+}
+
+/**
+ * Glass's Two Lines row (iOS style B, `twoLineRow`, #4338 A9): the state's dot under its heading's caret, the agent's mark
+ * and the title with the time; then its state word ([statusText]), one line of its latest words (where it runs while it
+ * has said nothing), the muted mark and the [source]'s tag at the end. No model or to-do: B has no line for them. The
+ * facts line follows, as on the Avatar row; a hairline above it from the title's start, unless first in its group.
+ */
+@Composable
+private fun TwoLineRow(
+    title: String, shown: Status, strong: Boolean, muted: Boolean, waiting: Boolean, depth: Int, position: GroupPosition,
+    preview: String?, time: String?, statusText: String?, label: String?, launcher: Boolean, flags: List<RowFlag>,
+    note: RowNote?, facts: List<RowFact>, source: RowSource?, agentMark: AgentMarkSpec?, place: RowPlace?, branch: Boolean,
+    modifier: Modifier, end: (@Composable () -> Unit)?,
+) {
+    val palette = PersonaTheme.palette
+    val type = PersonaTheme.type
+    val tone = palette.status(shown, waiting)
+    val start = Step * depth
+    val words = start + Caret + TwoLineGap
+    val hasMetadata = note != null || facts.isNotEmpty()
+    // a branch hangs off its initiator one step up: a hairline down from under that row's dot
+    val guide = if (!branch) Modifier else Modifier.drawBehind {
+        val x = (Step * (depth - 1) + Caret / 2).toPx()
+        drawLine(palette.line, Offset(x, 0f), Offset(x, size.height), Hairline.toPx())
+    }
+    Column(
+        modifier.fillMaxWidth().then(guide)
+            .drawBehind { if (!position.first) drawLine(palette.line, Offset(words.toPx(), 0f), Offset(size.width, 0f), Hairline.toPx()) }
+            .stableAlpha(if (muted) 0.72f else 1f),
+    ) {
+        Row(Modifier.padding(start = start, top = Tokens.Space.s, bottom = if (hasMetadata) None else Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xxs)) {
+                StyledTitleLine(title, strong, muted, label, launcher, flags, agentMark, time, leading = {
+                    Box(Modifier.width(Caret), contentAlignment = Alignment.Center) { RowStateDot(shown, waiting) }
+                    Spacer(Modifier.width(TwoLineGap))
+                })
+                val said = preview?.takeIf { it.isNotBlank() }?.replace('\n', ' ') ?: place?.words?.takeIf(String::isNotEmpty)
+                val line = buildAnnotatedString {
+                    statusText?.let { withStyle(SpanStyle(color = tone.text, fontWeight = FontWeight.Medium)) { append(it) } }
+                    if (statusText != null && said != null) append("  ")
+                    said?.let { append(it) }
+                }
+                if (line.isNotEmpty() || place?.muted == true || source != null) Row(Modifier.padding(start = Caret + TwoLineGap), verticalAlignment = Alignment.CenterVertically) {
+                    Text(line, Modifier.weight(1f), style = type.caption.copy(fontWeight = FontWeight.Normal), color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (place?.muted == true) {
+                        Spacer(Modifier.width(Tokens.Space.xs))
+                        JIcon(PhIcons.Prohibit, stringResource(R.string.designsystem_row_muted), size = Caret, tint = palette.ink3)
+                    }
+                    source?.let { Spacer(Modifier.width(Tokens.Space.s)); SourceTag(it) }
+                }
+            }
+            end?.let { Box { it() } }
+        }
+        if (hasMetadata) RowMetadata(note, facts, Caret + TwoLineGap, Modifier.padding(start = start, bottom = Tokens.Space.s))
+    }
+}
+
+/**
+ * Glass's State Cards row (iOS style C, `cardRow`, #4338 A9): a card of its own [depth] steps in, its state's color in a
+ * bar down the leading edge; the agent's mark and the title with the time; two lines of its latest words; the facts
+ * line; at the foot its state in words in its color ([statusText], every state but Seen: `cardStateWord`) and where it
+ * runs ([PlaceLine]). One that needs you is tinted ([CardWashAlpha]); one open beside the list is ringed in the accent.
+ * One that only waits in the background ([waiting]) takes that state's lighter tone, as iOS's `stateTone`.
+ */
+@Composable
+private fun StateCardRow(
+    title: String, shown: Status, strong: Boolean, muted: Boolean, waiting: Boolean, depth: Int, preview: String?, time: String?,
+    statusText: String?, label: String?, launcher: Boolean, flags: List<RowFlag>, note: RowNote?, facts: List<RowFact>, source: RowSource?,
+    agentMark: AgentMarkSpec?, place: RowPlace?, selected: Boolean, modifier: Modifier, press: Modifier, end: (@Composable () -> Unit)?,
+) {
+    val palette = PersonaTheme.palette
+    val type = PersonaTheme.type
+    val tone = palette.status(shown, waiting)
+    val shape = PersonaTheme.shapes.cardShape
+    Column(
+        modifier.fillMaxWidth().padding(start = Step * depth, top = Tokens.Space.xs, bottom = Tokens.Space.xs)
+            .clip(shape).background(if (shown == Status.NeedsYou) palette.needsYou.dot.copy(alpha = CardWashAlpha) else palette.surfaceOpaque)
+            .border(Tokens.Size.hairline, palette.line, shape)
+            .then(if (selected) Modifier.border(Tokens.Size.lineMedium, palette.accent, shape).semantics { this.selected = true } else Modifier)
+            .then(press)
+            .drawBehind {
+                val bar = Tokens.Space.xs.toPx()
+                val inset = Tokens.Space.s.toPx()
+                drawRoundRect(tone.dot, Offset(Tokens.Space.xs.toPx(), inset), Size(bar, (size.height - inset * 2).coerceAtLeast(0f)), CornerRadius(bar / 2))
+            }
+            .stableAlpha(if (muted) 0.72f else 1f)
+            .padding(start = Tokens.Space.l, end = Tokens.Space.m, top = Tokens.Space.s, bottom = Tokens.Space.s),
+        verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.weight(1f)) { StyledTitleLine(title, strong, muted, label, launcher, flags, agentMark, time) }
+            end?.invoke()
+        }
+        preview?.takeIf { it.isNotBlank() }?.let {
+            Text(it.replace('\n', ' '), style = type.caption.copy(fontWeight = FontWeight.Normal), color = palette.ink2, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+        if (note != null || facts.isNotEmpty()) RowMetadata(note, facts, None, Modifier.padding(top = None))
+        if (statusText != null || place != null || source != null) Row(verticalAlignment = Alignment.CenterVertically) {
+            statusText?.let {
+                Text(it, style = type.caption.copy(fontWeight = FontWeight.Medium), color = tone.text, maxLines = 1)
+                Spacer(Modifier.width(Tokens.Space.s))
+            }
+            PlaceLine(place ?: RowPlace(), source, Modifier.weight(1f))
+        }
     }
 }
 
@@ -691,7 +887,7 @@ private fun AgentAvatar(mark: AgentMarkSpec, status: Status, waiting: Boolean) {
         ) { JAgentMark(mark, size = AvatarMark) }
         Box(Modifier.align(Alignment.BottomEnd).offset(AvatarRim, AvatarRim).size(corner), contentAlignment = Alignment.Center) {
             if (waiting) JIcon(persona.core.designsystem.icons.PersonaIcons.backgroundWaiting, null, size = corner,
-                tint = palette.status(Status.Working).dot, decorative = true)
+                tint = palette.backgroundWaiting.dot, decorative = true)
             else JStatusDot(status, size = Tokens.Size.dotXL)
         }
     }
@@ -815,8 +1011,14 @@ private const val BoardBayPeek = 0.4f
 
 /** One quick filter: a label, its count, and the status it filters by. */
 @Immutable
-/** A quick filter: its words, count and state ([status]'s dot, or [icon] in its color: Waiting in the background's clock). */
-data class Bay(val label: String, val count: Int? = null, val status: Status? = null, val icon: persona.core.designsystem.icons.PhIcon? = null)
+/**
+ * A quick filter: its words, count and state ([status]'s dot, or [icon] in its color: Waiting in the background's clock).
+ * [waiting]: it lists the agents that only wait in the background, so the Glass home draws it in that state's lighter tone.
+ */
+data class Bay(
+    val label: String, val count: Int? = null, val status: Status? = null, val icon: persona.core.designsystem.icons.PhIcon? = null,
+    val waiting: Boolean = false,
+)
 
 /**
  * The quick filters of a list. Glass shows glass chips; brief underlined tabs; the board a counter board with

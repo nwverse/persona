@@ -38,7 +38,9 @@ func (h *Manager) readInbox(ctx context.Context, round inboxRound) assistantwire
 // accounts' order; an account that can't be read is left out and named in Failed with why (the manager keeps what it
 // had and the apps say it is behind). nil without mail or when the accounts can't be listed.
 func (h *Manager) readMail(ctx context.Context) *assistantwire.InboxMailRead {
-	if h.mail == nil || h.connectors.Get("mail") == nil {
+	// Add to Inbox off (#5307): no mail round, so the manager keeps the mail items it has; search, replies and the
+	// knowledge base go on.
+	if h.mail == nil || h.connectors.Get("mail") == nil || !h.connectors.Feeds("mail", connector.FeedInbox) {
 		return nil
 	}
 	accounts, err := h.mail.ListAccounts()

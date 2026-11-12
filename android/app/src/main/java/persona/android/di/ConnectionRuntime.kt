@@ -189,6 +189,12 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
             } }
             if (flows.isEmpty()) flowOf(emptyList()) else combine(flows) { lists -> lists.flatMap { it } }
         }.stateIn(scope, SharingStarted.Eagerly, emptyList())
+        override val writtenAt = groups.flatMapLatest { list ->
+            val flows = list.mapNotNull { it.data?.messages?.writtenAt }
+            if (flows.isEmpty()) flowOf(emptyMap()) else combine(flows) { maps ->
+                maps.fold(emptyMap<String, Long>()) { acc, one -> acc + one }
+            }
+        }.stateIn(scope, SharingStarted.Eagerly, emptyMap())
         override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?) {
             gate.withLock {
                 val group = groupOf(session.machineId) ?: throw IllegalStateException(AppText.get(R.string.app_error_pair_first))
@@ -322,6 +328,10 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
 
     private suspend fun cleanupLocked(revoked: Boolean = false) = withContext(NonCancellable) {
         lastRevoked = revoked
+        // Sign out on each hub before forgetting it (#5538, as Apple's HubSignOut.swift): only a revoked credential
+        // makes the hub drop this device's pushes and Live Activities; forgetting it here does not. The local cleanup
+        // runs either way, so a hub that cannot be reached is not a reason to stay paired.
+        revokeOnHubsLocked()
         closeAllLocked()
         persona.platform.notify.Notify.disconnect(app)
         ways.retain(emptySet())
@@ -350,6 +360,17 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
     private suspend fun closeLocked(group: GroupRuntime) {
         group.close()
         group.data?.let { runCatching { dataStore.closeGroup(it) } }
+    }
+
+    /** Revokes every group's credential on its hub, best-effort per hub. A hub that cannot be reached is not retried. */
+    private suspend fun revokeOnHubsLocked() {
+        for (group in mutableGroups.value) revokeOnHubLocked(group)
+    }
+
+    /** Revokes this device's credential on one hub (#5538): the hub then drops its pushes and Live Activities. */
+    private suspend fun revokeOnHubLocked(group: GroupRuntime?) {
+        val deviceId = group?.data?.credentials?.deviceId?.takeIf { it.isNotBlank() } ?: return
+        revokeCredential(group.connection, deviceId)
     }
 
     /**
@@ -587,6 +608,7 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
     }
 
     private suspend fun removeGroupLocked(groupId: String, revoked: Boolean = false): Unit = withContext(NonCancellable) {
+        revokeOnHubLocked(mutableGroups.value.firstOrNull { it.id == groupId })
         val change = dataStore.change { it.removeGroup(groupId) }
         if (change.document.groups.isEmpty()) {
             // The last group: exactly what disconnecting the only pairing always did.

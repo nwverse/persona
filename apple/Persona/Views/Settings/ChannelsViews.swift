@@ -542,26 +542,27 @@ private struct ChannelDirectoryLoader: ViewModifier {
     }
 }
 
-/// The mark beside a conversation's title: the extension that opened it (#3758, `AutoConversationSource.external`), else
-/// the channel its latest message came in from. One mark: an extension's conversation has no channel of its own.
+/// The mark beside a conversation's title: what opened one Persona opened by itself (`source`, from
+/// `AutoConversations.source`: the Inbox, a scheduled task, Lark /agent, an extension…, #3758, #5195), else the channel
+/// its latest message came in from. One mark: such a conversation has no channel of its own.
 struct ConversationSourceMark: View {
-    var origin: String?
+    var source: AutoConversationSource?
     var channels: [String]?
 
     var body: some View {
-        if let source = AutoConversationSource.external(origin) {
-            ExternalSourceMark(source: source)
+        if let source {
+            AutoSourceMark(source: source)
                 .accessibilityElement()
-                .accessibilityLabel(source.from)
+                .accessibilityLabel(source.markLabel)
         } else {
             ConversationChannelMark(ids: channels)
         }
     }
 }
 
-/// Where an external conversation came from, as a mark of `side` points: Lark's brand for Lark /agent, the extensions
-/// symbol for another extension (#3758).
-struct ExternalSourceMark: View {
+/// What opened a conversation Persona opened by itself, as a mark of `side` points: the source's brand where it has one
+/// (Lark's for Lark /agent, #3758), else its symbol, the one All Chats' filter for it shows (#5195).
+struct AutoSourceMark: View {
     var source: AutoConversationSource
     var side: CGFloat = Theme.Size.markS
 
@@ -583,7 +584,7 @@ struct ExternalSourceLine: View {
 
     var body: some View {
         HStack(spacing: Theme.Space.xs) {
-            ExternalSourceMark(source: source)
+            AutoSourceMark(source: source)
             Text(source.from).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
         }
         .accessibilityElement(children: .combine)

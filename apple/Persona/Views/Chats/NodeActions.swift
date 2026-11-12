@@ -254,8 +254,17 @@ nonisolated enum NodeMenu {
         return tab.isEmpty ? detail : "\(tab) · \(detail)"
     }
 
-    /// Only the agents a launcher starts without a first message: Claude Code (a Codex start needs one).
+    /// Only Claude Code. Codex starts in a tab of its own: a Codex start that fails closes its pane, which here is the
+    /// user's own shell (#5275).
     static func launchableHere(_ l: Launcher) -> Bool { (l.agent ?? "").isEmpty || l.agent == "claude" }
+
+    /// Run Agent Here's footer: the agent starts in the picked shell; where the computer has a Codex launcher, also that
+    /// Codex starts from New Session (#5275). Codex is not mentioned to a computer without it.
+    static func runHereFooter(_ launchers: [Launcher]) -> String {
+        launchers.contains(where: \.isCodex)
+            ? String(localized: "Starts in the selected shell without opening a new tab. Codex starts in a tab of its own: use New Session.")
+            : String(localized: "Starts in the selected shell without opening a new tab.")
+    }
 
     /// The chat of the agent Run Agent Here started on `machine`, from what `panes/agent` answered: it opens the way New
     /// Session opens the one it starts (#3287). nil when the answer names no session: the list stays in front.
@@ -576,7 +585,7 @@ struct RunAgentHereSheet: View {
                         // The pane's shell is a terminal's too: what New Agent grays out is said here (#1643), not hidden.
                         LauncherBlockLine(block: block)
                     } else {
-                        Text("Starts in the selected shell without opening a new tab. Codex needs a first message, so use New Session.")
+                        Text(NodeMenu.runHereFooter(loaded.launchers))
                     }
                 }
             }

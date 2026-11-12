@@ -25,6 +25,7 @@
   "copy_resume_command": "Copy resume command",
   "renamed": "Renamed",
   "change_failed": "Couldn't change: {error}",
+  "change_unconfirmed": "The hub didn't confirm the change within 95 seconds. It may have been applied; check the current settings before trying again.",
   "rename": "Rename",
   "tab_name": "Tab name (herdr tab)",
   "session_name": "Session name",
@@ -66,8 +67,6 @@
   "speed_standard": "Standard",
   "speed_fast": "Fast",
   "header_mode": "Permission mode: {mode}",
-  "mode_unknown": "Unknown",
   "leave_bypass_confirm": "Switch to {mode}",
-  "leave_bypass_detail": "This agent wasn't started with Full access, so it can't be switched back to it from here.",
-  "modes_locked": "Not running: the mode changes while it runs"
+  "leave_bypass_detail": "This agent wasn't started with Full access, so it can't be switched back to it from here."
 }
