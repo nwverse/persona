@@ -211,9 +211,16 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * counted the 69 B of room main had at 0bfcf2879 as its own, and #4743 (+37 B) used part of it, merged in between; ja
  * 593,057 B on main at 18de01b8d, with 0 B of room. And 94 B for the six-line composer (#5674, #5704, #5713: ja
  * 593,151 B on main at 5f60a1c45: the composer's fixed maximum-height token and manual-scroll measurement; the
- * layout is unchanged by this accounting). Raise it on purpose, in the change that needs it.
+ * layout is unchanged by this accounting). And 372 B for forwarding several messages at once (#3838: ja 593,523 B
+ * against 592,798 B on main at 49d8a0092c, +725 B, of which 353 B fit the room main had): while a chat picks, each
+ * message's row gives its first place to the checkbox and goes inert, and the chat hands the composer's place to the
+ * bar; several forwards over the box or in a bubble go to a chunk of their own, the bubble saying "2 forwarded
+ * messages" until it is in; and with no note, "Please look at the forwarded messages above.". The checkbox, the bar,
+ * the picks and the group's bar and card come with Forward to or that chunk. That first-screen code counted +266 B
+ * against main at 5824cdd677; the rest is the minifier renaming App's and ImageViewer's local names, which this count
+ * does not even out (#5760). Raise it on purpose, in the change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 593_151;
+export const FIRST_SCREEN_BUDGET = 593_523;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
