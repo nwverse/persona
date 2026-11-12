@@ -283,7 +283,7 @@
     <string name="chat_tasks_permission_accept_edits">Can edit files</string>
     <string name="chat_tasks_permission_plan">Plan first</string>
     <string name="chat_tasks_permission_auto">Auto</string>
-    <string name="chat_tasks_permission_bypass">Allow all</string>
+    <string name="chat_tasks_permission_bypass">Allow everything</string>
     <string name="chat_tasks_permission_default">Ask every step</string>
     <plurals name="chat_tasks_plan_started">
         <item quantity="one">✓ Started %1$d task</item>
@@ -296,13 +296,13 @@
     <string name="chat_tasks_plan_task_failed">“%1$s” didn\'t start: %2$s</string>
     <string name="chat_tasks_plan_reason_unknown">unknown reason</string>
     <plurals name="chat_tasks_plan_split">
-        <item quantity="one">%1$d task, started like this</item>
+        <item quantity="one">Split into %1$d task, started like this</item>
         <item quantity="other">Split into %1$d tasks, started like this</item>
     </plurals>
-    <string name="chat_tasks_plan_single">Start it like this</string>
+    <string name="chat_tasks_plan_single">Start like this</string>
     <string name="chat_tasks_default_model">Default model</string>
     <string name="chat_tasks_read_only">Read-only requested</string>
-    <string name="chat_tasks_plan_remember">Start ones like these directly next time</string>
+    <string name="chat_tasks_plan_remember">Start these directly</string>
     <plurals name="chat_tasks_plan_start_count">
         <item quantity="one">Start %1$d task</item>
         <item quantity="other">Start %1$d tasks</item>
