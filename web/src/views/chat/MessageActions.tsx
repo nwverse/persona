@@ -10,6 +10,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { t } from "../../i18n";
 import { clock } from "../../lib/format";
 import { sendDraft, type QuotedTask } from "../../lib/drafts";
+import { useIsLatestMessage } from "./latest-message-time";
 import type { ForwardPick } from "../../lib/forward";
 import { addContext, newContext } from "../../lib/links";
 import type { Item } from "../../lib/types";
@@ -111,8 +112,22 @@ function useWhileOpen(live: Rewind["block"] | undefined, open: boolean, closed: 
 }
 
 /** Wraps a message: right-click / long press opens its menu. The hover bar goes under it (with the time), or beside it
- *  (`side`, your own bubbles: they had no row under them, so the layout does not move; the time stays the tooltip), or
- *  over its top right corner (`corner`, a task's card: no row under it either). `task`: "Quote" quotes it as that task. */
+ *  (`side`, your own bubbles: they had no row under them, so the layout does not move; the time leads that bar), or
+ *  over its top right corner (`corner`, a task's card: no row under it either). `task`: "Quote" quotes it as that task.
+ *  The chat's last message keeps its time on screen (#5285): a reply's stays in the row under it, outside the hover
+ *  bar; your own bubble's goes under the bubble (UserBubble). */
+/** The last reply's row under it: the hover bar, then the time, which stays on screen (and on a touch screen, where the bar
+ *  is hidden). Any other message: just the bar. */
+function PinnedTime({ time, children }: { time?: string; children: React.ReactNode }) {
+  if (!time) return <>{children}</>;
+  return (
+    <div className="mt-1.5 flex h-6 items-center" data-latest-time>
+      {children}
+      <span className="ml-1 text-[11px] text-ink-3 tabular-nums">{time}</span>
+    </div>
+  );
+}
+
 export function MessageActions({
   text,
   isUser,
@@ -148,6 +163,7 @@ export function MessageActions({
 }) {
   const [selecting, setSelecting] = useState(false);
   const touch = useMedia(NO_HOVER);
+  const pinned = useIsLatestMessage(ts) && !corner;
   const forwarded = itemId ?? messageId;
   const pick: ForwardPick | undefined = forwarded ? { itemId: forwarded, text, isUser: Boolean(isUser), ts, images, photos } : undefined;
   const actions = useActions(text, Boolean(isUser), ts, task, () => setSelecting(true), pick);
@@ -234,13 +250,15 @@ export function MessageActions({
       >
         {children}
       </div>
+      <PinnedTime time={pinned && !side ? clock(ts) : undefined}>
       <div
         className={cx(
           "hidden h-6 items-center gap-0.5 opacity-0 transition-opacity duration-200 group-hover/msg:opacity-100 focus-within:opacity-100 [@media(hover:hover)]:flex",
           moreAnchor && "opacity-100", // the ⋯ menu is open: its bar stays while the pointer is in the menu
-          side ? "absolute right-full bottom-0.5 mr-1.5" : corner ? "absolute top-2 right-2 rounded-[8px] bg-surface px-0.5 shadow-hairline" : "mt-1.5",
+          side ? "absolute right-full bottom-0.5 mr-1.5" : corner ? "absolute top-2 right-2 rounded-[8px] bg-surface px-0.5 shadow-hairline" : !pinned && "mt-1.5",
         )}
       >
+        {side && ts && !pinned && <span className="mr-1 text-[11px] whitespace-nowrap text-ink-3 tabular-nums">{clock(ts)}</span>}
         {actions
           .filter((a) => a.key !== "select" && !contextActions.includes(a))
           .map((a) => (
@@ -268,8 +286,9 @@ export function MessageActions({
             <Icon name="more" size={14} />
           </button>
         )}
-        {!side && !corner && ts && <span className="ml-1 text-[11px] text-ink-3">{clock(ts)}</span>}
+        {!side && !corner && ts && !pinned && <span className="ml-1 text-[11px] text-ink-3">{clock(ts)}</span>}
       </div>
+      </PinnedTime>
       {touch && !isUser && !side && !corner && (
         <div className="mt-1 flex h-6 items-center gap-5">
           <button type="button" aria-label={t("chat-messageactions.copy_reply")} title={t("chat-messageactions.copy")} onClick={() => void copyText(text)} className="touch-hit flex size-6 items-center justify-center rounded-[6px] text-ink-3">
