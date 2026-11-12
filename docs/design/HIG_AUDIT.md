@@ -328,7 +328,7 @@ Each block lists: Severity, Platform, Location, Violates, Problem, Evidence, Fix
 
 #### HIG-030 Shell top bar and viewer chrome Dynamic Type caps
 - **Severity**: P2. **Platform**: iOS, iPadOS.
-- **Location**: `apple/Shared/Design/Theme.swift:865`, `apple/Shared/Design/Theme.swift:870`, `apple/Persona/DesignSystem/ShellComponents.swift:377`, `apple/Persona/DesignSystem/ShellComponents.swift:163`, `apple/Persona/DesignSystem/ViewerChrome.swift:34`, `apple/Persona/Views/Chat/ImageViewer.swift:217`, `apple/Persona/Views/Inbox/Lark/LarkConversationsView.swift:289`.
+- **Location**: `apple/Shared/Design/Theme.swift:814`, `apple/Shared/Design/Theme.swift:819`, `apple/Persona/DesignSystem/ShellComponents.swift:377`, `apple/Persona/DesignSystem/ShellComponents.swift:163`, `apple/Persona/DesignSystem/ViewerChrome.swift:34`, `apple/Persona/Views/Chat/ImageViewer.swift:217`, `apple/Persona/Views/Inbox/Lark/LarkConversationsView.swift:289`.
 - **Violates**: [Typography][typo] and [Accessibility][a11y]: support enlargement of at least 200%.
 - **Problem**: bars cap at xxxLarge (about 1.35x), and the compact switch fallback caps at Large, so bar text stops short of accessibility sizes. The caps are documented and tested; the Large cap is only the second branch of a `ViewThatFits`. Viewer bars are mostly icon-only. Debatable, since the chat content itself scales.
 - **Evidence**: `static let topBarLargestTypeSize: DynamicTypeSize = .xxxLarge`.
@@ -392,7 +392,7 @@ Each block lists: Severity, Platform, Location, Violates, Problem, Evidence, Fix
 
 #### HIG-038 Shell composer, drawer and segment colors are fixed hex pairs
 - **Severity**: P2. **Platform**: iOS.
-- **Location**: `apple/Shared/Design/Theme.swift:842`, `apple/Shared/Design/Theme.swift:845`, `apple/Shared/Design/Theme.swift:850`, `apple/Persona/DesignSystem/ShellComposerBar.swift:476`, `apple/Persona/Views/Shell/ShellView.swift:26`.
+- **Location**: `apple/Shared/Design/Theme.swift:791`, `apple/Shared/Design/Theme.swift:794`, `apple/Shared/Design/Theme.swift:799`, `apple/Persona/DesignSystem/ShellComposerBar.swift:476`, `apple/Persona/Views/Shell/ShellView.swift:26`.
 - **Violates**: [Dark Mode][dark]: avoid hard-coded colors; use system backgrounds for elevated levels.
 - **Problem**: the ChatGPT-style neutral palette does not use base or elevated system levels, so a composer in a sheet looks the same in both. Both appearances are readable. The Google sign-in button colors (`apple/Persona/Views/Mail/MailViews.swift:561`) and the dark-forced image editor (`apple/Persona/Views/Chat/ImageEditor.swift:72`) are brand and content exceptions. The watch card fill is HIG-082.
 - **Evidence**: `Theme.Shell.composer/drawer/segment` are fixed light/dark hex pairs.
@@ -446,11 +446,11 @@ Each block lists: Severity, Platform, Location, Violates, Problem, Evidence, Fix
 - **Evidence**: `reduceMotion ? Theme.Motion.state : Theme.Motion.composerSwap` changes only the curve.
 - **Fix**: use `.opacity` in both branches when reduced; skip the press scale; gate the pulse with `isActive: listening && !reduceMotion`.
 
-#### HIG-045 Message lift menu and attach bar animate scale and blur without a fallback
+#### HIG-045 Message lift menu animates scale and blur without a fallback
 - **Severity**: P2. **Platform**: iOS.
-- **Location**: `apple/Persona/Views/Chat/MessageLift.swift:94`, `apple/Persona/Views/Chat/MessageLift.swift:119`, `apple/Persona/Views/Chat/MessageLift.swift:160`, `apple/Persona/Views/Chat/MessageMenu.swift:305`, `apple/Persona/Views/Chat/MessageMenu.swift:393`, `apple/Persona/Views/Chat/AttachSheet.swift:360`, `apple/Persona/Views/Chat/AttachSheet.swift:481`.
+- **Location**: `apple/Persona/Views/Chat/MessageLift.swift:94`, `apple/Persona/Views/Chat/MessageLift.swift:119`, `apple/Persona/Views/Chat/MessageLift.swift:160`, `apple/Persona/Views/Chat/MessageMenu.swift:305`, `apple/Persona/Views/Chat/MessageMenu.swift:393`.
 - **Violates**: [Accessibility][a11y] (Reduce Motion); [Motion][motion].
-- **Problem**: long-press blurs the page, the bar scales in from 0.85 and the drag-back spring bounces. `reduceMotion` is declared at `MessageLift.swift:119` but never read. The attach bar-away state scales and blurs by 10.
+- **Problem**: long-press blurs the page, the bar scales in from 0.85 and the drag-back spring bounces. `reduceMotion` is declared at `MessageLift.swift:119` but never read. (The attach panel's bar now cross-fades, without scale or blur, and none with Reduce Motion: #4312.)
 - **Evidence**: `.transition(.scale(scale: 0.85, anchor: p.below ? .top : .bottom).combined(with: .opacity))`.
 - **Fix**: use the declared flag: opacity transition, bounce-0 spring, no blur or scale when reduced.
 
@@ -512,7 +512,7 @@ Each block lists: Severity, Platform, Location, Violates, Problem, Evidence, Fix
 
 #### HIG-053 Custom Assistant and Agents switch replaces the tab bar on iPhone
 - **Severity**: P2. **Platform**: iOS.
-- **Location**: `apple/Persona/DesignSystem/ShellComponents.swift:19`, `apple/Persona/DesignSystem/ShellComponents.swift:73`, `apple/Persona/DesignSystem/ShellComponents.swift:130`, `apple/Persona/DesignSystem/ShellComponents.swift:165`, `apple/Shared/Design/Theme.swift:860`, `apple/Persona/Views/RootView.swift:73`.
+- **Location**: `apple/Persona/DesignSystem/ShellComponents.swift:19`, `apple/Persona/DesignSystem/ShellComponents.swift:73`, `apple/Persona/DesignSystem/ShellComponents.swift:130`, `apple/Persona/DesignSystem/ShellComponents.swift:165`, `apple/Shared/Design/Theme.swift:809`, `apple/Persona/Views/RootView.swift:73`.
 - **Violates**: [Accessibility][a11y] (44 default); [VoiceOver][vo]; [Tab bars][tab].
 - **Problem**: top-level navigation on iPhone (when the shell is on) is a custom two-segment capsule 72x36pt with only `isSelected` (no container or "1 of 2" semantics). Tapping the selected segment opens a menu, with only a "Chat menu" hint. Swipe paging and the top position are mitigations or debatable. The system `TabView` serves iPad and the shell-off path.
 - **Evidence**: `.scaledFrame(width: Theme.Shell.segmentWidth, height: Theme.Shell.switchHeight - Theme.Space.s)`.

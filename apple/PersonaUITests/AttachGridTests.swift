@@ -77,7 +77,8 @@ final class AttachGridTests: XCTestCase {
         XCTAssertLessThanOrEqual(send.frame.maxY, keyboard.frame.minY + 1, "Send is under the keyboard: \(send.frame), the keyboard \(keyboard.frame)")
         XCTAssertGreaterThanOrEqual(caption.frame.minY, app.windows.firstMatch.frame.minY, "the caption field went over the top: \(caption.frame)")
         XCTAssertTrue(caption.isHittable, "the caption field can't be reached")
-        XCTAssertEqual(caption.value as? String, "看看这张图", "what was typed is not in the field")
+        // The caption is the conversation's draft, which the app keeps: what was typed ends it.
+        XCTAssertTrue((caption.value as? String ?? "").hasSuffix("看看这张图"), "what was typed is not in the field: \(caption.value ?? "")")
     }
 
     /// The panel is a half-height system sheet with an even grid (#4312): it opens at the medium detent with the chat
@@ -132,18 +133,44 @@ final class AttachGridTests: XCTestCase {
         let keyboard = app.keyboards.firstMatch
         XCTAssertTrue(keyboard.waitForExistence(timeout: 10), "no keyboard")
         sleep(1)
-        caption.typeText("看看这张图")
+        // ASCII: typing Chinese through the simulator's English keyboard stalls its keyboard queue.
+        caption.typeText("Look at this one")
         sleep(1)
         shot(app, "3-keyboard")
         if check {
             XCTAssertLessThanOrEqual(caption.frame.maxY, keyboard.frame.minY + 1, "the caption field is under the keyboard: \(caption.frame), the keyboard \(keyboard.frame)")
             XCTAssertTrue(caption.isHittable, "the caption field can't be reached")
-            XCTAssertEqual(caption.value as? String, "看看这张图", "what was typed is not in the field")
+            // The caption is the conversation's draft, which the app keeps: what was typed ends it.
+            XCTAssertTrue((caption.value as? String ?? "").hasSuffix("Look at this one"), "what was typed is not in the field: \(caption.value ?? "")")
         }
     }
 
+    /// Opened while typing, the composer's keyboard goes down and stays down after the sheet is swiped away; what was
+    /// picked lands in the composer once, and the next opening starts with nothing picked (#4312).
+    @MainActor func testSwipeDownKeepsThePicksAndTheKeyboardDown() throws {
+        let (app, cells) = try openPanel(typingFirst: true)
+        cells.element(boundBy: 0).tap()
+        XCTAssertEqual(cells.element(boundBy: 0).value as? String, "已选，第 1 张", "the first photo was not picked")
+        let sheet = app.descendants(matching: .any)["attach-sheet"].firstMatch
+        sheet.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.02))
+            .press(forDuration: 0.05, thenDragTo: app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98)))
+        XCTAssertTrue(sheet.waitForNonExistence(timeout: 5), "the sheet did not go on a swipe down")
+        sleep(1)
+        XCTAssertFalse(app.keyboards.firstMatch.exists, "the composer's keyboard came back after the sheet went")
+        let removes = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@ OR label BEGINSWITH %@", "移除图片", "Remove Image"))
+        XCTAssertTrue(removes.firstMatch.waitForExistence(timeout: 10), "the picked photo is not in the composer:\n\(app.debugDescription)")
+        XCTAssertEqual(removes.count, 1, "the picked photo went into the composer \(removes.count) times")
+        shot(app, "4-after-swipe")
+        app.buttons["shell-composer-add"].firstMatch.tap()
+        XCTAssertTrue(cells.firstMatch.waitForExistence(timeout: 15), "the panel did not open again")
+        sleep(1)
+        let picked = (0..<cells.count).filter { !((cells.element(boundBy: $0).value as? String) ?? "").isEmpty }
+        XCTAssertEqual(picked, [], "the next opening starts with photos picked")
+    }
+
     /// Launches against the mock hub with the camera cell shown, opens the panel and gives it the photo library.
-    @MainActor private func openPanel() throws -> (XCUIApplication, XCUIElementQuery) {
+    /// `typingFirst`: the composer's field has the keyboard when + is tapped.
+    @MainActor private func openPanel(typingFirst: Bool = false) throws -> (XCUIApplication, XCUIElementQuery) {
         guard let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] else { throw XCTSkip("needs scripts/mock/mock_hub.py (PERSONA_MOCK_HUB)") }
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
@@ -151,6 +178,12 @@ final class AttachGridTests: XCTestCase {
         app.launchPinned()
         let plus = app.buttons.matching(NSPredicate(format: "(identifier == %@ OR label IN %@) AND enabled == true", "shell-composer-add", ["添加", "Add"])).firstMatch
         XCTAssertTrue(plus.waitForExistence(timeout: 30), "no + in the composer:\n\(app.debugDescription)")
+        if typingFirst {
+            let field = app.descendants(matching: .any)["shell-composer-field"].firstMatch
+            XCTAssertTrue(field.waitForExistence(timeout: 10), "no composer field")
+            field.tap()
+            XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 10), "no keyboard for the composer")
+        }
         // A fresh install asks for the library on the first +: give it all (the runner's grant does not always hold, and
         // the default handler would deny it).
         addUIInterruptionMonitor(withDescription: "photos access") { alert in

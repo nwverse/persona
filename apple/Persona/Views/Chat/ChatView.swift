@@ -4164,7 +4164,7 @@ struct Composer: View, Equatable {
     @State private var editingIndex: Int?
     @State private var showFiles = false
     #if os(iOS)
-    /// The iPhone's 「+」 panel (`AttachSheet`, Telegram's attachment menu).
+    /// The iPhone's 「+」 panel (`AttachSheet`), a half-height system sheet.
     @State private var attachPanel = AttachPanel()
     #endif
     @State private var selection: TextSelection?
@@ -4777,18 +4777,13 @@ struct Composer: View, Equatable {
         }
     }
 
-    /// The iPhone's 「+」 opens the panel (iPad and the Mac keep the menu). The keyboard goes down first and the panel
-    /// follows a moment later, the two moving together (Telegram's).
+    /// The iPhone's 「+」 opens the panel's sheet (iPad and the Mac keep the menu); the composer's keyboard goes down.
     private var attachOpener: ((CGRect) -> Void)? {
         #if os(iOS)
         guard UIDevice.current.userInterfaceIdiom == .phone else { return nil }
-        return { frame in
-            guard focused else { attachPanel.open(from: frame); return }
+        return { _ in
             focused = false
-            Task {
-                try? await Task.sleep(for: Theme.Attach.afterKeyboard)
-                attachPanel.open(from: frame)
-            }
+            attachPanel.open()
         }
         #else
         return nil
