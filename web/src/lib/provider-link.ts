@@ -42,10 +42,11 @@ const FRAGMENT_HEAD = "import=";
 const EFFORTS = new Set(["minimal", "low", "medium", "high", "xhigh", "max"]);
 const PROTOCOL = { messages: "anthropic-messages", responses: "openai-responses", chat: "openai-chat" } as const;
 
-/** The cindy protocol a provider is reached by: a Claude Code launcher's Messages, or a direct API's; null for the
- *  rest (Codex, Antigravity, omp), which no cindy endpoint brings back as they are. */
+/** The cindy protocol a provider is reached by: a Claude Code launcher's Messages, or a direct Responses or Chat
+ *  Completions API's; null for the rest, which no cindy endpoint brings back as they are: Codex, Antigravity, omp, and a
+ *  direct Messages API (the hub reads a Messages endpoint back as a Claude Code gateway). */
 function protocolOf(p: LinkSource): string | null {
-  if (p.kind === "api") return PROTOCOL[p.api ?? "messages"] ?? null;
+  if (p.kind === "api") return p.api === "responses" || p.api === "chat" ? PROTOCOL[p.api] : null;
   return !p.agent || p.agent === "claude" ? PROTOCOL.messages : null;
 }
 
@@ -89,18 +90,21 @@ function linkModel(m: ProviderModel): LinkModel {
   return Object.keys(out).length === 1 ? m.id : out;
 }
 
-/** The provider's models, its default first, each ID once (an empty or overlong one is left out: the hub would refuse
- *  the link for it). */
+/** The provider's models, its default first, each ID trimmed and once, as the hub compares them (an empty or overlong
+ *  one is left out, and a repeat: the hub would refuse the link for it). */
 function modelsOf(p: LinkSource): ProviderModel[] {
   const list = p.models ?? [];
   const def = p.model?.trim();
-  const all = def ? [list.find((m) => m.id === def) ?? { id: def }, ...list] : list;
+  const all = def ? [list.find((m) => m.id.trim() === def) ?? { id: def }, ...list] : list;
   const seen = new Set<string>();
-  return all.filter((m) => {
-    const ok = !!m.id.trim() && m.id.length <= MAX_ID && !seen.has(m.id);
-    seen.add(m.id);
-    return ok;
-  });
+  const out: ProviderModel[] = [];
+  for (const m of all) {
+    const id = m.id.trim();
+    if (!id || id.length > MAX_ID || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id === m.id ? m : { ...m, id });
+  }
+  return out;
 }
 
 const utf8 = (s: string) => new TextEncoder().encode(s);

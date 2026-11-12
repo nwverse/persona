@@ -184,4 +184,9 @@ describe("what a refused link says", () => {
     expect(noteText({ code: "link_field" })).toBe(t("lib-provider-paste.link_field_unknown"));
     for (const code of ["link_invalid", "link_version", "link_too_long", "link_field"]) expect(noteText({ code })).not.toBe(t("lib-provider-paste.other"));
   });
+
+  it("says a cindy endpoint's own request path can't be set here", () => {
+    expect(noteText({ code: "cindy_request_path" })).toBe(t("lib-provider-paste.cindy_request_path"));
+    expect(noteText({ code: "cindy_request_path" })).not.toBe(t("lib-provider-paste.other"));
+  });
 });

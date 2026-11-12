@@ -705,8 +705,7 @@ function Models() {
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState("");
   // an import link this page was opened with (#5420, lib/import-link.ts): Add opens on it. Read without taking it
-  // (StrictMode runs this twice), then forgotten there once mounted; closing the wizard forgets it here too. One opened
-  // while the page is up (the same page opened again with a link) takes the place of whatever is open.
+  // (StrictMode runs this twice), then forgotten there once mounted; closing the wizard forgets it here too.
   const [link, setLink] = useState(importLinkHeld);
   // `?add=1` opens the wizard, `?launcher=<name>` one provider: where "Connect a model" / "Change the key" lead (lib/readiness.ts)
   const [open, setOpen] = useState<string | null>(() => (link ? null : new URLSearchParams(location.search).get("launcher")));
@@ -718,18 +717,27 @@ function Models() {
   const [importAlias, setImportAlias] = useState<FoundAlias | null>(null);
   // what a stored provider opens with when a paste goes on with it
   const [editDraft, setEditDraft] = useState<EditDraft | null>(null);
+  // One opened while the page is up (pasted over it) opens Add in place of a provider's details, but never over a
+  // dialog with something typed in it (the wizard, the copy dialog, the alias import): it waits, held, until that closes.
+  const busy = editing !== null || copying !== null || importing;
+  const busyNow = useRef(busy);
+  busyNow.current = busy;
+  const takeLink = (l: string) => {
+    dropImportLink();
+    setOpen(null);
+    setImportAlias(null);
+    setEditDraft(null);
+    setLink(l);
+    setEditing("new");
+  };
   useEffect(() => {
     dropImportLink();
-    return onImportLink((l) => {
-      dropImportLink();
-      setOpen(null);
-      setCopying(null);
-      setImporting(false);
-      setEditDraft(null);
-      setLink(l);
-      setEditing("new");
-    });
+    return onImportLink((l) => (busyNow.current ? toast(t("settings-providerlink.link_waits"), "info") : takeLink(l)));
   }, []);
+  useEffect(() => {
+    const l = importLinkHeld();
+    if (!busy && l) takeLink(l);
+  }, [busy]);
 
   // the list read again; rejects when it couldn't be
   const refresh = () => loadLaunchers<LauncherView>().then((r) => (setList(r.launchers), setSync(r.sync ?? []), r.launchers));

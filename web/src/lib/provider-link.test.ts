@@ -4,7 +4,8 @@
 // link it takes out of the address bar when a page opens with one.
 import { afterEach, describe, expect, it } from "vitest";
 import fixture from "../../../spec/fixtures/provider-import-link/cases.json";
-import { dropImportLink, holdImportLink, importLinkHeld, takeImportLink } from "./import-link";
+import { takeToken } from "./auth";
+import { dropImportLink, holdImportLink, importLinkHeld, onImportLink, restoreImportLink, takeImportLink, takeImportLinkOnStart } from "./import-link";
 import { encodeImportData, importLinkHref, linkable, linkKey, linkPayload, type LinkPayload, type LinkSource } from "./provider-link";
 import type { ProviderModel } from "./providers";
 
@@ -51,11 +52,17 @@ describe("the links the web builds (spec/fixtures/provider-import-link encode)",
 });
 
 describe("which providers can be shared", () => {
-  it("takes Persona's Claude Code gateways and direct APIs on a plain address", () => {
+  it("takes Persona's Claude Code gateways and direct Responses and Chat Completions APIs on a plain address", () => {
     expect(linkable(GATEWAY)).toBe(true);
     expect(linkable({ ...GATEWAY, kind: undefined, agent: undefined })).toBe(true);
     expect(linkable({ ...GATEWAY, source: "jarvis" })).toBe(true);
-    for (const api of ["messages", "responses", "chat"] as const) expect(linkable({ ...GATEWAY, kind: "api", agent: undefined, api })).toBe(true);
+    for (const api of ["responses", "chat"] as const) expect(linkable({ ...GATEWAY, kind: "api", agent: undefined, api })).toBe(true);
+  });
+
+  it("leaves out a direct Messages API: its link would come back as a Claude Code gateway", () => {
+    expect(linkable({ ...GATEWAY, kind: "api", agent: undefined, api: "messages" })).toBe(false);
+    expect(linkable({ ...GATEWAY, kind: "api", agent: undefined, api: undefined })).toBe(false);
+    expect(linkPayload({ ...GATEWAY, kind: "api", api: "messages" })).toBeNull();
   });
 
   it("leaves out other runtimes, a computer's own launchers and addresses that can hold a key", () => {
@@ -94,6 +101,11 @@ describe("the payload", () => {
     ];
     const { payload } = linkPayload({ ...GATEWAY, model: "c", models })!;
     expect(payload.endpoints[0]!.models).toEqual(["c", "a", { id: "b", reasoning: true, reasoningEfforts: ["high"] }]);
+  });
+
+  it("trims each model ID and counts IDs equal once trimmed as one, as the hub does", () => {
+    const { payload } = linkPayload({ ...GATEWAY, model: " m", models: [{ id: "m" }, { id: "m " }, { id: " x ", name: "X" }, { id: "\t" }] })!;
+    expect(payload.endpoints[0]!.models).toEqual(["m", { id: "x", name: "X" }]);
   });
 
   it("brings only the model IDs when their details don't fit, and no list when the IDs don't either", () => {
@@ -141,6 +153,44 @@ describe("a page opened with an import link", () => {
   it("takes the whole link and keeps the settings page's query, dropping the fragment", () => {
     expect(takeImportLink(`${O}/settings?tab=models#import=eyJr&v=1`)).toEqual({ text: `${O}/settings?tab=models#import=eyJr&v=1`, rest: "/settings?tab=models" });
     expect(takeImportLink(`${O}/settings?tab=models&manager=m1#v=1&import=eyJr`)?.rest).toBe("/settings?tab=models&manager=m1");
+  });
+
+  it("keeps whatever else the fragment holds for whoever takes it, the link's text whole", () => {
+    expect(takeImportLink(`${O}/settings?tab=models#token=jp_x&import=eyJr&v=1`)).toEqual({ text: `${O}/settings?tab=models#token=jp_x&import=eyJr&v=1`, rest: "/settings?tab=models#token=jp_x" });
+    expect(takeImportLink(`${O}/overview#import=eyJr&hubs=h1`)?.rest).toBe("/settings?tab=models#hubs=h1");
+  });
+
+  it("leaves the address bar as the page starts, a sign-in link's token still there to sign in with", () => {
+    history.replaceState(null, "", "/s/abc?x=1#token=jp_x&import=eyJr&v=1");
+    const href = location.href;
+    takeImportLinkOnStart();
+    expect(location.pathname + location.search + location.hash).toBe("/settings?tab=models#token=jp_x");
+    expect(importLinkHeld()).toBe(href);
+    expect(takeToken(location.href)).toEqual({ token: "jp_x", rest: "/settings?tab=models" });
+    // nothing to take: nothing changes
+    dropImportLink();
+    history.replaceState(null, "", "/settings?tab=models#settings-providers");
+    takeImportLinkOnStart();
+    expect(location.hash).toBe("#settings-providers");
+    expect(importLinkHeld()).toBeNull();
+  });
+
+  it("puts a link still waiting back in the address bar for a reload, and nothing when none waits", () => {
+    history.replaceState(null, "", "/settings?tab=models");
+    restoreImportLink();
+    expect(location.pathname + location.search + location.hash).toBe("/settings?tab=models");
+    holdImportLink(`${location.origin}/settings?tab=models#import=eyJr`);
+    restoreImportLink();
+    expect(location.pathname + location.search + location.hash).toBe("/settings?tab=models#import=eyJr");
+  });
+
+  it("tells a page already open on the providers about each link held", () => {
+    const seen: string[] = [];
+    const stop = onImportLink((l) => seen.push(l));
+    holdImportLink("a");
+    stop();
+    holdImportLink("b");
+    expect(seen).toEqual(["a"]);
   });
 
   it("opens the Model providers tab from another page or another tab", () => {

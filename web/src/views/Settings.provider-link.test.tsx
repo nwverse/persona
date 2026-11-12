@@ -15,11 +15,14 @@ vi.mock("../lib/store", async (original) => ({
   ...(await original<typeof import("../lib/store")>()),
   useStore: (select: (state: { features: string[]; machines: unknown[]; conn: string; link: { networkUp: boolean; restarting: boolean }; hubName: string; mesh: unknown[] }) => unknown) => select({ features: [], machines: [], conn: "online", link: { networkUp: true, restarting: false }, hubName: "", mesh: [] }),
 }));
-type WizardProps = { existing: unknown; link?: string | null; onClose: () => void };
-const seen = vi.hoisted(() => ({ wizard: null as unknown }));
+type WizardProps = { existing: unknown; link?: string | null; onClose: () => void; onImportAlias?: (a: FoundAlias) => void };
+type ImportProps = { open: boolean; alias?: string; onClose: () => void };
+const seen = vi.hoisted(() => ({ wizard: null as unknown, import: null as unknown }));
 vi.mock("./settings/ModelConfiguration", () => ({ ModelConfiguration: () => null }));
 vi.mock("./settings/ProviderWizard", () => ({ ProviderWizard: (p: unknown) => ((seen.wizard = p), null) }));
-vi.mock("./settings/ProviderImport", () => ({ ProviderImport: () => null }));
+vi.mock("./settings/ProviderImport", () => ({ ProviderImport: (p: unknown) => ((seen.import = p), null) }));
+const toasts = vi.hoisted(() => [] as string[]);
+vi.mock("../ui/atoms", async (original) => ({ ...(await original<typeof import("../ui/atoms")>()), toast: (text: string) => void toasts.push(text) }));
 vi.mock("./settings/LauncherQuota", () => ({ LauncherQuota: () => null }));
 vi.mock("../lib/pwa", async (original) => ({ ...(await original<typeof import("../lib/pwa")>()), useInstall: () => "installed" }));
 const GW = {
@@ -40,6 +43,7 @@ vi.mock("../lib/api", async (original) => ({
 
 import { t } from "../i18n";
 import { dropImportLink, holdImportLink, importLinkHeld } from "../lib/import-link";
+import type { FoundAlias } from "../lib/provider-paste";
 import { Settings } from "./Settings";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -49,6 +53,7 @@ let root: Root;
 let copied: string[];
 const flush = async () => { for (let i = 0; i < 6; i++) await act(async () => { await Promise.resolve(); }); };
 const wizard = () => seen.wizard as WizardProps;
+const importer = () => seen.import as ImportProps;
 const text = () => document.body.textContent ?? "";
 const buttons = () => [...document.body.querySelectorAll("button")];
 const byLabel = (label: string) => buttons().find((b) => b.getAttribute("aria-label") === label);
@@ -86,6 +91,7 @@ async function detail(title: string) {
 beforeEach(() => {
   LIST.launchers = [GW, CODEX, ALIAS];
   copied = [];
+  toasts.length = 0;
   Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: (s: string) => (copied.push(s), Promise.resolve()) } });
   history.replaceState(null, "", "/settings?tab=models");
   host = document.createElement("div");
@@ -123,6 +129,52 @@ describe("a page opened with an import link", () => {
     expect(wizard()).toMatchObject({ existing: "new", link: LINK });
     expect(importLinkHeld()).toBeNull();
     expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it("waits for the wizard to close instead of throwing away what is in it, then opens", async () => {
+    await mount();
+    await click(buttons().find((b) => b.textContent?.startsWith(t("settings.add_provider")))!);
+    await act(async () => holdImportLink(LINK));
+    await flush();
+    expect(wizard()).toMatchObject({ existing: "new", link: null });
+    expect(toasts).toEqual([t("settings-providerlink.link_waits")]);
+    expect(importLinkHeld()).toBe(LINK);
+    act(() => wizard().onClose());
+    await flush();
+    expect(wizard()).toMatchObject({ existing: "new", link: LINK });
+    expect(importLinkHeld()).toBeNull();
+  });
+
+  it("waits for the copy dialog to close, keeping the key typed there until then", async () => {
+    await mount();
+    await detail("Example Gateway");
+    await click(byLabel(t("settings-providerlink.more"))!);
+    await click(buttons().find((b) => b.textContent?.includes(t("settings-providerlink.copy_link")))!);
+    await click(keySwitch());
+    type(keyBox()!, "FAKE-EXAMPLE-KEY");
+    await act(async () => holdImportLink(LINK));
+    await flush();
+    expect(keyBox()!.value).toBe("FAKE-EXAMPLE-KEY");
+    expect(wizard()).toMatchObject({ existing: null });
+    expect(toasts).toEqual([t("settings-providerlink.link_waits")]);
+    await click(button(t("common.cancel")));
+    expect(wizard()).toMatchObject({ existing: "new", link: LINK });
+  });
+
+  it("waits for the alias import to close, then opens with that import's alias forgotten", async () => {
+    await mount();
+    await click(buttons().find((b) => b.textContent?.startsWith(t("settings.add_provider")))!);
+    act(() => wizard().onImportAlias!({ name: "cc_alias", base_url: "https://gateway.example.invalid", machine: "laptop", computer: "Laptop", online: true }));
+    await flush();
+    expect(importer()).toMatchObject({ open: true, alias: "cc_alias" });
+    await act(async () => holdImportLink(LINK));
+    await flush();
+    expect(importer()).toMatchObject({ open: true, alias: "cc_alias" });
+    expect(wizard()).toMatchObject({ existing: null });
+    act(() => importer().onClose());
+    await flush();
+    expect(wizard()).toMatchObject({ existing: "new", link: LINK });
+    expect(importer()).toMatchObject({ open: false, alias: undefined });
   });
 
   it("opens nothing without one", async () => {
