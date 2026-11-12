@@ -360,8 +360,8 @@ export function modelChipLabel(model: string | undefined): string {
   const word = (w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
   const claude = /^claude-([a-z]+)-(\d+)(?:-(\d+))?$/i.exec(id);
   if (claude) return `${word(claude[1])} ${claude[3] ? `${claude[2]}.${claude[3]}` : claude[2]}`;
-  const gpt = /^gpt-([\d.]+)(?:-(mini|nano))?$/i.exec(id);
-  if (gpt) return `GPT-${gpt[1]}${gpt[2] ? ` ${word(gpt[2])}` : ""}`;
+  const gpt = /^gpt-([\d.]+)((?:-[a-z0-9]+)*)$/i.exec(id);
+  if (gpt) return `GPT-${gpt[1]}${gpt[2].split("-").filter(Boolean).map((w) => ` ${word(w)}`).join("")}`;
   return id.split("-").filter(Boolean).map(word).join(" ");
 }
 

@@ -180,6 +180,9 @@ describe("subagent cards (#5030)", () => {
     expect(modelChipLabel("us.anthropic.claude-sonnet-4-6")).toBe("Sonnet 4.6");
     expect(modelChipLabel("gateway/claude-sonnet-4-6")).toBe("Sonnet 4.6");
     expect(modelChipLabel("gpt-5.4-mini")).toBe("GPT-5.4 Mini");
+    expect(modelChipLabel("gpt-5-codex")).toBe("GPT-5 Codex");
+    expect(modelChipLabel("gpt-5.1-codex-max")).toBe("GPT-5.1 Codex Max");
+    expect(modelChipLabel("gpt-5")).toBe("GPT-5");
     expect(modelChipLabel("some-future-model")).toBe("Some Future Model");
     expect(modelChipLabel(undefined)).toBe("");
     expect(modelChipLabel("  ")).toBe("");
