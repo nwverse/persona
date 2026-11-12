@@ -1,6 +1,7 @@
 package persona.feature.machines
 
 import androidx.activity.ComponentActivity
+import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -216,5 +217,40 @@ class MachineAgentPriorityUiTest {
         rule.onNodeWithContentDescription("Back").assertIsDisplayed().performClick()
 
         rule.onNodeWithText("Machine 12").assertIsDisplayed()
+    }
+
+    @Config(sdk = [35], qualifiers = "en-w400dp-h900dp-xhdpi")
+    @Test
+    fun summaryUsesSingularAndPluralAgentsCorrectly() {
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                Text(machineSummaryText(MachineSummary(2, 3, 3, 1)))
+                Text(machineSummaryText(MachineSummary(2, 3, 3, 2)))
+            }
+        }
+        rule.onNodeWithText("2 of 3 online · 3 needing attention · 1 agent needs you").assertExists()
+        rule.onNodeWithText("2 of 3 online · 3 needing attention · 2 agents need you").assertExists()
+    }
+
+    @Config(sdk = [35], qualifiers = "zh-w400dp-h900dp-xhdpi")
+    @Test
+    fun summaryUsesChineseResourcesForOneAgent() {
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                Text(machineSummaryText(MachineSummary(2, 3, 3, 1)))
+            }
+        }
+        rule.onNodeWithText("2/3 台在线，3 台需要注意，1 个 Agent 需要你").assertExists()
+    }
+
+    @Config(sdk = [35], qualifiers = "ja-w400dp-h900dp-xhdpi")
+    @Test
+    fun summaryUsesJapaneseResourcesForOneAgent() {
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                Text(machineSummaryText(MachineSummary(2, 3, 3, 1)))
+            }
+        }
+        rule.onNodeWithText("2/3台がオンライン、3台が要注意、1件のエージェントが要対応").assertExists()
     }
 }

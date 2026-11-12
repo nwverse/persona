@@ -25,6 +25,13 @@ import persona.core.designsystem.icons.PhIcons
 import persona.core.navigation.*
 
 @Composable
+internal fun machineSummaryText(summary: MachineSummary): String {
+    val attention = pluralStringResource(R.plurals.machines_attention, summary.attention, summary.attention)
+    val agents = pluralStringResource(R.plurals.machines_agents_needs_you, summary.needsYou, summary.needsYou)
+    return stringResource(R.string.machines_summary_with_agents, summary.online, summary.total, attention, agents)
+}
+
+@Composable
 internal fun MachinesScreen(
     machineId: String?, model: MachinesViewModel, navigator: Navigator, actions: MachineActionsViewModel? = null, launcherPages: Boolean = false,
     /** What extensions draw on this machine's page, after its own sections (docs/extensions/extensions.md "UI slots"). */
@@ -114,7 +121,7 @@ internal fun MachinesScreen(
     val listState = rememberMachineGridListState(ids, machineGridColumns(contentWidth))
     JListPage(
         title = if (machineId == null) stringResource(R.string.machines_title) else machine?.displayName ?: stringResource(R.string.machines_title_detail),
-        summary = if (machineId == null) stringResource(R.string.machines_summary_with_agents, listSummary.online, listSummary.total, listSummary.attention, listSummary.needsYou) else null,
+        summary = if (machineId == null) machineSummaryText(listSummary) else null,
         onBack = navigator::back, largeTitle = machineId == null,
         state = listState,
         actions = {
