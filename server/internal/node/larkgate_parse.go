@@ -9,6 +9,7 @@ import (
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/shellcmd"
+	"mvdan.cc/sh/v3/syntax"
 )
 
 var (
@@ -176,7 +177,7 @@ func classifyLarkDepth(cmd string, gates []proto.CommandGate, cwd string, risk l
 					v.other = true
 				}
 			}
-			c, deny, ok := parseGateCall(g, words[1:], vars, cwd)
+			c, deny, ok := parseGateCall(g, words[1:], vars, cwd, !unquotedCommandParameter(s.Text))
 			if deny != "" {
 				v.deny = deny
 				return v
@@ -331,8 +332,61 @@ func gateAimed(gates []proto.CommandGate, text string) (proto.CommandGate, bool)
 	return proto.CommandGate{}, false
 }
 
+// unquotedCommandParameter reports a parameter expansion that shell field
+// splitting can turn into extra arguments. Redirect targets are not command
+// arguments, and quoted expansions stay in one argument.
+func unquotedCommandParameter(cmd string) bool {
+	cmd = strings.TrimSpace(cmd)
+	for {
+		stripped := false
+		for _, keyword := range []string{"do", "then", "else"} {
+			if len(cmd) > len(keyword) && cmd[:len(keyword)] == keyword && strings.ContainsRune(" \t\n", rune(cmd[len(keyword)])) {
+				cmd = strings.TrimSpace(cmd[len(keyword):])
+				stripped = true
+			}
+		}
+		if !stripped {
+			break
+		}
+	}
+	tree, err := syntax.NewParser().Parse(strings.NewReader(cmd), "")
+	if err != nil {
+		return true
+	}
+	found := false
+	scanWord := func(word *syntax.Word) {
+		syntax.Walk(word, func(node syntax.Node) bool {
+			switch node.(type) {
+			case *syntax.SglQuoted, *syntax.DblQuoted:
+				return false
+			case *syntax.ParamExp:
+				found = true
+				return false
+			}
+			return true
+		})
+	}
+	syntax.Walk(tree, func(node syntax.Node) bool {
+		if found {
+			return false
+		}
+		call, ok := node.(*syntax.CallExpr)
+		if !ok {
+			return true
+		}
+		for _, arg := range call.Args {
+			scanWord(arg)
+			if found {
+				break
+			}
+		}
+		return false
+	})
+	return found
+}
+
 // parseGateCall reads `METHOD PATH [BODY] [curl flags]` after a gated command.
-func parseGateCall(g proto.CommandGate, args []string, vars map[string]string, cwd string) (larkCall, string, bool) {
+func parseGateCall(g proto.CommandGate, args []string, vars map[string]string, cwd string, allowVariablePath bool) (larkCall, string, bool) {
 	expand := func(s string) (string, bool) {
 		if !strings.Contains(s, "$") {
 			return s, true
@@ -348,13 +402,13 @@ func parseGateCall(g proto.CommandGate, args []string, vars map[string]string, c
 	}
 	// A literal method is part of the call's identity: even a previously
 	// assigned variable could change before a loop invokes it. A literal GET
-	// remains a read when its route or query contains ordinary variables.
+	// remains a read when its quoted route or query contains ordinary variables.
 	if len(args) < 2 || !httpMethod.MatchString(strings.ToUpper(args[0])) {
 		return larkCall{}, "", false // a subcommand of its own (ol events …): not a call the rules know
 	}
 	method := strings.ToUpper(args[0])
 	path, resolved := expand(args[1])
-	if strings.Contains(path, "$(") || strings.Contains(path, "`") || !resolved && method != "GET" {
+	if strings.Contains(path, "$(") || strings.Contains(path, "`") || !resolved && (method != "GET" || !allowVariablePath) {
 		return larkCall{}, "", false
 	}
 	c := larkCall{Method: method}

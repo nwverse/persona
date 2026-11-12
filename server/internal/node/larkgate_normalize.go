@@ -21,8 +21,14 @@ func normalizeLarkCommand(cmd, cwd string) string {
 	// Restrict these transformations to a straight sequence: an assignment in a
 	// conditional, loop or background job may never have happened.
 	for _, stmt := range tree.Stmts {
-		if _, ok := stmt.Cmd.(*syntax.CallExpr); !ok || stmt.Background || stmt.Negated || stmt.Coprocess {
+		call, ok := stmt.Cmd.(*syntax.CallExpr)
+		if !ok || stmt.Background || stmt.Negated || stmt.Coprocess {
 			return cmd
+		}
+		for _, a := range call.Assigns {
+			if a.Name != nil && a.Name.Value == "IFS" {
+				return cmd // field splitting can change the expanded executable's identity
+			}
 		}
 	}
 	vars := map[string]string{}

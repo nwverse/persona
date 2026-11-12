@@ -101,6 +101,7 @@ func TestLarkLiteralCommandVariable(t *testing.T) {
 		{"substitution", `A=$(which x); $A`, 1},
 		{"unassigned", `$A`, 1},
 		{"dynamic value", `A=$B; $A`, 1},
+		{"IFS splits literal command", `A=lark-cli/im; IFS=/; $A +messages-send --as user --text hi`, 1},
 		{"lark send", `A=/x/lark-cli; $A im +messages-send --text hi`, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) { assertAssistantBypassClassification(t, tc.command, tc.cards) })
@@ -143,6 +144,7 @@ func TestLarkLoopWritesStayBehindApproval(t *testing.T) {
 		{"variable read method", `for method in GET; do ex "$method" /health; done`},
 		{"variable write method", `for method in POST; do ex "$method" /documents '{}'; done`},
 		{"variable command", `for x in a b; do $CLI GET "/documents/$x"; done`},
+		{"unquoted route becomes delete", `for route in '/health -X DELETE'; do ex GET $route; done`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			v := classifyLark(tc.command, olGate(""), t.TempDir(), nil)
