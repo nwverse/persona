@@ -104,6 +104,7 @@ func TestLarkLiteralCommandVariable(t *testing.T) {
 		{"dynamic value", `A=$B; $A`, 1},
 		{"IFS splits literal command", `A=lark-cli/im; IFS=/; $A +messages-send --as user --text hi`, 1},
 		{"arithmetic changes IFS", `A=lark-cli0im; B=$((IFS=0)); $A +messages-send --as user --text hi`, 1},
+		{"wrapper expansion changes IFS", `A=lark-cli0im; timeout "$((IFS=0))" $A +messages-send --as user --text hi`, 1},
 		{"lark send", `A=/x/lark-cli; $A im +messages-send --text hi`, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) { assertAssistantBypassClassification(t, tc.command, tc.cards) })
@@ -150,6 +151,7 @@ func TestLarkLoopWritesStayBehindApproval(t *testing.T) {
 		{"unquoted query becomes delete", `for query in 'q=a -X DELETE'; do ex GET /health --url-query $query; done`},
 		{"command substitution becomes delete", `ex GET /health --url-query $(printf 'q=a -X DELETE')`},
 		{"quoted positional expansion becomes delete", `set -- /health -X DELETE; ex GET "$@"`},
+		{"brace expansion becomes delete", `for route in ''; do ex GET "$route"{/health,-X,DELETE}; done`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			v := classifyLark(tc.command, olGate(""), t.TempDir(), nil)

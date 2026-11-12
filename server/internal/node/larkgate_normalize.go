@@ -65,6 +65,21 @@ func normalizeLarkCommand(cmd, cwd string) string {
 		resolvedAbsolute := false
 		if ok && len(suffix) > 0 {
 			index := len(words) - len(suffix)
+			dynamicArgs := false
+			for i, arg := range call.Args {
+				if i == index {
+					continue
+				}
+				_, dynamic := executionWord(arg)
+				if dynamic || wordExpandsToMany(arg) {
+					dynamicArgs = true
+					break
+				}
+			}
+			if dynamicArgs {
+				clear(vars)
+				continue // do not resolve the executable after another argument can change shell state
+			}
 			word := call.Args[index]
 			if len(word.Parts) == 1 {
 				if p, ok := word.Parts[0].(*syntax.ParamExp); ok && p.Param != nil && !p.Excl && !p.Length && !p.Width && p.Index == nil && p.Slice == nil && p.Repl == nil && p.Exp == nil && p.Names == 0 {
@@ -76,16 +91,9 @@ func normalizeLarkCommand(cmd, cwd string) string {
 				}
 			}
 		}
-		// Preserve assignments only across simple commands known not to change
-		// shell state. Expansions can themselves assign variables.
+		// Preserve assignments only across simple commands known not to change shell state.
 		name := words[0]
 		unchanged := resolvedAbsolute || map[string]bool{"echo": true, ":": true, "true": true, "false": true, "ls": true, "git": true, "go": true, "pwd": true, "date": true, "sleep": true, "cat": true, "head": true, "grep": true, "jq": true}[name]
-		for _, arg := range call.Args {
-			_, dynamic := executionWord(arg)
-			if dynamic {
-				unchanged = false
-			}
-		}
 		if len(call.Assigns) != 0 || len(stmt.Redirs) != 0 || !unchanged {
 			clear(vars)
 		}

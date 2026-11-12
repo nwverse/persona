@@ -344,9 +344,39 @@ func scalarParameter(p *syntax.ParamExp) bool {
 		!p.Excl && !p.Length && !p.Width && p.Index == nil && p.Slice == nil && p.Repl == nil && p.Exp == nil && p.Names == 0
 }
 
+// wordExpandsToMany reports shell syntax that can produce extra arguments.
+// Double quotes protect scalar variables, but not "$@" or array expansions.
+func wordExpandsToMany(word *syntax.Word) bool {
+	found := false
+	syntax.Walk(word, func(node syntax.Node) bool {
+		switch n := node.(type) {
+		case *syntax.SglQuoted:
+			return false
+		case *syntax.DblQuoted:
+			syntax.Walk(n, func(inner syntax.Node) bool {
+				if p, ok := inner.(*syntax.ParamExp); ok && !scalarParameter(p) {
+					found = true
+					return false
+				}
+				return true
+			})
+			return false
+		case *syntax.ParamExp, *syntax.BraceExp, *syntax.ArithmExp, *syntax.CmdSubst, *syntax.ProcSubst, *syntax.ExtGlob:
+			found = true
+			return false
+		case *syntax.Lit:
+			if strings.ContainsAny(n.Value, "*?[") || strings.Contains(n.Value, "{") && strings.Contains(n.Value, "}") && strings.Contains(n.Value, ",") {
+				found = true
+				return false
+			}
+		}
+		return true
+	})
+	return found
+}
+
 // splitGateArguments reports an expansion that can produce extra arguments.
-// Redirect targets are excluded. Double quotes protect scalar variables, but
-// "$@", arrays and other multi-value expansions still need confirmation.
+// Redirect targets are excluded.
 func splitGateArguments(cmd string) bool {
 	cmd = strings.TrimSpace(cmd)
 	for {
@@ -366,27 +396,6 @@ func splitGateArguments(cmd string) bool {
 		return true
 	}
 	found := false
-	scanWord := func(word *syntax.Word) {
-		syntax.Walk(word, func(node syntax.Node) bool {
-			switch n := node.(type) {
-			case *syntax.SglQuoted:
-				return false
-			case *syntax.DblQuoted:
-				syntax.Walk(n, func(inner syntax.Node) bool {
-					if p, ok := inner.(*syntax.ParamExp); ok && !scalarParameter(p) {
-						found = true
-						return false
-					}
-					return true
-				})
-				return false
-			case *syntax.ParamExp:
-				found = true
-				return false
-			}
-			return true
-		})
-	}
 	syntax.Walk(tree, func(node syntax.Node) bool {
 		if found {
 			return false
@@ -396,7 +405,7 @@ func splitGateArguments(cmd string) bool {
 			return true
 		}
 		for _, arg := range call.Args {
-			scanWord(arg)
+			found = wordExpandsToMany(arg)
 			if found {
 				break
 			}
