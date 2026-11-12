@@ -8616,8 +8616,8 @@ if SUBSCRIPTION_INBOX:
     ]
 
 # MOCK_SUBSCRIPTION_INBOX=group (#5671): beside it, a group chat's subscription grouped by source, as one row like a Lark
-# chat: the newest message is the row, nine came in, one of them asks the owner (so the row is Needs you), the earlier
-# ones listed in its context. =group_before: the same messages as hubs before #5671 delivered them, a row each.
+# chat: titled by the subscription, the newest message its sender line, nine came in, one of them asks the owner (so the
+# row is Needs you), the earlier ones listed in its context. =group_before: the same messages as hubs before #5671 delivered them, a row each.
 SUB_GROUP_MESSAGES = [  # (minutes ago, sender, text, tier, summary): made up
     (58, "小林", "周六的读书会改到下午了", "fyi", "读书会改到周六下午"),
     (51, "Mia", "下午几点？我两点以后才有空", "fyi", ""),
@@ -8652,8 +8652,10 @@ def sub_group_row(ms, key, count, tier, summary):
 
 
 if SUBSCRIPTION_INBOX == "group":
-    INBOX[1:1] = [sub_group_row(SUB_GROUP_MESSAGES, "all", len(SUB_GROUP_MESSAGES), "action",
-                                "读书会定在周六下午两点，小林问你能不能带投影仪")]
+    _row = sub_group_row(SUB_GROUP_MESSAGES, "all", len(SUB_GROUP_MESSAGES), "action", "读书会定在周六下午两点，小林问你能不能带投影仪")
+    _row["title"] = "示例读书群"  # the one row is titled by the subscription, with no tag saying it again
+    del _row["connector"]["label"]
+    INBOX[1:1] = [_row]
 elif SUBSCRIPTION_INBOX == "group_before":
     INBOX[1:1] = [sub_group_row([m], f"m{i}", 1, m[3], m[4] or m[2]) for i, m in reversed(list(enumerate(SUB_GROUP_MESSAGES)))]
 

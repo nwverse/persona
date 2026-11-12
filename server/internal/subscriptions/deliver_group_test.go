@@ -59,8 +59,9 @@ func TestASourceGroupedSubscriptionIsOneRow(t *testing.T) {
 		t.Fatalf("three caught-up items of a subscription grouped by source: %d rows, want one: %+v", len(rows), rows)
 	}
 	r := rows[0]
-	if r.Thread != "sub:"+sub.ID+":all" || r.Title != "Room booked" || r.Sender != "Office" || r.Last != "n2" ||
-		!r.At.Equal(time.Date(2026, 11, 10, 8, 30, 0, 0, time.UTC)) || r.URL != "https://example.com/n2" || r.Label != "Notices" {
+	// Titled by the subscription, as a group chat's row, with no tag saying it again; the rest is its newest item.
+	if r.Thread != "sub:"+sub.ID+":all" || r.Title != "Notices" || r.Label != "" || r.Sender != "Office" || r.Last != "n2" ||
+		r.Preview != "Made-up notice text" || !r.At.Equal(time.Date(2026, 11, 10, 8, 30, 0, 0, time.UTC)) || r.URL != "https://example.com/n2" {
 		t.Fatalf("the row is its newest item: %+v", r)
 	}
 	if !strings.HasPrefix(r.Context, "11-10 07:00 · Office · Form due\n11-10 08:00 · Office · Office hours moved\n\nRoom booked\n") {

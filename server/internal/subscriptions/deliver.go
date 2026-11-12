@@ -222,7 +222,12 @@ func (d deliverer) inboxThings(catchup, live []Held) []connector.InboxThing {
 		threads[key] = append(threads[key], h)
 	}
 	for _, key := range order {
-		out = append(out, d.threadThing(key, threads[key]))
+		t := d.threadThing(key, threads[key])
+		if !byThread {
+			// The subscription's one row reads as a group chat's: titled by its name, with no tag saying it again.
+			t.Title, t.Label = d.sub.Label, ""
+		}
+		out = append(out, t)
 	}
 	return out
 }
