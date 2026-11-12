@@ -97,6 +97,7 @@ func TestPaneScreenReadsNeedAFullDevice(t *testing.T) {
 	}
 }
 
+// A full device's; cwd (#5832) only to a node with pane_cwd, else node_outdated before the node is asked.
 func TestNewShellIsAFullDevicesAndNamesNoDirectory(t *testing.T) {
 	tn := newTermNode(t)
 	h := tn.hub
@@ -119,6 +120,12 @@ func TestNewShellIsAFullDevicesAndNamesNoDirectory(t *testing.T) {
 	}
 	if got := tn.await(t, 1); len(got) != 1 || got[0] != "panes.new" {
 		t.Errorf("node log = %q", got)
+	}
+	m.mu.Lock()
+	m.info.Protocol, m.info.Capabilities = 1, nil // a node from before pane_cwd
+	m.mu.Unlock()
+	if code := post(roleFull, `{"workspace_id":"w1","cwd":"~/proj"}`); code != http.StatusConflict {
+		t.Errorf("cwd to an old node: %d, want 409", code)
 	}
 }
 
