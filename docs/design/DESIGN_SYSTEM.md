@@ -352,6 +352,7 @@ For every component: use the design-system one, not a lookalike. Counts are appr
 - Draft scrolling (iOS, #5650): typing and cursor movement keep the caret visible; unrelated layout updates only correct an offset past the content end. A manual scroll wins over queued caret work and stays put until new input or cursor movement.
 - Full-page editor (iOS, #5650): a dedicated upper-right control row contains Hide Keyboard and Collapse, in the composer's neutral icon ink, with 44 pt touch targets. Quotes and editable text start below that row, never behind the controls. This serves anyone composing and reviewing a long message; it requires no new setting.
 - States: expanded when focused, non-empty or holding attachments; send hidden when empty and replaced by voice or stop; send gate button when the main conversation is not ready.
+- Model menu (`[model/effort]`, #4322): titled sections, "Model" and "Thinking Effort", their choices as switches with the current one checked (`MenuChoice` in `apple/Persona/Views/Chat/SessionModes.swift`; a running agent's `SessionModesMenu`, a new conversation's `StarterModesMenu`). Never an inline `Picker` in a titled section: an iOS menu draws no title over its options (`docs/lessons/ios.md`). The Agents header's mode menu (#3719) uses the same switches.
 - Accessibility: every control labelled; hold-to-talk has a hint and a tap action (`apple/Persona/DesignSystem/ComposerHoldMic.swift:105-110`). Reduce Motion read in the bar.
 - Source: `apple/Persona/DesignSystem/ShellComposerBar.swift:11`, `apple/Persona/DesignSystem/ComposerButtons.swift`.
 - Platforms: web composer (14 px radius, 28 px buttons, `web/src/views/chat/Composer.tsx:648`); Android `ComposerFrame` (radius 32 in Glass).
@@ -526,7 +527,7 @@ For every component: use the design-system one, not a lookalike. Counts are appr
 
 `.card()` uses the system grouped background, not the style's card color, so it does not follow Clay, Island or Lark (DS-07). The space page's cards (`SlotCard` and the dashed new-tab card in `apple/Persona/Views/Chats/SpaceView.swift`) are `.card(padding: 12)` with a minimum height of `box150`; Android Glass draws the same page with `AgentSlotCard`, `AgentNewTabCard` and `AgentCardRow` (`android/core/designsystem/src/main/kotlin/persona/core/designsystem/AgentSpaceCards.kt`), on its opaque card color with the hairline stroke, since its translucent card color is nearly invisible on the dark page (#4338). Inset wells (`Fill.well`) are rebuilt by hand in 24+ places. Web has no shared card outside the admin app.
 
-**Place map card** (iOS, #5543, `PlaceMapCard`): a quick result like the added-reminder card (`QuickResultCard`): the same `Fill.well` and `Radius.card`, under the turn's work line, with the tool calls still folded (super rule 2). On top, a still map `Size.chatMap` tall (160, scaled), made by `MKMapSnapshotter` off the main thread for the card's size and appearance and cached (bound 24); while it is made the well's fill holds the same height, so nothing below moves. Places carry `CountBadge` numbers on the accent in the order the tool returned them, which is the order the answer counts in; the phone's own fix is an accent dot. Under the map, the first three places as rows (number, name in `secondaryStrong`, distance and address in `caption`) with an icon-only Directions button (`Icon.directions`, 44 pt target, spoken "Directions to <place>"), then "N more on the map". Tapping the map opens a sheet with a live `Map`, the same numbers as `Marker` monograms, every place's row and Done. Why a new card: no existing component shows places, and a live map in the chat would redraw while scrolling (`docs/apple/performance.md`, P8). No setting; nothing is drawn for a failed, empty or running call.
+**Place map card** (iOS, #5543, `PlaceMapCard`): a quick result like the added-reminder card (`QuickResultCard`): the same `Fill.well` and `Radius.card`, under the turn's work line, with the tool calls still folded (super rule 2). On top, a still map `Size.chatMap` tall (160, scaled), made by `MKMapSnapshotter` off the main thread for the card's size and appearance and cached (bound 24); while it is made the well's fill holds the same height, so nothing below moves. Places carry `CountBadge` numbers on the accent in the order the tool returned them, which is the order the answer counts in; the phone's own fix is an accent dot. Under the map, the first three places as rows (number, name in `secondaryStrong`, distance and address in `caption`) with an icon-only Directions button (`Icon.directions`, 44 pt target, spoken "Directions to <place>"), then "N more on the map". Tapping the map opens a sheet with a live `Map`, the same numbers as `Marker` monograms, every place's row and Done. Why a new card: no existing component shows places, and a live map in the chat would redraw while scrolling (`docs/apple/performance.md`, P8). No setting; nothing is drawn for a failed, empty or running call. **Hand-off** (#5545): directions `phone_maps_navigate` opened in Apple Maps are the same card with one place, the destination: on the map a white `Icon.place` in an accent circle (the accent dot stays the phone's own fix), and one row with Maps' app icon (`BrandMark`, `Brand.iosMaps`, as Settings › Connectors draws it), the destination's name, the mode and "Opened in Maps" in `caption`, and the icon-only button (`Icon.directions`, spoken "Open directions to <place> in Maps") that opens the same directions in the same mode again. Nothing opens Maps without a tap, and the words say Maps navigates, not Persona. **Route** (#5544): a route `phone_maps_route` worked out is the same card with the destination: on the map the route's line in the accent (`Size.barWide`, round caps and joins) from the phone's accent dot to the destination's mark, the same line as a `MapPolyline` in the sheet; one row with `Icon.place`, the destination, "Walking · 6 min · 420 m" in `caption`, and the icon-only button (`Icon.directions`, spoken "Start directions to <place> in Maps") that hands the route to Maps in its mode. Transit has no line (Apple Maps gives apps none), only the destination with its time and distance.
 
 The web task plan's workspace row (#3659) reuses the assistant form `fieldClass`, native labelled selects/inputs, and
 the existing plan Edit dialog. The compact policy choice stays on the plan card because it authorizes where a task
@@ -614,7 +615,7 @@ sending identity or confirmation behavior.
 - **Recap pages reuse the minutes' layout** (#4741, a recorded day's page, `RecordingDayView`): a compact header, then the recap drawn as a meeting's minutes are (`RecordingMinutesSections`, `docs/apple/recording.md` "Minutes"), then one last section: a **Transcript** link to the day's transcript on its own page (`RecordingDayTranscriptView`, by the hour), with the actions under it (**Erase Last 10 Minutes** on today's day while it is open, **Delete Recording**). A meeting's page instead shows its transcript inline, in a section of its own above its actions. The recap: summary with Copy and Share; the timeline as sections named for the time of day (Morning, Afternoon, Evening) with a meeting entry marked by `Theme.Icon.meetingMark` and its name; points and suggested to-dos as the minutes' items (a mark, the words, `RecordingMinutes.byline`, a time chip: `Chip` `.tint(Theme.accent)`, compact, with a 44 pt hit area, opening the transcript at that line and lighting it for 2 s). Before it exists the section says what it waits for, "Writing the recap…" with a spinner, or the failure with Retry, as minutes do. Suggested to-dos are read-only here, with a footer saying they are confirmed on the web.
 - Web rows: 32 px desktop, 44 px touch. Android rows: min 56 dp.
 - Web sidebar groups share visible disclosure chevrons and sticky, interactive headings in every grouping (to-do, computer, repository, project and state). Nested group headings stack below their parents and the measured Persona row; the next sibling replaces the current heading as it scrolls past. The Agents title, grouping segments and quick filters form one sticky toolbar below Persona (at the viewport top on the phone Agents page). One inward-chevron button toggles between Collapse all when any visible group is open and Expand all when they are all folded; its spoken label and tooltip name the next action. The toolbar stays above the section headings on an opaque theme background, with no fog over the first heading. The existing menu retains both explicit actions, affecting its groups and nested disclosures while keeping the block and grouping controls open. Individual folds remain independently reversible; flat conversation lists have no invented group headings.
-- Status sections (web To-dos, #3156): a list grouped by what the user should do next uses folding section titles in a fixed order (urgent first, then the rest folded), one row per piece of work with related items behind an "N related" disclosure, and stale items folded under Shelved with a one-tap Restore instead of being hidden or deleted. Rules in `docs/assistant/todo-status-sop.md`. Why not the folder groups: they say where work lives, not who has to act.
+- Status sections (web To-dos, #3156): a list grouped by what the user should do next uses folding section titles in a fixed order (what the user has to act on, then the unfinished work, then what just finished; only Shelved and Done start folded, Done last, #5707), one row per piece of work with related items behind an "N related" disclosure, and stale items folded under Shelved with a one-tap Restore instead of being hidden or deleted. A row that is only worth a look (Just finished) has a one-tap **Got it** under its words, the same secondary button as Restore (iOS: also a leading swipe action after the full swipe's own), which files it under Done at once with an Undo toast (4.4, reversible rung); opening the item counts as seeing it, without a word. Rules in `docs/assistant/todo-status-sop.md` ("Seen"). Why not the folder groups: they say where work lives, not who has to act. Why unfinished work above Just finished: what still has to be done should not take a scroll and a tap while finished work sits above it.
   - Section titles are the Agents list's state headers (`SectionHeader`: the name and a `CountBadge` in the state's tone; `FoldButton` for the folding ones), and the count is the items listed under the title. No separate summary line repeats them (#3712).
   - "N related" sits inside the row it belongs to, under its words; opened, the related rows come under it a level in, with a line down their side.
   - A filter and a sort for such a list go in one button's menu next to the view switch (on the web, next to the search field), the active filter also as a chip that clears it ("List controls" below); the sort orders rows inside each section and never moves a section (To-dos on iOS, Android and the web, #3740).
@@ -657,8 +658,8 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
 
 ### 3.5 Navigation
 
-- Shell (compact width): Assistant and Agents as pages on a strip, a drawer sidebar, no tab bar. Top bar: persona button, `ShellSwitch`, circle button (`apple/Persona/DesignSystem/ShellComponents.swift:19,258,294`). Re-tapping the selected segment opens its menu.
-- Regular width: system tab view and split navigation; the same sidebar in a column.
+- Shell (compact width): Assistant and Agents as pages on a strip, a drawer sidebar, no tab bar. Top bar: persona button, `ShellSwitch`, circle button (`apple/Persona/DesignSystem/ShellComponents.swift:19,258,294`). Re-tapping Assistant opens its menu. Explicitly selecting Agents opens its list, clearing any retained detail navigation; re-tapping Agents from a detail returns to the list. Re-tapping Agents while already at the list opens the existing list-options menu. A card, notification or session link remains a targeted open and goes directly to that Agent, not through the list. This list-first rule serves people moving between their everyday Assistant conversation and Agent work, without a setting or a new visual style.
+- Regular width: system tab view and split navigation; the same sidebar in a column. On iOS, selecting or reselecting Agents follows the same list-first rule, leaving the split's detail empty until an Agent is explicitly opened. Agent sidebar links use the bound detail path, not a separate implicit split selection, so clearing navigation also clears a row-opened detail without rebuilding the list. Cold-launch and width-change restoration remain separate from explicit tab selection.
 - Assistant switcher on Apple (sidebar header, `apple/Persona/Views/Assistant/AssistantSwitcher.swift`, with two or more installed assistants, `ManagerRoster.isMulti`; the rules every client shares are in the "Assistant switcher" bullet below): the persona face with a state dot at its foot, the current assistant's name with a down arrow and its state line; a tap opens a popover list of the hub's assistants on a solid panel (`Theme.card`: through glass the badges behind it showed beside the rows), each row the first letter on a solid disc in its color with a state dot at its foot (green online, gray offline, orange installing, ringed in the panel's color), name, Default chip (only beside another assistant), state line (up to three lines at the accessibility sizes) and a check on the current one or, on any other with something waiting, its count (`CountBadge`'s `.needs` look; VoiceOver says "n things waiting for you"); an offline row is dimmed as a whole (`Theme.Fade.offline`) and still pickable. While another assistant has something waiting the face carries a mark at its head (`AssistantWaitingDot`, the needs-you color, ringed like the state dot; beside the name where the face is not drawn), and the header's spoken name says so. A page of an offline assistant's merged things (the inbox, to-dos) shows `AssistantOfflineNotice` in place of its empty state: laid out as `EmptyStateView`, with the assistant's avatar and its offline mark (`AssistantMonogram`, faded as an offline row) where that has its symbol, then "<name> Is Offline" and when it last synced. Then New Assistant and Manage Assistants…, which stay whole and tappable at the largest text size while the rows scroll above them. Rows are at least 44 pt and one line each. Why a popover and not a `Menu`: a row carries a colored avatar, a status dot, a chip and a second line, which a system menu item cannot draw, and the same list is drawn on web and Android. It is the only place that switches assistants; pages do not add their own.
 - Page titles: `.pageTitle`, `.detailTitle` (`apple/Persona/DesignSystem/PageTitle.swift`).
 - An Agent chat's header folds into a slim bar (iOS `ChromeHeader` and `compactChrome` in `apple/Persona/Views/Chat/ChatView.swift`, `docs/apple/ios.md`; Android on Glass `JFoldingHeader` and `ChatSlimBar`, #4339 C4): it follows the list's own scrolling (toward the newest it folds, back into the history it opens), is never left half way when the finger lifts (folded at the newest end, else the nearer end), and folds by itself after 3 s without a touch while nothing is presented over the page. The slim bar is back and a centered capsule (the agent's mark, the state's dot, the title; Connecting… while the hub is out of reach) that opens the header again; nothing on its right. Android also opens it when a new request arrives, and never folds by itself while animations are off. The open header's title opens Session Info.
@@ -854,6 +855,17 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   `?purpose=assistant` list. The sheet says the pick applies from the next message until changed and leaves settings
   unchanged; **Use the default** clears it. The pick follows every later send and retry in that conversation. Older hubs
   without a model list keep the launcher choices and show one disabled explanation row. No new token or style.
+- Android (Glass only, #5055; Brief and Board keep their Mode sheet, launcher chips and header mode button, decision 8):
+  `JModelPill`, `JModelPanel` and `JModelChangeDivider` in `android/core/designsystem` (`docs/android/android-design.md`
+  2.2), from tokens: the pill `wellXS` tall with `Space.s` sides, the tile at `markS`, the name in `caption` (at most
+  `box120` under 600 dp of composer), the marks at `markXS`; the same width rules, so on a phone the pill is the tile and
+  the chevron. It shows while the composer's toolbar does (focused or with a draft), as Android's mode button did. The
+  panel is a sheet (search, the rail, two-line rows, the strip for Persona chats) whose Customize is a page of the same
+  sheet; the star and Customize are always shown (no hover on a phone) and a provider's reason sits under its group's
+  name. The strip's text button is the design system's quiet `JTextButton` (`ink2` on Glass) rather than `accent-ink`.
+  The header's mode button moved into the composer beside the pill (decision 11). The divider uses the model mark (no
+  arrows-left-right glyph in Android's set yet). Not yet: the other engine's switch and its dialog (#5054), Codex's Fast,
+  quota bars and prices, forgetting a typed id.
 
 ### 3.9 Empty states
 
@@ -1170,11 +1182,25 @@ control when it sits lower in the row.
 
 Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and waiting for a reply.
 
-- **Home**: the bottom of the session page. A request that blocks the Agent stays visible there until it is answered or folded, and says why the Agent waits ("Answer this so Claude can continue"). Several read "1 of 3", one open at a time; any can be folded to answer later.
+- **Home**: the bottom of the session page, a stack of cards above the composer, which stays usable (iOS `PendingCards`;
+  Android `DecisionStack` and `DecisionDock`, #4210 T6). A request that blocks the Agent stays visible there until it is
+  answered or folded, and says why the Agent waits ("Answer this so Claude can continue"). The cards stack as they come
+  while they fit in half the page; past it they scroll on their own under "N pending", permissions first and then the
+  newest, and a new card brings the stack back to its top. "N pending" counts the cards in the stack. With the keyboard
+  up the cards take the conversation's room above the rest of the footer, the composer staying over the keyboard, and
+  "N pending" is left off a lone card. Each card folds on its own: a tap on its header folds it to one line, its title and
+  what it asks, and another opens it; any can be folded to answer later. A message typed while a card waits is sent as
+  any other, also while a permission holds the Agent (iOS sends it the same way). Each style keeps its own card: on
+  Android, Glass a floating card inset like the composer, Brief a rounded card with a light shadow, Board a bordered card
+  under its amber rule.
   A Persona conversation's own requests (its model's tool approvals, `ask_user`) are the same: above its composer, under
   the Needs you / In progress entries, on every client (#4883: on the web and Android they sat only in the closed Needs
   you tray, and an owner waited minutes on an approval no screen in the chat showed). Needs you still counts them, and
-  its row for one closes the tray onto the card instead of drawing it a second time.
+  its row for one closes the tray onto the card instead of drawing it a second time. The oldest question of the
+  conversation's tasks' Agents is answered there too (iOS `TaskQuestions`; Android in the same stack, #4339 C10), under
+  its task's name with "N more", which counts the tasks' other questions; the next comes up when it is answered. The
+  tray keeps a row with Review for every task, and Review on one whose card is not in the stack brings that card in,
+  first, until it is answered or folded.
   A child session's request (web, #5120: `folded_under`) has its parent's page as its home: shown there with the
   parent's own, "From subagent · <title>", counted once under the parent, and every link to it opens the parent.
   A lead's worker's request (web, #5180) has the lead's page as its home too. While the Team panel shows that worker,
@@ -1541,9 +1567,10 @@ Apple reuses the pairing Form, Section, Picker, toolbar and Theme tokens.
 The live recording sheet's page for a room meeting (a phone meeting recording started while the hub listed
 `meeting_conversation`; contract: `docs/assistant/meeting-minutes.md`, "Meeting conversation (#3862)"; the phone's side:
 `docs/apple/recording.md`, "The meeting conversation (#3862)"). It is `MeetingPage`, shown by `RecordingLiveSheet`: live
-while the meeting records, and after Stop the same page in its after mode, continuing as the meeting's thread; a past
-meeting's recording page pushes the after mode (row **Meeting Conversation**). Ordinary recordings and #3746 meetings keep
-the live view and the wrap-up unchanged. Reason: the meeting is one conversation from its start to its follow-up, so the
+while the meeting records, and after Stop the same page in its after mode, continuing as the meeting's thread; any
+finished recording's page with something to talk about (a note, a meeting no room attended, a room meeting) pushes the
+after mode (row **Talk about this meeting**, phase 6). Ordinary recordings and #3746 meetings keep the live view and the
+wrap-up unchanged while they record. Reason: the meeting is one conversation from its start to its follow-up, so the
 page the user watches during the meeting is the page they keep writing in after it.
 
 - **Structure, live**: a header (title in `Theme.Font.title`, the page menu, **Hide**), a state line (the recording dot,
@@ -1554,7 +1581,8 @@ page the user watches during the meeting is the page they keep writing in after 
   structure stays the same, so the thread's scroll position holds). At accessibility sizes a one-line header (dot, time,
   menu, Hide) stays fixed, the rest scrolls as one, and the bar stays pinned.
 - **Structure, after**: **Done** when it is in the sheet, a status card (title, start–end, the minutes' state with
-  **Open Minutes** / **Open Recording** as a plain themed button, since the composer is the page's primary action) kept
+  **Open Minutes** / **Open Recording** as a plain themed button, since the composer is the page's primary action; in the
+  sheet and where the minutes push opened the page, not when pushed from the recording's page, whose Back returns there) kept
   above the thread rather than scrolled away with it (the thread follows its end), the room's thread, the **After the
   Meeting** divider, the follow-up's thread, and the composer alone in the bar. At accessibility sizes and while the
   keyboard is up the card is one fixed line (the minutes' state, Open as an icon with its name as the label), and the
@@ -1597,7 +1625,21 @@ page the user watches during the meeting is the page they keep writing in after 
   entries. Asks the room's thread doesn't hold (still asking, failed, answered from material) keep the existing
   `MeetingExchangeRow` look.
 - **The After the Meeting divider**: a centered caption between two hairlines, the look of the chat's `CompactDivider`,
-  between the room's thread and the follow-up's.
+  between the room's thread and the follow-up's. With nothing before it (a recording that never had a room, a room that
+  never came up and no asks) there is no divider: the thread is the follow-up alone, and until it starts one secondary
+  line says what to ask ("Ask Persona about this meeting: what was decided, who does what, or a follow-up email."),
+  shown once the hub has answered for the meeting, so it never flashes over a follow-up or room made elsewhere.
+- **Talk about this meeting (phase 6)**: on the recording's page one row, in the section under the header beside
+  Private Meeting, drawn as that row (a `Label` with the style's `Theme.Icon.conversation`, one line), pushing the after
+  mode; it shows for any recording that ended (not rolling or all-day) with text, minutes or a conversation the hub holds
+  (past retention not the text), on a hub with the meeting conversation. It is a row, not a button: the page's primary content stays the minutes, and
+  the composer is the thread's. The minutes push opens the same page over Recordings, with Open to the recording's page,
+  and the live sheet of a recording running then doesn't present itself over it.
+- **Voice after the meeting (phase 6)**: once the follow-up exists, the composer has the chat's **Voice Chat** button
+  (`ComposerVoiceButton`, the plain face) before the field, where the live page has [+]; at accessibility sizes it is in
+  the row under the field. During the call the chat's `VoiceBar` takes the composer's place, and a call that ended by
+  itself leaves the chat's `VoiceEndedStrip` over the composer, as in a chat (section 3.1). No voice before the follow-up
+  exists, and none while something records.
 - **Photos (phase 3)**: in a meeting started while the hub listed `meeting_photos`, [+] also has **Take Photo** (where
   the device has a camera) and **Choose Photos** (the system picker, images only, at most
   `Theme.Recording.photoPickLimit` at once), live only and never with Just Me on: a photo is the meeting's material,
@@ -1679,12 +1721,14 @@ page the user watches during the meeting is the page they keep writing in after 
   minutes `minutes-photo` and `minutes-photo-removed`,
   `meeting-ask-field`, `meeting-ask-send`
   (the two shared with the live bar's typed question), `meeting-ask-caption`, `meeting-ask-notice`, `recording-more`,
-  `meeting-page-stop-speaking`, `meeting-after-status`, `meeting-after-divider`, `meeting-followup-retry`; at the start
-  `meeting-private-start`; on the recording's page `recording-private` and `recording-meeting-conversation`; the sheet's
+  `meeting-page-stop-speaking`, `meeting-after-status`, `meeting-after-divider`, `meeting-followup-retry`,
+  `meeting-followup-empty`, `meeting-voice` (and the chat's `voice-bar`, `voice-ended`); at the start
+  `meeting-private-start`; on the recording's page `recording-private` and `recording-talk`; the sheet's
   shared ones (`recording-now-title`, `recording-live-timer`, `recording-live-hide`, `recording-pause`,
   `recording-bookmark`, `recording-stop`, `recording-wrapup-title`, `recording-wrapup-open`, `recording-wrapup-done`)
-  keep their names. UI tests: `MeetingConversationUITests`.
-- Platforms: the web shows the same thread on the recording detail (**Conversation**); Android has no meeting page yet.
+  keep their names. UI tests: `MeetingConversationUITests`, `TalkAboutMeetingUITests`.
+- Platforms: the web shows the same thread on the recording detail (**Conversation**, with **Talk about this meeting**
+  from phase 6); Android has no meeting page yet.
 
 ## One Record entry (#5243)
 

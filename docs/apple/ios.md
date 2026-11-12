@@ -2106,6 +2106,10 @@ On iOS By Repository keeps its structure, a card per repository with its worktre
   - At the end: N agents, Idle, or nothing for a worktree whose agents are all in its child worktrees; then the chevron.
   - A worktree the host lists opens its first agent (or its page) on a tap, folds from its own chevron (a 44 pt square, its chevron where the header's is), and holds Open / New Session / New Child Worktree / Rename / Copy in its long-press menu.
   - The host's catalog worktrees (Orca's) take the same lines; theirs alone keep the long-press menu, as their cards had it.
+  - A folder two repositories claim (a Codex App chat names its project's folder, above the repository whose main checkout
+    the folder is, #5715) is a worktree line in each, each with its own agents: the repository whose main checkout it is keeps
+    the path as the line's id, the other's gets `@<repository id>` after it (`RepoTree.build`), since the list keys rows,
+    folds and quiet state by that id. Mock: `MOCK_SHARED_FOLDER=1`.
 - **Agents** are the display's rows (`SlotRow`: Avatar, Two Lines, State Cards; `CompactSlotRow`: Compact List), with what they show in every grouping: the title, the time, the latest words, where it runs, the model's short name. They sit under the line they belong to at its level (a worktree's, as a tab's agents sit under the tab's row; a level in under the header of a repository with its main checkout alone), moved in by the tree's levels (`TreeIndent`), and keep the long-press menu (`AgentRowMenu`).
 - **Folded lines:**
   - Idle agents sit behind one quiet line: "N idle · their tabs ›", or "Hide N Idle" once opened.
