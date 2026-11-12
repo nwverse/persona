@@ -2,8 +2,8 @@
 // (#3862)", "What the phone and the web do"): the private switch for every meeting, and for a room meeting the one thread
 // (the room's questions and answers, then **After the meeting** and the follow-up conversation), the room's state and the
 // follow-up's first message. **Talk about this meeting** (phase 6, "Phase 6: talk about this meeting") is that first
-// message for any recording with text or minutes, once it has ended. Only on a hub that lists `meeting_conversation`;
-// older hubs see the page as before.
+// message for any recording with text or minutes but an all-day one (its page is the day recap), once it has ended and
+// `…/live` has answered for it. Only on a hub that lists `meeting_conversation`; older hubs see the page as before.
 // It reads `GET /api/v1/recordings/{id}/live` once, then only the parts a content-free `meeting_live` event says are
 // newer (`?parts=`), and every 5 seconds while the meeting runs as a fallback. On a hub that also lists `meeting_photos`
 // (phase 3) it reads a meeting's photos (`GET …/photos`) after that first read, again when their revision moves, and
@@ -29,7 +29,7 @@ import {
   type RecordingView,
 } from "../../lib/kb";
 import { messageManager } from "../../lib/manager-choice";
-import { followupThread, hasMaterial, MEETING_CONVERSATION_FEATURE, MEETING_PHOTOS_FEATURE, meetingRunning, newerParts, roomState, roomThread, type MeetingLine, type ThreadEntry } from "../../lib/meeting-thread";
+import { followupThread, MEETING_CONVERSATION_FEATURE, MEETING_PHOTOS_FEATURE, meetingRunning, newerParts, offersTalk, roomState, roomThread, type MeetingLine, type ThreadEntry } from "../../lib/meeting-thread";
 import { href, navigate, onLinkClick, type Route } from "../../lib/router";
 import { listenSession, onHubEvent, useStore } from "../../lib/store";
 import type { ItemsPage, Item } from "../../lib/types";
@@ -57,7 +57,8 @@ export interface MeetingState {
   meeting: boolean;
   /** A room meeting (its upload carried `room`). */
   roomMeeting: boolean;
-  /** Any recording with text or minutes: **Talk about this meeting** is offered once it has ended (phase 6). */
+  /** Any recording with text or minutes but an all-day one, once `…/live` answered for it: **Talk about this meeting**
+   *  is offered once it has ended (phase 6). */
   talk: boolean;
   room?: MeetingRoom;
   followup?: MeetingConversation;
@@ -86,9 +87,9 @@ export function useRecordingMeeting(detail: KBDetail | null | undefined, rec: Re
   const meta = detail?.kind === "recordings" ? detail.meta : undefined;
   const fromMeta = useMemo(() => meetingMeta(meta), [meta]);
   const meeting = on && !!detail && detail.kind === "recordings" && countsAsMeeting(meta);
-  const talk = on && hasMaterial(detail);
+  const offers = on && offersTalk(detail);
   // Any recording that may have a follow-up reads it, so one made on another device joins the thread.
-  const wanted = on && !!detail && detail.kind === "recordings" && (meeting || talk || !!fromMeta.room || !!fromMeta.followup);
+  const wanted = on && !!detail && detail.kind === "recordings" && (meeting || offers || !!fromMeta.room || !!fromMeta.followup);
   const id = detail?.id ?? "";
   // What …/live said of this recording, part by part: a part it answered (even as absent) replaces detail.meta's. Kept
   // with the recording it is of, so another recording on the same page starts from its own detail.meta.
@@ -262,6 +263,10 @@ export function useRecordingMeeting(detail: KBDetail | null | undefined, rec: Re
   // its private mark and follow-up come with the event.
   const running = !!rec && !!merged.room && (rec.partial || ["starting", "ready", "unavailable"].includes(roomState(merged.room) ?? ""));
   const live = wanted && !read.gone;
+  // **Talk about this meeting** only once `…/live` has answered for this recording: hello's `meeting_conversation` is the
+  // default manager's, and a recording of another manager's knowledge base (X-Persona-Manager) may have no `…/followup`
+  // to write to; that read is then a 404 (gone), and no composer shows.
+  const talk = offers && !!read.got.followup && !read.gone;
   useEffect(() => {
     if (!live) return;
     readLive("all");

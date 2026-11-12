@@ -1457,7 +1457,8 @@ page the user watches during the meeting is the page they keep writing in after 
   structure stays the same, so the thread's scroll position holds). At accessibility sizes a one-line header (dot, time,
   menu, Hide) stays fixed, the rest scrolls as one, and the bar stays pinned.
 - **Structure, after**: **Done** when it is in the sheet, a status card (title, start–end, the minutes' state with
-  **Open Minutes** / **Open Recording** as a plain themed button, since the composer is the page's primary action) kept
+  **Open Minutes** / **Open Recording** as a plain themed button, since the composer is the page's primary action; in the
+  sheet and where the minutes push opened the page, not when pushed from the recording's page, whose Back returns there) kept
   above the thread rather than scrolled away with it (the thread follows its end), the room's thread, the **After the
   Meeting** divider, the follow-up's thread, and the composer alone in the bar. At accessibility sizes and while the
   keyboard is up the card is one fixed line (the minutes' state, Open as an icon with its name as the label), and the
@@ -1502,12 +1503,14 @@ page the user watches during the meeting is the page they keep writing in after 
 - **The After the Meeting divider**: a centered caption between two hairlines, the look of the chat's `CompactDivider`,
   between the room's thread and the follow-up's. With nothing before it (a recording that never had a room, a room that
   never came up and no asks) there is no divider: the thread is the follow-up alone, and until it starts one secondary
-  line says what to ask ("Ask Persona about this meeting: what was decided, who does what, or a follow-up email.").
+  line says what to ask ("Ask Persona about this meeting: what was decided, who does what, or a follow-up email."),
+  shown once the hub has answered for the meeting, so it never flashes over a follow-up or room made elsewhere.
 - **Talk about this meeting (phase 6)**: on the recording's page one row, in the section under the header beside
   Private Meeting, drawn as that row (a `Label` with the style's `Theme.Icon.conversation`, one line), pushing the after
-  mode; it shows for any recording that ended (not rolling or all-day) with text, minutes or a conversation the hub holds,
-  on a hub with the meeting conversation. It is a row, not a button: the page's primary content stays the minutes, and
-  the composer is the thread's. The minutes push opens the same page over Recordings.
+  mode; it shows for any recording that ended (not rolling or all-day) with text, minutes or a conversation the hub holds
+  (past retention not the text), on a hub with the meeting conversation. It is a row, not a button: the page's primary content stays the minutes, and
+  the composer is the thread's. The minutes push opens the same page over Recordings, with Open to the recording's page,
+  and the live sheet of a recording running then doesn't present itself over it.
 - **Voice after the meeting (phase 6)**: once the follow-up exists, the composer has the chat's **Voice Chat** button
   (`ComposerVoiceButton`, the plain face) before the field, where the live page has [+]; at accessibility sizes it is in
   the row under the field. During the call the chat's `VoiceBar` takes the composer's place, and a call that ended by

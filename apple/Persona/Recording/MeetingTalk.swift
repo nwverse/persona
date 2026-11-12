@@ -10,13 +10,30 @@ import UserNotifications
 nonisolated enum MeetingTalk {
     /// Whether a recording's page offers **Talk about this meeting**: a hub with the meeting conversation (phase 1's route),
     /// a recording that has ended (while it records, a room meeting's page is the live sheet and the hub would answer
-    /// `409 meeting_running`), not a rolling or all-day one (they have pages of their own), with words in its transcript,
-    /// minutes ready, or a conversation the hub already holds for it (a follow-up, or a room that came up).
-    static func offered(_ entry: RecordingEntry, conversation: Bool, minutes: Bool, meeting: MeetingConversation.Meeting) -> Bool {
+    /// `409 meeting_running`), not a rolling or all-day one (they have pages of their own), with words in its transcript
+    /// (`text`, from `hasText`), minutes ready, or a conversation the hub already holds for it (a follow-up, or a room that
+    /// came up). Past retention (`expired`, `RecordingSync.Status.expired`) the transcript here is no material: the hub
+    /// has cut it, or deleted the recording, and the first message would be refused (`409 no_material`, `404`); only the
+    /// minutes, the follow-up or a room whose conversation the hub still has count then (it deletes the room at the cut).
+    static func offered(_ entry: RecordingEntry, conversation: Bool, minutes: Bool, meeting: MeetingConversation.Meeting,
+                        text: Bool, expired: Bool) -> Bool {
         guard conversation, !entry.active, !entry.isRolling, !entry.isDay else { return false }
         if minutes || meeting.followup != nil { return true }
+        if expired { return meeting.room?.key(group: "") != nil }
         if entry.roomMeeting || meeting.room.map({ $0.known != MeetingRoom.State.none }) == true { return true }
-        return entry.sentences.contains { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        return text
+    }
+
+    /// Whether the transcript has words (what `entry.sentences` would hold that isn't blank), walking the segments and
+    /// stopping at the first line rather than sorting and joining them all (docs/apple/performance.md P4).
+    static func hasText(_ entry: RecordingEntry) -> Bool {
+        let spoken = entry.attendance.flatMap { $0.spoken.isEmpty ? nil : $0 }
+        for segment in entry.segments {
+            for line in segment.sentences ?? [] where !line.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                if spoken?.spokenBy(line) != true { return true }
+            }
+        }
+        return false
     }
 
     /// The push's key for the recording it is about (the minutes push; the hub lowercases it). Optional: older hubs leave it out.

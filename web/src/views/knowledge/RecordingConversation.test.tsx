@@ -347,6 +347,39 @@ describe("a recorded meeting's conversation", () => {
     expect(location.pathname).toBe(`/persona/${follow}`);
   });
 
+  it("offers the talk only once …/live has answered for the recording, and none where it is gone", async () => {
+    const note = { room: undefined, attendance: undefined, kind: "note", complete: true, ended_at: recent() };
+    await load(fixture(note));
+    // Not before that read: hello's meeting_conversation is the default manager's, and a recording of another, older
+    // manager's knowledge base has no …/followup.
+    expect(pending(livePath)).toHaveLength(1);
+    expect(section()).toBeNull();
+    await reply(pending(livePath)[0], { error: "404 page not found" }, 404);
+    expect(section()).toBeNull();
+    expect(requests.some((r) => r.url.endsWith("/followup"))).toBe(false);
+    fresh();
+    await load(fixture(note));
+    expect(section()).toBeNull();
+    await reply(pending(livePath)[0], { attendance: "off", next: 0, fed: 0, asks: [], revs: { asks: 0 } });
+    expect(section()!.querySelector("textarea")).not.toBeNull();
+  });
+
+  it("offers no talk about an all-day recording, whose page is its day recap, and shows a follow-up made for one", async () => {
+    const day = { room: undefined, attendance: undefined, minutes_state: undefined, kind: "day", day: "2026-11-10", part: 1, complete: true,
+      ended_at: recent() };
+    await load(fixture(day));
+    expect(pending(livePath)).toHaveLength(0);
+    expect(section()).toBeNull();
+    // One made before, or by another app: its thread, as any recording's.
+    fresh();
+    const followup = { machine_id: "server", session_id: follow };
+    await load(fixture({ ...day, followup }));
+    await reply(pending(livePath)[0], { attendance: "off", next: 0, fed: 0, asks: [], followup, revs: { asks: 0, followup: 1 } });
+    await reply(pending(itemsPath(follow))[0], { items: followItems() });
+    expect(kinds()).toEqual(["material", "question", "answer"]);
+    expect(section()!.querySelector("textarea")).toBeNull();
+  });
+
   it("talks about a #2981 meeting too, its questions staying under Questions in the meeting", async () => {
     const followup = { machine_id: "server", session_id: follow };
     await load(fixture({ room: undefined, attending_session: { machine_id: "server", session_id: "conv-2" }, complete: true, ended_at: recent() }));

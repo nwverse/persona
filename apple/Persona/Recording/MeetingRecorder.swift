@@ -248,8 +248,11 @@ import UserNotifications
     }
 
     /// The minutes push (#3862 phase 6): Recordings, with the meeting's one thread (`MeetingPage` after mode) pushed over it
-    /// once the page is on screen (`MeetingPageOpener`). Not the live sheet: the push is about a meeting that ended.
+    /// once the page is on screen (`MeetingPageOpener`). Not the live sheet: the push is about a meeting that ended, and
+    /// with another recording running the sheet doesn't present itself as the page appears (`holdOnAppear`), so it
+    /// doesn't cover that meeting; the now-recording card is the way back to it.
     static func openMeeting(_ id: UUID) {
+        RecordingLivePresenter.shared.holdOnAppear()
         MeetingPageOpener.shared.open(id)
         showRecordings()
     }

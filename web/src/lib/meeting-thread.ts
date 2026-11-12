@@ -217,6 +217,13 @@ export function hasMaterial(detail: Pick<KBDetail, "kind" | "meta" | "segments" 
   return (detail.segments ?? []).some((s) => typeof s?.text === "string" && s.text.trim() !== "");
 }
 
+/** Whether a recording's detail offers **Talk about this meeting** (phase 6): a recording with something to talk about
+ *  (`hasMaterial`) that is not an all-day one (kind `day`), whose page is its day recap, as the iPhone leaves it out. The
+ *  hub refuses no kind, so a follow-up made for one still shows its thread. */
+export function offersTalk(detail: Pick<KBDetail, "kind" | "meta" | "segments" | "minutes"> | null | undefined): boolean {
+  return hasMaterial(detail) && detail?.meta?.kind !== "day";
+}
+
 /** The parts of a `meeting_live` event newer than the revisions read so far (a part without a number is read). */
 export function newerParts(changed: unknown, revs: unknown, known: Record<string, number>): string[] {
   if (!Array.isArray(changed)) return [];

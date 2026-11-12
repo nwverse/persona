@@ -23,8 +23,9 @@ import UserNotifications
     }
 
     private func offered(_ e: RecordingEntry, conversation: Bool = true, minutes: Bool = false,
-                         meeting: MeetingConversation.Meeting = .init()) -> Bool {
-        MeetingTalk.offered(e, conversation: conversation, minutes: minutes, meeting: meeting)
+                         meeting: MeetingConversation.Meeting = .init(), expired: Bool = false) -> Bool {
+        MeetingTalk.offered(e, conversation: conversation, minutes: minutes, meeting: meeting, text: MeetingTalk.hasText(e),
+                            expired: expired)
     }
 
     private func path(_ id: UUID, _ route: String) -> String { "/api/v1/recordings/\(id.uuidString.lowercased())/\(route)" }
@@ -76,6 +77,43 @@ import UserNotifications
         #expect(!offered(bare, meeting: none), "a room that never came up holds nothing")
         #expect(offered(recording(meeting: true, attendance: .room(.off, private: false, photos: false), lines: [])),
                 "a room meeting has its thread")
+    }
+
+    /// Past retention (`RecordingSync.Status.expired`) the hub has cut the transcript, or deleted the recording, and the
+    /// room with it: the lines still on this phone are no material. Minutes, a follow-up, or a room whose conversation the
+    /// hub still has (its cut not run yet) are.
+    @Test func pastRetentionTheTranscriptHereIsNoMaterial() throws {
+        #expect(!offered(recording(), expired: true), "a note's words on this phone only")
+        #expect(!offered(recording(meeting: true, attendance: .room(.listener, private: false, photos: false)), expired: true),
+                "a room meeting whose room the hub doesn't report")
+        #expect(offered(recording(), minutes: true, expired: true), "the minutes outlive the transcript")
+        var followup = MeetingConversation.Meeting()
+        followup.followup = RecordingUpload.SessionRef(machineID: "server", sessionID: "f1")
+        #expect(offered(recording(), meeting: followup, expired: true), "retention never deletes the follow-up")
+        var room = MeetingConversation.Meeting()
+        room.room = try JSON.decoder.decode(MeetingRoom.self, from: Data(#"{"state":"ended","machine_id":"server","session_id":"r1"}"#.utf8))
+        #expect(offered(recording(meeting: true), meeting: room, expired: true), "a room the hub still has")
+        room.room = try JSON.decoder.decode(MeetingRoom.self, from: Data(#"{"state":"deleted"}"#.utf8))
+        #expect(!offered(recording(meeting: true), meeting: room, expired: true), "the room went at the transcript's cut")
+        #expect(offered(recording(meeting: true), meeting: room), "within retention, as before")
+    }
+
+    /// `hasText` says what `sentences` holds that isn't blank, without building it: any segment, in any order, and not the
+    /// lines Persona said out loud in the meeting.
+    @Test func hasTextIsTheTranscriptsWords() {
+        #expect(MeetingTalk.hasText(recording()))
+        #expect(!MeetingTalk.hasText(recording(lines: [])))
+        #expect(!MeetingTalk.hasText(recording(lines: [" ", "\n\t"])))
+        var later = recording(lines: [])
+        later.segments = [RecordingSegment(index: 1, start: 60, duration: 60, sentences: [RecordingSentence(start: 61, end: 64, text: "Ship it.")]),
+                          RecordingSegment(index: 0, start: 0, duration: 60, sentences: nil)]
+        #expect(MeetingTalk.hasText(later), "a segment not transcribed yet doesn't hide another's words")
+        var spoken = recording(meeting: true, attendance: .room(.participant, private: false, photos: false), lines: ["You kept the cap."])
+        spoken.attendance?.spoken = [RecordingSpan(start: 0, end: 4)]
+        #expect(spoken.sentences.isEmpty)
+        #expect(!MeetingTalk.hasText(spoken), "Persona's own answer out loud isn't the meeting's")
+        spoken.segments[0].sentences?.append(RecordingSentence(start: 10, end: 14, text: "Who owns the test?"))
+        #expect(MeetingTalk.hasText(spoken))
     }
 
     // MARK: Writing the follow-up of a recording without a room
@@ -150,5 +188,22 @@ import UserNotifications
         #expect(opener.take(now: now.addingTimeInterval(2)) == nil, "once")
         opener.open(id, now: now)
         #expect(opener.take(now: now.addingTimeInterval(MeetingPageOpener.stale + 1)) == nil, "too late: a launch that never got there")
+    }
+
+    /// With a recording running, the live sheet doesn't present itself over the meeting the push opened: the next appear
+    /// skips it, once and only soon after; asking for the sheet (the Live Activity, the now-recording card) cancels that.
+    @Test func thePushedMeetingIsNotCoveredByTheLiveSheet() {
+        let presenter = RecordingLivePresenter()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        #expect(presenter.presentsOnAppear(now: now))
+        presenter.holdOnAppear(now: now)
+        #expect(!presenter.presentsOnAppear(now: now.addingTimeInterval(1)), "the page the push opened")
+        #expect(presenter.presentsOnAppear(now: now.addingTimeInterval(2)), "once")
+        presenter.holdOnAppear(now: now)
+        #expect(presenter.presentsOnAppear(now: now.addingTimeInterval(MeetingPageOpener.stale + 1)), "a hold nobody took soon")
+        presenter.holdOnAppear(now: now)
+        presenter.open()
+        #expect(presenter.serial == 1)
+        #expect(presenter.presentsOnAppear(now: now.addingTimeInterval(1)), "asked for: it presents")
     }
 }

@@ -6,7 +6,7 @@ import SwiftUI
 /// Live box with the newest lines, the thread (Persona, or Just Me), and the bar with the composer, Pause, Bookmark and
 /// Stop under the thumb. After Stop the same page goes on as the thread (`.after`): where the minutes are (kept above the
 /// thread), **After the Meeting** and the follow-up's composer; a past meeting's page is that one, pushed from its
-/// recording. An ordinary recording and a #3746 meeting keep `RecordingLiveView` and `RecordingWrapUp`.
+/// recording (or over Recordings by the minutes push, with Open to the recording's page). An ordinary recording and a #3746 meeting keep `RecordingLiveView` and `RecordingWrapUp`.
 struct MeetingPage: View {
     enum Mode: Equatable { case live, after }
 
@@ -18,6 +18,9 @@ struct MeetingPage: View {
     var captureError: String? = nil
     /// Hide (live) / Done (after, in the sheet); nil when pushed (the navigation bar's back).
     var close: (() -> Void)? = nil
+    /// After mode, pushed where Back doesn't return to the recording's page (the minutes push opens it over Recordings,
+    /// #3862 phase 6): Open Minutes / Open Recording push that page, as in the sheet, with no Done.
+    var opensRecording = false
 
     @Environment(AppModel.self) private var model
     @Environment(\.dynamicTypeSize) private var size
@@ -525,14 +528,17 @@ struct MeetingPage: View {
         }
         .safeAreaInset(edge: .bottom, spacing: Theme.Space.flush) { afterBar(entry) }
         .voiceUnavailableAlert($voiceNote, model: model)
-        // Whether the follow-up's hub has a voice to call (at most once a minute, `VoiceSupport`).
-        .tabActiveTask(id: VoiceProbeID(group: conversation.followupKey(id)?.group ?? "", active: scenePhase == .active)) {
+        // Whether the follow-up's hub has a voice to call (at most once a minute, `VoiceSupport`). The id says whether the
+        // follow-up exists: with one hub paired its group is "", so the group alone wouldn't change when the first message
+        // makes it, and the probe would never run on this page.
+        .tabActiveTask(id: FollowupVoiceProbe(group: conversation.followupKey(id)?.group, active: scenePhase == .active)) {
             guard scenePhase == .active, VoicePlatform.current == .phone, let key = conversation.followupKey(id),
                   let api = model.api(key.group) else { return }
             await VoiceSupport.shared.refresh(group: key.group, api: api)
         }
-        // Pushed from the recording's page, the back button returns there: no way to push it again from here.
-        .modifier(OpensRecording(id: id, enabled: close != nil, opening: $opening))
+        // Pushed from the recording's page, the back button returns there: no way to push it again from here. In the
+        // sheet, and opened over Recordings by the minutes push, Open is the way to the minutes.
+        .modifier(OpensRecording(id: id, enabled: opens, opening: $opening))
         .tabActiveTask(id: "\(entry.revision)|\(minutes.round)|\(entry.transcribedAll)") { await followMinutes() }
         .onChange(of: minutes.state) { old, new in
             // Only minutes that come while the page waits for them are news: a past meeting's, there as it opens, are not.
@@ -580,7 +586,7 @@ struct MeetingPage: View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             afterTitle(entry)
             minutesLine
-            if close != nil {
+            if opens {
                 Button { opening = true } label: {
                     Text(openTitle)
                         .font(Theme.Font.bodyStrong).lineLimit(1).minimumScaleFactor(0.7)
@@ -612,7 +618,7 @@ struct MeetingPage: View {
             .lineLimit(1)
             .minimumScaleFactor(0.7)
             .frame(maxWidth: .infinity, alignment: .leading)
-            if close != nil {
+            if opens {
                 Button { opening = true } label: {
                     ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.heading)
                         .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
@@ -637,6 +643,10 @@ struct MeetingPage: View {
     }
 
     private var openTitle: String { minutesReady ? String(localized: "Open Minutes") : String(localized: "Open Recording") }
+
+    /// The page has Open Minutes / Open Recording: in the sheet, or where it was pushed over something other than the
+    /// recording's page (`opensRecording`).
+    private var opens: Bool { close != nil || opensRecording }
 
     /// The minutes line has something to say (the hub answered, and there are or will be minutes).
     private var minutesShown: Bool {
@@ -788,6 +798,13 @@ private struct MeetingLiveBox: View {
     }
 }
 
+/// The after page's voice probe (`VoiceSupport.refresh`): the follow-up's group, nil while there is no follow-up, and
+/// whether the scene is active.
+private nonisolated struct FollowupVoiceProbe: Hashable, Sendable {
+    var group: String?
+    var active: Bool
+}
+
 /// One of the Live box's lines; its id is its place in the transcript, which only grows at the end.
 private struct LiveRow: Identifiable, Equatable {
     var id: String
@@ -796,7 +813,8 @@ private struct LiveRow: Identifiable, Equatable {
     var text: String
 }
 
-/// Open Minutes / Open Recording's destination, only where the page has that button (in the sheet).
+/// Open Minutes / Open Recording's destination, only where the page has that button (in the sheet, or opened by the
+/// minutes push).
 private struct OpensRecording: ViewModifier {
     var id: UUID
     var enabled: Bool

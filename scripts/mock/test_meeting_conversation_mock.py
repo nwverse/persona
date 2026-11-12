@@ -359,6 +359,17 @@ class MeetingConversationMockTests(Conversation, unittest.TestCase):
             self.assertEqual(self.meta(rid)["followup"], made["followup"])
             self.assertNotIn("room", self.meta(rid))  # no room was made for it
 
+    def test_a_trimmed_recording_without_minutes_has_nothing_to_talk_about(self):
+        """A trimmed recording's material is its minutes alone (the hub's meta.json keeps `chars`): an all-day recording
+        past recording_days keeps its recap and has no minutes."""
+        day = str(uuid.uuid4())
+        status, _ = self.upload(day, kind="day", day="2026-11-10", tz="UTC", part=1, started_at="2026-11-10T08:00:00Z", device="watch",
+                                duration=0, coverage={"to": 10000, "gaps": []}, segments=LINES, complete=True)
+        self.assertEqual(status, 200)
+        self.assertEqual(self.call("POST", "/mock/recording_trim", {"id": day})[0], 200)
+        self.assertNotIn("minutes", self.call("GET", f"/api/v1/kb/recordings/{day}")[1]["detail"])
+        self.assertEqual(self.call("POST", f"/api/v1/recordings/{day}/followup", {"id": str(uuid.uuid4()), "text": "x"})[1]["code"], "no_material")
+
     def test_kb_search_takes_a_kind(self):
         """GET /api/v1/kb-search?kind= searches one kind as kb_search does (#3862 phase 6); an unknown kind is a 400."""
         rid = str(uuid.uuid4())
