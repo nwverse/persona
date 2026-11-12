@@ -547,6 +547,10 @@ private fun TodoTriageRow(
                         TodoHoldLine(it, Modifier.padding(start = Tokens.Space.xxl))
                     }
                     TodoPlanLine(todo, Modifier.padding(start = Tokens.Space.xxl))
+                    // A decision held for the next briefing (#4930): nothing was pushed for it, and the row says so.
+                    if (todo.ask?.forBriefing == true) Text(stringResource(R.string.agents_todo_for_briefing),
+                        Modifier.padding(start = Tokens.Space.xxl).testTag("todo-for-briefing-${todo.id}"),
+                        style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 if (triage.section == TriageSection.Pr) {
                     // PR to merge: the PR, and how long since anything of it moved, however old (#3206)
