@@ -136,7 +136,7 @@
     <string name="designsystem_row_style_two_lines">2 行</string>
     <string name="designsystem_row_style_cards">状態カード</string>
     <string name="designsystem_row_style_list">コンパクトリスト</string>
-    <string name="designsystem_row_style_avatar_summary">アバター、タイトルと時刻、最新の発言 1 行、実行場所。</string>
+    <string name="designsystem_row_style_avatar_summary">アバター、タイトルと時刻、最新の発言 2 行、実行場所。</string>
     <string name="designsystem_row_style_two_lines_summary">エージェントごとに 2 行：タイトルと時刻、最新の発言 1 行。</string>
     <string name="designsystem_row_style_cards_summary">エージェントごとに 1 枚のカード。左端に状態の色があり、あなたを待つカードは色付きです。</string>
     <string name="designsystem_row_style_list_summary">エージェントごとに 1 行：状態、タイトル、時刻。</string>
