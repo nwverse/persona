@@ -1,5 +1,12 @@
 # Lessons: testing and validation
 
+- Fixture teardown is part of a test's elapsed time (#5730). A scripted terminal whose shell is ready immediately
+  does not need a fixed startup pause. When a test has finished its assertions, cancel background prompt checks
+  owned by that fixture and join them before restoring package settings or closing sockets. Delivery/recovery tests
+  must still await the check before their assertions; cancellation at teardown must not substitute for those checks.
+  Keep normal detached delivery and production wait limits unchanged, and measure serial and partitioned commands
+  separately when evaluating the gain.
+
 - A test that calls an entry point which sets the process environment must `t.Setenv` that variable first, so the
   test puts it back (#4581). `nodeclient.RunHook` with `--persona-home <dir>` sets `PERSONA_HOME`; one test left it
   pointing at its removed `t.TempDir()`, and every later `internal/node` test put `node.sock` there. On macOS that path
