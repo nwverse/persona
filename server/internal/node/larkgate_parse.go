@@ -68,6 +68,7 @@ func classifyLarkDepth(cmd string, gates []proto.CommandGate, cwd string, risk l
 		return v
 	}
 	vars := map[string]string{}
+	varsStable := larkVariableScopeStable(cmd)
 	executableEnv := false
 	for _, s := range segs {
 		nestedUnsure := false
@@ -111,9 +112,11 @@ func classifyLarkDepth(cmd string, gates []proto.CommandGate, cwd string, risk l
 			words = words[1:]
 		}
 		if len(words) == 0 {
-			for _, a := range env {
-				k, val, _ := strings.Cut(a, "=")
-				vars[k] = val
+			if varsStable {
+				for _, a := range env {
+					k, val, _ := strings.Cut(a, "=")
+					vars[k] = val
+				}
 			}
 			continue
 		}
@@ -335,6 +338,61 @@ func gateAimed(gates []proto.CommandGate, text string) (proto.CommandGate, bool)
 		}
 	}
 	return proto.CommandGate{}, false
+}
+
+// larkVariableScopeStable reports whether straight-line assignments can be
+// used to expand a later route. Control flow and commands that can alter the
+// parent shell make every earlier value unsuitable for that inference.
+func larkVariableScopeStable(cmd string) bool {
+	tree, err := syntax.NewParser().Parse(strings.NewReader(cmd), "")
+	if err != nil {
+		return false
+	}
+	stable := true
+	syntax.Walk(tree, func(node syntax.Node) bool {
+		if !stable {
+			return false
+		}
+		switch n := node.(type) {
+		case *syntax.IfClause, *syntax.ForClause, *syntax.WhileClause, *syntax.CaseClause:
+			stable = false
+			return false
+		case *syntax.Stmt:
+			if n.Background || n.Negated || n.Coprocess {
+				stable = false
+				return false
+			}
+		case *syntax.BinaryCmd:
+			syntax.Walk(n, func(inner syntax.Node) bool {
+				if _, ok := inner.(*syntax.Assign); ok {
+					stable = false
+					return false
+				}
+				return true
+			})
+			return false
+		case *syntax.ParamExp:
+			if n.Exp != nil {
+				stable = false
+				return false
+			}
+		case *syntax.CallExpr:
+			if len(n.Args) > 0 {
+				name, _ := executionWord(n.Args[0])
+				if map[string]bool{
+					"set": true, "unset": true, "export": true, "declare": true, "typeset": true, "local": true,
+					"readonly": true, "builtin": true, "command": true, "eval": true, "source": true, ".": true,
+					"cd": true, "pushd": true, "popd": true, "shopt": true, "let": true, "read": true,
+					"mapfile": true, "readarray": true, "printf": true, "trap": true, "exec": true,
+				}[name] {
+					stable = false
+					return false
+				}
+			}
+		}
+		return true
+	})
+	return stable
 }
 
 // scalarParameter is a plain quoted scalar expansion, not "$@", an array
