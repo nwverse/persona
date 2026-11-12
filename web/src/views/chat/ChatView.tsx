@@ -961,7 +961,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       keepOutgoing(key, { id, text: out.text, images: out.images, at: p.at, launcher, model });
       try {
         // the bubble stays as sending while a gap (a hub restart) is waited out; the id is the op id too
-        const reply = await inSendOrder(key, () => apiOp<{ session?: Session } | undefined>(`${sessionPath(mid, sid)}/messages`, {
+        const reply = await inSendOrder(key, () => apiOp<{ session?: Session; waits_on_computer?: boolean } | undefined>(`${sessionPath(mid, sid)}/messages`, {
           ...flight.request,
           method: "POST",
           opId: id,
@@ -975,6 +975,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
         const acceptedAt = Date.now();
         acceptOutgoing(key, id, acceptedAt);
         setPending((ps) => ps.map((x) => (x.id === id ? { ...x, posting: false, acceptedAt } : x)));
+        // a terminal Agent waiting on a question at the computer reads it only after that is answered (#5890)
+        if (reply?.waits_on_computer) toast(t("lib-outbox.waits_on_computer"), "info");
         // a Codex's first message: the answer is the thread it began, where the conversation goes on (lib/codex-waiting.ts)
         const began = reply?.session;
         if (began?.session_id && began.session_id !== sid) {

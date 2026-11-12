@@ -538,6 +538,10 @@
         <item quantity="other">%d 件</item>
     </plurals>
     <string name="agents_todo_restore">戻す</string>
+    <string name="agents_todo_seen">了解</string>
+    <string name="agents_todo_seen_moved">「完了」に移動しました</string>
+    <string name="agents_todo_seen_undo">元に戻す</string>
+    <string name="agents_todo_seen_failed">操作できませんでした：%1$s</string>
     <string name="agents_todo_pr_moved">%1$s · %2$sに更新</string>
     <string name="agents_todo_for_briefing">この判断は次のブリーフィングと一緒に届きます</string>
     <string name="agents_todo_pr">PR</string>
