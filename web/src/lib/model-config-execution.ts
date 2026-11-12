@@ -22,6 +22,8 @@ export function executionForm(p: ModelPurpose, providers: ModelProvider[] = [], 
   const agent = providerAgent(provider, p.effective?.provider);
   let backend: string;
   if (p.kind === "plugin") backend = providerName(p.effective?.provider, providers) ?? "";
+  // A keyless launcher picked for an API purpose runs its CLI once per request on the main chat's computer (#5823).
+  else if (p.kind === "api" && provider?.kind === "launcher" && !provider.has_key) backend = agent === "codex" ? "codex exec" : "claude -p";
   else if (p.kind === "api") backend = { messages: "Messages", responses: "Responses", chat: "Chat" }[provider?.api || "messages"];
   else if (launch === "headless") {
     backend = agent === "codex" ? "codex app-server"

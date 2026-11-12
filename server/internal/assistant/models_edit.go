@@ -70,9 +70,13 @@ func (s *Service) modelProviderCompatible(p ModelPurpose, v ModelProvider, store
 		compatible = messagesAPI(v.API)
 	}
 	if p.Kind == "api" && v.Kind == "launcher" {
+		// Claude Code or Codex answering on the main chat's computer (models_run.go); a managed launcher with a Messages
+		// gateway is called over HTTP, as before.
+		compatible = p.MachineID != "" && slices.Contains([]string{"", "claude", "codex"}, v.Agent) &&
+			(len(v.Machines) == 0 || slices.Contains(v.Machines, p.MachineID))
 		for _, l := range stored {
 			if v.ID == "launcher."+l.Name {
-				compatible = messagesAPI(l.API)
+				compatible = messagesAPI(l.API) || compatible && s.scopeReason(l, p.MachineID) == ""
 				break
 			}
 		}
@@ -172,7 +176,10 @@ func (s *Service) validateModel(ctx context.Context, p ModelPurpose, b ModelBind
 		return i18n.Err("assistant-models.err_effort_unsupported")
 	}
 	if p.Kind == "api" {
-		_, err := s.apiConfig(ctx, b)
+		c, err := s.apiConfig(ctx, b)
+		if err == nil && c.RunLauncher != "" {
+			return checkModelID(b.Model) // passed to the CLI as --model
+		}
 		return err
 	}
 	if p.Kind == "plugin" {
