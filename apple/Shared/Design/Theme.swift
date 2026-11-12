@@ -505,6 +505,10 @@ nonisolated enum Theme {
         /// The width the small window's card is drawn at (VNCPiPCard: Connecting…, why not), in points, about the small
         /// window's own on an iPhone so its text reads at its size there.
         static let pictureInPictureCard: CGFloat = 240
+        /// A task sheet closes on a rightward swipe that starts within `edgeBackZone` of the leading edge and travels at
+        /// least `edgeBackDistance` (a sheet has no system edge-back; #5603).
+        static let edgeBackZone: CGFloat = 24
+        static let edgeBackDistance: CGFloat = 72
         static let line: CGFloat = 1
         static let lineMedium: CGFloat = 1.5
         static let rule: CGFloat = 2

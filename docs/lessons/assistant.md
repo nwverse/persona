@@ -367,6 +367,8 @@ the only line between tool calls was English to a Chinese owner. The node now al
 (`midTurn`), asking for one sentence in the user's language before the next tool call, and the CLAUDE.md asks for the
 user's language in process text too.
 
+- Match Inbox PR/issue comments by full task URLs before the AI twin gate (#5578). A to-do may record its link only in `pr_url`, its title or its notes. Keep host, repository and PR/issue kind in the identity, leave ambiguous matches to the judge, and use a separate per-message signal cursor: the twin's `Of` cursor tracks handling, which does not run while it is off. Persist associations before forwarding them, and retain the existing supervision opt-in and exclusions. A URL-only Agent must still obey the age limit before its first automatic handling; creating its task association is not permission to process old backlog. On load, seed previously linked items' signal cursors from the stored snapshot so a restart is not paid-for news; count only batches observed after that snapshot.
+
 ## Disable ToolSearch per server, not for the whole assistant process (#5838)
 
 Setting `ENABLE_TOOL_SEARCH=false` for Persona's assistant also forced every claude.ai connector's tools into each request (one connector alone was hundreds of tools and most of the context), causing repeated compaction. `personad mcp` now marks only Persona tools with `_meta: {"anthropic/alwaysLoad": true}` when `PERSONA_ASSISTANT=1`, and the assistant no longer disables ToolSearch globally. Keep other servers on Claude Code's normal deferred loading. A regression test checks both the metadata and the process environment.
@@ -398,3 +400,13 @@ leader and read an answer full of its own labels. A leader's `todo_create` now o
 tree shows pieces no Agent has worked on as `planned`. Two traps found on the way: such a piece has an `origin`, so the
 To-dos SOP shelves it after 48 h untouched like any agent-made to-do (it leaves the tree; the leader touching it keeps it),
 and the stuck rule must not count a piece that never started, or every planned piece older than a day reported stuck.
+
+## A source read by pages must settle what left the page (#5993)
+
+The Inbox's mail rounds read each account's newest 40 INBOX messages, and every rule that files a mail item (read
+elsewhere, the 7-day window) ran only for threads on that page. Mail archived or deleted in the mail client, or pushed off
+by newer mail, left its item open for good: nothing else files an open item, so the open side grew with the mailbox
+(600 open items after 30 days of 60 mails a day, all read the same evening). A rule that only fires on what a bounded read
+returns needs a second path for what it no longer returns: here past-window items are filed without asking, and the rest are
+looked up by UID once a round (`inbox.mail_flags`), bounded, with a failed lookup changing nothing. Tests of such a round
+must wait for the background triage pass (`waitTriage`) before setting a tier by hand, or the fallback tier overwrites it.
