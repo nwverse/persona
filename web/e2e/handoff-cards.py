@@ -149,7 +149,8 @@ def run(args):
                         else:
                             expect(aside).to_contain_text("Starting the agent")
                         expect(page.locator("[data-handoff-back]")).to_have_count(0)
-                        page.wait_for_function("() => document.getAnimations().every((a) => a.playState !== 'running')")
+                        # its slide-in done (the panel's own animation; the chat's busy marks loop on their own)
+                        aside.evaluate("(el) => Promise.all(el.getAnimations().map((a) => a.finished))")
                         box = aside.bounding_box()
                         if width < 640:
                             assert box["x"] == 0 and box["width"] == width, box
@@ -215,9 +216,11 @@ def settings(browser, args, shots):
         context.add_init_script(f"localStorage.setItem('persona.token', 'demo'); localStorage.setItem('persona.language', 'en'); localStorage.setItem('persona.theme', '{theme}');")
 
         def api(route):
+            # the page's own data; the rest of Settings (models, hub, extensions) says it could not be read, which is
+            # what a hub without them answers, rather than an empty body none of them expects
             path = urlparse(route.request.url).path.removeprefix("/api/v1")
-            data = {"machines": [MACHINE]} if path == "/machines" else {"sessions": [PERSONA]} if path == "/sessions" else {}
-            route.fulfill(status=200, content_type="application/json", body=json.dumps(data))
+            data = {"machines": [MACHINE]} if path == "/machines" else {"sessions": [PERSONA]} if path == "/sessions" else None
+            route.fulfill(status=200 if data else 404, content_type="application/json", body=json.dumps(data or {"error": "not found"}))
 
         context.route("**/api/v1/**", api)
         context.route_web_socket("**/api/v1/ws**", lambda ws: ws.send(json.dumps({"type": "hello", "server_version": "demo", "hub_name": "Demo hub", "features": []})))
@@ -228,7 +231,6 @@ def settings(browser, args, shots):
         page.goto(args.url.rstrip("/") + "/settings?tab=general")
         group = page.get_by_role("radiogroup", name="How Agents open")
         expect(group).to_be_visible()
-        group.scroll_into_view_if_needed()
         panel, full = group.get_by_role("radio", name="Side panel"), group.get_by_role("radio", name="Full page")
         expect(panel).to_have_attribute("aria-checked", "true")
         expect(full).to_have_attribute("aria-checked", "false")
