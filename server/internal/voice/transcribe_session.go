@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -27,17 +28,19 @@ const (
 // trChunkMost is the most audio one append carries: 100 ms.
 const trChunkMost = 2 * trRate / 10
 
-// The audio the job keeps, and how fast a session that is behind gets it (variables so tests can change them).
+// The audio the job keeps, and how a session that is behind gets it (variables so tests can change them).
 var (
 	// trKeep is how far back a live job keeps its audio: a session opened again (a reconnect, a replacement, a
 	// rollover) is given its audio from the first window still to be sent, as far as this goes back.
 	trKeep = 60 * time.Second
-	// trCatchUp is how much faster than real time a live session that is behind gets its audio (the final pass runs at
-	// four times real time; faster, the service falls behind).
+	// trCatchUp is how much faster than real time a live verbatim session that is behind gets its audio (the final
+	// pass runs at four times real time; faster, the service falls behind).
 	trCatchUp = 4.0
-	// trCaptionCatchUp is the same for a caption session: real time, since captions break faster than that (59%
-	// character error rate measured at four times).
-	trCaptionCatchUp = 1.0
+	// trCaptionJump is how far a live caption session may fall behind the live edge (a burst of audio: the manager's
+	// backlog after ready, a resend) before it skips to the edge. It is never given a backlog: captions break faster
+	// than real time (59% character error rate measured at four times), and paced at real time it would stay behind
+	// for good, its captions too late to be interim ones (trInterimLag).
+	trCaptionJump = time.Second
 )
 
 // trBuffer is a job's audio by recording position (samples), for its sessions' writers.
@@ -169,7 +172,8 @@ type trSession struct {
 
 	mu    sync.Mutex
 	marks []trMark
-	quiet []trQuiet // silence to send once the audio reached a position
+	quiet []trQuiet  // silence to send once the audio reached a position
+	skips [][2]int64 // live caption session: the recording audio [from, to) it left out to catch up (skip)
 
 	// job loop only
 	started  bool
@@ -401,9 +405,10 @@ func (s *trSession) wake() {
 	}
 }
 
-// write sends the job's audio to the session from its feed on, as it comes (live, at most trCatchUp times real time
-// while it is behind) or at the job's speed (replay), and the silence asked for; in replay, once its audio reached its
-// stop, the tail of silence that ends the last turn, and then nothing.
+// write sends the job's audio to the session from its feed on, as it comes (live: a verbatim session at most trCatchUp
+// times real time while it is behind, a caption session skips to the live edge once it is more than trCaptionJump
+// behind) or at the job's speed (replay), and the silence asked for; in replay, once its audio reached its stop, the
+// tail of silence that ends the last turn, and then nothing.
 func (s *trSession) write() {
 	j := s.j
 	var paceFrom time.Time
@@ -471,11 +476,12 @@ func (s *trSession) write() {
 		speed := j.speed
 		if j.mode == modeLive {
 			speed = 0
-			if j.buf.edgeNow()-at > trRate {
+			switch edge := j.buf.edgeNow(); {
+			case s.kind == trCaption && edge-at > trSamples(trCaptionJump):
+				s.skip(at, edge)
+				continue
+			case s.kind != trCaption && edge-at > trRate:
 				speed = trCatchUp
-				if s.kind == trCaption {
-					speed = trCaptionCatchUp
-				}
 			}
 		}
 		if speed > 0 {
@@ -530,6 +536,28 @@ func (s *trSession) send(pcm []byte, at int64) bool {
 	return true
 }
 
+// skip has a live caption session go on from the live edge to, leaving out the audio [from, to) (trCaptionJump): the
+// service hears the audio jump, as across a hole, and the windows of what it left out get no captions (skipped).
+func (s *trSession) skip(from, to int64) {
+	s.mu.Lock()
+	s.skips = append(s.skips, [2]int64{from, to})
+	s.pos.Store(to)
+	s.mu.Unlock()
+	s.j.logf("session %d (%s) was %.1f s behind the live edge: it skipped to it", s.no, s.kind, trSeconds(to-from))
+}
+
+// skipped says whether s left out any of the recording audio [from, to) (skip).
+func (s *trSession) skipped(from, to int64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, k := range s.skips {
+		if k[0] < to && from < k[1] {
+			return true
+		}
+	}
+	return false
+}
+
 // toRecording is the recording position of session sample c.
 func (s *trSession) toRecording(c int64) int64 {
 	s.mu.Lock()
@@ -563,7 +591,7 @@ func (s *trSession) clockAt(at int64) (int64, bool) {
 	return 0, false
 }
 
-// pruneMarks forgets what was sent before recording position at.
+// pruneMarks forgets what was sent, or skipped, before recording position at.
 func (s *trSession) pruneMarks(at int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -572,6 +600,7 @@ func (s *trSession) pruneMarks(at int64) {
 		i++
 	}
 	s.marks = s.marks[i:]
+	s.skips = slices.DeleteFunc(s.skips, func(k [2]int64) bool { return k[1] <= at })
 }
 
 // close ends s: politely (session.close, and the service's session.closed with its usage, which the reader passes

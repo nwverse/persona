@@ -44,7 +44,7 @@ func trFast(t *testing.T) {
 	setVar(t, &trStall, 300*time.Millisecond)
 	setVar(t, &trFlushSilence, time.Second)
 	setVar(t, &trCatchUp, 200.0)
-	setVar(t, &trCaptionCatchUp, 200.0)
+	setVar(t, &trCaptionJump, time.Minute) // the tests stream faster than real time: the caption session never skips
 	setVar(t, &trReconnectWaits, []time.Duration{0, 20 * time.Millisecond, 20 * time.Millisecond})
 	setVar(t, &trUsageMost, 200*time.Millisecond)
 	setVar(t, &trReplayWindow, 4*time.Second)
@@ -846,6 +846,61 @@ func TestTranscriptionCaptionRolloverAtTheLiveEdge(t *testing.T) {
 	}
 	if strings.Contains(logs.String(), "(dropped)") || strings.Contains(logs.String(), "the captions' text") {
 		t.Error("a healthy session was dropped against a rolled-over caption session's captions")
+	}
+}
+
+// Audio that comes in a burst after ready (the manager's backlog, a resend after a reconnect) leaves the caption
+// session seconds behind the live edge. It skips to the edge rather than staying behind for good at real time, so
+// interim captions come again at once; the window whose audio it skipped has no captions, the windows after it do,
+// and every sentence comes.
+func TestTranscriptionCaptionSkipsABurst(t *testing.T) {
+	trProduction(t)
+	setVar(t, &trWindow, 4*time.Second)
+	_, srv, logs, _ := trLive(t, voicetest.Script{Sentences: trScript4, CaptionNoise: 0.05})
+	tc := startTr(t, srv, liveStart())
+	tc.next(extwire.TFReady)
+	pcm := voicetest.PCM(voicetest.Script{Sentences: trScript4}, 13.4)
+	// The first 3 s in one frame: more than the caption session's writer can keep up with, as a backlog sent back to
+	// back may be.
+	burst := 2 * 16000 * 3
+	if err := tc.c.Write(context.Background(), websocket.MessageBinary, pcm[:burst]); err != nil {
+		t.Fatal(err)
+	}
+	tc.stream(pcm[burst:], 1)
+	tc.mu.Lock()
+	streamed := len(tc.got)
+	tc.mu.Unlock()
+	tc.send(extwire.TranscriptionFrame{Type: extwire.TFEnd})
+	frames := tc.done()
+	defer func() {
+		if t.Failed() {
+			t.Log(logs.String())
+		}
+	}()
+	sameTexts(t, frames, trScript4)
+	live := 0 // interim captions of the sentences said after the burst, while they were said
+	for _, f := range trOfType(frames[:streamed], extwire.TFInterim) {
+		if *f.Start >= 3.5 {
+			live++
+		}
+	}
+	if live < 10 {
+		t.Errorf("%d interim captions after the burst", live)
+	}
+	var first, later string
+	for _, line := range strings.Split(logs.String(), "\n") {
+		switch {
+		case strings.Contains(line, "window 0 ["):
+			first = line
+		case strings.Contains(line, "window ") && strings.Contains(line, "]: captions "):
+			later = line
+		}
+	}
+	if !strings.Contains(logs.String(), "skipped to it") || !strings.Contains(first, "no captions") || later == "" {
+		t.Errorf("the caption session did not skip the burst, or the windows' captions are wrong:\n%s\n%s", first, later)
+	}
+	if strings.Contains(logs.String(), "(dropped)") {
+		t.Error("a healthy session was dropped")
 	}
 }
 

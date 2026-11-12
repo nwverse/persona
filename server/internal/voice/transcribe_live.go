@@ -690,8 +690,13 @@ func (j *trJob) finalizeOne(w *trWin) bool {
 			continue
 		}
 		s := sl.responsible(w.n)
-		if s == nil && sl.kind == trCaption {
-			continue // no caption session heard this window (one opened again starts at the live edge): no captions
+		if sl.kind == trCaption && (s == nil || s.skipped(w.from, w.to)) {
+			// No caption session heard all of this window (one opened again starts at the live edge, one that fell
+			// behind skipped to it): no captions. What it has of the window is forgotten as a window's captions are.
+			if s != nil {
+				j.captionText(s, w)
+			}
+			continue
 		}
 		if s == nil || !j.settled(s, w, now) {
 			if !waited {
