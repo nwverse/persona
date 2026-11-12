@@ -255,7 +255,8 @@ releases retain their separate publishing workflow.
 ## 1. Skills move out of the binary
 
 - **The user's skill space**: `~/.persona/skills/<name>/` on the machine that runs the assistant.
-  - Each directory is one skill (with a `SKILL.md` inside); the user adds and edits them, and personad only reads, never writes;
+  - Each directory is one skill (with a `SKILL.md` inside); users can add and edit them. Updates never overwrite them;
+    an explicitly confirmed Web ZIP import can add a new name, with a narrow Undo for that new installation.
   - The machine that runs the assistant is usually the hub machine's local node; when the assistant is configured on another machine, it is that one.
 - **Syncing into the assistant directory**: every time node starts the assistant process (both Claude and Codex assistants; `/agent` and the AI twin also use the assistant directory):
   1. For each skill under `~/.persona/skills/`, create a symlink at `<assistant dir>/.claude/skills/<name>`.
@@ -273,8 +274,64 @@ releases retain their separate publishing workflow.
 - **Drop `-tags public`**: there is no difference between the two anymore; `files_public.go` / `files_bundled.go` merge into one embed holding only built-in skills.
   - The privacy scan before release stays, and also checks that every skill in the binary is registered as redistributable (`assistantskills.Redistributable`);
   - A test guards it: the built-in skills directory may only contain skills registered as redistributable.
-- **App**: Settings › Assistant › Skills, a read-only list (name, the description from `SKILL.md`, whether it comes from "my skills" or **Built-in**).
-  API `GET /api/v1/skills`; the hub asks the node that runs the assistant. Management (add / delete / edit) comes later.
+- **App**: Settings › Assistant › Skills lists name, description and user / built-in / plugin source.
+  `GET /api/v1/skills` remains read-only and compatible with older clients; the hub asks the current assistant's node.
+  The Web additionally offers **Upload ZIP**, described below. Native clients are unchanged.
+
+### Web skill ZIP installation
+
+For people adding a trusted skill package, Settings › Assistant › Skills has one **Upload ZIP** action.
+Choose a file, wait for checks, review the plain-text name, description, actual destination and computer, then
+**Install skill** or **Cancel**. Selecting a file never installs it. No shell, dependency installer, HTML renderer
+or model is used to check a package. The feature changes no model/profile setting.
+
+The manager authorizes the current assistant and its execution computer using the existing full-access route,
+then sends `skills.import` to that node. The browser cannot select another machine or supply a path.
+The node uses `assistantskills.UserDir`: normally `~/.persona/skills/<name>/`, respecting `PERSONA_SKILLS_DIR`
+and the existing `PERSONA_HOME` resolver. This store is shared by assistants running as that machine's user;
+it is not silently changed to a private manager store. A changed computer, root identity, expired reference,
+offline machine or old node fails explicitly. Open the page again after changing environments.
+
+Package contract:
+
+- One ZIP with exactly one uppercase `SKILL.md`, either at the root or inside one enclosing directory; all
+  resources must be in that same package. Nested skills, several manifests and outside-wrapper files are refused.
+- The entire manifest is UTF-8, at most 64 KiB, with YAML frontmatter between `---` lines. `name` and `description`
+  are non-empty YAML strings. The name (not the ZIP filename) is at most 64 ASCII lowercase letters/digits with
+  single separating hyphens, not a reserved device name. Description is at most 4096 UTF-8 bytes.
+  Duplicate YAML keys, aliases/anchors and custom tags are refused.
+- At most 4 MiB compressed, 16 MiB expanded, 4 MiB per file, 512 archive entries and 12 path levels; maximum
+  expansion ratio 200 per entry. Both declared and actually read sizes/CRC are checked. Only Store/Deflate,
+  ordinary files/directories are accepted. No links, special files, traversal, absolute/drive/UNC/backslash paths,
+  reserved names, duplicate entries, case/Unicode-normalization collisions or internal provisioning stamps.
+- Preview extracts into a private temporary sibling and removes it before replying; only bounded, expiring metadata
+  receipts remain (32 per node, ten minutes). Install rechecks the exact same ZIP, current environment and conflicts,
+  then publishes by an exclusive atomic rename. No existing directory, built-in, plugin or local runtime skill is
+  overwritten or shadowed. Unsupported exclusive-rename platforms fail closed. Failure/cancellation removes staging.
+
+After installation the existing list refreshes. A ten-minute **Undo installation** receipt exists only on this
+connected page/node lifetime; reloading, switching assistant or node restart can invalidate it. Undo only detaches the
+same unchanged new directory, with identity/content/mode checks; modified or replaced packages are refused. It moves
+files to a hidden `.undone-…` sibling and reports that recovery path, rather than deleting them. This also protects a
+local writer holding an open file during the move. There is no arbitrary-path delete or edit API. Recovery is retained
+for the user; no background job deletes it or reinstalls an undone package.
+
+A canceled preview has no durable staged files. Cancellation before the atomic publish cleans staging; a lost response
+after publish may mean the whole installation completed, so refresh the list before retrying. Writes are never
+automatically retried. Repeated/concurrent installation cannot replace the winning name.
+
+Discovery uses existing provisioning: `assistantLarkEnv` links the user store into `.claude/skills`, and
+`assistantRuntimeSkills` links it into `.agents/skills`. Claude reads the existing assistant directory; Codex's
+existing `skills/extraRoots/set` points at `.claude/skills`. No new discovery engine or `@skill` behavior is added.
+The settings list is the Persona-provisioned inventory, not every skill a runtime might discover. Refresh lists
+immediately; start a new chat to safely pick up installation/Undo, as already-running sessions may retain old context.
+Tests exercise actual import/list/provisioning entry points and resource reads, not a paid Claude/Codex turn.
+
+`TestImport*`, `TestSkillImport*` and `web/src/views/settings/Skills.test.tsx` cover archive safety, atomic races,
+environment/credential changes, strict server-derived targeting and the confirmation/Undo states. The opt-in
+`TestSkillImportBrowserHarness` uses the real manager handler and archive store with synthetic device transport
+and a temporary directory; unrelated routes use `scripts/mock/mock_hub.py`. It is UI integration evidence, not a
+production or live-model test. Its header documents loopback ports and shutdown; run with `SKILL_IMPORT_QA=1`.
 
 ## 2. Build channels
 
