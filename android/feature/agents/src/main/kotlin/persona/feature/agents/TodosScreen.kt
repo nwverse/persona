@@ -506,7 +506,7 @@ private fun TodoTriageRow(
                     val tickName = stringResource(R.string.agents_todo_done_action)
                     val tickLabel = stringResource(if (finished) R.string.agents_todo_reopen else R.string.agents_todo_done_action)
                     Box(
-                        Modifier.size(Tokens.Space.xl).clip(CircleShape)
+                        Modifier.size(Tokens.Space.Standard.xl).clip(CircleShape)
                             .clickable(onClickLabel = tickLabel, role = Role.Checkbox) { onDone(todo, !finished) }
                             .semantics {
                                 contentDescription = tickName

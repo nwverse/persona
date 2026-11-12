@@ -17,7 +17,6 @@ import { lazyPage } from "../../lib/lazy-page";
 import { enterSends, hasFinePointer, useMedia } from "../../lib/viewport";
 import { useModalFocus } from "../../ui/overlay";
 import { COMPACT_COMPOSER, growLines, lineCount, offersExpand } from "./composer-grow";
-import { INPUT_MAX } from "./dock";
 import { imagePayload, MAX_IMAGE, quotePath, releaseAttachments, sendFile } from "../../lib/attachments";
 import { activateComposer, addContext, getContexts, newContext, registerComposer, removeContext, useContexts, withContexts, type ComposerHandle } from "../../lib/links";
 import { addQuote, applyDraft, getQuotes, onDraftEvent, parseQuotes, removeQuote, replaceNeedsConfirm, sendDraft, setQuotes, splitQuotes, storeDraft, useQuotes, withQuoteBlock, withUnsent, type DraftImage } from "../../lib/drafts";
@@ -223,10 +222,10 @@ export const Composer = memo(function Composer({
   editNow.current = editingLast;
   useEffect(() => { lastEscape.current = null; }, [draftKey, working, disabled, onEditLastMessage]);
   const box = useRef<HTMLDivElement>(null);
-  // Phones (#5688): the box grows to a line limit from the visible height, then scrolls and offers Expand, the draft
-  // full screen. `grow` is what the last measure found: the limit, a line's height, the padding, and whether it is past it.
+  // The box grows to six lines (less only in a very short viewport), then scrolls; phones also offer Expand.
+  // `grow` holds the measured line height, padding and overflow state, shared by both widths.
   const compact = useMedia(COMPACT_COMPOSER);
-  const visible = useVisibleHeight(compact);
+  const visible = useVisibleHeight();
   const [grow, setGrow] = useState({ limit: 0, line: 0, pad: 0, over: false });
   const [expanded, setExpanded] = useState(false);
   // the caret to put back in the box when the full editor closes
@@ -406,12 +405,10 @@ export const Composer = memo(function Composer({
     if (holder) holder.style.minHeight = `${holder.getBoundingClientRect().height}px`;
     el.style.height = "0px";
     const h = el.scrollHeight;
-    // the CSS max-height (INPUT_MAX) caps it: 240px, less when the visible height is small (a keyboard, a phone on
-    // its side), so the send button stays on screen; past it the box scrolls (overflow-y-auto: when the keyboard
-    // lowers the cap, no new draft comes to say so)
+    // The layout effect measures before paint, so both widths use the same six-whole-line cap without a second
+    // fixed-pixel fallback. Very short visible viewports still leave space for Send; longer drafts scroll inside.
     el.style.height = `${Math.max(h, 24)}px`;
     if (holder) holder.style.minHeight = held;
-    if (!compact) return;
     const css = getComputedStyle(el);
     const line = parseFloat(css.lineHeight) || 24;
     const pad = (parseFloat(css.paddingTop) || 0) + (parseFloat(css.paddingBottom) || 0);
@@ -967,7 +964,7 @@ export const Composer = memo(function Composer({
           placeholder={pill && hasFinePointer() ? t("chat-composer.suggestion", { suggestion: pill }) : placeholder}
           aria-label={t("chat-composer.message")}
           title={hasFinePointer() ? (onEditLastMessage ? t("composer.history_hint_edit") : t("composer.history_hint")) : undefined}
-          style={{ maxHeight: compact && grow.line ? `${grow.limit * grow.line + grow.pad}px` : INPUT_MAX }}
+          style={{ maxHeight: `${grow.limit * grow.line + grow.pad}px` }}
           className={cx("min-h-6 w-full resize-none overflow-y-auto bg-transparent px-2 pt-1.5 text-[14px] leading-[21px] text-ink outline-none [@media(pointer:coarse)]:text-[16px] [@media(pointer:coarse)]:leading-[24px] [overflow-wrap:anywhere] placeholder:text-ink-3 disabled:opacity-50", showExpand && "pr-8")}
         />
         {showExpand && (
@@ -1140,12 +1137,11 @@ function StopButton({ stopping, onStop }: { stopping?: boolean; onStop: () => vo
   );
 }
 
-/** The visible height (above the keyboard), followed while `on`: the grow limit comes from it. */
-function useVisibleHeight(on: boolean): number {
+/** The visible height above the keyboard, followed on both phone and desktop. */
+function useVisibleHeight(): number {
   const read = () => (typeof window === "undefined" ? 0 : Math.round(window.visualViewport?.height ?? window.innerHeight));
   const [h, setH] = useState(read);
   useEffect(() => {
-    if (!on) return;
     const vv = window.visualViewport;
     const update = () => setH(read());
     update();
@@ -1155,7 +1151,7 @@ function useVisibleHeight(on: boolean): number {
       vv?.removeEventListener("resize", update);
       removeEventListener("resize", update);
     };
-  }, [on]);
+  }, []);
   return h;
 }
 

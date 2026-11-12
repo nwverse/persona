@@ -904,3 +904,19 @@ prompt finishes, while that published text still exists. `streamEnd` uses the st
 watch to send its empty boundary, and cancels pending throttled text first. A native transcript may have a
 middle-truncated copy of the reply, so text reconciliation alone cannot retire the Hub's full cached copy.
 Cover unwatch before completion, a pending batch, and a later watcher in the SDK and AGY lifecycle tests.
+
+## Native preview exports can silently truncate assistant replies (#5644)
+
+AGY's compact export includes `<truncated N bytes>` inside long text while its complete export retains the body.
+Such previews can fit Persona's own page limit, hiding the full-text action. Read complete native records before
+applying SDK page limits, and use the same source for inventory revisions, watch cursors and live pushes. A compact
+cursor ahead of the complete export can skip content. Change the history scope when replacing previously cached
+previews, and cache parsed files with bounded storage and file-version invalidation to keep polling responsive.
+Test normal RPC pages, live pushes, delayed export writes and same-size or atomic file updates. Preserve literal
+placeholder examples in complete source text.
+
+## Filesystem timestamps can alias rapid native rewrites (#5659)
+
+Nanosecond stat fields can repeat across same-size writes within one filesystem timestamp tick. Bypass the parsed
+cache for recently modified exports, and cache settled histories after a quiet window. Run rewrite regressions on
+the deployment filesystem as well as the development machine, including a settled cache hit and atomic replacement.
