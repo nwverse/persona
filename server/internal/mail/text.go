@@ -5,6 +5,7 @@ import (
 	"html"
 	"io"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/emersion/go-imap/v2"
@@ -182,7 +183,45 @@ func stripHTML(s string) string {
 			last = ' '
 		}
 	}
-	return html.UnescapeString(b.String())
+	return dropPadding(html.UnescapeString(b.String()))
+}
+
+// isPadding: the characters a mail pads its hidden preheader with, so that mail apps pull no body text into the
+// preview, and that strings.Fields does not take for white space: zero-width space, non-joiner and joiner, word
+// joiner, byte order mark, soft hyphen and combining grapheme joiner.
+func isPadding(r rune) bool {
+	switch r {
+	case '\u200b', '\u200c', '\u200d', '\u2060', '\ufeff', '\u00ad', '\u034f':
+		return true
+	}
+	return false
+}
+
+// dropPadding is s without runs of padding characters that stand next to white space or at an end of s. A run between
+// two other characters is part of a word and stays: U+200C in Persian and Indic words, U+200D in emoji sequences and
+// Indic conjuncts, U+00AD where a word may be broken.
+func dropPadding(s string) string {
+	if !strings.ContainsFunc(s, isPadding) {
+		return s
+	}
+	rs := []rune(s)
+	out := make([]rune, 0, len(rs))
+	for i := 0; i < len(rs); {
+		if !isPadding(rs[i]) {
+			out = append(out, rs[i])
+			i++
+			continue
+		}
+		j := i
+		for j < len(rs) && isPadding(rs[j]) {
+			j++
+		}
+		if i > 0 && j < len(rs) && !unicode.IsSpace(rs[i-1]) && !unicode.IsSpace(rs[j]) {
+			out = append(out, rs[i:j]...)
+		}
+		i = j
+	}
+	return string(out)
 }
 
 // tagEnd is the index of the ">" that ends the tag s[i] (a "<") starts, -1 when there is none: a ">" inside a quoted
