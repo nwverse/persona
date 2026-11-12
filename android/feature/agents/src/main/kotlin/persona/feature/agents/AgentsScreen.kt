@@ -1,6 +1,7 @@
 package persona.feature.agents
 
 import persona.core.contracts.clipped
+import persona.core.designsystem.dense
 import persona.core.designsystem.text
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -827,7 +828,7 @@ private fun AgentsListPlaceholder() {
                 horizontalArrangement = Arrangement.spacedBy(Tokens.Space.m),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Box(Modifier.size(Tokens.Space.xxl).background(fill, shape))
+                Box(Modifier.size(Tokens.Space.Standard.xxl).background(fill, shape))
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
                     Box(Modifier.fillMaxWidth(0.48f).height(Tokens.Space.m).background(fill, shape))
                     Box(Modifier.fillMaxWidth(0.68f).height(Tokens.Space.s).background(fill, shape))
@@ -881,7 +882,7 @@ private fun ConnectionNotice(state: ConnectionState, onSettings: () -> Unit) {
         }), status = Status.NeedsYou,
             actionLabel = stringResource(if (state == ConnectionState.NeedsLocalNetworkPermission) R.string.agents_connection_allow else R.string.agents_connection_diagnose),
             onAction = onSettings)
-    } else Text(stringResource(R.string.agents_connection_cached), Modifier.padding(vertical = 8.dp), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3)
+    } else Text(stringResource(R.string.agents_connection_cached), Modifier.padding(vertical = 8.dp.dense), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3)
 }
 
 @Composable
