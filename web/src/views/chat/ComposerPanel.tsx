@@ -7,6 +7,7 @@
 // folder keeps browsing, a file types `@path `, a workspace or a session becomes a context chip (Composer.tsx).
 import { useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
 import { api, enc } from "../../lib/api";
+import { BUSY_MOTION } from "../../lib/busy-motion";
 import type { FsListing } from "../../lib/files";
 import { browseTarget, byPrefix, displayTitle, nameMatches, otherSessions, relPath, sessionDetail, workspaceDetail, workspaceMatches, workspaceTitle } from "../../lib/mentions";
 import { machineWithHub } from "../../lib/mesh";
@@ -354,7 +355,7 @@ export function ComposerPanel({
         </div>
         {loading && !rows.length && (
           <div role="status" aria-label={t("chat-composerpanel.reading_folder")} className="space-y-1 p-1">
-            {[0, 1, 2].map((i) => <div key={i} className="h-[44px] animate-pulse rounded-[8px] bg-hover" />)}
+            {[0, 1, 2].map((i) => <div key={i} className={`${BUSY_MOTION} h-[44px] animate-pulse rounded-[8px] bg-hover`} />)}
           </div>
         )}
         {!loading && !entries.length && (from === "at" || !empty) && (
