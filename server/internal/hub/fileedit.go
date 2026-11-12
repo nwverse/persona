@@ -28,7 +28,17 @@ type fileEditRequest struct {
 	Dir      string   `json:"dir,omitempty"`
 	Conflict string   `json:"conflict,omitempty"`
 	TrashIDs []string `json:"trash_ids,omitempty"`
+	// write (#5828, #5829): the text; create a new file, or replace the one still at revision (or hashing to sha256);
+	// force: Overwrite Anyway.
+	Text     *string `json:"text,omitempty"`
+	Create   bool    `json:"create,omitempty"`
+	Revision string  `json:"revision,omitempty"`
+	SHA256   string  `json:"sha256,omitempty"`
+	Force    bool    `json:"force,omitempty"`
 }
+
+// maxFileWriteBody: a write's JSON (the node takes 4 MB of text; escaping can double it).
+const maxFileWriteBody = 10 << 20
 
 // check says what makes the request not one of op's, nil when it is one.
 func (q fileEditRequest) check(op string) error {
@@ -65,6 +75,22 @@ func (q fileEditRequest) check(op string) error {
 		return nonEmpty(q.Paths, "paths")
 	case "restore":
 		return nonEmpty(q.TrashIDs, "trash_ids")
+	case "mkdir":
+		if strings.TrimSpace(q.Dir) == "" {
+			return errors.New("dir is required")
+		}
+		if n := q.Name; strings.TrimSpace(n) == "" || n == "." || n == ".." || strings.ContainsAny(n, "/\x00") {
+			return errors.New("name can't be a folder's name")
+		}
+	case "write":
+		if strings.TrimSpace(q.Path) == "" {
+			return errors.New("path is required")
+		}
+		if q.Text == nil {
+			return errors.New("text is required")
+		}
+	case "zip":
+		return nonEmpty(q.Paths, "paths")
 	}
 	return nil
 }
@@ -72,7 +98,11 @@ func (q fileEditRequest) check(op string) error {
 func (h *Hub) fileEdit(op string) http.HandlerFunc {
 	return h.withMachine(func(w http.ResponseWriter, r *http.Request, m *Machine) {
 		var q fileEditRequest
-		if err := decodeJSONBody(w, r, &q, 1<<20); err != nil {
+		limit := int64(1 << 20)
+		if op == "write" {
+			limit = maxFileWriteBody
+		}
+		if err := decodeJSONBody(w, r, &q, limit); err != nil {
 			writeBodyErr(w, err, err)
 			return
 		}
@@ -80,7 +110,11 @@ func (h *Hub) fileEdit(op string) http.HandlerFunc {
 			writeErr(w, http.StatusBadRequest, err)
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute) // a big folder to the trash on a slow disk
+		wait := 2 * time.Minute // a big folder to the trash on a slow disk
+		if op == "zip" {
+			wait = 10 * time.Minute // up to 2 GB of files
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), wait)
 		defer cancel()
 		var out json.RawMessage
 		if err := m.call(ctx, "file."+op, q, &out); err != nil {
