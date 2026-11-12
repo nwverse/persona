@@ -19,7 +19,7 @@
   "attach_hint": "画像やファイルは貼り付けかドロップで追加 · 起動後にバックグラウンドで送信",
   "open_folder": "{name}を開く",
   "permission_mode": "権限モード",
-  "permission_mode_hint": "権限モードはチャット中にも変更できます。「すべて許可」は新規作成時にのみ選べます。",
+  "permission_mode_hint": "権限モードはチャット中にも変更できます。「フルアクセス」は新規作成時にのみ選べます。",
   "no_computer_title": "まだコンピューターがありません",
   "no_computer_body": "エージェントはあなたのコンピューターで動くため、まだ選べるものがありません。まず 1 台追加してください。",
   "worktree": "新しい worktree で",

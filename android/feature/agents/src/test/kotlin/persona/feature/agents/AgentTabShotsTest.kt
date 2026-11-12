@@ -128,6 +128,7 @@ class AgentTabShotsTest {
         }
         for (nextStyle in AppStyle.entries) for (nextDark in listOf(false, true)) {
             rule.runOnIdle { style = nextStyle; dark = nextDark }
+            // Glass's cards say it after the state ("工作中 · 发起者"), the rows in a tag of its own.
             rule.onAllNodesWithText("发起者", substring = true)[0].assertIsDisplayed()
             capture("space-${nextStyle.name.lowercase()}-${if (nextDark) "dark" else "light"}")
         }
