@@ -8837,7 +8837,10 @@ if os.environ.get("MOCK_GITHUB") == "guide":  # a status with the steps to fix i
                         "capabilities": ["status", "hosts"], "hosts": ["github.com"]}
 # Feishu and mail as connectors (GET /api/v1/connectors?all=1, migration M6): the app draws them as their own rows.
 LEGACY_CONNECTORS = [{"id": "lark", "name": "飞书", "status": "ok", "capabilities": ["tools", "inbox", "archive"], "enabled": True},
-                     {"id": "mail", "name": "邮件", "status": "ok", "capabilities": ["tools", "actions", "inbox", "archive"], "enabled": True}]
+                     {"id": "mail", "name": "邮件", "status": "ok", "capabilities": ["tools", "actions", "archive"], "enabled": True,
+                      "archive": True, "inbox": True}]  # mail's Add to Inbox (#5307): MOCK_MAIL_INBOX=off starts it off
+if os.environ.get("MOCK_MAIL_INBOX") == "off":
+    LEGACY_CONNECTORS[1]["inbox"] = False
 
 # Telegram (the Telegram extension, #1704; docs/archive/extensions/plan-telegram.md): the user's own account, signed in from Settings › Connectors › Telegram a step at a time.
 # All made up: api_id 1234567 (a hash of 32 zeros is refused), any phone starting with +, the code 12345, the 2FA
@@ -21224,6 +21227,15 @@ class H(BaseHTTPRequestHandler):
             port = int(p.split("/")[6])
             if not port_listening(port): return self.send_json({"error": "nothing is listening on port %d" % port}, 404)
             return self.send_json({"port": port, "listening": True, "http": True})
+        if self.command == "PUT" and p == "/api/v1/connectors/mail/settings":  # mail's Add to Inbox (#5307)
+            body = json.loads(self.last_body or b"{}")
+            mail_c = LEGACY_CONNECTORS[1]
+            for feed in ("inbox", "archive"):
+                if feed in body:
+                    if not isinstance(body[feed], bool):
+                        return self.send_json({"error": feed + ": true or false"}, 400)
+                    mail_c[feed] = body[feed]
+            return self.send_json(mail_c)
         if self.command == "PUT" and p == "/api/v1/connectors/github/settings":  # GitHub's inbox options
             body = json.loads(self.last_body or b"{}")
             if "inbox" in body:  # "Send to inbox" (MOCK_GITHUB_EXTENSION), from the connector's page or the extension's
