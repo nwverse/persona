@@ -65,7 +65,26 @@ final class QueueStripTextSizeUITests: XCTestCase {
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", pair, "-tab", "dev", "-openSession", widget, "-UIPreferredContentSizeCategoryName", size, "-ui.scheme", look]
         app.launchPinned()
+        dismissIconNotice(app)
         return app
+    }
+
+    /// The app's icon follows its Light & Dark, so switching the look switches the icon, and the system says so in an
+    /// alert over the chat (as `ChatBottomGapTests` finds): tap it away, if it comes within a few seconds.
+    @MainActor private func dismissIconNotice(_ app: XCUIApplication) {
+        let notice = NSPredicate(format: "label CONTAINS[c] 'icon' OR label CONTAINS '图标'")
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+            for source in [app, XCUIApplication(bundleIdentifier: "com.apple.springboard")] {
+                let alert = source.alerts.containing(notice).firstMatch
+                if alert.exists, alert.buttons.firstMatch.exists {
+                    alert.buttons.firstMatch.tap()
+                    _ = alert.waitForNonExistence(timeout: 3)
+                    return
+                }
+            }
+            Thread.sleep(forTimeInterval: 0.3)
+        }
     }
 
     /// The strip, its title and its Send Now.

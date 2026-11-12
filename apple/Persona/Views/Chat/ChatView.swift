@@ -5504,7 +5504,7 @@ struct QueueStrip: View {
                     VStack(alignment: .leading, spacing: Theme.Space.sm) {
                         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.sm) {
                             tray
-                            title
+                            title.multilineTextAlignment(.leading) // the label centers wrapped lines
                         }
                         sendNowButton
                     }
