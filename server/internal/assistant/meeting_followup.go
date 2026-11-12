@@ -263,7 +263,7 @@ func (s *Service) followupSeed(ctx context.Context, e *kb.Engine, rec kb.Recordi
 		}
 	}
 	var lines []string
-	for _, sg := range e.Store.RecordingSegments(rec.ID) {
+	for _, sg := range kb.MeetingLines(e.Store.RecordingSegments(rec.ID)) { // Persona's echo is not the meeting's (#5905)
 		lines = append(lines, "["+meetingClock(sg.Start)+"] "+oneLine(sg.Text))
 	}
 	d.Transcript, d.Cut = cutMiddle(strings.Join(lines, "\n"), followupTranscriptRunes)

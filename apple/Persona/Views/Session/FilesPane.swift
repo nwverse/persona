@@ -28,6 +28,8 @@ struct FilesPane: View {
     @State private var error: String?
     @State private var file: FileRef?
     @State private var info: InfoTarget?
+    /// The item whose permissions are open (#5831).
+    @State private var permissions: InfoTarget?
     /// The item to mark after opening a folder (a found file, Show in Files Page, a link's real location).
     @State private var highlight: String?
     @AppStorage("files.showHidden") private var showHidden = false
@@ -71,6 +73,10 @@ struct FilesPane: View {
     private var canEdit: Bool { FolderEdits.available(model, group: group) }
     /// The hub can make folders, write text files, zip (hello `file_mkdir`, `file_write`, `file_zip`; an unknown list
     /// offers them and lets the answer tell).
+    /// Permissions can be changed (#5831): not on a Windows computer, where the hub has `file_chmod` and the folder takes changes.
+    private var canChangeMode: Bool {
+        writable && hubHas("file_chmod") && model.machine(machine)?.os?.lowercased() != "windows"
+    }
     private func hubHas(_ feature: String) -> Bool {
         let f = model.features(group)
         return f.isEmpty || f.contains(feature)
@@ -160,6 +166,10 @@ struct FilesPane: View {
                     file = nil
                     show(target, dir: false)
                 }
+        }
+        .sheet(item: $permissions) { t in
+            FilePermissionsSheet(machine: machine, path: t.path, cwd: cwd) { _ in Task { await load() } }
+                .presentationDetents([.medium, .large])
         }
         .sheet(item: $info) { t in
             FileInfoSheet(machine: machine, path: t.path, cwd: cwd, entry: t.entry) { real, dir in show(real, dir: dir) }
@@ -623,6 +633,9 @@ struct FilesPane: View {
             }
             Button { copy(full) } label: { Label("Copy Path", systemImage: Theme.Icon.copy) }
             Button { info = InfoTarget(path: full, entry: e) } label: { Label("Info [File Info]", systemImage: Theme.Icon.info) }
+            if canChangeMode, e.symlink != true {
+                Button { permissions = InfoTarget(path: full, entry: e) } label: { Label("Permissions…", systemImage: Theme.Icon.permissions) }
+            }
             if writable || hubHas("file_copy") {
                 Divider()
                 if writable { Button { startRename(e) } label: { Label("Rename [Chats View 0d0cba]", systemImage: Theme.Icon.edit) } }

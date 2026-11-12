@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -47,6 +48,7 @@ type fileMakeParams struct {
 	SHA256   string   `json:"sha256"`
 	Force    bool     `json:"force"`
 	Conflict string   `json:"conflict"`
+	Mode     *int     `json:"mode"`
 }
 
 func (n *Node) fileMake(ctx context.Context, method string, params json.RawMessage) (any, error) {
@@ -67,6 +69,8 @@ func (n *Node) fileMake(ctx context.Context, method string, params json.RawMessa
 		return n.zipPaths(ctx, p.Paths, p.Cwd, p.Dir, p.Name)
 	case "file.copy": // filecopy.go
 		return n.copyFiles(ctx, p.Paths, p.Cwd, p.Dir, p.Conflict)
+	case "file.chmod": // #5831
+		return n.changeMode(p.Path, p.Cwd, p.Mode)
 	}
 	return nil, fmt.Errorf("unknown method %s", method)
 }
@@ -452,4 +456,47 @@ func cleanOldZips(base string) {
 			_ = os.RemoveAll(filepath.Join(base, e.Name()))
 		}
 	}
+}
+
+// errNoPermissions: Windows has no permission bits for the file page to change.
+var errNoPermissions = &rpc.Error{Code: "unsupported", Message: "this computer has no Unix permissions to change"}
+
+// changeMode sets a file's or folder's permission bits (#5831): 0–0777 only (no setuid, setgid or sticky from the phone),
+// where the home takes changes; a link changes what it leads to (as chmod does). Answers the bits now.
+func (n *Node) changeMode(path, cwd string, mode *int) (map[string]any, error) {
+	if runtime.GOOS == "windows" {
+		return nil, errNoPermissions
+	}
+	if mode == nil || *mode < 0 || *mode > 0o777 {
+		return nil, errors.New("mode must be from 0 to 0777")
+	}
+	shown := strings.TrimSpace(path)
+	asked := n.resolvePath(shown, cwd)
+	if asked == "" {
+		return nil, errors.New("empty path")
+	}
+	real, _, err := n.statSafe(asked)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, errNotFound(shown)
+	}
+	if err != nil {
+		return nil, explainDenied(asked, n.home, err)
+	}
+	if isHome(fold(real), n.home) {
+		return nil, errReadOnly(shown)
+	}
+	if err := n.writable(real); err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(real, fs.FileMode(*mode)); err != nil {
+		return nil, err
+	}
+	st, err := os.Stat(real)
+	if err != nil {
+		return nil, err
+	}
+	if n.logger != nil {
+		n.logger.Printf("permissions changed from the phone: %s %o", real, st.Mode().Perm())
+	}
+	return map[string]any{"path": shown, "mode": unixMode(st.Mode())}, nil
 }

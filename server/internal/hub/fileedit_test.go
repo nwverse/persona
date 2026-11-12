@@ -35,7 +35,7 @@ func fileEditHub(t *testing.T, answer func(method string, params map[string]any)
 	m.peer = hubPeer
 	h.byID["m1"] = m
 	mux := http.NewServeMux()
-	for _, op := range []string{"rename", "move", "trash", "restore", "mkdir", "write", "zip", "copy"} {
+	for _, op := range []string{"rename", "move", "trash", "restore", "mkdir", "write", "zip", "copy", "chmod"} {
 		mux.HandleFunc("POST /api/v1/machines/{mid}/files/"+op, h.fileEdit(op))
 	}
 	return mux
@@ -176,5 +176,26 @@ func TestFileMakeRoutes(t *testing.T) {
 	code, out := postEdit(mux, "write", `{"path":"~/w/a.txt","text":"x","revision":"old"}`)
 	if code != http.StatusConflict || out["code"] != proto.CodeFileChanged {
 		t.Fatalf("conflict: %d %v", code, out)
+	}
+}
+
+// #5831: chmod reaches the node with its bits; bits past 0777 (or none) are 400.
+func TestFileChmodRoute(t *testing.T) {
+	var got []string
+	mux := fileEditHub(t, func(method string, p map[string]any) (any, error) {
+		b, _ := json.Marshal(p)
+		got = append(got, method+" "+string(b))
+		return map[string]any{"mode": p["mode"]}, nil
+	})
+	if code, out := postEdit(mux, "chmod", `{"path":"~/w/run.sh","mode":493}`); code != 200 || out["mode"] != float64(493) {
+		t.Fatalf("chmod: %d %v", code, out)
+	}
+	for _, body := range []string{`{"path":"~/w/run.sh","mode":2541}`, `{"path":"~/w/run.sh"}`, `{"mode":420}`, `{"path":"~/w/run.sh","mode":-1}`} {
+		if code, _ := postEdit(mux, "chmod", body); code != http.StatusBadRequest {
+			t.Fatalf("%s: %d, want 400", body, code)
+		}
+	}
+	if len(got) != 1 || got[0] != `file.chmod {"mode":493,"path":"~/w/run.sh"}` {
+		t.Fatalf("node got %v", got)
 	}
 }

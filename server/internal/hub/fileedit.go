@@ -35,6 +35,8 @@ type fileEditRequest struct {
 	Revision string  `json:"revision,omitempty"`
 	SHA256   string  `json:"sha256,omitempty"`
 	Force    bool    `json:"force,omitempty"`
+	// chmod (#5831): permission bits 0–0777.
+	Mode *int `json:"mode,omitempty"`
 }
 
 // maxFileWriteBody: a write's JSON (the node takes 4 MB of text; escaping can double it).
@@ -91,6 +93,13 @@ func (q fileEditRequest) check(op string) error {
 		}
 	case "zip":
 		return nonEmpty(q.Paths, "paths")
+	case "chmod":
+		if strings.TrimSpace(q.Path) == "" {
+			return errors.New("path is required")
+		}
+		if q.Mode == nil || *q.Mode < 0 || *q.Mode > 0o777 {
+			return errors.New("mode must be from 0 to 0777")
+		}
 	case "copy":
 		if strings.TrimSpace(q.Dir) == "" {
 			return errors.New("dir is required")

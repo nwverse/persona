@@ -40,6 +40,7 @@ export function FileInfoDialog({
   entry,
   onClose,
   onGoTo,
+  onChangeMode,
 }: {
   mid: string;
   cwd: string;
@@ -49,6 +50,8 @@ export function FileInfoDialog({
   onClose: () => void;
   /** Go to where a link leads: a folder opens, a file is shown in its folder. */
   onGoTo?: (path: string, dir: boolean) => void;
+  /** Change the permissions (#5831): offered where the computer takes them. */
+  onChangeMode?: (mode: number) => void;
 }) {
   const features = useStore((s) => s.features);
   const machine = useStore((s) => s.machines.find((m) => m.id === mid));
@@ -135,6 +138,11 @@ export function FileInfoDialog({
             <Row label={t("files-info.who")} value={permissionWords(info.mode)} />
             {info.owner && <Row label={t("files-info.owner")} value={info.group ? t("files-info.owner_group", { owner: info.owner, group: info.group }) : info.owner} />}
             <Row label={t("files-info.code")} value={`${modeSymbolic(info.mode)} · ${modeOctal(info.mode)}`} mono />
+            {onChangeMode && !info.symlink && (
+              <div className="px-3 py-2">
+                <Button icon="pencil" onClick={() => onChangeMode(info.mode!)}>{t("files-perm.change")}</Button>
+              </div>
+            )}
           </Group>
         )}
         {loading && <Loading label={t("files-info.loading")} />}

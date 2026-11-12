@@ -17247,6 +17247,7 @@ MOCK_TREE[MOCK_REPO + "/docs/guide.pdf"] = ("application/pdf", mock_pdf())
 # checkout), `old-settings.json` → ../legacy/settings.json (broken), and a script; GET …/stat?detail=1 answers the Info
 # sheet's fields (mode, owner, group, times, items, a link's target).
 MOCK_LINKS = {}
+MOCK_MODES = {}  # tree key (no trailing /) -> permission bits changed through …/files/chmod (#5831)
 if os.environ.get("MOCK_FILE_LINKS"):
     MOCK_TREE["code/shared/"] = None
     MOCK_TREE["code/shared/colors.json"] = '{"sky": "#4a90d9", "rain": "#5b6b7d"}\n'
@@ -17274,7 +17275,7 @@ def mock_stat_detail(mid, asked, cwd):
     link = MOCK_LINKS.get(rel)
     real = link_real(rel)
     is_dir = real == "" or real.endswith("/")
-    d = {"path": asked, "kind": "dir" if is_dir else "file", "mode": 0o755 if is_dir or rel.endswith(".sh") else 0o644,
+    d = {"path": asked, "kind": "dir" if is_dir else "file", "mode": MOCK_MODES.get(real.rstrip("/"), 0o755 if is_dir or rel.endswith(".sh") else 0o644),
          "owner": "me", "group": "staff", "mtime": ago(hours=5), "ctime": ago(hours=5), "birthtime": ago(days=9)}
     if is_dir:
         d["items"] = len(mock_children(real))
@@ -20565,7 +20566,7 @@ _features_without_file_ops = features
 def features():
     return (_features_without_file_ops() + (["upload_dir", "file_edit"] if FILE_OPS else [])
             + (["file_info"] if os.environ.get("MOCK_FILE_LINKS") else [])
-            + (["file_mkdir", "file_write", "file_zip", "file_copy"] if FILE_OPS else []))
+            + (["file_mkdir", "file_write", "file_zip", "file_copy", "file_chmod"] if FILE_OPS else []))
 
 
 def file_ops_key(mid, path, cwd):
@@ -20707,7 +20708,7 @@ def file_ops_route(h, p, body):
 def file_make_route(h, p, body):
     """POST /api/v1/machines/{mid}/files/{mkdir,write,zip} under MOCK_FILE_OPS (#5828): a folder in the tree, a text file
     made or replaced, a real zip of tree entries kept in FILES at a temporary path for …/file/download."""
-    m = re.fullmatch(r"/api/v1/machines/([^/]+)/files/(mkdir|write|zip|copy)", p)
+    m = re.fullmatch(r"/api/v1/machines/([^/]+)/files/(mkdir|write|zip|copy|chmod)", p)
     if not (FILE_OPS and m): return False
     mid, op = m.groups()
     req = json.loads(body or b"{}")
@@ -20733,6 +20734,12 @@ def file_make_route(h, p, body):
         MOCK_TREE[rel] = text
         fs_changed(mid, [(home + "/" + rel.rpartition("/")[0]).rstrip("/")], True)
         return h.send_json({"path": home + "/" + rel, "size": len(text.encode()), "revision": "r%d" % len(FILE_OPS_LOG), "mtime": ago()}) or True
+    if op == "chmod":  # #5831: the bits kept for the Info sheet's answer
+        home, rel, err = file_ops_key(mid, req.get("path", ""), cwd)
+        if err: return h.send_json(*err) or True
+        if not taken(rel): return h.send_json({"error": "不存在", "code": "not_found"}, 404) or True
+        MOCK_MODES[rel.rstrip("/")] = int(req.get("mode", 0o644)) & 0o777
+        return h.send_json({"path": req["path"], "mode": MOCK_MODES[rel.rstrip("/")]}) or True
     if op == "copy":  # #5830: the tree entries copied into dir, named as a move names them
         home, drel, err = file_ops_dir(mid, req.get("dir", ""), cwd)
         if err: return h.send_json(*err) or True

@@ -122,6 +122,7 @@ POST /api/v1/machines/{id}/confirm
 POST /api/v1/machines/{id}/reject
 POST /api/v1/machines/{mid}/doctor/fix
 POST /api/v1/machines/{mid}/files
+POST /api/v1/machines/{mid}/files/chmod
 POST /api/v1/machines/{mid}/files/copy
 POST /api/v1/machines/{mid}/files/mkdir
 POST /api/v1/machines/{mid}/files/move

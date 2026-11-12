@@ -29,6 +29,7 @@ import { SearchField } from "../../ui/SearchField";
 import { scrollBehavior } from "../../ui/stream/motion";
 import { PanelHeader } from "../../ui/PanelHeader";
 import { FileInfoDialog } from "./files/FileInfo";
+import { FILE_CHMOD_FEATURE, PermissionsDialog } from "./files/Permissions";
 import { NewItemDialog, type NewKind } from "./files/NewItem";
 import { FileView } from "./files/FileView";
 import { DropHint, dragHasFiles, RowCheck, rowClick, rowFrameProps, RowMore, SelectionBar, useFileOps, type OpTarget, type RowOps } from "./files/FileOps";
@@ -79,6 +80,7 @@ export function FilesPanel({ mid, sid, cwd, path, file, highlight: marked, onClo
   const features = useStore((s) => s.features);
   const [newKind, setNewKind] = useState<NewKind | null>(null);
   const [info, setInfo] = useState<{ path: string; entry?: FsEntry } | null>(null);
+  const [perm, setPerm] = useState<{ path: string; mode?: number } | null>(null);
   const [query, setQuery] = useState("");
   useEffect(() => setQuery(""), [dir]);
 
@@ -151,6 +153,8 @@ export function FilesPanel({ mid, sid, cwd, path, file, highlight: marked, onClo
   const shown = here?.listing?.path ?? (dir === "~" && home ? home : dir.startsWith("~/") && home ? home + dir.slice(1) : dir);
   const sessionFolder = cwd.startsWith("/") ? cwd.replace(/\/+$/, "") || "/" : null;
   const writable = writableHere(shown, home);
+  // permissions (#5831): where the computer takes changes, not on Windows
+  const canChmod = writable && hubHas(features, FILE_CHMOD_FEATURE) && machine?.os?.toLowerCase() !== "windows";
   // A broken link says what it says (Info); a folder opens; a file opens in the viewer.
   const enter = (e: FsEntry) => (e.link_broken ? setInfo({ path: joinPath(shown, e.name), entry: e }) : e.dir ? go(joinPath(shown, e.name)) : setOpen([joinPath(shown, e.name)]));
 
@@ -240,6 +244,7 @@ export function FilesPanel({ mid, sid, cwd, path, file, highlight: marked, onClo
           <Menu
             items={beforeTrash(ops.rowItems(rowMenu.x, rowMenu.open), [
               { key: "info", label: t("files-info.info"), icon: "info", divider: true, onSelect: () => setInfo({ path: rowMenu.x.path }) },
+              ...(canChmod ? [{ key: "perm", label: t("files-perm.menu"), icon: "shield" as const, onSelect: () => setPerm({ path: rowMenu.x.path }) }] : []),
             ])}
             anchor={rowMenu.at.anchor ?? null}
             point={rowMenu.at.point}
@@ -341,7 +346,18 @@ export function FilesPanel({ mid, sid, cwd, path, file, highlight: marked, onClo
           }}
         />
       )}
-      {info && <FileInfoDialog mid={mid} cwd={cwd} path={info.path} entry={info.entry} onClose={() => setInfo(null)} onGoTo={goTo} />}
+      {info && (
+        <FileInfoDialog
+          mid={mid}
+          cwd={cwd}
+          path={info.path}
+          entry={info.entry}
+          onClose={() => setInfo(null)}
+          onGoTo={goTo}
+          onChangeMode={canChmod && info.path !== shown ? (mode) => { setPerm({ path: info.path, mode }); setInfo(null); } : undefined}
+        />
+      )}
+      {perm && <PermissionsDialog mid={mid} cwd={cwd} path={perm.path} mode={perm.mode} onClose={() => setPerm(null)} onChanged={() => setReloads((n) => n + 1)} />}
       {viewing && (
         <FileView
           key={viewing}

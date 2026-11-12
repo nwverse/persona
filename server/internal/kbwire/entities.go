@@ -156,6 +156,10 @@ type RecordingSegment struct {
 	// N is an all-day recording's line number: its upload position plus one, what the recap cites
 	// (docs/assistant/day-recap.md); 0 (absent) for every other recording.
 	N int `json:"n,omitempty"`
+	// Echo: the line is Persona's own answer as the meeting's microphone heard it (#5905,
+	// docs/assistant/meeting-minutes.md "Persona's echo"), marked by the phone or by the hub's rule (kb/echo.go). Kept,
+	// never fed to the minutes, the summary or the follow-up; absent (false) for every other line.
+	Echo bool `json:"echo,omitempty"`
 }
 
 // Hit is one search result.
