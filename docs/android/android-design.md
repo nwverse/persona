@@ -13,7 +13,7 @@ Pages are written once. Each style provides its own design tokens (palette, typo
 | Background | System white / black; repository-grouped Agents use `#F5F5F5` / `#2A2A2A` | White paper `#FFFFFF` / ink night `#0E1117` | Board grey `#E6E9ED` / graphite `#0E1114` |
 | Accent colors | System-blue state marks for waiting, amber for running, green for unread; text hues adjusted only to retain the existing AA floors | Only the highlighter `#FFE15A`, marking only Persona's suggestions and things waiting for you | The thin edge and glyph on the strip's left carry state: amber / blue / green / grey |
 | Primary button | Solid white (dark) / solid ink (light), capsule; the sidebar's New Chat uses blue | Solid ink capsule, inverted in dark mode | Solid ink, small 8dp corners |
-| Typeface (Latin and digits) | Android system font; standard iPhone role sizes, no bundled display face | Manrope (everything) | Barlow Semi Condensed (numbers, fields, counts) |
+| Typeface (Latin and digits) | Android system font; iPhone chrome roles with Android long-form body 16sp and secondary 14sp (#5780), no bundled display face | Manrope (everything) | Barlow Semi Condensed (numbers, fields, counts) |
 | Shapes | Cards 14dp, panels 22dp, controls 10dp; home composer 32dp, displaced drawer page 55dp | Cards 24dp, everything else rows without a fill | Small 10dp corners plus a 1dp stroke |
 | Motion | Springs and restrained overlay transitions; primary homes use flat reference backgrounds | Gentle 240ms transitions | Crisp 160ms |
 | Navigation (Assistant and Agents at the top; Settings in the shared sidebar) | Centered compact capsule with a grey selected segment, avatar left and New Conversation right | Underlined text tabs | A ruled two-cell switcher |
