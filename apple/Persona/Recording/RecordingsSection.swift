@@ -176,10 +176,11 @@ struct RecordingStatusText: View {
     }
 }
 
-/// Start a recording on this phone (the watch has its own). Meeting Recording leads: one prominent button, named after the
-/// calendar event happening now (`MeetingRecorder`, docs/apple/recording.md「Meeting recordings」); the options for it are
-/// one row each, and a plain Start Recording is the secondary button under them. While one runs, the controls are one row:
-/// the now-recording card, which opens the live sheet (`RecordingLiveSheet`).
+/// Start a recording on this phone (the watch has its own). Record is the one prominent button (#5243): a meeting, named
+/// after the calendar event happening now (`MeetingRecorder`, docs/apple/recording.md「Meeting recordings」). Under it the
+/// options are one row each, first Meeting / Note (Note, for this one start, records a plain note and hides the meeting's
+/// options). While one runs, the controls are one row: the now-recording card, which opens the live sheet
+/// (`RecordingLiveSheet`).
 struct RecordingCaptureControls: View {
     @State private var capture = RecordingCapture.shared
     @State private var library = RecordingLibrary.shared
@@ -198,6 +199,8 @@ struct RecordingCaptureControls: View {
     @State private var pickedAttendee: MeetingAttendees.Candidate?
     /// The next meeting's private mark (#3862): off unless turned on here, for that meeting only.
     @State private var pickedPrivate = false
+    /// Meeting unless Note is picked here, for the next start only (#5243): never remembered.
+    @State private var pickedKind = RecordingKindChoice.meeting
     /// A start was tapped and recording has not begun (the calendar read, then the microphone): the hero stays, busy.
     @State private var startRequested = false
     #endif
@@ -255,17 +258,10 @@ struct RecordingCaptureControls: View {
         let busy = preparing != .idle
         hero(busy: busy)
         if capture.state == .starting { startingRow }
-        // The plain recording is a quiet second way to start, right under the first, before any option.
-        Button { startNote() } label: {
-            Label("Start Recording", systemImage: Theme.Icon.recording).font(Theme.Font.body)
-                .lineLimit(size.isAccessibilitySize ? 3 : 1).minimumScaleFactor(0.6)
-                .frame(maxWidth: .infinity)
-                .scaledFrame(minHeight: Theme.Size.tapTarget)
-        }
-        .buttonStyle(.borderless)
-        .disabled(busy)
-        .accessibilityIdentifier("recording-start")
-        if MeetingAttendees.offered(model) {
+        // Meeting or Note is a choice row under the one Record button, never a second button (#5243); a note has none
+        // of the meeting's options (progressive disclosure).
+        kindRow.disabled(busy)
+        if pickedKind == .meeting, MeetingAttendees.offered(model) {
             personaRow.disabled(busy)
             if MeetingAttendees.conversation(model) {
                 // The meeting's own room conversation attends (#3862): no session to pick, and the private mark instead.
@@ -301,16 +297,17 @@ struct RecordingCaptureControls: View {
         }
     }
 
-    /// Meeting Recording, and what it will be called: the calendar's meeting on now, or a way to let it read the calendar.
-    /// While the start is in flight the button keeps its label, shows a spinner beside it and is disabled.
+    /// Record, and what a meeting will be called: the calendar's meeting on now, or a way to let it read the calendar (a
+    /// note has no name from it). While the start is in flight the button keeps its label, shows a spinner beside it and
+    /// is disabled.
     @ViewBuilder private func hero(busy: Bool) -> some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
-            Button { startMeeting() } label: {
+            Button { record() } label: {
                 HStack(spacing: Theme.Space.s) {
                     // At accessibility sizes the icon goes: the words never truncate, they scale down a little instead.
-                    if size.isAccessibilitySize { Text("Meeting Recording") } else {
+                    if size.isAccessibilitySize { Text("Record [Recordings Section ef2821]") } else {
                         // White like the title: the symbol took the tint, drew in the button's own blue and pushed the title off-center.
-                        Label("Meeting Recording", systemImage: Theme.Icon.recording).foregroundStyle(Theme.onSolid)
+                        Label("Record [Recordings Section ef2821]", systemImage: Theme.Icon.recording).foregroundStyle(Theme.onSolid)
                     }
                     if busy { ProgressView() }
                 }
@@ -323,27 +320,32 @@ struct RecordingCaptureControls: View {
             .themedButton(prominent: true)
             .disabled(busy)
             .accessibilityIdentifier("recording-meeting-start")
-            if let meeting = meetingNow, let title = meeting.title {
-                Label(String(localized: "Calendar: \(title) · \(Self.span(meeting))"), systemImage: Theme.Icon.calendarEvent)
-                    .font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
-                    .accessibilityIdentifier("recording-meeting-now")
-            } else if calendarAskable {
-                Button {
-                    Task {
-                        _ = await MeetingCalendar.requestAccess()
-                        calendarAskable = MeetingCalendar.canAsk
-                        meetingNow = await MeetingCalendar.meetingOffMain()
-                    }
-                } label: {
-                    Label("Name Recordings After Calendar Meetings", systemImage: Theme.Icon.calendarEvent).font(Theme.Font.caption)
-                        .lineLimit(size.isAccessibilitySize ? 4 : 1).multilineTextAlignment(.leading)
-                }
-                .buttonStyle(.borderless)
-            } else {
-                Text("Named after the calendar event happening now, if there is one.").font(Theme.Font.caption).foregroundStyle(.secondary)
-            }
+            if pickedKind == .meeting { calendarLine }
         }
         .padding(.vertical, Theme.Space.xs)
+    }
+
+    /// What the meeting will be called: the calendar's meeting on now, or a way to let it read the calendar.
+    @ViewBuilder private var calendarLine: some View {
+        if let meeting = meetingNow, let title = meeting.title {
+            Label(String(localized: "Calendar: \(title) · \(Self.span(meeting))"), systemImage: Theme.Icon.calendarEvent)
+                .font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+                .accessibilityIdentifier("recording-meeting-now")
+        } else if calendarAskable {
+            Button {
+                Task {
+                    _ = await MeetingCalendar.requestAccess()
+                    calendarAskable = MeetingCalendar.canAsk
+                    meetingNow = await MeetingCalendar.meetingOffMain()
+                }
+            } label: {
+                Label("Name Recordings After Calendar Meetings", systemImage: Theme.Icon.calendarEvent).font(Theme.Font.caption)
+                    .lineLimit(size.isAccessibilitySize ? 4 : 1).multilineTextAlignment(.leading)
+            }
+            .buttonStyle(.borderless)
+        } else {
+            Text("Named after the calendar event happening now, if there is one.").font(Theme.Font.caption).foregroundStyle(.secondary)
+        }
     }
 
     /// The capture is `.starting` (the microphone): Cancel is possible only now. "Waiting for microphone access" is the
@@ -360,6 +362,25 @@ struct RecordingCaptureControls: View {
             Text("Waiting for microphone access").font(Theme.Font.caption).foregroundStyle(.secondary)
         }
         .transition(.opacity)
+    }
+
+    /// Meeting or Note for the next start: a menu row like Persona's, with what a note is under it.
+    private var kindRow: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            Picker(selection: $pickedKind) {
+                ForEach(RecordingKindChoice.allCases, id: \.self) { Text($0.title).tag($0) }
+            } label: {
+                Label("Type", systemImage: pickedKind.symbol)
+            }
+            .pickerStyle(.menu)
+            .font(Theme.Font.body)
+            .accessibilityIdentifier("recording-kind")
+            if pickedKind == .note {
+                Text("No minutes, and Persona stays out.").font(Theme.Font.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("recording-kind-detail")
+            }
+        }
     }
 
     /// Persona's part: one menu, the same control and label as while recording, with what it does under it.
@@ -470,9 +491,19 @@ struct RecordingCaptureControls: View {
 
     // MARK: Starting
 
-    private func startMeeting() {
-        let attendance = startAttendance
-        pickedRole = nil; pickedAttendee = nil; pickedPrivate = false
+    /// Record: a meeting with the options shown, or a note when Note is picked. The picks are for this start only.
+    private func record() {
+        let start = RecordingStart.make(pickedKind, offered: MeetingAttendees.offered(model), conversation: MeetingAttendees.conversation(model),
+                                        photos: MeetingAttendees.photos(model), role: role, privateMark: pickedPrivate,
+                                        attendee: chosenAttendee)
+        pickedRole = nil; pickedAttendee = nil; pickedPrivate = false; pickedKind = .meeting
+        switch start {
+        case .meeting(let attendance): startMeeting(attendance)
+        case .note: startNote()
+        }
+    }
+
+    private func startMeeting(_ attendance: RecordingAttendance?) {
         startRequested = true
         Task {
             await MeetingRecorder.shared.startMeeting(inForeground: true, openPage: false, attendance: attendance)
@@ -493,21 +524,11 @@ struct RecordingCaptureControls: View {
     /// until one is chosen (#3862).
     private var attendee: MeetingAttendees.Candidate? { pickedAttendee ?? MeetingAttendees.preferred(model) }
 
-    /// What Meeting Recording starts with: the role and session shown above it. A session picked here that can no longer
-    /// attend (its computer went offline meanwhile) gives way to the preferred one; with nobody chosen Persona starts off,
-    /// and the main chat attends only when picked here. With the meeting conversation (#3862) it is a room meeting
-    /// whatever the role, off included: every upload carries `room` and the private mark.
-    private var startAttendance: RecordingAttendance? {
-        guard MeetingAttendees.offered(model) else { return nil }
-        let role = self.role
-        if MeetingAttendees.conversation(model) {
-            return RecordingAttendance.room(role, private: pickedPrivate, photos: MeetingAttendees.photos(model))
-        }
+    /// Who attends the meeting Record starts (`RecordingStart.make`): a session picked here that can no longer attend (its
+    /// computer went offline meanwhile) gives way to the preferred one.
+    private var chosenAttendee: MeetingAttendees.Candidate? {
         let all = MeetingAttendees.candidates(model)
-        guard role.attends,
-              let chosen = pickedAttendee.flatMap({ p in all.first { $0.key == p.key } }) ?? MeetingAttendees.preferred(model)
-        else { return RecordingAttendance(role: .off) }
-        return MeetingAttendees.choose(chosen, in: RecordingAttendance(role: role))
+        return pickedAttendee.flatMap { p in all.first { $0.key == p.key } } ?? MeetingAttendees.preferred(model)
     }
 
     /// 14:00–15:00.
@@ -571,7 +592,7 @@ struct RecordingCaptureControls: View {
     #endif
 }
 
-/// Recordings as a page of its own (the drawer's Meeting Recording, the Control, Siri, the activity's tap): what Knowledge ›
+/// Recordings as a page of its own (the drawer's Record, the Control, Siri, the activity's tap): what Knowledge ›
 /// Recordings shows, one step closer.
 struct RecordingsPage: View {
     #if DEBUG

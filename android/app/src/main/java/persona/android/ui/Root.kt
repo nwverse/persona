@@ -210,7 +210,10 @@ private fun PersonaRootContent(
 private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((Router) -> ResolvedRoute?)?>, shellServices: SettingsServices, shell: AppServices) {
     // Extension page badges live on the sidebar's Settings entry, never on a third home tab.
     val extensionSlots = persona.feature.settings.rememberExtensionSlots(shellServices.extensions?.takeUnless { shellServices.demo }, session.connection.state)
-    val services = remember(shellServices, extensionSlots) { shellServices.copy(extensionSlots = extensionSlots) }
+    val services = remember(shellServices, extensionSlots, session.preferences) {
+        // The Agents list's display, as its ⋯ › Display sets it: Settings › Interface style offers the same choice.
+        shellServices.copy(extensionSlots = extensionSlots, agentsDisplay = session.preferences)
+    }
     val slotsState = extensionSlots?.state?.collectAsStateWithLifecycle()?.value
     val slotBadge = slotsState?.tabBadge ?: persona.feature.settings.SlotBadge()
     val context = LocalContext.current

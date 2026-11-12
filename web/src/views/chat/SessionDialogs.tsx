@@ -305,11 +305,12 @@ export function useModeSet(session: Session) {
   /** POST …/modes {launcher, from, model?, effort?} (#5035): another launcher records a switch that the user's next
    *  message carries out, the session's own drops one; `from` is the launcher the pick was made against, so one made on
    *  a session that switched meanwhile is refused (`switch_stale`). The pending switch shows at once (the pill's clock)
-   *  and goes back to what it was if the hub says no, with its words. */
-  const switchLauncher = async (step: { launcher: string; from?: string; model?: string; effort?: string }): Promise<boolean> => {
+   *  and goes back to what it was if the hub says no, with its words. `agent`: the engine a launcher of the other engine
+   *  runs (#5054), drawn as the node will record it (`pending_switch.agent`); it is not sent. */
+  const switchLauncher = async (step: { launcher: string; from?: string; model?: string; effort?: string }, agent?: string): Promise<boolean> => {
     const base = latest.current;
     const before = base.pending_switch;
-    const pending = { launcher: step.launcher, model: step.model, effort: step.effort, at: new Date().toISOString() };
+    const pending = { launcher: step.launcher, model: step.model, effort: step.effort, ...(agent ? { agent } : {}), at: new Date().toISOString() };
     const next: Session = { ...base, pending_switch: step.launcher === sessionLauncher(base) ? undefined : pending };
     upsertSession(next);
     latest.current = next; // a step after this one builds on it before the push draws it

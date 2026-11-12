@@ -1,7 +1,23 @@
 // node --test site/worker.test.mjs
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFile } from "node:fs/promises";
 import worker from "./worker.mjs";
+
+test("legal pages link to the existing product support footer without placeholder contacts", async () => {
+  const home = await readFile(new URL("./public/index.html", import.meta.url), "utf8");
+  assert.match(home, /<footer id="contact">/);
+  assert.match(home, /href="mailto:[^"@]+@[^"@]+"/);
+  assert.match(home, /href="https:\/\/github\.com\/nwverse\/persona\/issues\/new\/choose"/);
+  for (const page of ["privacy", "terms"]) {
+    const html = await readFile(new URL(`./public/${page}/index.html`, import.meta.url), "utf8");
+    assert.match(html, /<h2>联系<\/h2>\s*<p><a href="\/#contact">/);
+    assert.doesNotMatch(html, /mailto:|person@example\.com/);
+    assert.match(html, /自托管的个人 AI 助手/);
+    assert.match(html, /不提供托管账号/);
+    assert.match(html, /虚构数据演示/);
+  }
+});
 
 const assets = { fetch: async (req) => new Response("asset " + new URL(req.url).pathname) };
 
