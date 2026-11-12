@@ -14,6 +14,8 @@ export const FILE_EDIT_FEATURE = "file_edit";
 export const FILE_MKDIR_FEATURE = "file_mkdir";
 export const FILE_WRITE_FEATURE = "file_write";
 export const FILE_ZIP_FEATURE = "file_zip";
+/** Copy and duplicate (#5830). */
+export const FILE_COPY_FEATURE = "file_copy";
 
 /** What an upload with a name already there does: `replace` it, or `keep` both ("name 2.extension", as Finder does). */
 export type Conflict = "replace" | "keep";
@@ -126,6 +128,17 @@ export async function moveEntries(mid: string, paths: string[], cwd: string, dir
     ...mutationAuth(credential),
   });
   return r.moved ?? [];
+}
+
+/** Copies `paths` into folder `dir` (#5830); a copy into their own folder with `keep` duplicates them. */
+export async function copyEntries(mid: string, paths: string[], cwd: string, dir: string, conflict?: Conflict, credential?: FileCredential): Promise<{ from: string; to: string }[]> {
+  const r = await api<{ copied?: { from: string; to: string }[] }>(`/machines/${enc(mid)}/files/copy`, {
+    method: "POST",
+    json: { paths, cwd, dir, ...(conflict ? { conflict } : {}) },
+    timeout: 610_000,
+    ...mutationAuth(credential),
+  });
+  return r.copied ?? [];
 }
 
 /** Moves `paths` to the machine's trash; resolves to what puts each back (restoreEntries). */

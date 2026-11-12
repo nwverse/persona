@@ -19664,7 +19664,7 @@ _features_without_file_ops = features
 def features():
     return (_features_without_file_ops() + (["upload_dir", "file_edit"] if FILE_OPS else [])
             + (["file_info"] if os.environ.get("MOCK_FILE_LINKS") else [])
-            + (["file_mkdir", "file_write", "file_zip"] if FILE_OPS else []))
+            + (["file_mkdir", "file_write", "file_zip", "file_copy"] if FILE_OPS else []))
 
 
 def file_ops_key(mid, path, cwd):
@@ -19806,7 +19806,7 @@ def file_ops_route(h, p, body):
 def file_make_route(h, p, body):
     """POST /api/v1/machines/{mid}/files/{mkdir,write,zip} under MOCK_FILE_OPS (#5828): a folder in the tree, a text file
     made or replaced, a real zip of tree entries kept in FILES at a temporary path for …/file/download."""
-    m = re.fullmatch(r"/api/v1/machines/([^/]+)/files/(mkdir|write|zip)", p)
+    m = re.fullmatch(r"/api/v1/machines/([^/]+)/files/(mkdir|write|zip|copy)", p)
     if not (FILE_OPS and m): return False
     mid, op = m.groups()
     req = json.loads(body or b"{}")
@@ -19832,6 +19832,22 @@ def file_make_route(h, p, body):
         MOCK_TREE[rel] = text
         fs_changed(mid, [(home + "/" + rel.rpartition("/")[0]).rstrip("/")], True)
         return h.send_json({"path": home + "/" + rel, "size": len(text.encode()), "revision": "r%d" % len(FILE_OPS_LOG), "mtime": ago()}) or True
+    if op == "copy":  # #5830: the tree entries copied into dir, named as a move names them
+        home, drel, err = file_ops_dir(mid, req.get("dir", ""), cwd)
+        if err: return h.send_json(*err) or True
+        copied = []
+        for path in req.get("paths", []):
+            _, rel, err = file_ops_key(mid, path, cwd)
+            if err: return h.send_json(*err) or True
+            if not taken(rel): return h.send_json({"error": "不存在", "code": "not_found"}, 404) or True
+            name = rel.rpartition("/")[2]
+            final = file_ops_free(drel, name, req.get("conflict"))
+            if final is None: return h.send_json({"error": "已经有了", "code": "exists", "name": name}, 409) or True
+            for k, v in list(MOCK_TREE.items()):
+                if k == rel or k == rel + "/" or k.startswith(rel + "/"): MOCK_TREE[drel + final + k[len(rel):]] = v
+            copied.append({"from": path, "to": req["dir"].rstrip("/") + "/" + final})
+        fs_changed(mid, [(home + "/" + drel).rstrip("/")], True)
+        return h.send_json({"copied": copied}) or True
     import io, zipfile
     out, n = io.BytesIO(), 0
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:

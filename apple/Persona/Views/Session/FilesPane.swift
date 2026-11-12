@@ -42,6 +42,7 @@ struct FilesPane: View {
     @State private var newName = ""
     @State private var trashing: [String] = [] // names waiting for the confirmation
     @State private var moving: [String] = [] // names the folder picker is open for
+    @State private var copyingPick = false // the picker copies them (Copy to…, #5830)
     @State private var dropping = false
     @State private var query = ""
     @FocusState private var findFocused: Bool
@@ -233,12 +234,16 @@ struct FilesPane: View {
             Text("The folder already has an item with that name. Replace moves the one there to the Trash; Keep Both names this one “name 2”.")
         }
         .sheet(isPresented: Binding(get: { !moving.isEmpty }, set: { if !$0 { moving = [] } })) {
-            FolderPicker(machineID: machineID, group: group, cwd: cwd, root: pickerRoot, at: shown, moving: moving.map(full)) { dir in
+            FolderPicker(machineID: machineID, group: group, cwd: cwd, root: pickerRoot, at: shown, moving: moving.map(full), copying: copyingPick) { dir in
                 let names = moving
                 moving = []
                 selecting = false
                 selection = []
-                edits.move(names.map(full), into: dir, cwd: cwd, machine: machine, model: model) { Task { await load() } }
+                if copyingPick {
+                    edits.copy(names.map(full), into: dir, cwd: cwd, machine: machine, model: model) { Task { await load() } }
+                } else {
+                    edits.move(names.map(full), into: dir, cwd: cwd, machine: machine, model: model) { Task { await load() } }
+                }
             }
         }
         .onDisappear { transfers.stop() }
@@ -282,7 +287,15 @@ struct FilesPane: View {
                 crumbs
             }
             HStack(spacing: Theme.Space.s) {
-                findField
+                if selecting {
+                    Text(selection.isEmpty ? String(localized: "Select Items") : String(localized: "\(selection.count) Selected"))
+                        .font(Theme.Font.secondaryMedium)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("files.select.count")
+                } else {
+                    findField
+                }
                 if selecting {
                     Button {
                         let names = (listing?.entries ?? []).filter { showHidden || !$0.name.hasPrefix(".") }.map(\.name)
@@ -470,38 +483,66 @@ struct FilesPane: View {
         trashing.count == 1 ? String(localized: "Move “\(trashing[0])” to the Trash?") : String(localized: "Move \(trashing.count) items to the Trash?")
     }
 
-    /// Under the list while selecting: what is picked, and Move / Move to Trash for all of it.
+    /// Under the list while selecting (#5830): Download, Copy to, Move to, Compress and Move to Trash for all of it.
     private var selectionBar: some View {
-        HStack(spacing: Theme.Space.m) {
-            Text(selection.isEmpty ? String(localized: "Select Items") : String(localized: "\(selection.count) Selected"))
-                .font(Theme.Font.secondaryMedium)
-                .lineLimit(1)
-                .accessibilityIdentifier("files.select.count")
-            Spacer(minLength: Theme.Space.s)
-            Button { downloadSelection() } label: {
-                Label("Download", systemImage: Theme.Icon.save).labelStyle(.iconOnly)
+        let none = selection.isEmpty || edits.busy
+        return HStack(spacing: Theme.Space.xs) {
+            barButton(Theme.Icon.save, String(localized: "Download"), id: "files.select.download", disabled: selection.isEmpty || !canDownloadSelection) {
+                downloadSelection()
             }
-            .themedButton()
-            .disabled(selection.isEmpty || !canDownloadSelection)
-            .accessibilityLabel("Download")
-            .accessibilityIdentifier("files.select.download")
-            Button { moving = Array(selection).sorted() } label: {
-                Label("Move", systemImage: Theme.Icon.folder).lineLimit(1)
+            if hubHas("file_copy") {
+                barButton(Theme.Icon.copy, String(localized: "Copy To [Files]"), id: "files.select.copy", disabled: none) {
+                    copyingPick = true
+                    moving = Array(selection).sorted()
+                }
             }
-            .themedButton()
-            .disabled(selection.isEmpty || edits.busy || !writable)
-            .accessibilityIdentifier("files.select.move")
-            Button(role: .destructive) { trashing = Array(selection).sorted() } label: {
-                Label("Move to Trash", systemImage: Theme.Icon.delete).labelStyle(.iconOnly)
+            barButton(Theme.Icon.folder, String(localized: "Move To [Files]"), id: "files.select.move", disabled: none || !writable) {
+                copyingPick = false
+                moving = Array(selection).sorted()
             }
-            .themedButton()
-            .disabled(selection.isEmpty || edits.busy || !writable)
-            .accessibilityLabel("Move to Trash")
-            .accessibilityIdentifier("files.select.trash")
+            if hubHas("file_zip") {
+                barButton(Theme.Icon.fileArchive, String(localized: "Compress"), id: "files.select.compress", disabled: none || !writable) {
+                    compress(Array(selection).sorted())
+                }
+            }
+            barButton(Theme.Icon.delete, String(localized: "Trash [Files]"), id: "files.select.trash", disabled: none || !writable, role: .destructive) {
+                trashing = Array(selection).sorted()
+            }
         }
-        .padding(.horizontal, Theme.Space.l)
-        .padding(.vertical, Theme.Space.m)
-        .surface(in: .capsule)
+        .padding(.horizontal, Theme.Space.s)
+        .padding(.vertical, Theme.Space.s)
+        .surface(in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
+    }
+
+    /// One action of the selection bar: its mark over its word, the whole cell a target.
+    private func barButton(_ symbol: String, _ title: String, id: String, disabled: Bool, role: ButtonRole? = nil,
+                           action: @escaping () -> Void) -> some View {
+        Button(role: role, action: action) {
+            VStack(spacing: Theme.Space.xxs) {
+                ThemedIcon(symbol).font(Theme.Font.body)
+                Text(title).font(Theme.Font.label).lineLimit(1).minimumScaleFactor(0.8)
+            }
+            .foregroundStyle(role == .destructive ? Theme.danger : Theme.accent)
+            .frame(maxWidth: .infinity)
+            .tapTargetHeight()
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .opacity(disabled ? 0.4 : 1)
+        .accessibilityIdentifier(id)
+    }
+
+    /// Zips names in the folder shown, the zip marked once it is there.
+    private func compress(_ names: [String]) {
+        selecting = false
+        selection = []
+        edits.compress(names.map(full), cwd: cwd, machine: machine, model: model) { made in
+            Task {
+                await load()
+                show(full(made), dir: false)
+            }
+        }
     }
 
     // MARK: Rows
@@ -580,10 +621,24 @@ struct FilesPane: View {
             }
             Button { copy(full) } label: { Label("Copy Path", systemImage: Theme.Icon.copy) }
             Button { info = InfoTarget(path: full, entry: e) } label: { Label("Info [File Info]", systemImage: Theme.Icon.info) }
+            if writable || hubHas("file_copy") {
+                Divider()
+                if writable { Button { startRename(e) } label: { Label("Rename [Chats View 0d0cba]", systemImage: Theme.Icon.edit) } }
+                if hubHas("file_copy") {
+                    Button { copyingPick = true; moving = [e.name] } label: { Label("Copy To…", systemImage: Theme.Icon.copy) }
+                }
+                if writable {
+                    Button { copyingPick = false; moving = [e.name] } label: { Label("Move", systemImage: Theme.Icon.folder) }
+                    if hubHas("file_copy") {
+                        Button { duplicate([e.name]) } label: { Label("Duplicate", systemImage: Theme.Icon.duplicate) }
+                    }
+                    if hubHas("file_zip") {
+                        Button { compress([e.name]) } label: { Label("Compress", systemImage: Theme.Icon.fileArchive) }
+                    }
+                }
+            }
             if writable {
                 Divider()
-                Button { startRename(e) } label: { Label("Rename [Chats View 0d0cba]", systemImage: Theme.Icon.edit) }
-                Button { moving = [e.name] } label: { Label("Move", systemImage: Theme.Icon.folder) }
                 Button(role: .destructive) { trashing = [e.name] } label: { Label("Move to Trash", systemImage: Theme.Icon.delete) }
             }
         }
@@ -592,7 +647,9 @@ struct FilesPane: View {
             Button("Info [File Info]") { info = InfoTarget(path: full, entry: e) }
             if writable {
                 Button("Rename [Chats View 0d0cba]") { startRename(e) }
-                Button("Move") { moving = [e.name] }
+                Button("Move") { copyingPick = false; moving = [e.name] }
+                if hubHas("file_copy") { Button("Duplicate") { duplicate([e.name]) } }
+                if hubHas("file_zip") { Button("Compress") { compress([e.name]) } }
                 Button("Move to Trash") { trashing = [e.name] }
             }
         }
@@ -757,6 +814,16 @@ struct FilesPane: View {
         }
         selecting = false
         selection = []
+    }
+
+    /// Copies names beside themselves ("name 2.ext"), the first copy marked.
+    private func duplicate(_ names: [String]) {
+        edits.duplicate(names.map(full), cwd: cwd, machine: machine, model: model) { made in
+            Task {
+                await load()
+                if let first = made.first { show(full(first), dir: false) }
+            }
+        }
     }
 
     private func copy(_ p: String) {

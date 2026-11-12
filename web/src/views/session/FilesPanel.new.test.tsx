@@ -23,7 +23,7 @@ const item = (label: string) => [...document.querySelectorAll('[role="menuitem"]
 
 beforeEach(async () => {
   localStorage.clear(); setToken("synthetic-A"); sent = []; clicked = [];
-  Object.assign(getState(), { features: ["file_edit", "upload_dir", "file_mkdir", "file_write", "file_zip"], machines: [{ id: "m1", name: "Work computer", online: true, home: "/home/me", os: "linux" }] });
+  Object.assign(getState(), { features: ["file_edit", "upload_dir", "file_mkdir", "file_write", "file_zip", "file_copy"], machines: [{ id: "m1", name: "Work computer", online: true, home: "/home/me", os: "linux" }] });
   vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) { clicked.push(this.getAttribute("href") ?? ""); });
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const u = new URL(String(input), "http://local.invalid");
@@ -34,7 +34,8 @@ beforeEach(async () => {
     sent.push({ path: u.pathname, body });
     if (u.pathname.endsWith("/files/mkdir")) return Response.json({ path: "/home/me/app/" + body.name });
     if (u.pathname.endsWith("/files/write")) return Response.json({ path: body.path, size: 0, revision: "r1" });
-    if (u.pathname.endsWith("/files/zip")) return Response.json({ path: "/tmp/persona-zips/z-1/" + body.name, name: body.name, size: 10, files: 2 });
+    if (u.pathname.endsWith("/files/zip")) return Response.json({ path: (body.dir ?? "/tmp/persona-zips/z-1") + "/" + body.name, name: body.name, size: 10, files: 2 });
+    if (u.pathname.endsWith("/files/copy")) return Response.json({ copied: body.paths.map((p: string) => ({ from: p, to: p + " 2" })) });
     return Response.json({});
   }));
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
@@ -69,5 +70,24 @@ describe("FilesPanel New and zip (#5828)", () => {
     expect(sent[0].path).toBe("/api/v1/machines/m1/files/zip");
     expect(sent[0].body).toEqual({ paths: ["/home/me/app/src", "/home/me/app/a.txt"], cwd: "/home/me/app", name: t("files-ops.archive_name") });
     expect(clicked.some((h) => h.includes("file/download") && h.includes(encodeURIComponent("/tmp/persona-zips/z-1/")))).toBe(true);
+  });
+
+  it("duplicates and compresses from a row's menu, and copies to a folder (#5830)", async () => {
+    const menuOf = async (name: string) => {
+      const row = host.querySelector<HTMLButtonElement>(`button[title="/home/me/app/${name}"]`)!;
+      await act(async () => row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 10 }))); await flush();
+    };
+    await menuOf("a.txt");
+    await act(async () => item(t("files-ops.duplicate"))!.click()); await flush();
+    expect(sent.at(-1)).toEqual({ path: "/api/v1/machines/m1/files/copy", body: { paths: ["/home/me/app/a.txt"], cwd: "/home/me/app", dir: "/home/me/app", conflict: "keep" } });
+    await menuOf("src");
+    await act(async () => item(t("files-ops.compress"))!.click()); await flush();
+    expect(sent.at(-1)).toEqual({ path: "/api/v1/machines/m1/files/zip", body: { paths: ["/home/me/app/src"], cwd: "/home/me/app", name: "src.zip", dir: "/home/me/app" } });
+    expect(document.body.textContent).toContain(t("files-ops.compressed", { name: "src.zip" }));
+    await menuOf("a.txt");
+    await act(async () => item(t("files-ops.copy_to"))!.click()); await flush();
+    expect(document.body.textContent).toContain(t("files-ops.copy_one_title", { name: "a.txt" }));
+    await click(t("files-ops.copy_here"));
+    expect(sent.at(-1)).toEqual({ path: "/api/v1/machines/m1/files/copy", body: { paths: ["/home/me/app/a.txt"], cwd: "/home/me/app", dir: "/home/me/app" } });
   });
 });
