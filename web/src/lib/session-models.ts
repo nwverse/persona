@@ -11,7 +11,7 @@ import { t } from "../i18n";
 import { ApiError, errorText } from "./api";
 import { agentId, sessionAgent } from "./agent-kind";
 import { modelShort } from "./context-usage";
-import { stateOf } from "./format";
+import { sessionCan, stateOf } from "./format";
 import { runsAssistant, type AssistantLauncher } from "./assistant-chat";
 import {
   defaultModel, forgetCustomModel, launcherModels, machineLaunchers, modelName, withoutCustom, type AgentModel, type LauncherDefault, type LauncherModels, type UnavailableLauncher,
@@ -194,6 +194,19 @@ export async function forgetModel(mid: string, launcher: string, id: string): Pr
 /** The engine a session runs (AgentMark ids: claude, codex, agy…). */
 export const sessionEngine = (s: Session): string => agentId(sessionAgent(s).agent);
 
+/** The hub moves a running Agent between Claude Code and Codex with the user's next message (#5054,
+ *  docs/protocol/protocol.md). */
+export const ENGINE_SWITCH_FEATURE = "engine_switch";
+
+/** Whether `s` may move to the other engine on a hub with ENGINE_SWITCH_FEATURE: a running Claude Code Agent whose model
+ *  the app switches (one in a terminal, as for another launcher, #5035), or a Codex Agent in a terminal (its own row: a
+ *  Codex app thread or a runtime's session has a source). The node refuses the rest (`switch_unsupported`). */
+export function engineSwitchable(s: Session): boolean {
+  const engine = sessionEngine(s);
+  if (engine === "claude") return canSwitchModel(s);
+  return engine === "codex" && !s.assistant && !s.source_kind && Boolean(s.pane_id) && sessionCan(s, "send") && stateOf(s) !== "offline";
+}
+
 /** What the pill and the panel can change on the session now: its model (Claude Code in a terminal, a runtime that says
  *  so), its effort (the composer's chips used to; a Codex thread on its app-server too). Neither: the pill is a label. */
 export function sessionSwitches(s: Session): { model: boolean; effort: boolean } {
@@ -241,16 +254,27 @@ export interface PillView extends PillSetup {
  *  `switch_failed`…): nothing was typed and the switch was dropped. */
 export const switchRefused = (e: unknown): boolean => e instanceof ApiError && e.status === 409 && Boolean(e.code?.startsWith("switch_"));
 
+/** The engine the waiting switch moves the conversation to (#5054): `pending_switch.agent`, "" when none waits or it
+ *  stays on its engine (another launcher of it, #5035). */
+export function pendingEngine(s: Session): string {
+  const ps = s.pending_switch;
+  if (!ps?.launcher || ps.launcher === sessionLauncher(s) || !ps.agent) return "";
+  const to = agentId(ps.agent);
+  return to === sessionEngine(s) ? "" : to;
+}
+
 /** The switch to another launcher waiting for the next message (#5035), as the pill draws it: that launcher, the model
  *  picked (its list's name for it once read; none picked: the launcher's default), the effort picked or the one it runs
- *  with now. null: none waits. */
+ *  with now. A switch to the other engine (#5054) draws that engine, and no effort of the engine it leaves: the one
+ *  picked, else the model's own default. null: none waits. */
 export function pendingView(s: Session, listOf: (launcher: string) => ModelList): PillSetup | null {
   const ps = s.pending_switch;
   if (!ps?.launcher || ps.launcher === sessionLauncher(s)) return null;
   const models = listOf(ps.launcher).list?.models ?? [];
   const row = ps.model ? models.find((m) => m.id === ps.model) : defaultModel(models);
-  const out: PillSetup = { engine: sessionEngine(s), provider: ps.launcher, model: row ? modelName(row) : ps.model ? modelLabel(ps.model) : t("chat-modelpill.default_model") };
-  const effort = ps.effort || s.effort;
+  const to = pendingEngine(s);
+  const out: PillSetup = { engine: to || sessionEngine(s), provider: ps.launcher, model: row ? modelName(row) : ps.model ? modelLabel(ps.model) : t("chat-modelpill.default_model") };
+  const effort = ps.effort || (to ? row?.default_effort : s.effort);
   if (effort) out.effort = effort;
   return out;
 }

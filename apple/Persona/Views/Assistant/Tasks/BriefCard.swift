@@ -10,9 +10,14 @@ struct BriefCard: View {
     var brief: BriefBody
     /// The hub group of the conversation it is in.
     var group: String = ""
+    /// The conversation whose feed has it: what its buttons ask goes to that conversation's manager.
+    var conversation: String = ""
     @Environment(\.horizontalSizeClass) private var widthClass
     /// Compact width: the done and failed rows show once this is on.
     @State private var pastOpen = false
+    @Environment(\.chatPin) private var pin
+    /// What the chat's pin knows the "Last N hours" line by (this view's, kept while it is drawn).
+    @State private var pastKey = "brief-past-" + UUID().uuidString
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
@@ -32,6 +37,10 @@ struct BriefCard: View {
             if brief.progressTotal > 0 {
                 Divider()
                 progress
+            }
+            if !brief.setup.isEmpty {
+                Divider()
+                BriefSetupSection(lines: brief.setup)
             }
         }
         .card(padding: Theme.Space.l)
@@ -65,7 +74,8 @@ struct BriefCard: View {
         return VStack(alignment: .leading, spacing: Theme.Space.xs) {
             if folds {
                 Button {
-                    withAnimation(Theme.Motion.state) { pastOpen.toggle() }
+                    // In the chat the line stays where it is and the rows open under it (#3757).
+                    toggleInPlace(pin, pastKey, animation: Theme.Motion.state, closing: pastOpen) { pastOpen.toggle() }
                 } label: {
                     HStack(spacing: Theme.Space.s) {
                         BriefHead(symbol: Theme.Icon.time, tint: Theme.accent, title: title)
@@ -79,6 +89,7 @@ struct BriefCard: View {
                 .buttonStyle(.plain)
                 .accessibilityValue(pastOpen ? String(localized: "Expanded") : String(localized: "Collapsed"))
                 .accessibilityIdentifier("brief.past")
+                .chatPinned(pastKey)
             } else {
                 BriefHead(symbol: Theme.Icon.time, tint: Theme.accent, title: title)
             }
@@ -113,7 +124,8 @@ struct BriefCard: View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
             BriefHead(symbol: Theme.Icon.question, tint: .secondary, title: String(localized: "Can wait (\(brief.laterTotal))"))
             ForEach(brief.later, id: \.id) { row in
-                BriefLaterRow(row: row, group: group, chat: BriefBody.chat(for: row, waiting: false, group: group, pending: []))
+                BriefLaterRow(row: row, group: group, conversation: conversation,
+                              chat: BriefBody.chat(for: row, waiting: false, group: group, pending: []))
             }
             BriefMore(n: brief.laterMore)
         }
@@ -142,6 +154,64 @@ struct BriefCard: View {
 
     private static func clock(_ date: Date) -> String {
         date.formatted(.dateTime.hour(.defaultDigits(amPM: .omitted)).minute())
+    }
+}
+
+// MARK: - Recommended setup
+
+/// The week's recommended setup (#5085, #5804; docs/assistant/assistant.md "Recommended setup"): the hub's own counts
+/// and words, drawn as they came. Open Settings is all a line does, and only where the app has its page: nothing is
+/// turned on from here.
+private struct BriefSetupSection: View {
+    var lines: [BriefBody.Setup]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            BriefHead(symbol: Theme.Icon.settings, tint: .secondary, title: String(localized: "Recommended setup"))
+            BriefNote(String(localized: "From Persona's own records of the last 7 days, unless a line names its own period. Nothing was changed: each of these stays as it is until you change it yourself."))
+            ForEach(lines) { line in
+                BriefSetupRow(line: line, open: action(line))
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("brief.setup")
+    }
+
+    /// Open Settings for a line whose mechanism is turned on at a page of this app; nil otherwise, and the line has
+    /// no button.
+    private func action(_ line: BriefBody.Setup) -> (() -> Void)? {
+        guard let page = line.page else { return nil }
+        return { BriefSetupPages.open(page) }
+    }
+}
+
+/// One mechanism: the hub's whole line, and Open Settings when the app has its page.
+private struct BriefSetupRow: View {
+    var line: BriefBody.Setup
+    var open: (() -> Void)?
+
+    var body: some View {
+        HStack(spacing: Theme.Space.m) {
+            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                Text(line.text).font(Theme.Font.secondary)
+                if line.isOnTheWebOnly {
+                    Text("That page is in the web app's settings for Persona.")
+                        .font(Theme.Font.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("brief.setup.web.\(line.id)")
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if let open {
+                Button(action: open) { Text("Open Settings [Brief Setup]").lineLimit(1) }
+                    .font(Theme.Font.captionStrong)
+                    .themedButton()
+                    .accessibilityIdentifier("brief.setup.open.\(line.id)")
+            }
+        }
+        .padding(.vertical, Theme.Space.xs)
+        .accessibilityIdentifier("brief.setup.\(line.id)")
     }
 }
 
@@ -269,6 +339,7 @@ struct BriefAcceptRow: View {
                     Text("Recommended: \(option)").font(Theme.Font.caption).foregroundStyle(.secondary)
                 }
                 Text(briefMeta(row)).font(Theme.Font.caption).foregroundStyle(.secondary)
+                if row.forBriefing { BriefHeldMark(id: row.id) }
                 HStack(spacing: Theme.Space.s) {
                     Spacer(minLength: 0)
                     ViewThatFits(in: .horizontal) {
@@ -280,6 +351,7 @@ struct BriefAcceptRow: View {
                     }
                 }
                 .padding(.top, Theme.Space.xs)
+                RuleSuggestionLine(suggestion: row.suggestion, card: .todo(row.id, round: row.askedAt ?? ""), group: group)
             }
             .padding(.vertical, Theme.Space.xs)
         }
@@ -344,11 +416,29 @@ struct BriefAcceptRow: View {
     }
 }
 
+/// A decision that can wait (#4930, #5803): nothing was pushed for it, it comes with the next briefing. Only a to-do's
+/// own row carries it (`TodoAsk.row`); a briefing's rows never do.
+private struct BriefHeldMark: View {
+    var id: String
+
+    var body: some View {
+        Label {
+            Text("Comes with your next briefing").lineLimit(1)
+        } icon: {
+            ThemedIcon(Theme.Icon.today)
+        }
+        .font(Theme.Font.caption)
+        .foregroundStyle(.secondary)
+        .accessibilityIdentifier("brief.held.\(id)")
+    }
+}
+
 /// A question an Agent left for the briefing: what it asks, how long it waited, Open when the app knows its chat, and
 /// Handled, which turns into what happened.
 private struct BriefLaterRow: View {
     var row: BriefBody.Row
     var group: String
+    var conversation: String = ""
     var chat: SessionKey?
     private var actions: BriefActions { .shared }
 
@@ -374,7 +464,7 @@ private struct BriefLaterRow: View {
         case .completed?, .taken?, .busy?, nil:
             let busy = actions.outcome(marking: row, group: group) == .busy
             Button {
-                Task { await actions.markHandled(row, group: group) }
+                Task { await actions.markHandled(row, group: group, conversation: conversation) }
             } label: {
                 Text("Handled").lineLimit(1).opacity(busy ? 0 : 1)
                     .overlay { if busy { ProgressView().controlSize(.small) } }

@@ -35,7 +35,9 @@ var Features = []string{
 	"typed_models",             // a model ID the launcher's list lacks: starts, POST …/modes, the Persona chat's pick; custom rows, DELETE …/models/custom (#1644)
 	"assistant_model_pick",     // PUT / DELETE /api/v1/assistant/conversations/{id}/model, model_pick on assistant conversations, unavailable on …/launchers?purpose=assistant (#5033)
 	"launcher_switch",          // POST …/modes {launcher, model?, effort?} switches a running Claude Code Agent to another launcher with its next message; Session.pending_switch (#5035)
+	"engine_switch",            // POST …/modes with a launcher of the other engine: the next message moves the conversation between Claude Code and Codex with a handoff; pending_switch.agent, engine_history (#5054)
 	"client_msg_id",            // session.send dedupes retries
+	FeatureMessageSendState,    // informational receipt support; trust only authenticated hello.message_send_state == 1
 	"client_ops",               // durable operation receipts and read-only status queries
 	"send_refusals",            // 409 dialog_open / input_draft, clear_draft
 	"screen_dialog",            // interaction.dialog, Resolution.option, 409 prompt_changed
@@ -62,6 +64,7 @@ var Features = []string{
 	"machine_trust",            // machines' trust and error_code, POST /api/v1/machines/{id}/confirm|reject (docs/assistant/onboarding.md 5.3)
 	"machines_add",             // POST /api/v1/auth/pair-codes with add / machine from a signed-in device: it adds a computer and pairs it (docs/assistant/onboarding.md 5.3)
 	"todo_threads",             // a to-do's chat thread: PUT/DELETE /api/v1/todos/{id}/thread, and `thread` on the to-dos GET returns (docs/assistant/todos.md "Chat thread")
+	"todo_seen",                // Got it on a Just finished to-do: PUT/DELETE /api/v1/todos/{id}/seen, and `seen_at` on the to-dos GET returns (docs/assistant/todo-status-sop.md "Seen")
 	"tls",                      // optional TLS listener and SPKI pin (hub-changes.md 1.1)
 	"endpoints",                // authenticated address discovery and capability-gated updates
 	"plugins",                  // GET /api/v1/plugins and the relay under /api/v1/plugins/{id}/ (docs/extensions/extensions.md)
@@ -92,6 +95,8 @@ var Features = []string{
 	"builtin_presets",          // the hub's own provider presets in GET /api/v1/launchers/presets; POST /api/v1/launchers with a preset takes an empty name, display_name and assign (docs/integrations/launchers.md "Built-in presets")
 	"launcher_auto_name",       // POST /api/v1/launchers without a preset takes an empty name; GET /api/v1/machines/{mid}/launchers carries display_name (docs/integrations/launchers.md "Display names")
 	"launcher_import_parse",    // POST /api/v1/launchers/import/parse reads a pasted configuration into provider drafts; GET / POST /api/v1/launchers/import take alias (#5193)
+	"launcher_auth_auto",       // POST /api/v1/launchers/test and /discover send only the credential header auth names, take auth "auto" and answer the auth that worked (docs/integrations/launchers.md "Authentication method")
+	"launcher_import_link",     // POST /api/v1/launchers/import/parse reads provider import links: cindy://provider/import and the web's #import= (#5420)
 	"upload_dir",               // POST /api/v1/machines/{mid}/files?dest=dir&dir=&conflict=: into a folder of the home (docs/protocol/protocol.md "Changing files")
 	"file_edit",                // POST /api/v1/machines/{mid}/files/{rename,move,trash,restore} (docs/protocol/protocol.md "Changing files")
 	"launcher_scope",           // a Persona-managed provider's share, scope_machines, delivery, own_service and machine_keys (docs/integrations/launchers.md "Device scope and on-demand delivery")
@@ -111,6 +116,10 @@ var Features = []string{
 // CodeWorktreeUnsupported: worktree.prepare / worktree.create on an engine that has no checkouts (a runtime such as
 // Paseo or Cindy, or a host without checkout support); the message starts with "unsupported".
 const CodeWorktreeUnsupported = "worktree_unsupported"
+
+// CodeWorktreeNoCommits: worktree.prepare / worktree.create on a repository nobody has committed to (HEAD names an
+// unborn branch): there is nothing to check out, so the folder itself is the only workspace (#5548).
+const CodeWorktreeNoCommits = "worktree_no_commits"
 
 // Codes of a failed credential.gh_token (hub → node, node/credential.go).
 const (

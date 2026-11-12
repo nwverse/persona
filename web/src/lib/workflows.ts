@@ -107,7 +107,7 @@ function endedAt(w: Workflow): number | null {
 }
 
 /** Its runs still running, and those that ended within the last day (the node lists them that long; an older one may
- *  list them longer): what the chat's "Background" chip and its dialog show. */
+ *  list them longer): what the chat's Background tasks button and panel show. */
 export function recentWorkflows(s: Session | undefined, now: number): Workflow[] {
   return (s?.workflows ?? []).filter((w) => {
     if (w.running) return true;

@@ -146,7 +146,17 @@ struct PlanCard: View {
         }
     }
 
+    /// The open card, and under it the standing rule the hub suggests for this kind of plan (#5802); without one the
+    /// card alone, as before.
     private var open: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            openCard
+            RuleSuggestionLine(suggestion: plan.suggestion, card: .plan(id: plan.id, conversation: plan.conversation),
+                               group: AppModel.shared.hub?.group ?? "", inset: true)
+        }
+    }
+
+    private var openCard: some View {
         VStack(alignment: .leading, spacing: Theme.Space.m) {
             Label(plan.tasks.count > 1 ? String(localized: "Split into \(plan.tasks.count) tasks, started like this") : String(localized: "Start like this"), systemImage: Theme.Icon.taskPlan)
                 .font(Theme.Font.captionStrong)
@@ -565,7 +575,7 @@ struct FeedLine: View {
             if let body = item.today { TodayCard(item: item, body: body) }
         case .brief:
             // A routine's facts (#2320); a body this build can't read leaves the card out, never the feed around it.
-            if let brief = item.brief { BriefCard(brief: brief, group: group) }
+            if let brief = item.brief { BriefCard(brief: brief, group: group, conversation: item.conversation) }
         case .message:
             if let id = item.ref, !store.laterMessages.contains(id) { MessageCard(item: item, itemID: id) }
         case .answered: AnsweredLine(item: item, taskTitle: taskTitle)
@@ -736,7 +746,10 @@ struct MessageCard: View {
     var itemID: String
     @State private var editing = false
     @State private var text = ""
+    @Environment(\.chatPin) private var pin
     private var store: TasksStore { .shared }
+    /// Edit turns the draft into a field in place: in the chat the card's top stays where it is (#3757).
+    private var pinKey: String { "message-card-" + itemID }
 
     var body: some View {
         let card = store.messageCard(item)
@@ -816,6 +829,7 @@ struct MessageCard: View {
         .card(padding: Theme.Space.l)
         .accessibilityElement(children: .contain)
         .animation(Theme.Motion.state, value: state)
+        .chatPinned(pinKey)
     }
 
     private func sendButton(_ card: FeedItem) -> some View {
@@ -834,7 +848,7 @@ struct MessageCard: View {
     private func editButton(_ card: FeedItem) -> some View {
         Button {
             if text.isEmpty { text = card.draft ?? "" }
-            withAnimation(Theme.Motion.state) { editing.toggle() }
+            toggleInPlace(pin, pinKey, animation: Theme.Motion.state, closing: editing) { editing.toggle() }
         } label: {
             Text(editing ? String(localized: "Done [Task Views 9b8ee8]") : String(localized: "Edit [Task Views 928324]"))
                 .lineLimit(1).fixedSize(horizontal: true, vertical: false)

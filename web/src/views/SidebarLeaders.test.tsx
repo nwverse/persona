@@ -143,7 +143,8 @@ describe("the leader conversations in the sidebar", () => {
     const pad = (d: number) => String(d).padStart(2, "0");
     // 20 older chats of the user's own, c20 the newest of them
     const older = Array.from({ length: 20 }, (_, i) => conversation(`c${pad(i + 1)}`, `Chat ${i + 1}`, `2026-10-${pad(i + 1)}T00:00:00Z`));
-    const own = ["newest", "wx", "mine", ...older.map((c) => c.session_id).reverse()];
+    // every chat but the main one and the leaders, whoever opened it (#5195): the scheduled task's and the Inbox's lead
+    const own = ["task", "twin", "newest", "wx", "mine", ...older.map((c) => c.session_id).reverse()];
     const button = (text: string) => [...host.querySelectorAll("button")].find((b) => b.textContent === text);
     const showMore = () => Array.from({ length: 15 }, (_, i) => button(t("sidebar.show_more", { count: i + 1 }))).find(Boolean);
     beforeEach(() => {
@@ -156,18 +157,23 @@ describe("the leader conversations in the sidebar", () => {
       ];
     });
 
-    it("lists the newest 15 of the user's own other chats; the hub's own are only under 全部对话", async () => {
+    it("lists the newest 15 other chats whoever opened them, the hub's own with their origin's mark (#5195)", async () => {
       await renderSidebar();
       expect(rowIds()).toEqual(["lead-a", "lead-b", ...own.slice(0, 15)]);
       expect(host.querySelector('a[href="/history"]')!.textContent).toContain(String(conversations.length));
+      const mark = (id: string) => row(id).querySelector("[data-origin-mark]");
+      expect(mark("task")?.getAttribute("data-origin-mark")).toBe("task");
+      expect(mark("task")?.getAttribute("aria-label")).toBe(t("assistant-conversations.origin_task"));
+      expect(mark("twin")?.getAttribute("data-origin-mark")).toBe("inbox");
+      for (const id of ["newest", "wx", "mine"]) expect(mark(id), id).toBeNull();
     });
 
     it("shows 15 more for each Show more until none are left, Show less goes back, and a reload keeps what was open", async () => {
       await renderSidebar();
       expect(button(t("sidebar.show_less"))).toBeUndefined();
-      act(() => button(t("sidebar.show_more", { count: 8 }))!.click());
+      act(() => button(t("sidebar.show_more", { count: 10 }))!.click());
       expect(rowIds()).toEqual(["lead-a", "lead-b", ...own]);
-      expect(button(t("sidebar.show_more", { count: 8 }))).toBeUndefined();
+      expect(button(t("sidebar.show_more", { count: 10 }))).toBeUndefined();
       // a reload
       act(() => root.unmount());
       root = createRoot(host);

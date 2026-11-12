@@ -18,6 +18,9 @@ nonisolated extension Theme.Size {
     static let recordingMeterBar: CGFloat = 3
     static let recordingMeterGap: CGFloat = 3
     static let recordingMeterHeight: CGFloat = 44
+    /// The widest a topic's chip on the meeting page gets (#3862 phase 2) at the default text size: a title of up to 80
+    /// characters is cut there, so the row shows the topics around the current one rather than one long title.
+    static let meetingTopicChip: CGFloat = 240
 }
 
 nonisolated extension Theme {
@@ -89,5 +92,10 @@ nonisolated extension Theme {
         /// How long "Persona is looking at the photo…" waits for the room's note after the photo was added, in seconds:
         /// a room that never writes one doesn't keep the spinner turning for the rest of the meeting.
         static let photoNoteWait: TimeInterval = 120
+        /// A Summary item opened in place (#5026): the transcript line its time picks, with this many lines before it
+        /// and after it. One before says what led to it; two after hold the reply or the follow-up, since an item is
+        /// stamped as its sentence begins. Few enough that the card stays a summary.
+        static let contextBefore = 1
+        static let contextAfter = 2
     }
 }

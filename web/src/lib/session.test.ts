@@ -107,6 +107,9 @@ describe("a stopped Agent (#4754)", () => {
     expect(isStoppedAgent({ ...stopped, capabilities: { read: true, terminal: true, send: true } })).toBe(false);
     expect(isStoppedAgent({ ...stopped, capabilities: { read: true } })).toBe(false); // an archive's snapshot: no terminal
     expect(isStoppedAgent({ ...stopped, source_kind: "claude_cli" })).toBe(false);
+    // a Codex thread nothing has open is marked the same way (#5521); a Codex App thread offers no terminal
+    expect(isStoppedAgent({ ...stopped, agent: "codex", source_kind: "codex_history" })).toBe(true);
+    expect(isStoppedAgent({ ...stopped, agent: "codex", source_kind: "codex_history", capabilities: { read: true } })).toBe(false);
     expect(isStoppedAgent({ ...stopped, assistant: true })).toBe(false);
     expect(isStoppedAgent(undefined)).toBe(false);
   });

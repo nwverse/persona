@@ -16,7 +16,7 @@ struct TodosView: View {
     @State private var creatingNotes = ""
     /// The New To-Do sheet's notes mic (#2188).
     @State private var dictation = Dictation()
-    /// Folded sections the user opened (Other open, Shelved, Done start folded), and merged rows opened to their members.
+    /// Folded sections the user opened (Shelved and Done start folded), and merged rows opened to their members.
     @State private var unfolded: Set<TodoSection> = []
     @State private var openedGroups: Set<String> = []
     /// Restores from Shelved kept on this device (`TodoRestores`), and the moment the sections are read at: a minute's
@@ -39,7 +39,7 @@ struct TodosView: View {
     /// What the list draws: the to-dos by status section (#3206, docs/assistant/todo-status-sop.md), related ones merged
     /// into one row. A search and the filter (#3740) narrow the to-dos first, then the sections place what is left.
     private func listState() -> TodoFilteredList {
-        TodoListLogic.list(store.todos, searched: store.todos.filter(matchesQuery), filter: listFilter,
+        TodoListLogic.list(store.scopedTodos, searched: store.scopedTodos.filter(matchesQuery), filter: listFilter,
                            lookup: TodosLogic.makeSessionLookup(AppModel.shared.allSessions(inFront: inFront)),
                            now: clock, restored: restored, calendar: TodoCalendar.userCalendar)
     }
@@ -56,7 +56,7 @@ struct TodosView: View {
         VStack(spacing: Theme.Space.flush) {
             TodosModeBar(view: $viewMode, mode: $calendarMode) { listControls }
             if viewMode == .calendar {
-                TodoCalendarView(todos: store.todos, mode: $calendarMode, anchor: $calendarAnchor,
+                TodoCalendarView(todos: store.scopedTodos, mode: $calendarMode, anchor: $calendarAnchor,
                                  open: { pushed = TodoDetailRoute(id: $0) }, showList: { viewMode = .list })
             } else {
                 list
@@ -93,10 +93,17 @@ struct TodosView: View {
             // `-showDoneTodos YES`: the Done section starts open (screenshots of done todos).
             if UserDefaults.standard.bool(forKey: "showDoneTodos") { unfolded = [.other, .shelved, .done] }
             if let match = UserDefaults.standard.string(forKey: "openTodoTitled"),
-               let todo = store.todos.first(where: { $0.title.contains(match) }) {
+               let todo = store.scopedTodos.first(where: { $0.title.contains(match) }) {
                 pushed = TodoDetailRoute(id: todo.id)
             }
             #endif
+        }
+        // Another assistant is current: the list is its to-dos now, and one opened or being written is the one before's.
+        .onChange(of: model.assistantSwitches) {
+            pushed = nil
+            showCreate = false
+            quickAdd = nil
+            openedGroups = []
         }
         .navigationDestination(item: $pushed) { r in TodoDetailView(todoID: r.id) }
     }
@@ -105,7 +112,6 @@ struct TodosView: View {
         let state = listState()
         let result = state.result
         let calendar = TodoCalendar.userCalendar
-        let openEmpty = [TodoSection.waiting, .working, .justDone, .pr].allSatisfy { result.groups($0).isEmpty }
         return List {
             // The search field, and what the filter leaves out of Needs you, right under the bar: no band of section
             // spacing between them and the first section (#3712).
@@ -133,7 +139,7 @@ struct TodosView: View {
                 ForEach(TodoSection.allCases, id: \.self) { section in
                     let groups = TodoListLogic.sorted(result.groups(section), by: listSort, calendar: calendar)
                     if !groups.isEmpty {
-                        let folded = section.startsFolded && !isUnfolded(section, openEmpty: openEmpty)
+                        let folded = section.startsFolded && !isUnfolded(section)
                         // The to-dos its rows list, a merged row's related ones too: the number says what is under it.
                         sectionView(section, groups: groups, count: groups.reduce(0) { $0 + $1.members.count }, folded: folded)
                             .listSectionSpacing(folded ? .custom(Theme.Space.flush) : .compact)
@@ -199,11 +205,9 @@ struct TodosView: View {
         Binding(get: { on }, set: { _ in withAnimation(Theme.Motion.state) { pick() } })
     }
 
-    /// A folded section is open when the user opened it, while searching, or (Other open) when nothing above it shows
-    /// or a filter is on: a filter narrows, so what it leaves in Other open shows; Shelved and Done stay folded.
-    private func isUnfolded(_ section: TodoSection, openEmpty: Bool) -> Bool {
+    /// A folded section (Shelved, Done) is open when the user opened it, or while searching.
+    private func isUnfolded(_ section: TodoSection) -> Bool {
         unfolded.contains(section) || !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || (section == .other && (openEmpty || listFilter != .all))
     }
 
     @ViewBuilder private func sectionView(_ section: TodoSection, groups: [TodoTriageGroup], count: Int, folded: Bool) -> some View {
@@ -265,9 +269,12 @@ struct TodosView: View {
     private func todoRow(_ todo: TodoItem, triage: TodoTriage?, related: TodoRelatedToggle? = nil) -> some View {
         // a failed start waiting on the owner reads open: its checkbox and swipe close it (#3713)
         let open = TodoTriageLogic.checksAsOpen(todo, triage)
+        // Got It on a Just finished row (#5707), while the hub keeps seen marks
+        let seen: (() -> Void)? = triage?.section == .justDone && model.hubFeatures.contains(TodoSeen.feature)
+            ? { markSeen(todo, after: triage?.last ?? .distantPast) } : nil
         return NavigationLink(value: TodoDetailRoute(id: todo.id)) {
             TodoRow(todo: todo, triage: triage, onToggleDone: { store.toggleDone(todo, done: open) },
-                    onRestore: triage?.section == .shelved ? { restore(todo) } : nil, related: related)
+                    onRestore: triage?.section == .shelved ? { restore(todo) } : nil, onSeen: seen, related: related)
         }
         .swipeActions(edge: .leading) {
             if triage?.section == .shelved {
@@ -292,6 +299,13 @@ struct TodosView: View {
                 }
                 .tint(Theme.positive)
             }
+            // after the full swipe's action, which stays what it was
+            if let seen {
+                Button(action: seen) {
+                    Label("Got It [To-do Seen]", systemImage: Theme.Icon.seen)
+                }
+                .tint(Theme.accent)
+            }
         }
         .swipeActions(edge: .trailing) {
             Button(role: .destructive) {
@@ -304,6 +318,26 @@ struct TodosView: View {
         .modifier(RelatedAction(related: related))
         // The link merges its children and would otherwise take the "N related" button's identifier too
         .accessibilityIdentifier("todos.row.\(todo.id)")
+    }
+
+    /// Got It (#5707, docs/assistant/todo-status-sop.md "Seen"): filed under Done at once, the hub keeps the mark for
+    /// every device, and the toast's Undo takes it off. `after`: the moment that put it in Just finished.
+    private func markSeen(_ todo: TodoItem, after: Date) {
+        let id = todo.id
+        Haptics.success()
+        Task {
+            do { try await store.setSeen(id: id, true, after: after) } catch {
+                AppModel.shared.toast = Toast(String(localized: "Couldn't move it to Done: \(error.localizedDescription)"), style: .error)
+            }
+        }
+        AppModel.shared.toast = Toast(String(localized: "Moved to Done"), style: .success,
+                                      action: Toast.Action(title: String(localized: "Undo")) {
+            Task {
+                do { try await TodoStore.shared.setSeen(id: id, false) } catch {
+                    AppModel.shared.toast = Toast(String(localized: "Couldn't put it back: \(error.localizedDescription)"), style: .error)
+                }
+            }
+        })
     }
 
     /// Restore from Shelved: counts as activity now, so it goes back to its section until another 48 hours pass.
@@ -337,7 +371,10 @@ struct TodosView: View {
 
     @ViewBuilder private var emptySection: some View {
         Section {
-            if !query.isEmpty {
+            // The hub's merged list has nothing of an assistant that is offline: said so, not offered as a first to-do.
+            if let offline = model.assistantManagerOffline {
+                AssistantOfflineNotice(manager: offline, surface: Theme.groupedPage)
+            } else if !query.isEmpty {
                 EmptyStateView(symbol: Theme.Icon.todo, title: String(localized: "No matching to-dos"),
                                message: String(localized: "Try a different search"))
             } else if listFilter != .all {
@@ -471,6 +508,8 @@ struct TodoRow: View {
     var onToggleDone: () -> Void
     /// Set for a shelved row: one tap brings it back.
     var onRestore: (() -> Void)? = nil
+    /// Set for a Just finished row while the hub keeps seen marks: Got It files it under Done (#5707).
+    var onSeen: (() -> Void)? = nil
     /// Set for a merged row's lead: its "N related", which opens the others under it.
     var related: TodoRelatedToggle? = nil
 
@@ -555,6 +594,20 @@ struct TodoRow: View {
                     .foregroundStyle(Theme.accent)
                     .buttonStyle(.borderless)
                     .accessibilityIdentifier("todos.restore")
+                }
+
+                if let onSeen {
+                    Button(action: onSeen) {
+                        Label("Got It [To-do Seen]", systemImage: Theme.Icon.seen)
+                            .lineLimit(1)
+                            .scaledFrame(minHeight: Theme.Size.tapTarget, alignment: .leading)
+                            .contentShape(.rect)
+                    }
+                    .font(Theme.Font.captionStrong)
+                    .foregroundStyle(Theme.accent)
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel(Text("Got It: move \(todo.title) to Done"))
+                    .accessibilityIdentifier("todos.seen.\(todo.id)")
                 }
 
                 if failedOpen, let error = todo.startError {

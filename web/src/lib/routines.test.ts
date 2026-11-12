@@ -82,8 +82,8 @@ describe("words", () => {
   it("says what it runs with when not the default", () => {
     expect(runsWith({})).toBeNull();
     expect(runsWith({ permission_mode: "default" })).toBeNull();
-    expect(runsWith({ launcher: "claude-fast", permission_mode: "auto", effort: "low" })).toEqual({ text: "claude-fast · 自动 · 思考低", danger: false });
-    expect(runsWith({ permission_mode: "bypassPermissions" })).toEqual({ text: "全部放行", danger: true });
+    expect(runsWith({ launcher: "claude-fast", permission_mode: "auto", effort: "low" })).toEqual({ text: "claude-fast · 自动审批 · 思考低", danger: false });
+    expect(runsWith({ permission_mode: "bypassPermissions" })).toEqual({ text: "完全访问", danger: true });
   });
 
   it("names its launcher by the provider's display name; an rc alias by its ID (#5029)", () => {

@@ -290,11 +290,17 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	n.listRows.Store(int32(max(peak, len(out))))
 	// Terminal-owned Codex parents were already seen before history was added: over the whole list, before any row goes.
 	resolveCodexHierarchy(out)
+	// A conversation that moved between Claude Code and Codex is one row, the session running it now: the sessions it
+	// ran in before are left out (engine_switch.go).
+	var earlier map[string]bool
+	if chains := n.state.engineHistories(); chains != nil {
+		earlier = joinStretches(out, chains)
+	}
 	// The rows kept move down over the dropped ones, in order.
 	j = 0
 	for i := range out {
 		s := &out[i]
-		if !n.sessionScopeAllows(s.Cwd) {
+		if earlier[s.SessionID] || !n.sessionScopeAllows(s.Cwd) {
 			continue
 		}
 		if s.Cwd != "" && n.cwdBlocked(s.Cwd) && !n.isAssistantSession(s.SessionID) && !n.keptSessions()[s.SessionID] {
@@ -361,7 +367,8 @@ func (n *Node) decorateIn(s *proto.Session, pass *codexListPass) {
 	}
 	if st, ok := n.decorateState(s); ok {
 		s.Compaction = st.Compaction
-		s.PendingSwitch = st.PendingSwitch // launcher_switch.go
+		s.PendingSwitch = st.PendingSwitch   // launcher_switch.go
+		s.SetEngineHistory(st.EngineHistory) // engine_switch.go
 	}
 	if s.PendingSwitch == nil {
 		s.PendingSwitch = n.unrecordedSwitch(s.SessionID)

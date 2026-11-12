@@ -19,7 +19,7 @@
   "attach_hint": "粘贴、拖入图片或文件 · 启动后在后台发送",
   "open_folder": "打开 {name}",
   "permission_mode": "权限模式",
-  "permission_mode_hint": "权限模式在对话里也能随时改，全部放行只能在新开时选。",
+  "permission_mode_hint": "权限模式在对话里也能随时改，完全访问只能在新开时选。",
   "no_computer_title": "还没有电脑",
   "no_computer_body": "Agent 要在你的一台电脑上运行，这里才有电脑可选。先添加一台。",
   "worktree": "在新 worktree 里",

@@ -43,3 +43,35 @@ fun worktreeLine(tree: AgentWorktree, quiet: Boolean, agents: Int, online: Boole
     },
     offline = !online,
 )
+
+/**
+ * A repository of By Repository with nothing going on (iOS `ChatsView.isQuiet`, #4338 A8): every agent in it idle, none
+ * pinned, waiting to be woken or awaiting the user's reply, and no quick filter on. It leaves its card for its computer's
+ * Idle Repositories on Glass.
+ */
+val AgentListGroup.isIdleRepository: Boolean get() = repo == RepoLevel.Repository && parent == "quiet"
+
+/**
+ * An idle repository's row in its computer's Idle Repositories (iOS `QuietSpaceRow` in By Repository, #4338 A8): how
+ * many [agents], the first three [tabs] they are in (an agent without a tab names none), and when it last moved
+ * ([updatedAt], its latest agent's).
+ */
+data class IdleRepoLine(val agents: Int, val tabs: List<String>, val updatedAt: java.time.Instant?)
+
+/** The row of [group], an idle repository ([isIdleRepository]). */
+fun idleRepoLine(group: AgentListGroup): IdleRepoLine = IdleRepoLine(
+    agents = group.totalCount ?: group.rows.count { !it.isNestedSubtask },
+    tabs = group.rows.mapNotNull { it.session.slotLabel }.take(3),
+    updatedAt = group.rows.mapNotNull { it.updatedAt }.maxOrNull(),
+)
+
+/**
+ * A working tree's idle agents behind one quiet line in By Repository (iOS `RepoIdleLine` and `agentRows`, #4338 A8):
+ * [rows] the agents with nothing going on, after the busy ones; "2 idle · review · research" until opened ([open]), then
+ * "Hide 2 Idle" after them. None where nothing folds: a quiet tree or repository (it folds whole), a quick filter or a
+ * search (every row it leaves shows).
+ */
+data class IdleFold(val rows: List<AgentSession>, val open: Boolean) {
+    /** What the folded line names after the count (iOS `RepoIdleLine.words`): the first three's tab names, else their titles. */
+    val names: List<String> get() = rows.take(3).map { it.session.slotLabel ?: it.session.displayTitle }
+}

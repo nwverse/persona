@@ -99,6 +99,9 @@ type ModelPrice struct {
 	Input     float64  `json:"input"`
 	Output    float64  `json:"output"`
 	CacheRead *float64 `json:"cache_read,omitempty"`
+	// CacheWrite: a 5-minute cache write; CacheWrite1h a 1-hour one (absent: CacheWrite's price, as cindy prices it).
+	CacheWrite   *float64 `json:"cache_write,omitempty"`
+	CacheWrite1h *float64 `json:"cache_write_1h,omitempty"`
 }
 
 // AgentModel is one model of the list: Claude Code's initialize, Codex's model/list.

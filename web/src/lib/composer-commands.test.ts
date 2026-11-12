@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { agentCommands, paneClaude, rankCommands, SLASH_LIMIT } from "./composer-commands";
 import { t } from "../i18n";
+import { WORKFLOWS_COMMAND } from "./background-panel";
 import { LOOP_TEXT } from "./loop-command";
 import type { Session } from "./types";
 
@@ -29,6 +30,23 @@ describe("agentCommands", () => {
   });
   it("has neither /model nor /clear for an offline Claude", () => {
     expect(words(session({ state: "offline", status: "offline" }))).not.toContain("/model");
+  });
+});
+
+// /workflows opens the Agent's Background tasks panel (#5421, cindy's): Claude Code Agents only.
+describe("agentCommands' /workflows", () => {
+  const LIST = [{ text: "继续" }, { text: WORKFLOWS_COMMAND }];
+  const has = (s?: Session) => agentCommands(LIST, s).some((c) => c.text === WORKFLOWS_COMMAND);
+  it("is listed for a Claude Code Agent, working or not, in a pane or not", () => {
+    expect(has(session({}))).toBe(true);
+    expect(has(session({ agent: "claude", state: "working", status: "working" }))).toBe(true);
+    expect(has(session({ pane_id: undefined }))).toBe(true);
+  });
+  it("is not listed for the assistant, Codex, another runtime or no session", () => {
+    for (const s of [session({ assistant: true }), session({ agent: "codex" }), session({ source_kind: "codex_app_server" }), session({ agent: "opencode" }), undefined]) expect(has(s)).toBe(false);
+  });
+  it("is Persona's own row: no Agent named as its source", () => {
+    expect(agentCommands(LIST, session({})).find((c) => c.text === WORKFLOWS_COMMAND)).toEqual({ text: WORKFLOWS_COMMAND });
   });
 });
 

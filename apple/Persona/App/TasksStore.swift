@@ -200,6 +200,14 @@ final class TasksStore {
         if plans[plan.id] != plan { plans[plan.id] = plan }
     }
 
+    /// A suggested rule was answered, or is no longer offered (#5802): the plans held here drop it. The hub sends no
+    /// plan event for it and a feed read brings only what came since, so nothing else would take it off them.
+    func ruleSuggestionSettled(_ id: String) {
+        for (key, plan) in plans where plan.suggestion?.id == id {
+            plans[key] = plan.withoutSuggestion
+        }
+    }
+
     private func merge(_ items: [FeedItem], into conversation: String) {
         guard !items.isEmpty else {
             if feeds[conversation] == nil { feeds[conversation] = [] }
@@ -439,8 +447,15 @@ final class TasksStore {
         }
     }
 
+    /// The hub's client for a plan's own routes: they name no conversation, so the plan's conversation's manager is
+    /// named (`AppModel.feedManager`), whichever assistant is current.
+    private func client(for plan: TaskPlan) -> APIClient? {
+        let model = AppModel.shared
+        return model.api?.manager(model.feedManager(of: plan.conversation, group: model.hub?.group ?? ""))
+    }
+
     func start(_ plan: TaskPlan, edits: [PlanTask]? = nil, remember: Bool = false) async {
-        guard let api = AppModel.shared.api, !busyPlans.contains(plan.id) else { return }
+        guard let api = client(for: plan), !busyPlans.contains(plan.id) else { return }
         busyPlans.insert(plan.id)
         defer { busyPlans.remove(plan.id) }
         do {
@@ -468,7 +483,7 @@ final class TasksStore {
     }
 
     func dismiss(_ plan: TaskPlan) async {
-        guard let api = AppModel.shared.api, !busyPlans.contains(plan.id) else { return }
+        guard let api = client(for: plan), !busyPlans.contains(plan.id) else { return }
         busyPlans.insert(plan.id)
         defer { busyPlans.remove(plan.id) }
         do {

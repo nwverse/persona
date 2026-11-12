@@ -192,6 +192,14 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 			if verdict == reviewNeedsUser {
 				r.WhyOwner, r.Reason, r.Recommend = decision.WhyOwner, decision.Reason, decision.Recommend
 				r.Options, r.CostOfWaiting = decision.Options, decision.CostOfWaiting
+				if !deadline.IsZero() {
+					at := deadline.UTC()
+					r.Deadline = &at
+				}
+				if a.Reversible != nil { // as the supervisor said it; absent when it did not say
+					rev := *a.Reversible
+					r.Reversible = &rev
+				}
 			}
 			if verdict == reviewRework {
 				v.Round++
@@ -222,6 +230,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	}
 	if a.Verdict == reviewRework { // after the judge's done, a wrong "done" in the work stats (agents_work_wrong_done.go)
 		s.workEvent("", "", reviewReworkEvent, map[string]any{"todo": t.ID, "judged_done": judgedDone})
+	}
+	if verdict != reviewAccepted { // by the reviewer's model and effort; an acceptance once it closed the task (below)
+		s.taskReviewed(ctx, self, t.ID, verdict, v)
 	}
 	if verdict == reviewRework || verdict == reviewNeedsUser || a.UserCheck || a.Outcome == outcomeCannot {
 		s.setTaskStageKind(ctx, t.ID, "unverified", "", "", false)
@@ -263,6 +274,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 				return "", err
 			}
 			if t.DoneAt == nil {
+				if closed && verdict == reviewAccepted { // accepted and closed (availability_supervision.go)
+					s.taskReviewed(ctx, self, t.ID, verdict, v)
+				}
 				// A failed start was closed already: its review clears the error without inventing completion effects.
 				switch {
 				case closed && ledger && verdict == reviewAccepted && a.UserCheck:

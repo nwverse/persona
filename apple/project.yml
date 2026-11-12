@@ -764,6 +764,7 @@ targets:
       - path: PersonaTests/AddComputerModelTests.swift
       - path: PersonaTests/NotificationActionsTests.swift
       - path: PersonaTests/NotifyPrefsTests.swift
+      - path: PersonaTests/AppIconBadgeTests.swift
       - path: PersonaTests/SentSettingsNavigationTests.swift
       - path: PersonaTests/SentModelTests.swift
       - path: PersonaTests/ConnectorRowTests.swift
@@ -793,6 +794,7 @@ targets:
       - path: PersonaTests/DelegateTests.swift
       - path: PersonaTests/GitReadFailureTests.swift
       - path: PersonaTests/ChatSupervisionLinesTests.swift
+      - path: PersonaTests/ChatSendFeedbackTests.swift
       - path: PersonaTests/SubagentResultTests.swift
       - path: PersonaTests/SubagentDeliveryTests.swift
       - path: PersonaTests/SupervisionTests.swift

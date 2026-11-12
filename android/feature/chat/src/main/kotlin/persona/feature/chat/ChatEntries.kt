@@ -199,6 +199,9 @@ fun ChatDestination(
     val handToPersona = rememberHandToPersona(wiring?.mainSender?.takeIf { style != ChatRenderStyle.Assistant }, navigator)
     val composer by (editor?.composer ?: remember { MutableStateFlow<ChatComposerState?>(null) }).collectAsStateWithLifecycle()
     val error by (editor?.error ?: remember { MutableStateFlow<Int?>(null) }).collectAsStateWithLifecycle()
+    ComposerFocusAskEffect(session, composer)
+    // The next card another chat waits on you with, after answering here (Persona's conversation in the Assistant tab).
+    val elsewhere = LocalWaitingElsewhere.current.takeUnless { historyReadOnly }
     androidx.compose.runtime.CompositionLocalProvider(LocalUsageRead provides wiring?.usage) {
         ChatScreen(session, services.chats(), services.messages(),
             services.interactions(), services.sessions(), onBack = onHistoryBack ?: navigator::back,
@@ -212,7 +215,8 @@ fun ChatDestination(
                 tasks = wiring?.tasks?.takeIf { style == ChatRenderStyle.Assistant && !historyReadOnly },
                 assistantManagement = assistantManagement,
                 agentShares = sharing,
-                inboxTrays = services.inboxTrays(), inboxScope = wiring?.scope?.path),
+                inboxTrays = services.inboxTrays(), inboxScope = wiring?.scope?.path,
+                waiting = elsewhere?.waiting.orEmpty(), onOpenRequest = elsewhere?.open),
             renderStyle = style,
             embedded = embedded, showTopBar = showTopBar,
             historyReadOnly = historyReadOnly, historyFooter = historyFooter, historySession = historySession,

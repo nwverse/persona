@@ -26,5 +26,9 @@
   "fix_it": "直す",
   "background_done": "バックグラウンドのラウンド",
   "background_running": "バックグラウンドで実行中",
-  "model_changed": "モデルが {from} から {to} に変わりました"
+  "model_changed": "モデルが {from} から {to} に変わりました",
+  "engine_switched": "{from} から {to} に切り替えました",
+  "engine_handoff_view": "引き継ぎ内容を表示",
+  "engine_continued": "要約から続行",
+  "engine_resumed": "セッション再開"
 }

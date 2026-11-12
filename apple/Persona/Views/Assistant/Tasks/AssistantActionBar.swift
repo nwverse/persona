@@ -348,16 +348,26 @@ struct AssistantActionBar: View {
     /// The open tray's rows, measured: the tray is as tall as they are, up to its cap.
     @State private var listHeight: CGFloat = 0
     @State private var removing: TodoItem?
+    @Environment(\.dynamicTypeSize) private var typeSize
     private var store: TasksStore { .shared }
+
+    /// The entries side by side; at the accessibility text sizes they go on to the next line when they don't fit, each
+    /// whole (`docs/design/DESIGN_SYSTEM.md` 1.2 rule 3): side by side they made the row, and with it the whole chat
+    /// page, wider than the screen, cut off at both edges (#5702). The layout changes, not the views.
+    private var entryRow: AnyLayout {
+        typeSize.isAccessibilitySize ? AnyLayout(FlowLayoutRow(spacing: Theme.Space.s))
+            : AnyLayout(HStackLayout(spacing: Theme.Space.s))
+    }
 
     var body: some View {
         let content = Self.content(conversation, key: key)
+        let row = entryRow
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             if let open {
                 tray(open, content)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            HStack(spacing: Theme.Space.s) {
+            row {
                 ForEach(ActionTray.allCases) { entry($0, count: content.count($0)) }
                 if ComputerActivityPill.shows(computer) {
                     ComputerActivityPill(activity: computer).background(Theme.pageBackground, in: .capsule) // as the entries
@@ -446,7 +456,10 @@ struct AssistantActionBar: View {
                     open = nil
                     store.showBoard = true
                 } label: {
+                    // A finger's height around the capsule (#5392).
                     Text("All").dockCapsule().fixedSize()
+                        .tapTargetHeight()
+                        .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("action-tray.board")
@@ -455,14 +468,15 @@ struct AssistantActionBar: View {
                 } label: {
                     ThemedIcon(Theme.Icon.close).font(Theme.Font.labelStrong).foregroundStyle(.secondary)
                         .scaledFrame(width: Theme.Size.badge, height: Theme.Size.badge)
-                        .contentShape(.circle)
+                        .tapTargetFrame()
+                        .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Close")
                 .accessibilityIdentifier("action-tray.close")
             }
-            .padding(.horizontal, Theme.Space.m)
-            .padding(.vertical, Theme.Space.s)
+            // No vertical padding: the 44 pt targets are the row's height, as the capsule and its padding were.
+            .padding(.leading, Theme.Space.m)
             if rows.isEmpty && (tray == .needsYou || content.shelved.isEmpty) {
                 Text(tray.empty).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(2)
                     .padding(.horizontal, Theme.Space.m)

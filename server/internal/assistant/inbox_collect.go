@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"maps"
+	"slices"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
@@ -158,6 +159,27 @@ func (b *inboxBook) recordReads(r assistantwire.InboxRound) bool {
 
 // ---- the connectors' ----
 
+// withoutCounts are a source's generic things with no extra.count, for one that does not say what it means there
+// (InboxSource.Counts): each of their moves counts one, as it always did.
+func withoutCounts(things []connector.InboxThing) []connector.InboxThing {
+	var out []connector.InboxThing
+	for i, t := range things {
+		if t.Extra == nil || t.Extra.Count == 0 {
+			continue
+		}
+		if out == nil {
+			out = slices.Clone(things)
+		}
+		x := *t.Extra
+		x.Count = 0
+		out[i].Extra = &x
+	}
+	if out == nil {
+		return things
+	}
+	return out
+}
+
 // collectSource applies one connector's things: its batches go to be related to events (in the background), a
 // migrated connector's things with extra keep the items' own blocks, the others become generic items; then the open
 // items its rules now leave out are filed.
@@ -180,6 +202,9 @@ func (s *Service) collectSource(ctx context.Context, src assistantwire.InboxSour
 			}
 		}
 		things = generic
+	}
+	if !src.Counts {
+		things = withoutCounts(things)
 	}
 	var changed []*InboxItem
 	b.mu.Lock()

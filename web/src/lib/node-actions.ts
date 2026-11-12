@@ -96,7 +96,8 @@ export const canChangeHost = (host: string | undefined) => !host || host === "he
 /** Renaming a workspace or a tab is herdr's and Tern's (the capability table in docs/integrations/engines.md). */
 export const canRenameIn = (host: string | undefined) => canChangeHost(host) || host === "tern";
 
-/** Only the agents a launcher starts the way "New agent" does without a first message: Claude Code. */
+/** Only Claude Code. Codex starts from "New agent" in a tab of its own: a Codex start that fails closes its pane, which
+ *  here is the user's own shell (#5275). */
 export const launchableHere = (l: Launcher) => (l.agent_type || l.agent || "claude") === "claude";
 
 export const GIT_OPS = [

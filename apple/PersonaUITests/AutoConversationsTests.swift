@@ -1,9 +1,10 @@
 import XCTest
 
 /// The conversations Persona opened by itself (#3264: Inbox's AI twin, scheduled tasks, Lark /agent…) in Persona's sidebar:
-/// since #4331 there is no Auto Chats row; Recent (#4873) lists only the user's own, and All Chats lists every one with a
-/// filter for each source. Against scripts/mock/mock_hub.py with MOCK_AUTO_CONVERSATIONS=1 (PERSONA_AUTO_HUB). SHOT_DIR
-/// keeps the screenshots (the sidebar, the list filtered to Inbox, all of it).
+/// since #4331 there is no Auto Chats row; Recent (#4873, #5195) lists the newest chats whoever opened them, each one
+/// Persona opened with its source's mark, and All Chats lists every one, opening on All, with a filter for each source.
+/// Against scripts/mock/mock_hub.py with MOCK_AUTO_CONVERSATIONS=1 (PERSONA_AUTO_HUB; MOCK_EXTERNAL=1 too or not).
+/// SHOT_DIR keeps the screenshots (the sidebar, All Chats as it opens, the list filtered to Inbox).
 final class AutoConversationsTests: XCTestCase {
     private var hub: String!
     private var app: XCUIApplication!
@@ -52,20 +53,29 @@ final class AutoConversationsTests: XCTestCase {
         app.buttons.matching(identifier: "sidebar-conversation").matching(NSPredicate(format: "label BEGINSWITH %@", prefix)).firstMatch
     }
 
-    /// The sidebar: the user's own in Recent, none Persona opened; no Auto Chats row any more.
-    @MainActor func testRecentListsOnlyTheUsersOwn() {
+    /// The sidebar: Recent has the newest five whoever opened them (#5195); the ones Persona opened carry their source's
+    /// mark, named in the row's label as their filter is; no Auto Chats row any more.
+    @MainActor func testRecentListsEveryChatWithItsSourceMark() {
         launch()
         let all = openSidebar()
-        XCTAssertTrue(conversation("帮我约周五").waitForExistence(timeout: 10), "the user's own conversation is not in 最近:\n\(app.debugDescription)")
-        XCTAssertFalse(conversation("1105 | 收件箱").exists, "an inbox conversation is in 最近")
-        XCTAssertFalse(conversation("1105 | 整理 | 群里的需求").exists, "a Lark /agent conversation is in 最近")
+        // The mock's newest after the main chat: three Inbox ones (6, 12, 40 minutes), Lark /agent's (2 hours), a
+        // scheduled task's (3 hours); the user's own (5 hours and older) are in All Chats.
+        XCTAssertTrue(conversation("1105 | 收件箱 | 回复韩梅梅").waitForExistence(timeout: 10), "the newest, an Inbox one, is not in 最近:\n\(app.debugDescription)")
+        let task = conversation("1105 | 定时 | 晨间简报")
+        XCTAssertTrue(task.exists, "a scheduled task's conversation is not in 最近")
+        XCTAssertTrue(task.label.contains("定时任务"), "its mark is not named: \(task.label)")
+        let lark = app.buttons.matching(identifier: "sidebar-conversation").matching(NSPredicate(format: "label CONTAINS %@", "来自 飞书 /agent")).firstMatch
+        XCTAssertTrue(lark.exists, "Lark /agent's conversation is not in 最近 with its mark")
+        XCTAssertEqual(app.buttons.matching(identifier: "sidebar-conversation").count, 5, "最近 lists five")
+        XCTAssertFalse(conversation("帮我约周五").exists, "an older conversation of the user's is in 最近")
         XCTAssertFalse(app.buttons["sidebar-auto"].exists, "the Auto Chats row is back")
         XCTAssertTrue(all.exists)
         sleep(1)
         shot("sidebar")
     }
 
-    /// All Chats: a filter for each source; one opens a conversation, which still stays out of Recent.
+    /// All Chats: it opens on All, every time (the last pick is not kept), with a filter for each source; a row opens
+    /// its conversation.
     @MainActor func testAllChatsFiltersBySource() {
         launch()
         openSidebar().tap()
@@ -74,6 +84,9 @@ final class AutoConversationsTests: XCTestCase {
         for id in ["task", "lark_agent", "spawned", "mine", "all"] {
             XCTAssertTrue(app.buttons["auto-filter-" + id].exists, "no \(id) filter")
         }
+        XCTAssertTrue(app.buttons["auto-filter-all"].isSelected, "全部 is not the filter All Chats opens on")
+        sleep(1)
+        shot("list-opens-on-all")
         inbox.tap()
         XCTAssertTrue(inbox.isSelected, "收件箱 is not the chosen filter")
         let rows = app.buttons.matching(identifier: "auto-conversation")
@@ -92,11 +105,12 @@ final class AutoConversationsTests: XCTestCase {
         XCTAssertGreaterThan(rows.count, 6, "全部's list")
         shot("list-all")
 
-        // A row opens its conversation (the sheet and the drawer go); opened, it still stays out of Recent.
+        // A row opens its conversation (the sheet and the drawer go); All Chats opens on All again, not on the pick.
         inbox.tap()
-        rows.matching(NSPredicate(format: "label BEGINSWITH %@", "1105 | 收件箱 | 回复韩梅梅")).firstMatch.tap()
+        rows.matching(NSPredicate(format: "label BEGINSWITH %@", "1105 | 收件箱 | 周会纪要确认")).firstMatch.tap()
         XCTAssertTrue(rows.firstMatch.waitForNonExistence(timeout: 5), "the list stayed")
-        _ = openSidebar(timeout: 5)
-        XCTAssertFalse(conversation("1105 | 收件箱 | 回复韩梅梅").exists, "the opened inbox conversation joined 最近")
+        openSidebar(timeout: 5).tap()
+        XCTAssertTrue(app.buttons["auto-filter-all"].firstMatch.waitForExistence(timeout: 5), "All Chats did not open again")
+        XCTAssertTrue(app.buttons["auto-filter-all"].isSelected, "All Chats kept the last pick (收件箱)")
     }
 }

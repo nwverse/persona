@@ -150,15 +150,20 @@ struct CommentQuote: View {
     var comment: MessageComment
     var number: Int
     var ink: Theme.UserBubbleInk
+    @Environment(\.chatPin) private var pin
     @State private var open = false
+    /// What the chat's pin knows it by (this view's, kept while it is drawn).
+    @State private var pinKey = "comment-" + UUID().uuidString
 
     var body: some View {
         let heading = [comment.heading(number), comment.shortLocation].joined(separator: " · ")
         QuoteCard(heading: heading, summary: open ? comment.full : comment.summary, lines: open ? .max : 2,
                   tint: ink.words, ink: ink.words, fill: ink.quoteFill) {
             Haptics.tap()
-            withAnimation(Theme.Motion.state) { open.toggle() }
+            // In the chat its top stays where it is and the note opens under it (#3757).
+            toggleInPlace(pin, pinKey, animation: Theme.Motion.state, closing: open) { open.toggle() }
         }
         .accessibilityIdentifier("bubble.comment")
+        .chatPinned(pinKey)
     }
 }

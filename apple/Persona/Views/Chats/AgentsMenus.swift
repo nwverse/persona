@@ -15,11 +15,16 @@ nonisolated struct MachineChoice: Equatable, Identifiable {
     /// With several groups, with the group's name (`Machine.title`).
     var name: String
     var symbol: String
+    /// Whose it is, for the menus that list the current assistant's computers (`AssistantScope`).
+    var group: String
+    var manager: String?
 
     @MainActor init(_ m: Machine) {
         id = m.ref.path
         name = m.title
         symbol = m.symbol
+        group = m.group
+        manager = m.manager
     }
 }
 
@@ -73,8 +78,10 @@ struct AgentsListMenu: View {
     var inline = false
 
     var body: some View {
-        // Only the machines' names and icons: not their live state, which changes with every push.
-        let machines = model.machineChoices
+        // Only the machines' names and icons: not their live state, which changes with every push. The current
+        // assistant's, as the list is its agents.
+        let scope = model.assistantScope
+        let machines = model.machineChoices.filter { scope.has($0.manager, group: $0.group) }
         let chosen = machines.first { $0.id == machineFilter }
         let hub = model.isMultiHub ? HubFilter.group(hubFilter).map { model.groupName($0) } : nil
         if inline {

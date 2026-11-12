@@ -60,6 +60,9 @@ A writable Git task whose directory is occupied defaults to `new`, regardless of
 When that inferred `new` meets an engine that cannot prepare checkouts (`worktree.prepare` fails with code `worktree_unsupported`:
 the Paseo or Cindy runtime, or a host without checkout support), the task runs in its `cwd` as tasks did before workspaces: a free directory becomes `existing`, an occupied one becomes
 `none` with `workspace_resolved.shared: true` and no claim. An explicit `new` still fails on such an engine.
+A repository nobody has committed to (no ref names a commit) has nothing to check out, so `worktree.prepare` fails
+with code `worktree_no_commits` (#5548): an inferred `new` then uses the free directory as `existing`, and an occupied one
+is refused with a message naming the task that holds it; an explicit `new` fails saying the repository has no commits.
 An explicit `workspace` overrides inference. When a caller means a particular branch/PR/checkout, it should name that checkout with `existing`.
 Inference uses the node's `worktree.status`; if the node cannot answer, the plan reports the error and asks for an explicit choice.
 The same preference is available through `persona_settings` as `assistant.task_workspace_preference`.
@@ -165,7 +168,7 @@ The approved simplified Assistant presentation places a task's **only card in th
 Planning, running, blocked progress, PR references and acceptance update that same task row in place. Tapping the row opens
 the existing task details. On iOS and Android the dispatch answer has only a small line naming what it dispatched ("Dispatched: <title> · Open", or each
 title when there are several); each opens that task's details, as its tray row does, not the tray (#3700). The web draws a hand-off card
-for each Agent instead, which opens that Agent's page ("Hand-off cards (web)" below). Historical plan/task/receipt/review/report cards use the same lightweight entry or are omitted from the chat; Android's Glass style draws receipts, reviews, reports, Persona's hand-offs, message cards and the hub's notice lines in the chat as iOS does (`docs/plans/android-ios-alignment/chats.md` C13).
+for each Agent instead, which opens that Agent in the side panel or as its page, as Settings says ("Hand-off cards (web)" below). Historical plan/task/receipt/review/report cards use the same lightweight entry or are omitted from the chat; Android's Glass style draws receipts, reviews, reports, Persona's hand-offs, message cards and the hub's notice lines in the chat as iOS does (`docs/plans/android-ios-alignment/chats.md` C13).
 
 **Pending** holds plans that still require Start and acceptance decisions, alongside ordinary questions/approvals. Drafts sent
 on the user's behalf are a separate group and require their own explicit Send; Approve all never sends drafts or chooses an
@@ -182,7 +185,7 @@ or `todo_…` ids, while PR and issue numbers stay), from the whole report, off 
 answer is dropped. With no model, an error or an empty answer there is no line, and the row shows `text` as before.
 `text` keeps the Agent's words in one line; `detail` keeps the whole report (Markdown, at most 2000 characters) when it
 differs from `text`. Tapping the row opens the task's details, which show the report as written (`detail ?? text`) with
-Markdown rendered (web: on the to-do's page; Android:
+Markdown rendered (web: over the Agent's chat in the task's side panel, folding to its title line, and on the to-do's page; Android:
 in the task sheet). Neither field reaches a prompt, the
 supervision message, a briefing, a card or a push: the supervisor still reads the report from its signal. Report feed
 items stay as they were. Mock: `MOCK_TASKS=1 MOCK_TASKS_REPORTS=1` has an English report with a Chinese line.
@@ -249,7 +252,7 @@ to the live text. iOS is left to #2879. Screenshots: `web/e2e/assistant-task-tra
 - Removal: any non-running task (failed to start, finished, stopped, completed, or "Starting" that hub never reported back on) can be removed, following the Agents page's Close interaction.
   Long-press a task card / pill / collapsed row for "Remove task," swipe left on the task board for Remove, or use ⋯ at the top right of task details. Removal deletes the to-do.
   Confirm first if it ever had an Agent (the Agent and transcript remain in Agents); a task that never started is removed directly.
-- Web behaves the same (#1142): failed tasks are red with "Didn't Start" and Remove on the card. Right-click a task card / pill / collapsed row for "Remove task…," or use Remove on the task's Needs you row (#5096).
+- Web behaves the same (#1142): failed tasks are red with "Didn't Start" and Remove on the card. Right-click a task card / pill / collapsed row for "Remove task…," use Remove on the task's Needs you row (#5096), or ⋯ at the top right of the task's side panel (#5424).
   Confirmation uses browser `confirm()`. "Starting" tasks left by older hubs are also recognized as "Didn't Start" from the error recorded in the plan card.
 - Retry (#1396): failed-start cards have Retry beside Remove, also available in task details. Hub retries that task exactly as specified in the plan
   (machine, directory, prompt, launcher / model, permissions, title), using the same to-do: immediately reopen it, clear the error (including red text on the plan card), and change the card in place to "Starting."
@@ -346,12 +349,15 @@ lines, and in the user's own color and alignment they read as something the user
   card instruction list, so Persona's routed hand-offs remain separate folded feed lines instead of being hidden.
   Tests: `DispatchedTasksTests`, `TaskSheetExpandTests`, `DispatchedTaskCardTests`; synthetic hub:
   `apple/PersonaUITests/Fixtures/dispatch_hub.py` (`PERSONA_MOCK_HUB`, screenshots with `PERSONA_SHOTS`).
-- The web has no task details (#5096): everything that opened them opens the task's Agent's page, as below.
+- On the web, where task details open is the browser's setting (#5424, "Where everything opens" below): the side panel
+  (`TaskPanel`, the task's Agent's chat under the task's title, its report and the question it waits on; the default), or
+  the task's Agent's page.
 
 ### Hand-off cards (web, #5096)
 
-The owner asked that this part of the web chat follow cindy exactly (its `SessionHandoffCard`, 2026-11-12). On the
-web, a task the main chat dispatched is a page you go to, never a panel beside the chat:
+The owner asked that this part of the web chat follow cindy exactly (its `SessionHandoffCard`, 2026-11-12). The cards
+are drawn the same whichever way they open; the owner then asked for the side panel back as the default, with cindy's
+page one setting away (#5424):
 
 - **One card per Agent.** Each Agent a dispatch started or a task took over is one full-width card where the dispatch is in the chat, stacked by plan order, with no heading over them. This covers a started plan, a standalone `task` item, and a message that started a new Agent for its task (`routed` with `new_agent`).
   - A task's line shows the Agents the hand-off went to: its first Agents, linked within two minutes of each other. That covers the plan's several Agents and a retry. An Agent linked later has its own card where that happened.
@@ -361,15 +367,22 @@ web, a task the main chat dispatched is a page you go to, never a panel beside t
   - cindy also shows a short session id. The Assistant's chat keeps ids out of sight (super rule 4), so here the id is only in the card's tooltip.
 - **The badge's data.** A `task` feed item made of an Agent the task did not start carries `body.wake`. It is `"resumed"` when agent_send with a task resumed a closed Agent. It is `"active"` for agent_supervise, the other agent_send cases, an Agent that became a task when its turn ended, and a task moved to another conversation (`taskCard` in `server/internal/assistant/agent_control.go`). Items without it are New, as is every item from before the field. A stopped, read-only Agent (#4754) is never resumed this way: a task whose Agents all stopped gets a new one, which is New.
 - **Before an Agent is up.** The card stands for the task. Its second line says the Agent is starting, why it didn't start (red), that the task closed before an Agent started, or that the task no longer exists.
-  - While the to-do exists, the card opens the to-do's page.
+  - While the to-do exists, the card opens the task (its side panel, or the to-do's page).
   - A task that didn't start has **Retry** and **Remove** on its Needs you row, where it waits on the user.
-- **Where everything opens.** Every entry of the main chat that opened task details opens a page:
-  - entries that open a task: the dock's pills, Needs you and In progress rows, task lines, the board, decisions, the Today card, injected task lines, links;
-  - where it goes: the task's most pressing Agent (`mostUrgentAgent`), or the to-do's page while no Agent is on it;
-  - an Agent that belongs to no task opens its own page.
-  - `/s/…` and `/todos?id=…` links in a reply open those pages at every width.
-- **The way back.** The Agent's page shows cindy's "Came from <conversation> · click to return" strip above the chat; ✕ puts it away. Clicking it, or Back, returns to the conversation where its chat was left: the conversation's history entry keeps the first line in view and its offset (`web/src/lib/handoff.ts`), and the chat opens there once instead of at its end.
-- Code: `web/src/views/assistant/Handoff.tsx`, `web/src/lib/handoff.ts`, `web/src/views/chat/HandoffBack.tsx`. Tests: `Handoff.test.tsx`, `lib/handoff.test.ts`, `HandoffBack.test.tsx`, `AssistantActionBar.test.tsx`. iOS and Android keep the dispatched line and task details for now (#5110).
+- **Where everything opens** (#5424). Settings › General › Agent preferences › **How Agents open** picks it, for this
+  browser only (`web/src/lib/agent-open.ts`, localStorage `agent.open`; nothing is written for the default). Every entry
+  goes through `openTask` / `openAgent` in `web/src/lib/handoff.ts`: the hand-off cards, the dock's pills, Needs you and
+  In progress rows, task lines, the board, decisions, the Today card, injected task lines, the workspace board and links.
+  - **Side panel** (the default): a task opens `TaskPanel` (its Agent's chat, ⌄ to switch between several Agents, ⋯ with
+    Open in new window and Remove task…; the task's starting or failed state while no Agent is up), an Agent `AgentPanel`.
+    The chat stays beside it on a wide window; a phone-sized one has the panel over the chat, and Back closes it. Both are
+    a lazy chunk (`views/SidePanel.tsx`). Leaving a Persona chat keeps its panel for when you come back (`lib/panel-memory.ts`).
+  - **Full page**: a task opens its most pressing Agent's page (`mostUrgentAgent`), or the to-do's page while no Agent is
+    on it; an Agent that belongs to no task opens its own page, with the way back below.
+  - `/s/…` and `/todos?id=…` links in a reply open in the side panel on a wide window while it is chosen, else as those
+    pages (a phone-sized window has no room beside the chat).
+- **The way back** (Full page). The Agent's page shows cindy's "Came from <conversation> · click to return" strip above the chat; ✕ puts it away. Clicking it, or Back, returns to the conversation where its chat was left: the conversation's history entry keeps the first line in view and its offset (`web/src/lib/handoff.ts`), and the chat opens there once instead of at its end.
+- Code: `web/src/views/assistant/Handoff.tsx`, `web/src/lib/handoff.ts`, `web/src/lib/agent-open.ts`, `web/src/views/assistant/TaskPanel.tsx`, `web/src/views/chat/HandoffBack.tsx`. Tests: `Handoff.test.tsx`, `lib/handoff.test.ts`, `TaskPanel.test.tsx`, `AgentOpenSetting.test.tsx`, `HandoffBack.test.tsx`, `AssistantActionBar.test.tsx`; browser: `web/e2e/handoff-cards.py` (both settings). iOS and Android keep the dispatched line and task details for now (#5110).
 
 ### Task board
 
@@ -560,7 +573,7 @@ Off by default: with no leaders, everything above is unchanged and only the main
 - **What a leader gets**: its context starts with "这是 leader 对话" (prompts `assistant/context.md`). A task it hands out with `task_plan` is supervised with the leader as `supervisor` (tasks handed out before it became one are not). The supervision loop routes each signal to its task's supervisor when that is a current leader (`digestTo`, `server/internal/assistant/supervise_leader.go`): the leader gets its own "📋 督办" message (when its conversation is gone, the main chat gets them instead) (the leader variant of `prompts/assistant/supervise.md`), with the same gathering, queueing, deduplication and folding as the main chat's. It reviews its tasks with `task_review` (accepted, rework with the same 2-round limit, cancelled); another side conversation cannot.
 - **What still goes to the main chat**: a leader's `needs_user` (the user gets the decision card as always, and the main chat gets an `escalated` entry with the leader's reason and recommendation, so it neither asks again nor loses track); any signal of a task waiting for the user; failed and retried starts (the start remedies, `task_start_screen` / `task_start_keys` / `task_retry`, stay main-chat tools); and tasks waiting for the user's nod to ship stay in the snapshot's approvals list. The main chat may still review a leader's task (for example after the user answered there); the task stays the leader's.
 - **Depth cap**: an agent linked to an open task (a worker) cannot call `task_plan` or `agent_start`, even when it runs as an assistant conversation: it is told to do the work itself with its in-session subagents and to ask its supervisor (`report_to_supervisor`) if it needs another task. Coding agents never had those tools, apart from a task leader's restricted `task_plan` ("Task leaders" below); the main chat and leaders are not limited.
-- **In the clients** (#4331): the sidebars call leaders **常驻** (en "Pinned"; the code, API and events keep leader / direction) and list them under Persona chats after the main chat, each with the direction tree's Working and Waiting on you counts ("The direction tree"), followed by Recent, the 5 most recent of the user's other chats (#4873); a conversation's menu has **设为常驻** / **取消常驻** (`…/make` / `…/end`). The clients read the tree again on its `directions` message, so an open sidebar follows a leader made or ended anywhere at once (a sixth leader once stayed hidden until a reload: the clients had read the leaders only when they loaded).
+- **In the clients** (#4331): the sidebars call leaders **常驻** (en "Pinned"; the code, API and events keep leader / direction) and list them under Persona chats after the main chat, each with the direction tree's Working and Waiting on you counts ("The direction tree"), followed by Recent, the most recently active other chats whoever opened them, the ones Persona opened with their source's mark (#4873, #5195; `docs/protocol/protocol.md` "Sidebar (same on every client)"); a conversation's menu has **设为常驻** / **取消常驻** (`…/make` / `…/end`). The clients read the tree again on its `directions` message, so an open sidebar follows a leader made or ended anywhere at once (a sixth leader once stayed hidden until a reload: the clients had read the leaders only when they loaded).
 - **Scheduling**: a leader is woken by its supervision messages; for a standing loop over a to-do pool, give it a recurring `schedule_followup` (`every`).
 
 ### Background supervisor (#4927)
@@ -671,6 +684,12 @@ call; nothing is turned on for the owner without the tap.
 - **A card already rung** keeps the suggestion it went out with (a plan and a to-do's decision are worded each time
   they are read). When a suggestion is answered, the manager takes it off every pending card that carries it and
   sends those cards again, so the line is gone on every device.
+- **Drawn by**: the Apple apps (#5802's Apple part, `docs/apple/ios.md` "Suggested standing rule and held decisions"):
+  one line under the plan card, the to-do's decision and the question card, with what Always creates, Always and Not
+  Now, and after Always where the rule is listed and removed. They have no list of standing authorizations, so that
+  result names the web app's. Android draws it too (#5802, `docs/android/android.md` "Rule suggestions, held
+  decisions, recommended setup and purpose descriptions"). No event is sent for a plan when its suggestion is
+  answered, so the Apple apps take the line off the plans they hold themselves (`TasksStore.ruleSuggestionSettled`).
 - **Two taps on Always at once** make one rule: the grant is stored only if no standing authorization covers the
   directory and action yet, checked under the lock every change of the list takes; the second tap gets 404.
 
@@ -752,6 +771,18 @@ work-log extension's progress card when one offers a tool for it, not by writing
 context names its direction and gives its rules: report up only reached, decision and stuck; a change counts only once
 deployed and checked live; send `leader_progress` for each reached task and each report cycle. See `docs/extensions/extensions.md` "Leader events".
 
+**A leader's pieces are to-dos (#5846).** How a leader split its direction used to live only in its own files and turns,
+so the owner could not see it. Now a leader records each piece with `todo_create` (a plain title saying what the piece
+achieves): in a leader conversation that tool opens the to-do under the direction (`origin` and ledger `supervisor` the
+leader, no `done_when`, no Agent; `createDirectionTodo` in `todo_plan.go`) instead of the owner's own to-do, and its answer
+gives the id. The leader runs an Agent on a piece with `task_plan todo_id` (no second to-do) and closes one finished
+without an Agent, or dropped (why in its notes), with `todo_complete`; when the owner asks how the work was split or how
+far it got, it answers from these to-dos, its files holding only details. The direction tree lists every piece, and one
+no Agent has worked on yet as `planned` (未开始), so the owner sees the whole split and what has not started. Like any
+to-do with an origin, a piece nothing touches for 48 h is shelved by the To-dos SOP and leaves the tree; a piece not
+started is never reported stuck (it has nothing to be stuck on) unless it waits on the owner.
+The main chat and other conversations still create the owner's own to-dos.
+
 **New chat opens a direction (#3607).** Right after the owner sends a New chat's first message (an app's
 `POST /api/v1/assistant/conversations`: not the main chat, a guest, the health space, a purpose or an extension's), the
 hub asks the model purpose `assistant.route` (Model configuration › Information processing, under the knowledge
@@ -822,9 +853,9 @@ Each direction (a leader conversation) opens into the open tasks it supervises, 
 - **Directions**: every current leader (`assistant.leaders` without the main chat), in the order `GET /api/v1/assistant/leaders` lists the current ones, named as it names them; then the secretary group (书记官, en "Secretary", ja 書記官), always last and always present, with the main chat's id and no name. Ended directions are not listed: their open tasks are the secretary's again, as their signals are (leader reports).
 - **Tasks**: exactly the to-dos the To-dos page counts open (`triageCountsAsOpen`, the #3340 rule; quiet tasks, a failed start still waiting, ask to-dos and concerns included, as the page includes them). Closed, cancelled, accepted, deployed and shelved ones are never listed.
 - **Whose**: the ledger's `supervisor`. A current leader's id → that direction. The main chat's id, `""`, no ledger, an ended or unknown conversation → the secretary. A task leader's Agent (`"machine/session"`, "Task leaders" above) → a worker: it is not listed or counted as a task of its own, and its active Agents are the `children` of that leader Agent inside the leader's task (a leader started again: the current leader Agent of the task its worker row names). When the leader's task is not open, the worker is listed as an ordinary task of the conversation above the leader (`supervisorAboveTask`). Workers whose leaders lead one another in a loop are each listed on their own (the same on every build).
-- **State** (first match wins): `needs_you` — the SOP's Waiting on you (an Agent asks or was interrupted, the owner decides, incl. `needs_user`, a failed start); `review` — waits for acceptance (`pending_review`, or an open acceptance ask) with nothing of it running; `stuck` — the leader reports' stuck rule (`taskStuck`: Waiting on you, PR to merge, Other open or Shelved, nothing moved for 24 h, every machine of its Agents answered); `working` — every other open task (shown as 在做).
-- **Counts**: per direction, how many of its listed tasks are in each state. A direction row shows `counts.working` and `counts.needs_you` as 「在做 N · 等你 N」 (en "Doing N · Needs you N", ja 「作業中 N · あなた待ち N」). The four counts of all groups add up to the To-dos page's open count for the same data, less the worker tasks nested under a leader Agent. The tree is the default manager's alone (it is not merged over managers the way `GET /api/v1/todos` is, `hub/ownership_lists.go`), so on a hub with more than one manager the sum matches only that manager's to-dos.
-- **Order**: tasks needs_you, review, stuck, working; within a state the newest activity first, then id.
+- **State** (first match wins): `needs_you` — the SOP's Waiting on you (an Agent asks or was interrupted, the owner decides, incl. `needs_user`, a failed start); `review` — waits for acceptance (`pending_review`, or an open acceptance ask) with nothing of it running; `planned` — no Agent has ever been on it and it is not a concern (shown as 未开始, en "Not started", ja 未着手; #5846: a leader's piece not handed out yet); `stuck` — the leader reports' stuck rule (`taskStuck`: Waiting on you, PR to merge, Other open or Shelved, nothing moved for 24 h, every machine of its Agents answered; a task no Agent has worked on counts only while it waits on you); `working` — every other open task (shown as 在做).
+- **Counts**: per direction, how many of its listed tasks are in each state. A direction row shows `counts.working` and `counts.needs_you` as 「在做 N · 等你 N」 (en "Doing N · Needs you N", ja 「作業中 N · あなた待ち N」). `counts.planned` is 0 from a hub before #5846. The five counts of all groups add up to the To-dos page's open count for the same data, less the worker tasks nested under a leader Agent. The tree is the default manager's alone (it is not merged over managers the way `GET /api/v1/todos` is, `hub/ownership_lists.go`), so on a hub with more than one manager the sum matches only that manager's to-dos.
+- **Order**: tasks needs_you, review, stuck, working, planned; within a state the newest activity first, then id.
 - **Agents**: a task's active Agents (not released, not dismissed); under each, the Agents of the task it spawned (`source: spawned`, `via` its `machine/session`), its workers' Agents, its running in-session sub-agents (`session_id` `"<parent>@<id>"`, title the description, nested by the sub-agent that launched each) and its Codex sub-agent sessions still going. An Agent appears once in its task. Its `state` is its session's as the apps get it on session rows (`""` when the session was not found). The tree asks each computer for its sessions once per build.
 - **Push**: `{"type":"directions"}` whenever the tree's content changed: a to-do, the sessions of a computer one of its Agents is on, a direction, its name or the leader list changed, or (every 10 minutes) a task may have become stuck; gathered for one second, compared with a digest of the last tree told, so an unchanged tree tells nothing. Clients read the tree again on it and on (re)connect; a hub without the route answers 404 and the clients keep the flat direction rows.
 
@@ -920,8 +951,13 @@ Hub-inserted chat entries do not enter Claude's transcript (that would trigger a
   Dynamic Type), 12 pt horizontal and 6 pt vertical padding, a full capsule radius, `Theme.Fill.chip` behind secondary
   text, 28 pt tall at the default size, 8 pt apart. Open is the filter chip's on look in the same size (accent fill, white
   semibold); Needs You with rows takes the waiting pill's tint, empty it is the plain grey capsule and opens "All Caught Up".
+  At the accessibility text sizes the entries (and the computer pill after them) are a `FlowLayoutRow`: one that doesn't
+  fit goes on to the next line, each whole. Side by side they made the row, and with it the whole chat page, wider than
+  the screen, the header and the composer cut off at both edges (#5702; `docs/design/DESIGN_SYSTEM.md` 1.2 rule 3 (c),
+  wrapping rather than a sideways scroll so Needs You and its count stay in view). Below those sizes the row is as before.
   Tests: `AssistantEntriesFixtureTests` (the shared fixture), `AssistantActionBarTests`, UI `AssistantActionBarUITests`
-  (`MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1`).
+  (`MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1`; `testEntriesStayOnScreenAtEveryTextSize` in zh-Hans, English and Japanese at
+  the default and the largest size, light and dark).
 - Task details have one header layer: the embedded Agent page takes over the task name, Close, and task ⋯ (#3255; see "Task details" above).
 - Screenshots: `MOCK_TASKS=1`, `MOCK_TASKS_AT`, `-showTaskDetail`, `-showTaskBoard` (`docs/operations/testing.md`).
 
@@ -940,12 +976,19 @@ Agents started manually in Agents have no to-do, or a to-do with empty `origin`,
 - Data: `AppModel.goingAgents` derives from the existing session list and updates only when pill-visible content changes. No new polling, and no dock redraw on every push.
   Filtering: `DockAgent.shown` (`apple/Shared/Tasks.swift`); unit tests `DockAgentTests`; UI tests `TaskDockAgentTests` (`MOCK_TASKS_DOCK=pair` for two pills, otherwise six).
 - No chat-stream cards for manual Agents: they were not started from the chat.
-- Web does the same (#1275): `dockAgents` (`web/src/lib/todos.ts`) filters and sorts; tapping a pill opens that Agent's page (#5096); "All N" goes to To-dos.
+- Web does the same (#1275): `dockAgents` (`web/src/lib/todos.ts`) filters and sorts; tapping a pill opens that Agent in the side panel (`AgentPanel`) or as its page, as Settings says (#5424); "All N" goes to To-dos.
 - Step 4 (#996 and this step's iOS work):
   - **Day sections**: `ChatLines.daySections` adds a date above each day's first row (Today / Yesterday / month, day, weekday), only in assistant chats.
   - **Old task cards collapse**: non-today `task` entries become one line (`TaskLine`: state, title, progress); tapping opens details.
   - **Instant result cards**: successful `phone_reminders_create` / `phone_calendar_create_event` results render below that turn's work row (`QuickResult`,
     `ChatLines.quickResults`). Undo deletes locally through EventKit (`RemindersTool.remove`, `CalendarTool.remove`), without hub.
+    Successful `phone_location_current`, `phone_location_search` and `phone_maps_search_nearby` results render there as a map (`PlaceMapResult`, `PlaceMapCard`, #5543):
+    the phone's dot or up to ten numbered pins in result order (the numbers the answer uses), the first three places listed with Directions to Apple Maps,
+    and the whole map in a sheet. The chat draws a cached `MKMapSnapshotter` still; only the sheet's map is live.
+    A route `phone_maps_route` worked out renders there as its line from the phone's dot to the destination, "Walking · 6 min · 420 m" and Start in Maps (#5544);
+    transit has no line, only the destination with its time and distance.
+    Directions `phone_maps_navigate` handed to Apple Maps (`opened: maps`) render there too (#5545): the destination on the same map, with Maps' icon,
+    the mode and "Opened in Maps", and a button that opens the same directions again; Maps does the navigating.
   - **Today**: first main-chat display each day calls `POST …/today` (`TasksStore.loadToday`), placing the card at midnight: completed tasks, waiting tasks, working count,
     Lark meetings (Prepare sends a message for you), chats mentioning you (Review); if the App already has reminder permission, also include reminders due today (no permission prompt for this).
   - **Direct-start tasks**: Persona profile's Proactive work section lists remembered kinds, with swipe-left deletion.
@@ -964,7 +1007,7 @@ Agents started manually in Agents have no to-do, or a to-do with empty `origin`,
     Drafts submitted after the reply was sent no longer insert cards.
   - **No placeholders**: drafts are sent verbatim with one tap. `inbox/agent.md` and `inbox/draft.md` require omitting unknown information (no more 【】 markers for the user to fill).
     `inbox_draft` rejects drafts containing 【…】 / {{…}} and asks the AI twin to resubmit. Web and Android cards refuse to send drafts still containing 【…】 and ask for edits.
-  - iOS still uses local records + the Inbox list item's `done`, not `sent_at` (the list retains processed items only for 3 days; reopening an item makes old cards show Send again). To be fixed.
+  - iOS still uses local records + the Inbox list item's `done`, not `sent_at` (the list retains processed items only for 3 days, at most the newest 200; reopening an item makes old cards show Send again). To be fixed.
 
 ## Steps
 

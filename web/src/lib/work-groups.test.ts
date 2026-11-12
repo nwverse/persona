@@ -19,6 +19,7 @@ import {
   planTodos,
   workBlocks,
   workDuration,
+  TICKING_DURATION,
   type AgentStatus,
   type ToolStep,
   type WorkGroupNode,
@@ -453,6 +454,14 @@ describe("titles and plans", () => {
     expect(workDuration(3_900_000)).toBe("1 小时 5 分");
     expect(workDuration(93_900_000)).toBe("1 天 2 小时 5 分");
     expect(workDuration(86_400_000)).toBe("1 天 0 小时 0 分");
+  });
+
+  it("reads as cindy's running status bar with its options: from 0s, the seconds always kept under an hour (#5312)", () => {
+    expect(workDuration(0, TICKING_DURATION)).toBe("0s");
+    expect(workDuration(59_000, TICKING_DURATION)).toBe("59s");
+    expect(workDuration(60_000, TICKING_DURATION)).toBe("1m 0s");
+    expect(workDuration(65_000, TICKING_DURATION)).toBe("1m 5s");
+    expect(workDuration(3_600_000, TICKING_DURATION)).toBe("1 小时 0 分");
   });
 
   it("a group without its times is Work details", () => {

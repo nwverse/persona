@@ -377,6 +377,16 @@ struct ChatsView: View {
                     spaceAt = spaceAt.filter { $0.key < p.count }
                     if p.isEmpty, !leaving { AppModel.rememberChat(nil); model.chatSwitched = [:] } // back at the list: next launch starts here
                 }
+                .onChange(of: model.agentsListReveal) { _, request in
+                    let previousPath = path
+                    stackStill.whenStill {
+                        // A newer targeted open wins, even if the stable-stack opener already consumed it.
+                        guard !leaving, model.agentsNavigationRevision == request, path == previousPath,
+                              model.openChat == nil, model.openPersonalAgent == nil else { return }
+                        spaceAt = [:]
+                        if !path.isEmpty { path = NavigationPath() }
+                    }
+                }
                 .onChange(of: model.openChat, initial: true) { _, key in
                     // Not before the list is on screen: a push into a stack whose root has not appeared yet built the
                     // chat three times (a TabView launch onto a chat, `-openSession` / a notification: items
@@ -403,8 +413,11 @@ struct ChatsView: View {
                     // Not over a personal agent's conversation asked for (#4519): that one is what the app came up for.
                     if path.isEmpty, model.openChat == nil, model.openPersonalAgent == nil, model.selectedTab == .chats,
                        let v = AppModel.rememberedChat {
+                        let request = model.agentsNavigationRevision
                         DispatchQueue.main.async {
-                            if path.isEmpty, model.openChat == nil, model.openPersonalAgent == nil, AppModel.rememberedChat == v, !leaving {
+                            if path.isEmpty, model.openChat == nil, model.openPersonalAgent == nil,
+                               model.selectedTab == .chats, model.agentsNavigationRevision == request,
+                               AppModel.rememberedChat == v, !leaving {
                                 model.openChat = SessionKey(path: v)
                             }
                         }
@@ -423,6 +436,13 @@ struct ChatsView: View {
                     }
                     #endif
                     if !machineFilter.isEmpty, !model.machines.isEmpty, model.machine(MachineRef(path: machineFilter)) == nil { machineFilter = "" }
+                }
+                // Another assistant is current, and the list is its agents now: a computer picked in the menu that is
+                // not one of its own would leave the list empty, and what was pushed from the list (a chat, a space, a
+                // computer) is the assistant before's.
+                .onChange(of: model.assistantSwitches) {
+                    if !machineFilter.isEmpty, !model.scopedMachines(inFront: false).contains(where: { $0.ref.path == machineFilter }) { machineFilter = "" }
+                    if !path.isEmpty { path = NavigationPath() }
                 }
         } empty: {
             SplitPlaceholder(symbol: Theme.Icon.agents, title: String(localized: "Choose an Agent"),
@@ -716,7 +736,7 @@ private struct AgentsList: View {
     }
 
     private var sessions: [Session] { feed.following ? feed.sessions : model.sessionLists.sessions }
-    private var machines: [Machine] { feed.following ? feed.machines : model.machines }
+    private var machines: [Machine] { feed.following ? feed.machines : model.scopedMachines() }
     /// What the rows read (a machine's name, an agent's label), filled by each run of the body and not observed. SwiftUI
     /// tracks what each row of a `List` read when it was last drawn: a row that asked the model for its machine went on
     /// following the machines while the list was held, was drawn again by the next push, and the `List` measured its
@@ -785,7 +805,7 @@ private struct AgentsList: View {
                                                workspaceRevision: workspaceCatalog.revision)
         return feed.projection.resolve(key, immediate: !follows || feed.immediateRevision == key.revision,
             input: { .init(sessions: follows ? feed.sessions : model.sessionLists.sessions,
-                           machines: follows ? feed.machines : model.machines, settings: settings,
+                           machines: follows ? feed.machines : model.scopedMachines(), settings: settings,
                            workspaces: workspaceCatalog.workspaces) },
             valid: { key in
                 key.revision >= feed.immediateRevision && AgentListProjectionCache.partitions(model) == key.partitions &&
@@ -872,7 +892,7 @@ private struct AgentsList: View {
         // One row per session that waits for the user, its cards under it (`AgentsNeedsYou`): the section, the Needs
         // You filter and the tab's badge count these rows.
         let waiting = AgentsNeedsYou.rows(
-            cards: AgentsNeedsYou.cards(feed.following ? feed.interactions : model.pendingInteractions, session: session,
+            cards: AgentsNeedsYou.cards(feed.following ? feed.interactions : model.scopedInteractions, session: session,
                                         machine: machineFilter, hub: model.isMultiHub ? hubFilter : nil),
             waiting: AgentsNeedsYou.waiting(base)) // a subtask waiting for you is a row of its own (`CodexTasks`)
         let _ = (lookup.needsYou = waiting.count)
@@ -1351,7 +1371,7 @@ private struct AgentsList: View {
             cardRow(ix)
         } else if let first = row.cards.first {
             if compact {
-                NavigationLink(value: first.sessionKey) {
+                agentNavigationLink(first.sessionKey) {
                     CompactInteractionRow(interaction: first, machine: machine(first.machineRef)?.title, more: row.cards.count - 1)
                 }
                 #if os(macOS)
@@ -1386,7 +1406,7 @@ private struct AgentsList: View {
             .accessibilityIdentifier("agents.interaction")
         } else if compact {
             // Compact List: one row like an agent's; the chat answers it.
-            NavigationLink(value: ix.sessionKey) {
+            agentNavigationLink(ix.sessionKey) {
                 CompactInteractionRow(interaction: ix, machine: machine(ix.machineRef)?.title)
             }
             #if os(macOS)
@@ -1431,7 +1451,7 @@ private struct AgentsList: View {
         let s = session(row.key)
         let place = s.flatMap { machine($0.machineRef)?.title }
         if compact {
-            NavigationLink(value: row.key) {
+            agentNavigationLink(row.key) {
                 CompactWaitingRow(session: s, machine: place, since: row.since)
             }
             .listRowInsets(CompactList.rowInsets)
@@ -2885,7 +2905,23 @@ private struct AgentsList: View {
                 .macOptionClick { MacShellState.shared.chatWindow = s.key }
         }
         #else
-        NavigationLink(value: s.key) { content() }
+        agentNavigationLink(s.key, content: content)
+        #endif
+    }
+
+    /// A split sidebar's value link owns selection outside the bound detail path. Use the path on iOS so tab
+    /// selection can clear every Agent detail, without rebuilding the list and losing its state.
+    @ViewBuilder private func agentNavigationLink<Content: View>(_ key: SessionKey, @ViewBuilder content: () -> Content) -> some View {
+        #if os(iOS)
+        // A split's sidebar can read compact: use the parent page's layout, not the column's width class.
+        if !ownsTop {
+            Button { openFromList(key) } label: { content() }
+                .buttonStyle(.plain)
+        } else {
+            NavigationLink(value: key, label: content)
+        }
+        #else
+        NavigationLink(value: key, label: content)
         #endif
     }
 }
@@ -3271,11 +3307,11 @@ nonisolated struct AgentsListShown: Encodable, Equatable {
     /// once; watched again at every change, held or not, never twice at a time).
     private func current() -> ([Session], [Interaction], [Machine])? {
         guard let model else { return nil }
-        guard !watching else { return (model.sessionLists.sessions, model.pendingInteractions, model.machines) }
+        guard !watching else { return (model.sessionLists.sessions, model.scopedInteractions, model.scopedMachines()) }
         watching = true
         return withObservationTracking {
             let _ = AgentListProjectionCache.partitions(model)
-            return (model.sessionLists.sessions, model.pendingInteractions, model.machines)
+            return (model.sessionLists.sessions, model.scopedInteractions, model.scopedMachines())
         } onChange: { [weak self] in
             Task { @MainActor in // told before the change: read it after
                 self?.watching = false
