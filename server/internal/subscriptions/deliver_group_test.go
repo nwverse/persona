@@ -256,3 +256,24 @@ func TestABodyThatIsTheTitleIsSaidOnce(t *testing.T) {
 		t.Fatalf("a body of its own: %q", got)
 	}
 }
+
+// The database keeps an item's stored time to the microsecond: the items of the run that started a grouping are in its
+// row all the same.
+func TestTheRunThatMarksAGroupingIsInItsRow(t *testing.T) {
+	from, mark := time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC), time.Date(2026, 11, 10, 9, 5, 0, 0, time.UTC)
+	start := time.Date(2026, 11, 10, 10, 0, 0, 123456789, time.UTC)
+	sub := markRows(Subscription{ID: "sub_a", Label: "Group", ToInbox: true, InboxFrom: &from, InboxCatchup: &mark, Recipe: sourceRecipe()}, false, start)
+	if sub.InboxGroup != "source" || sub.InboxGroupFrom == nil {
+		t.Fatalf("not marked: %q", sub.InboxGroup)
+	}
+	d := deliverer{sub: sub, loc: time.UTC, lang: i18n.En}
+	at := start.Add(-time.Minute)
+	stored := start.Truncate(time.Microsecond) // as Postgres hands it back
+	things := d.inboxThings(nil, []Held{
+		{Seq: 1, Stored: mark.Add(time.Minute), Item: Item{UID: "old", Title: "Before", Time: &at}},
+		{Seq: 2, Stored: stored, Item: Item{UID: "new", Title: "After", Time: &at}},
+	})
+	if len(things) != 1 || things[0].Last != "new" || strings.Contains(things[0].Context, "Before") {
+		t.Fatalf("the row of the marking run: %+v", things)
+	}
+}

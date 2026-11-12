@@ -260,13 +260,16 @@ func rowsFrom(sub Subscription) (from *time.Time, ok bool) {
 
 // markRows is next after a run that succeeded at start: the run that ends the Inbox's catch-up starts its rows with
 // the recipe's grouping (the catch-up holds no item delivered before), and one after the grouping changed (a recipe
-// changed without a new catch-up, or rows from before #5671) starts the new grouping with this run's items.
+// changed without a new catch-up, or rows from before #5671) starts the new grouping with this run's items. The mark is
+// to the microsecond, as the database keeps the items' stored time: to the nanosecond, this run's own would read back
+// as stored before it.
 func markRows(next Subscription, caughtUp bool, start time.Time) Subscription {
 	switch g := groupOf(next.Recipe); {
 	case caughtUp:
 		next.InboxGroup, next.InboxGroupFrom = g, nil
 	case inboxFrom(next) != nil && next.InboxCatchup != nil && rowsGroup(next) != g:
-		next.InboxGroup, next.InboxGroupFrom = g, &start
+		at := start.Truncate(time.Microsecond)
+		next.InboxGroup, next.InboxGroupFrom = g, &at
 	}
 	return next
 }
