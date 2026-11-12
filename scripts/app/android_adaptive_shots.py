@@ -19,7 +19,7 @@ import xml.etree.ElementTree as ET
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 PROBE_PATH = "no_backup/hub-data/adaptive-probe.json"
 UI_PATH = "/data/local/tmp/persona-adaptive-ui.xml"
-MODIFIER_KEYS = ("SHIFT_LEFT", "CTRL_LEFT", "ALT_LEFT", "META_LEFT")
+MODIFIER_KEYS = ("SHIFT_LEFT", "CTRL_LEFT")
 TRANSFORM_STEPS = {"rotate", "posture", "wm-size", "freeform-resize"}
 MAX_PROBE_AGE_NANOS = 15_000_000_000
 MAX_PROBE_BYTES = 2_000_000
@@ -69,6 +69,9 @@ def parse_wm_density(text):
 
 
 def parse_device_state(text):
+    named = re.search(r"mCommittedState=.*\bname='([A-Z_]+)'", text)
+    if named:
+        return named.group(1)
     match = re.search(r"mCommittedState=([A-Z_]+|\d+)", text)
     return match.group(1) if match else None
 
@@ -364,7 +367,7 @@ class AdaptiveRunner:
         return result
 
     def pid(self):
-        output = self.adb.shell("pidof", self.app_id, timeout=5).strip()
+        output = self.adb.shell("pidof", self.app_id, timeout=5, check=False).strip()
         if not output:
             return None
         values = output.split()
@@ -373,8 +376,11 @@ class AdaptiveRunner:
         return int(values[0])
 
     def _launch_arguments(self, step, pairing=False):
-        arguments = ["am", "start", "-W", "-n", self.app_id + "/persona.android.debug.DebugEntryActivity",
-                     "--es", "debug.automation", "true", "--es", "debug.theme", self.theme]
+        activity = ("persona.android.debug.DebugEntryActivity" if step.get("step") == "launch"
+                    else "persona.android.MainActivity")
+        automation_type = "--ez" if step.get("step") == "launch" else "--es"
+        arguments = ["am", "start", "-W", "-n", self.app_id + "/" + activity,
+                     automation_type, "debug.automation", "true", "--es", "debug.theme", self.theme]
         if os.environ.get("SHOTS_STYLE"):
             arguments += ["--es", "debug.style", self.style]
         if pairing:
@@ -425,7 +431,14 @@ class AdaptiveRunner:
             def selected():
                 route, key = self.read_navigation()
                 return True if key == target else None
-            poll("selected session " + target, selected, timeout=20)
+            poll("selected session " + target, selected, timeout=float(step.get("timeout", 60)))
+            def draft_ready():
+                probe = self.read_probe(self.pid())
+                now = self.elapsed_nanos()
+                texts = [node.attrib.get("text", "") for node in self.ui_tree()]
+                page = self.page_evidence(probe, "chat:" + target, now, texts)
+                return page.get("composer", {}).get("draftLoaded") is True or None
+            poll("composer draft " + target, draft_ready, timeout=float(step.get("timeout", 60)))
         probe_page = step.get("probePage") or {
             "machines": "Machines", "settings": "Settings", "phone": "Phone data",
         }.get(step.get("page"))
@@ -438,7 +451,7 @@ class AdaptiveRunner:
                 texts = [node.attrib.get("text", "") for node in self.ui_tree()]
                 self.page_evidence(probe, probe_page, now, texts)
                 return True
-            poll("open target " + probe_page, target_ready, timeout=float(step.get("timeout", 20)))
+            poll("open target " + probe_page, target_ready, timeout=float(step.get("timeout", 60)))
 
     def reset_modifiers(self):
         for key in MODIFIER_KEYS:
@@ -463,19 +476,24 @@ class AdaptiveRunner:
         raise AdaptiveFailure("uiautomator dump failed after 5 fresh attempts: %s" % last_error)
 
     def tap(self, step):
-        nodes = self.ui_tree()
-        matches = []
-        for node in nodes:
-            resource = node.attrib.get("resource-id", "")
-            resource_match = step.get("resource-id") and (
-                resource == step["resource-id"] or resource.endswith(":id/" + step["resource-id"]))
-            desc_match = step.get("content-desc") is not None and node.attrib.get("content-desc") == step["content-desc"]
-            text_match = step.get("text") is not None and node.attrib.get("text") == step["text"]
-            if resource_match or desc_match or text_match:
-                matches.append(node)
-        if len(matches) != 1:
-            raise AdaptiveFailure("tap selector matched %d nodes, expected exactly one" % len(matches))
-        node = matches[0]
+        last_count = [0]
+        def unique_node():
+            nodes = self.ui_tree()
+            matches = []
+            for node in nodes:
+                resource = node.attrib.get("resource-id", "")
+                resource_match = step.get("resource-id") and (
+                    resource == step["resource-id"] or resource.endswith(":id/" + step["resource-id"]))
+                desc_match = step.get("content-desc") is not None and node.attrib.get("content-desc") == step["content-desc"]
+                text_match = step.get("text") is not None and node.attrib.get("text") == step["text"]
+                if resource_match or desc_match or text_match:
+                    matches.append(node)
+            last_count[0] = len(matches)
+            return matches[0] if len(matches) == 1 else None
+        try:
+            node = poll("tap selector", unique_node, timeout=float(step.get("timeout", 30)))
+        except AdaptiveFailure as error:
+            raise AdaptiveFailure("tap selector matched %d nodes, expected exactly one" % last_count[0]) from error
         x, y = parse_bounds(node.attrib.get("bounds"))
         self.adb.shell("input", "tap", str(x), str(y), timeout=5)
         self.action_log.append({"type": "tap", "x": x, "y": y})
@@ -596,8 +614,15 @@ class AdaptiveRunner:
                 height_dp = round(height_px * 160 / density)
                 evidence = "task-bounds"
         displays = self.adb.shell("dumpsys", "window", "displays", timeout=15)
-        rotation = re.search(r"mCurrentRotation=(\d+)", displays)
-        orientation = ("landscape" if int(rotation.group(1)) in (1, 3) else "portrait") if rotation else (
+        current = re.search(r"\bcur=(\d+)x(\d+)", displays)
+        if current and not (task and task.configuration_dp):
+            width_px, height_px = (int(value) for value in current.groups())
+            width_dp = round(width_px * 160 / density)
+            height_dp = round(height_px * 160 / density)
+            evidence = "display-current"
+        rotation = re.search(r"mCurrentRotation=(?:ROTATION_)?(\d+)", displays)
+        rotation_value = {"90": 1, "180": 2, "270": 3}.get(rotation.group(1), int(rotation.group(1))) if rotation else None
+        orientation = ("landscape" if rotation_value in (1, 3) else "portrait") if rotation_value is not None else (
             "landscape" if width_dp > height_dp else "portrait")
         return {
             "widthDp": width_dp, "heightDp": height_dp, "widthPx": width_px, "heightPx": height_px,
@@ -738,10 +763,10 @@ class AdaptiveRunner:
         pid = self.pid()
         if pid is None:
             raise AdaptiveFailure("Persona process is not running")
-        route, selected_key = self.read_navigation()
         if self.route_override is not None:
-            route = self.route_override
-            selected_key = self.selected_key_override
+            route, selected_key = self.route_override, self.selected_key_override
+        else:
+            route, selected_key = self.read_navigation()
         window = self.read_window()
         device_state = self.device_state()
         nodes = self.ui_tree()
@@ -823,6 +848,8 @@ class AdaptiveRunner:
             for path, expectation in checks.items():
                 operation = "equals"
                 expected = expectation
+                if isinstance(expectation, str) and expectation == "unchanged":
+                    operation = "unchanged"
                 if isinstance(expectation, dict) and len(expectation) == 1 and next(iter(expectation)) in ("equals", "unchanged", "matches", "notOverlaps"):
                     operation, expected = next(iter(expectation.items()))
                 actual = path_value(snapshot, path)

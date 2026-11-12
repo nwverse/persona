@@ -167,6 +167,8 @@ case "$COMMAND" in
     CLOCK_PID=""
     CLOCK_STOP=/data/local/tmp/persona-shots-clock.stop
     STYLE_ARGS=()
+    AUTOMATION_ARGS=(--es debug.automation true)
+    [ "$COMMAND" != shots-live ] || AUTOMATION_ARGS=(--ez debug.automation true)
     [ -z "${SHOTS_STYLE:-}" ] || STYLE_ARGS=(--es debug.style "$SHOTS_STYLE")
     demo() { "$ADB" -s "$SERIAL" shell am broadcast -a com.android.systemui.demo -e command "$@" >/dev/null; }
     # Set the emulator's clock back to the frozen instant (before each cold start and each capture).
@@ -364,7 +366,7 @@ SHOTS_PY
     freeze_clock
     # debug.style is saved, but pm clear above wiped it, so every launch passes it again.
     "$ADB" -s "$SERIAL" shell am start -W -n "$APP_ID/persona.android.debug.DebugEntryActivity" \
-      --es debug.mockAddress "$MOCK_ADDRESS" --es debug.openTab Agents --es debug.automation true \
+      --es debug.mockAddress "$MOCK_ADDRESS" --es debug.openTab Agents ${AUTOMATION_ARGS[@]+"${AUTOMATION_ARGS[@]}"} \
       ${STYLE_ARGS[@]+"${STYLE_ARGS[@]}"} >/dev/null
     # Poll the private navigation checkpoint (the pairing-scoped shell position) to wait for pairing and shell creation.
     shell_ready() { "$ADB" -s "$SERIAL" shell run-as "$APP_ID" find no_backup/hub-data -name shell-position.json 2>/dev/null | tr -d '\r' | grep -q 'shell-position.json'; }
@@ -383,6 +385,9 @@ SHOTS_PY
       [ "$THEME" != both ] || THEMES=(light dark)
       RESET_ARGS=()
       for theme in ${THEMES[@]+"${THEMES[@]}"}; do
+        # Each theme gets one fresh initial task so its first debug route is applied by initialLaunch.
+        # The Python runner never force-stops between the steps of that theme.
+        "$ADB" -s "$SERIAL" shell am force-stop "$APP_ID" >/dev/null
         ADB="$ADB" APP_ID="$APP_ID" SERIAL="$SERIAL" MOCK_ADDRESS="$MOCK_ADDRESS" OUTPUT="$OUTPUT" \
           SHOTS_STYLE="${SHOTS_STYLE:-}" SHOTS_SETTLE="$SETTLE" SHOTS_FROZEN="${SHOTS_FROZEN:-}" \
           python3 scripts/app/android_adaptive_shots.py --scenario "$SCENARIO" --theme "$theme" --out "$OUTPUT" \

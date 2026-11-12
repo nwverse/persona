@@ -111,6 +111,20 @@ class AdaptiveShotsTest(unittest.TestCase):
                 clear_index = adb.commands.index(clears[0])
                 self.assertTrue(all(command[:1] == ["wm"] for command in adb.commands[:clear_index]))
 
+    def test_open_uses_main_activity_while_launch_uses_debug_entry(self):
+        with tempfile.TemporaryDirectory() as output:
+            runner = make_runner(FakeAdb(), output)
+            launch = runner._launch_arguments({"step": "launch"})
+            open_step = runner._launch_arguments({"step": "open"})
+            self.assertTrue(any("persona.android.debug.DebugEntryActivity" in arg for arg in launch))
+            self.assertIn("--ez", launch)
+            self.assertTrue(any(arg.endswith("persona.android.MainActivity") for arg in open_step))
+            self.assertNotIn("persona.android.debug.DebugEntryActivity", open_step)
+
+    def test_device_state_reads_optional_name_form(self):
+        text = "mCommittedState=Optional[DeviceState{identifier=2, name='HALF_OPENED', app_accessible=true}]"
+        self.assertEqual("HALF_OPENED", shots.parse_device_state(text))
+
     def test_transforms_execute_before_bounded_readback(self):
         for method, step, expected in (
             ("rotate", {"orientation": "landscape"}, ["emu", "rotate"]),
@@ -142,6 +156,25 @@ class AdaptiveShotsTest(unittest.TestCase):
             shots.parse_persona_task(OTHER_TASK_DUMP, APP_ID)
         with self.assertRaisesRegex(shots.AdaptiveFailure, "resumed"):
             shots.parse_persona_task(TASK_DUMP.replace("topResumedActivity", "otherActivity"), APP_ID)
+
+    def test_rotation_and_current_display_dimensions_are_real_evidence(self):
+        adb = FakeAdb()
+        original = adb.shell
+        def shell(*arguments, **kwargs):
+            if arguments[:2] == ("dumpsys", "window"):
+                return "init=1768x2208 420dpi cur=2208x1768 mCurrentRotation=ROTATION_270\n"
+            if arguments[:2] == ("dumpsys", "activity"):
+                return OTHER_TASK_DUMP
+            if arguments[:2] == ("wm", "density"):
+                return "Physical density: 420\n"
+            return original(*arguments, **kwargs)
+        adb.shell = shell
+        with tempfile.TemporaryDirectory() as output:
+            runner = make_runner(adb, output)
+            window = runner.read_window()
+            self.assertEqual("landscape", window["orientation"])
+            self.assertEqual(841, window["widthDp"])
+            self.assertEqual(674, window["heightDp"])
 
     def test_freeform_right_bottom_coordinates_match_boundary_table(self):
         for width, height, right, bottom in ((599, 480, 1198, 960), (600, 480, 1200, 960),
@@ -352,6 +385,33 @@ class AdaptiveShotsTest(unittest.TestCase):
             runner.run()
             self.assertEqual("fake", runner.posture_evidence)
             self.assertTrue(runner.fake_posture_changed)
+
+    def test_tap_waits_for_the_target_node(self):
+        empty = shots.parse_ui_nodes(b'<hierarchy><node resource-id="other" bounds="[0,0][10,10]" /></hierarchy>')
+        ready = shots.parse_ui_nodes(b'<hierarchy><node resource-id="field" bounds="[0,0][10,10]" /></hierarchy>')
+        with tempfile.TemporaryDirectory() as output:
+            runner = make_runner(FakeAdb(), output)
+            runner.ui_tree = mock.Mock(side_effect=[empty, ready])
+            runner.tap({"resource-id": "field", "timeout": 0.1})
+            self.assertEqual(2, runner.ui_tree.call_count)
+
+    def test_route_override_does_not_require_a_shell_checkpoint(self):
+        with tempfile.TemporaryDirectory() as output:
+            runner = make_runner(FakeAdb(), output)
+            runner.route_override = "phone"
+            runner.selected_key_override = None
+            runner.read_navigation = mock.Mock(side_effect=shots.AdaptiveFailure("shell position has no route tab"))
+            snapshot = runner.collect("capture", "settings", 42)
+            self.assertEqual("phone", snapshot["route"])
+            runner.read_navigation.assert_not_called()
+
+    def test_unchanged_string_shorthand_is_an_operation(self):
+        with tempfile.TemporaryDirectory() as output:
+            runner = make_runner(FakeAdb(), output)
+            runner.initial_pid = 42
+            runner.collect = mock.Mock(return_value={"pidAfter": 42})
+            runner.check_assertions({"checks": {"pid": "unchanged"}})
+            self.assertEqual(42, runner.previous_snapshot["pidAfter"])
 
     def test_assertions_poll_for_delayed_evidence(self):
         with tempfile.TemporaryDirectory() as output:
