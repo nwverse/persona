@@ -31,6 +31,11 @@ Pitfalls, odd behavior and the trade-offs made at the time (formerly in `CLAUDE.
   (Cloudflare rejected it with `externally managed DNS records`, publish exited 1, but the script had already uploaded). Run `git fetch` before creating the worktree, and check `git rev-parse HEAD origin/main`
   match before deploying; when publish errors, first check whether the live site already switched to this code, then decide how to fix it.
 - Trimmed Go build metadata can omit linker flags, so a serving-binary verifier must read exact `vcs.revision` and clean-source settings instead of searching for `main.commit` in the flags (#1553). Keep the serving/built binary hash comparison. A hub deployment already publishes its web artifact; acknowledge that only with a matching commit and exact built/installed tree receipt, rather than repeat a stale deploy after main advances.
+- Autorelease incident identity must survive new main commits (#4671): a commit-keyed notification budget still spams
+  when a broken build spans many merges. Hash the target's step/result and diagnostic summary, clear it only on actual
+  recovery, and keep delivery retries separate from action retries. A deploy guard rejecting a checkout missing upstream
+  commits is deferred work, not a failed build; match both its exact diagnostic and exit code. When logs append across
+  retries, inspect only the current attempt's output or an older stale-checkout line can hide a real later failure.
 - Unattended releases need locks shared with manual entry points, not only a worker lock (#1477). Use the hub's existing promotion lock for deployments from every build computer, resolving its state root from the installed service rather than assuming a default directory; use a build-computer release lock through upload and TestFlight processing. A successful upload followed by a processing timeout must resume the same build number, not upload another binary. Hub notification acceptance is not a phone-display receipt; installation acceptance needs an observed notification.
 - Two sessions releasing at once collide on the build number (2026-11-04): both started `release.sh` (without a build number) in the same minute and got the same time-based number `202611040002`;
   the one that finished uploading first went into TestFlight, the later upload was rejected by App Store Connect (`Redundant Binary Upload`, exit 70), and only one archive with that name was left in Organizer.
@@ -247,3 +252,13 @@ forks with the same branch name cancelling each other. A reusable workflow's
 another lane from accidentally cancelling the caller, while allowing its direct
 and reusable invocations to deduplicate the same branch/lane. Keep every shard,
 set `max-parallel`, and measure normal-load PRs separately from peak queues.
+
+## Two fixes for the same breakage both merged (2026-11-12, #5609)
+
+- #5554 and #5608 fixed the same token drift (#5589) within the hour, each adding `Theme.Size.slimBar` in a different
+  place of `Theme.swift`. Git merged both without a conflict, and `main` declared it twice: no Apple target compiled.
+  A clean squash merge says nothing about whether the result builds.
+- Right before merging a fix for something on `main` that others hit too (a failing check, a broken build), fetch
+  `main`, look at what landed since your branch (`git log HEAD..origin/main -- <your files>`), and merge it into your
+  branch. If someone fixed it already, close yours. A lane that a pre-commit hook or a failing check sends to a fix
+  should look for an open PR with that fix before writing one.

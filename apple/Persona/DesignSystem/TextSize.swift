@@ -117,6 +117,22 @@ extension View {
         scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget, alignment: alignment)
             .frame(minWidth: Theme.Size.tapTarget, minHeight: Theme.Size.tapTarget, alignment: alignment)
     }
+
+    /// At least as tall as a finger needs (`Theme.Size.tapTarget`), as wide as it is: a row or a heading that is a button
+    /// and draws less than that (#3753). Grows with the text like `tapTargetFrame`, never below the token.
+    func tapTargetHeight(alignment: Alignment = .center) -> some View {
+        scaledFrame(minHeight: Theme.Size.tapTarget, alignment: alignment)
+            .frame(minHeight: Theme.Size.tapTarget, alignment: alignment)
+    }
+
+    /// A line of text that is a button, hit like a finger-sized row without taking a row's room: the touch area grows
+    /// `Theme.Space.l` above and below (a caption line plus that is about `Theme.Size.tapTarget`), the layout does not.
+    /// For links in a row under a card, where a taller row would push the card's own buttons under the composer (#5392).
+    func tapTargetOutset() -> some View {
+        padding(.vertical, Theme.Space.l)
+            .contentShape(.rect)
+            .padding(.vertical, -Theme.Space.l)
+    }
 }
 
 extension View {

@@ -21,6 +21,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import persona.core.contracts.Machine
 import persona.core.designsystem.*
+import persona.core.designsystem.dense
+import persona.feature.chat.UltracodeQuotaLines
+import persona.feature.chat.rememberUltracodeQuota
 import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
 import java.net.URI
@@ -43,10 +46,10 @@ internal fun NewAgentDialog(
     JSheet(onDismiss = { if (!state.starting) onDismiss() }, title = stringResource(R.string.agents_action_new_session)) {
         BackHandler(onBack = close)
         Column(Modifier.fillMaxWidth().weight(1f).imePadding()) {
-            LazyColumn(Modifier.weight(1f), list, contentPadding = PaddingValues(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            LazyColumn(Modifier.weight(1f), list, contentPadding = PaddingValues(bottom = 16.dp.dense), verticalArrangement = Arrangement.spacedBy(8.dp.dense)) {
                 newAgentItems(state, model, machines, query, { query = it }, close, onModels = { picking = true }, prompt, onBlocked = { helping = it })
             }
-            NewAgentFooter(state, model, machines, online, Modifier.fillMaxWidth().padding(top = 8.dp))
+            NewAgentFooter(state, model, machines, online, Modifier.fillMaxWidth().padding(top = 8.dp.dense))
         }
         if (picking) NewAgentModelSheet(state, model::pickModel, model::reloadModels, onDismiss = { picking = false })
         LauncherHelp(helping, state, model, onAddProvider?.let { add -> { helping = null; onDismiss(); add() } }) { helping = null }
@@ -157,7 +160,7 @@ private fun LazyListScope.newAgentItems(
         if (machine?.online != true) Text(stringResource(R.string.agents_new_space_offline), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
     } else item("machines") {
         JSectionHeader(stringResource(R.string.agents_new_machine))
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp.dense)) {
             machines.forEach { machine ->
                 JChip(machine.displayName, selected = machine.id == state.machineId, icon = PhIcons.Laptop,
                     status = if (machine.online) Status.Idle else Status.Offline,
@@ -265,6 +268,21 @@ private fun LazyListScope.newAgentItems(
         val efforts = state.modelEfforts
         if (efforts?.isEmpty() == true) JRow(stringResource(R.string.agents_new_effort), subtitle = stringResource(R.string.agents_new_no_effort), enabled = false)
         else ChoiceMenu(stringResource(R.string.agents_new_effort), state.selection.effort, effortChoices(efforts), editable) { model.selection(state.selection.copy(effort = it)) }
+        // Claude Code's ultracode for this start (#582, iOS UltracodeStartRow): off each time, never saved; a known CLI
+        // too old for it says so and can't be switched on.
+        val shown = NewAgentUltracode.offered(LocalHubFeatures.current, state.agentType, efforts)
+        val version = machines.firstOrNull { it.id == state.machineId }?.claudeVersion?.trim()
+        val blocked = version?.takeIf { shown && NewAgentUltracode.tooOld(it) }
+        LaunchedEffect(shown, blocked) { if (!shown || blocked != null) model.ultracode(false) }
+        if (shown) JSwitchRow("ultracode", state.ultracode && blocked == null, model::ultracode, // i18n-ignore: a proper name, never translated
+            subtitle = blocked?.let { stringResource(R.string.agents_new_ultracode_old, it, NewAgentUltracode.MIN_VERSION.joinToString(".")) }
+                ?: stringResource(R.string.agents_new_ultracode_subtitle),
+            enabled = editable && blocked == null, subtitleLines = Int.MAX_VALUE)
+        // The Claude subscription's use on this computer's hub (iOS UltracodeStartRow); no warning under a CLI too old for it.
+        val read = model.usage?.let { usage -> state.machineId.takeIf { shown && it.isNotEmpty() }?.let { id -> suspend { usage(id) } } }
+        rememberUltracodeQuota(read, state.machineId)?.let { quota ->
+            UltracodeQuotaLines(quota, blocked == null, Modifier.padding(horizontal = rowPadding).padding(bottom = Tokens.Space.m))
+        }
     }
     item("prompt") {
         JTextField(state.prompt, model::prompt, enabled = !state.locked,
@@ -287,7 +305,7 @@ private fun followSummary(res: Resources, state: NewAgentState): String {
 
 @Composable
 private fun NewAgentFooter(state: NewAgentState, model: NewAgentViewModel, machines: List<Machine>, online: Boolean, modifier: Modifier) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp.dense)) {
         if (state.pending != null) PendingBadge(if (state.starting) PendingStatus.Verifying else PendingStatus.Unconfirmed)
         state.error?.let { Text(it.resolve(), color = PersonaTheme.palette.ink2, style = PersonaTheme.type.callout) }
         if (!online) Text(stringResource(R.string.agents_new_offline_footer), color = PersonaTheme.palette.ink2, style = PersonaTheme.type.callout)

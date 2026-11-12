@@ -26,6 +26,9 @@ type Manifest struct {
 	Description     string `json:"description,omitempty"`
 	Publisher       string `json:"publisher,omitempty"`
 	Homepage        string `json:"homepage,omitempty"`
+	// Source-only square PNG artwork: 256–4096 pixels, at most 2 MiB. Catalog entry icon carries this path; strip it
+	// from packaged and runtime manifests for compatibility.
+	Icon string `json:"icon,omitempty"`
 	// What the market shows and searches (docs "Extension market"): at most 16, each 1 to 24 characters. Packages and
 	// indexes carry the manifest without them (hubs before tags refuse an unknown field); the index entry carries them
 	// instead.
@@ -56,6 +59,16 @@ type Manifest struct {
 	// "Command-line programs (tools)", #4507). Installing them is a permission. Hubs before them refuse the manifest.
 	Tools []ToolSpec `json:"tools,omitempty"`
 	Auth  *AuthSpec  `json:"auth,omitempty"`
+	// Configured host CLI integrations the program may use through a bounded, read-only typed RPC. IDs never name an
+	// executable; writes and arbitrary command lines are not part of this contract.
+	HostIntegrations []HostIntegrationSpec `json:"host_integrations,omitempty"`
+}
+
+// HostIntegrationSpec: A configured CLI integration, selected by a closed ID rather than by an extension-provided
+// executable.
+type HostIntegrationSpec struct {
+	ID      string `json:"id"`
+	Version string `json:"version"`
 }
 
 // ToolSpec: one command-line program. Exactly one of archive and npm.
@@ -4452,6 +4465,8 @@ type KBDetail struct {
 	Segments []KBRecordingSegment `json:"segments,omitempty"`
 	// A recording's meeting minutes, once written (docs/assistant/meeting-minutes.md); kept as the hub sends them.
 	Minutes json.RawMessage `json:"minutes,omitempty"`
+	// An all-day recording's day recap, once written (docs/assistant/day-recap.md); kept as the hub sends them.
+	Recap json.RawMessage `json:"recap,omitempty"`
 	// A topic's knowledge points (docs/assistant/knowledge.md "Topics").
 	Points []KBTopicPoint `json:"points,omitempty"`
 }
@@ -4494,6 +4509,9 @@ type KBRecordingSegment struct {
 	Start float64 `json:"start"`
 	End   float64 `json:"end"`
 	Text  string  `json:"text"`
+	// An all-day recording's line number: the segment's 1-based position in its uploads (docs/assistant/day-recap.md);
+	// absent on other recordings.
+	N int `json:"n,omitempty"`
 }
 
 // KBDayParams: kb.day: a chat's messages of one day in the knowledge base's time zone.
@@ -5738,6 +5756,7 @@ func (v requiredJSONView) MarshalJSON() ([]byte, error) {
 // newDef makes a value of each definition, for tests that read examples by definition name.
 var newDef = map[string]func() any{
 	"Manifest":                      func() any { return new(Manifest) },
+	"HostIntegrationSpec":           func() any { return new(HostIntegrationSpec) },
 	"ToolSpec":                      func() any { return new(ToolSpec) },
 	"ToolCheck":                     func() any { return new(ToolCheck) },
 	"ToolArchive":                   func() any { return new(ToolArchive) },

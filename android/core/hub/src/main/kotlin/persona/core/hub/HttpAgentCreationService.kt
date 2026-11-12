@@ -144,6 +144,8 @@ class HttpAgentCreationService(
     }
     private companion object {
         /** A provider outside the computer's scope, or skipped there for its own service: nothing was started. */
-        val ScopeRefusals = setOf("launcher_out_of_scope", "launcher_own_service")
+        val ScopeRefusals = setOf("launcher_out_of_scope", "launcher_own_service",
+            // a start that asked for ultracode where it can't run (#582): nothing started; the words say why
+            "node_outdated", "ultracode_unsupported")
     }
 }

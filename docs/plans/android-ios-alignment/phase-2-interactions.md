@@ -24,7 +24,7 @@ Haptics, hit targets and the feedback layer are in [phase 1](phase-1-tokens-and-
 
 ### Waiting for the owner
 
-**Q4. Where pending requests sit.** iOS stacks the request cards above the composer, which stays usable; past half the page they collapse into "N pending", permissions first, and each card folds to a one-line preview when its header is tapped. Android draws one request at a time in place of the composer, with "n / total" paging, and hides the composer, the queue strip and the source note until the request is answered or folded. `DESIGN_SYSTEM.md` section 4.8 describes paging ("1 of 3, one open at a time"), which matches Android, not the iOS code. Proposal: follow the iOS code, and correct section 4.8 in the same PR. This is a large change (section 1.4).
+**Q4. Where pending requests sit.** iOS stacks the request cards above the composer, which stays usable; past half the page they collapse into "N pending", permissions first, and each card folds to a one-line preview when its header is tapped. Android draws one request at a time in place of the composer, with "n / total" paging, and hides the composer, the queue strip and the source note until the request is answered or folded. `DESIGN_SYSTEM.md` section 4.8 describes paging ("1 of 3, one open at a time"), which matches Android, not the iOS code. Proposal: follow the iOS code, and correct section 4.8 in the same PR. This is a large change (section 1.4). Decided (2026-11-12): follow the iOS code (T6).
 
 **Q6. Text size.** iOS offers Small, Standard and Large, one step below or above the system size; sizes that go with the text (icons, buttons, avatars) scale with it, up to 1.6 times. Android only follows the system font scale, and its icons and controls don't scale. Proposal: the same setting on Android, in Settings › Interface style.
 
@@ -110,6 +110,8 @@ Risks: no selection across messages; a selection may be lost when the message sc
 
 Risks: room on a small phone with the keyboard and two text fields; what a typed message means while a permission blocks the Agent (a product decision); focus and TalkBack order; screenshots in all three styles.
 
+Done (11-12), after Q4 was decided as follow iOS: in every style (the stack is behaviour), `ChatScreen` no longer hides the composer, the queue strip or the source note while a request shows, and `InteractionPanel` draws the cards in the design system's `DecisionStack`: in the order they came while they fit, past the cap scrolling under "N pending" with the permissions first and then the newest (`PendingStack.order`), a new card bringing the stack back to its top. Each card folds on its own (`RequestFolds`), from a tap on its header or its caret, to one line with its title and what it asks (`foldPreview`); the paging, "n / total" and the request list sheet are gone, and ↗ still opens a card's full page. The cap is half the page and never pushes the composer off it (an open tray takes its room first); with the keyboard up the cards take the conversation's room above the rest of the footer (`PendingStack.cap`, measured from the bars). A message typed while a permission waits is sent as any other, as iOS's `sendText` does. The looks, each in its style's `shapes.panel`: Glass a floating card without the handle, inset like the composer; Brief a rounded card with the composer's light shadow; Board a bordered card under its amber rule. Brief and Board change with the behaviour: their docked panel and strip only fitted in place of the composer. Tests `PendingStackTest`, `PendingStackUiTest`, `QuestionCancellationUiTest`, `DecisionSemanticsTest`; shots `PendingStackShotsTest`. Left: TalkBack and focus order checked on a device (the cards read top to bottom, as drawn); iOS's per-kind form caps with the keyboard up (`cardFits`), where Android caps the whole card at the stack's height and scrolls its body inside; the voice call's room (Android has no call bar in the chat).
+
 ### T7. Text size (if Q6 is yes)
 
 **Today.** iOS: `apple/Persona/DesignSystem/TextSize.swift` moves Dynamic Type one step from the system's size, sizes that go with text scale up to 1.6 times, and the setting is in `apple/Persona/Views/Settings/AppearanceSettingsView.swift`. Android: text is in sp, while icons and controls are fixed dp; Settings › Interface style is `android/feature/settings/src/main/kotlin/persona/feature/settings/AppearanceSettings.kt`, and the style is stored through `AppStyle.kt`.
@@ -127,7 +129,7 @@ Risks: overriding density inside the theme instead would compound and could lose
 1. T2 and T1: small, independent PRs.
 2. T3, after the motion tokens of phase 1.
 3. T4, then T5.
-4. T6 and T7, after the owner answers Q4 and Q6.
+4. T6 (Q4 was decided on 2026-11-12: follow iOS), then T7 after the owner answers Q6.
 
 ### Verification
 

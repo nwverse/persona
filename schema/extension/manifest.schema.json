@@ -35,6 +35,7 @@
         "publisher": {"type": "string"},
         "homepage": {"type": "string",
           "pattern": "^https://([A-Za-z0-9._~!$&'()*+,;=:%@-]*@)?[^\\x00-\\x20\\x7f/?#@\\\\^`{|}]+([/?#][^\\x00-\\x1f\\x7f]*)?$"},
+        "icon": {"type": "string", "const": "assets/icon.png", "description": "Source-only square PNG artwork: 256–4096 pixels, at most 2 MiB. Catalog entry icon carries this path; strip it from packaged and runtime manifests for compatibility."},
         "tags": {
           "description": "What the market shows and searches (docs \"Extension market\"): at most 16, each 1 to 24 characters. Packages and indexes carry the manifest without them (hubs before tags refuse an unknown field); the index entry carries them instead.",
           "type": "array", "maxItems": 16, "items": {"type": "string", "minLength": 1, "maxLength": 24}
@@ -62,13 +63,26 @@
           "description": "Command-line programs the hub installs into the extension's own directory and puts first on its PATH (docs \"Command-line programs (tools)\", #4507). Installing them is a permission. Hubs before them refuse the manifest.",
           "type": "array", "maxItems": 8, "items": {"$ref": "#/$defs/ToolSpec"}
         },
-        "auth": {"$ref": "#/$defs/AuthSpec"}
+        "auth": {"$ref": "#/$defs/AuthSpec"},
+        "host_integrations": {
+          "description": "Configured host CLI integrations the program may use through a bounded, read-only typed RPC. IDs never name an executable; writes and arbitrary command lines are not part of this contract.",
+          "type": "array", "maxItems": 1, "items": {"$ref": "#/$defs/HostIntegrationSpec"}
+        }
       },
       "required": ["manifest_version", "id", "name", "version"],
       "anyOf": [
         {"not": {"anyOf": [{"required": ["runtime"]}, {"required": ["node"]}]}},
         {"required": ["engines"], "properties": {"engines": {"anyOf": [{"required": ["extension_protocol"]}, {"required": ["plugin_protocol"]}]}}}
       ]
+    },
+    "HostIntegrationSpec": {
+      "description": "A configured CLI integration, selected by a closed ID rather than by an extension-provided executable.",
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "enum": ["lark-cli"]},
+        "version": {"$ref": "#/$defs/VersionRange"}
+      },
+      "required": ["id", "version"]
     },
     "ToolSpec": {
       "description": "One command-line program. Exactly one of archive and npm.",

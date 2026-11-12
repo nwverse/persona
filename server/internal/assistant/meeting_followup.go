@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -25,6 +26,10 @@ import (
 // followupTranscriptRunes is how much of the transcript of record the seed holds; a longer one gives its start and its
 // end.
 const followupTranscriptRunes = 100000
+
+// followupPhotoRunes is how much of the photos' recognized text the seed holds, the earliest photos' first; the rest
+// is cut (kb_get has it whole).
+const followupPhotoRunes = 20000
 
 // followupRoute is POST /api/v1/recordings/{id}/followup.
 func (s *Service) followupRoute(w http.ResponseWriter, r *http.Request) {
@@ -57,7 +62,9 @@ func (s *Service) followupRoute(w http.ResponseWriter, r *http.Request) {
 	case meetingRunning(rec, m, time.Now()):
 		apierr.WriteCode(w, http.StatusConflict, codeMeetingRunning, i18n.Err("assistant-meeting.meeting_running"))
 		return
-	case rec.Chars == 0 && !e.Store.HasMinutes(rec.ID):
+	// A trimmed recording keeps chars in meta.json with its transcript gone, so its only material is its minutes (an
+	// all-day one past recording_days keeps its recap and no minutes: nothing to seed a follow-up with).
+	case (rec.Chars == 0 || rec.Trimmed()) && !e.Store.HasMinutes(rec.ID):
 		apierr.WriteCode(w, http.StatusConflict, codeNoMaterial, i18n.Err("assistant-meeting.no_material"))
 		return
 	}
@@ -223,6 +230,21 @@ func (s *Service) followupSeed(ctx context.Context, e *kb.Engine, rec kb.Recordi
 	}
 	if rec.Trimmed() {
 		return prompts.RenderMeetingFollowupSeed(d)
+	}
+	// The photos still listed: their words after the minutes, the room's notes on them with the room thread. One the
+	// owner deleted is in neither (a follow-up made before keeps its copy).
+	budget := followupPhotoRunes
+	for _, p := range meetingPhotos(e.PhotoTexts(rec.ID)) {
+		if n := utf8.RuneCountInString(p.Text); n > budget {
+			p.Text, d.PhotosCut = cutRunes(p.Text, budget), true
+		}
+		budget -= utf8.RuneCountInString(p.Text)
+		if p.Caption != "" || p.Text != "" {
+			d.Photos = append(d.Photos, p)
+		}
+		if p.Note != "" {
+			d.Notes = append(d.Notes, p)
+		}
 	}
 	if l, _, err := e.LiveRead(rec.ID); err == nil {
 		for _, a := range l.Asks {

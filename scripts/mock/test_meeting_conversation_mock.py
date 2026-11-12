@@ -315,6 +315,7 @@ class MeetingConversationMockTests(Conversation, unittest.TestCase):
         self.assertIn("[30:00] Bo: Who owns the regression test?", items[0]["text"])
         self.assertTrue(items[0]["text"].endswith("\n\nDraft the email to the vendor."))
         self.assertEqual(items[-1]["role"], "assistant")
+        self.assertLess(items[0]["seq"], items[-1]["seq"])  # apps order by seq: the owner's words come before the reply
         # The same call again: its answer, nothing sent; another body under its id: op_id_reused.
         self.assertEqual(self.call("POST", path, {"id": first, "text": "Draft the email to the vendor."}), (200, made))
         self.assertEqual(len(self.items(sid)), len(items))
@@ -335,6 +336,54 @@ class MeetingConversationMockTests(Conversation, unittest.TestCase):
         self.assertEqual(self.call("POST", f"/api/v1/recordings/{empty}/followup", {"id": bad_id, "text": "x"})[1]["code"], "no_material")
         self.assertEqual(self.call("POST", f"/api/v1/recordings/{empty}/followup", {"id": str(uuid.uuid4()), "text": "x"})[1]["created"], True)
 
+    def test_followup_from_any_recording(self):
+        """Talk about this meeting (#3862 phase 6): a note, and a meeting that never had a room (uploaded while the
+        manager had no meeting conversation), get their follow-up once ended; without ended_at they wait as any does."""
+        ended = "2026-11-10T15:00:00+08:00"
+        note, bare = str(uuid.uuid4()), str(uuid.uuid4())
+        self.upload(note, kind="note", title="Voice memo", segments=LINES, complete=True)
+        self.assertEqual(self.call("POST", f"/api/v1/recordings/{note}/followup", {"id": str(uuid.uuid4()), "text": "x"})[1]["code"], "meeting_running")
+        self.call("POST", "/mock/meeting_conversation", {"on": False})
+        try:
+            self.upload(bare, segments=LINES, complete=True, ended_at=ended)
+        finally:
+            self.call("POST", "/mock/meeting_conversation", {"on": True})
+        self.upload(note, kind="note", title="Voice memo", segments=LINES, complete=True, ended_at=ended, revision=int(time.time() * 1000) + 5)
+        for rid in (note, bare):
+            call = str(uuid.uuid4())
+            status, made = self.call("POST", f"/api/v1/recordings/{rid}/followup", {"id": call, "text": "What did we decide?"})
+            self.assertEqual((status, made["created"], made["client_msg_id"]), (200, True, f"followup-{call}"), rid)
+            first = self.items(made["followup"]["session_id"])[0]["text"]
+            self.assertIn("Bo: Who owns the regression test?", first)
+            self.assertTrue(first.endswith("\n\nWhat did we decide?"))
+            self.assertEqual(self.meta(rid)["followup"], made["followup"])
+            self.assertNotIn("room", self.meta(rid))  # no room was made for it
+
+    def test_a_trimmed_recording_without_minutes_has_nothing_to_talk_about(self):
+        """A trimmed recording's material is its minutes alone (the hub's meta.json keeps `chars`): an all-day recording
+        past recording_days keeps its recap and has no minutes."""
+        day = str(uuid.uuid4())
+        status, _ = self.upload(day, kind="day", day="2026-11-10", tz="UTC", part=1, started_at="2026-11-10T08:00:00Z", device="watch",
+                                duration=0, coverage={"to": 10000, "gaps": []}, segments=LINES, complete=True)
+        self.assertEqual(status, 200)
+        self.assertEqual(self.call("POST", "/mock/recording_trim", {"id": day})[0], 200)
+        self.assertNotIn("minutes", self.call("GET", f"/api/v1/kb/recordings/{day}")[1]["detail"])
+        self.assertEqual(self.call("POST", f"/api/v1/recordings/{day}/followup", {"id": str(uuid.uuid4()), "text": "x"})[1]["code"], "no_material")
+
+    def test_kb_search_takes_a_kind(self):
+        """GET /api/v1/kb-search?kind= searches one kind as kb_search does (#3862 phase 6); an unknown kind is a 400."""
+        rid = str(uuid.uuid4())
+        self.upload(rid, title="App review", segments=LINES, complete=True)
+        kinds = lambda hits: {h["path"].split("/", 1)[0] for h in hits}
+        self.assertLessEqual({"projects", "recordings"}, kinds(self.call("GET", "/api/v1/kb-search?q=app")[1]["hits"]))
+        status, only = self.call("GET", "/api/v1/kb-search?q=app&kind=recordings")
+        self.assertEqual((status, kinds(only["hits"])), (200, {"recordings"}))
+        self.assertTrue(any(rid in h["path"] for h in only["hits"]))
+        self.assertNotIn("recordings", kinds(self.call("GET", "/api/v1/kb-search?q=app&kind=projects")[1]["hits"]))
+        results = self.call("GET", "/api/v1/kb-search?q=app&kind=recordings&results=1")[1]["results"]
+        self.assertTrue(results and {r["entry"]["kind"] for r in results} == {"recordings"})
+        self.assertEqual(self.call("GET", "/api/v1/kb-search?q=app&kind=nope")[0], 400)
+
     def test_just_me_goes_to_the_main_chat(self):
         rid = str(uuid.uuid4())
         self.upload(rid, room={"attendance": "off"})
@@ -345,20 +394,46 @@ class MeetingConversationMockTests(Conversation, unittest.TestCase):
         self.assertEqual((status, out["client_msg_id"]), (200, f"just-me-{cid}"))
         main = self.call("GET", "/api/v1/assistant")[1]["main"]
         self.assertEqual(out["conversation"], {"machine_id": "server", "session_id": main})
-        sent = self.items(main)[-1]
-        self.assertEqual(sent["client_msg_id"], f"just-me-{cid}")
+        sent = next(x for x in self.items(main) if x.get("client_msg_id") == f"just-me-{cid}")
         self.assertTrue(sent["text"].startswith('<persona-context kind="context" title="Meeting: Design review"'))
         self.assertTrue(sent["text"].endswith("\n\nShould I push back on the vendor?"))
         self.assertEqual(self.call("POST", path, {"id": cid, "text": "Should I push back on the vendor?"}), (200, out))
-        self.assertEqual(self.items(main)[-1]["id"], sent["id"])
+        self.assertEqual([x["id"] for x in self.items(main) if x.get("client_msg_id") == f"just-me-{cid}"], [sent["id"]])
         self.assertEqual(self.call("POST", path, {"id": cid, "text": "other"})[1]["code"], "op_id_reused")
         self.assertEqual(self.live(rid)["asks"], [])  # nothing of it is kept with the recording
+        for _ in range(40):  # the main chat answers a moment later, after the owner's message
+            after = [x for x in self.items(main) if x["seq"] > sent["seq"] and x["role"] == "assistant"]
+            if after: break
+            time.sleep(0.1)
+        self.assertTrue(after)
         note = str(uuid.uuid4())
         self.upload(note, kind="note")
         self.assertEqual(self.call("POST", f"/api/v1/recordings/{note}/just-me", {"id": str(uuid.uuid4()), "text": "x"})[1]["code"], "not_meeting")
         self.upload(rid, ended_at="2026-11-10T15:00:00+08:00", room={"attendance": "off"})
         self.assertEqual(self.call("POST", path, {"id": str(uuid.uuid4()), "text": "x"})[1]["code"], "meeting_ended")
         self.assertEqual(self.call("POST", path, {"id": cid, "text": "Should I push back on the vendor?"}), (200, out))  # the receipt first
+
+    def test_a_fresh_start_takes_just_me_out_of_the_main_chat(self):
+        # A UI test's Just me question and the main chat's reply must not show in a later test's main chat.
+        rid = str(uuid.uuid4())
+        self.upload(rid, room={"attendance": "listener"})
+        main = self.call("GET", "/api/v1/assistant")[1]["main"]
+        kept = [x["id"] for x in self.items(main)] if main else []
+        cid = str(uuid.uuid4())
+        self.assertEqual(self.call("POST", f"/api/v1/recordings/{rid}/just-me", {"id": cid, "text": "Who writes the notes?"})[0], 200)
+        main = self.call("GET", "/api/v1/assistant")[1]["main"]
+        self.wait(lambda: any(x["role"] == "assistant" and x["id"] not in kept for x in self.items(main)), "the reply")
+        self.call("POST", "/mock/recording_minutes", {"mode": "pending"})
+        after = self.call("GET", "/api/v1/assistant")[1]["main"]
+        left = [x["id"] for x in self.items(after)] if after else []
+        self.assertEqual(left, kept)  # the question and its reply are gone, everything before stays
+        # A reply still on its timer when the fresh start comes is never written.
+        self.upload(rid, room={"attendance": "listener"})
+        self.call("POST", f"/api/v1/recordings/{rid}/just-me", {"id": str(uuid.uuid4()), "text": "And the slides?"})
+        self.call("POST", "/mock/recording_minutes", {"mode": "pending"})
+        time.sleep(1.5)
+        after = self.call("GET", "/api/v1/assistant")[1]["main"]
+        self.assertEqual([x["id"] for x in self.items(after)] if after else [], kept)
 
     def test_meeting_live_events_are_content_free(self):
         next_of = self.websocket()

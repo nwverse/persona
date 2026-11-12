@@ -99,8 +99,21 @@ under its `logs/` subdirectory. Do not enable shell tracing or print credentials
 
 A missing baseline runs that target once. Later checks compare the last successful commit directly with the newest branch HEAD,
 including deleted paths. Failure does not advance that baseline; two failures at the same HEAD suspend that target until another
-HEAD appears. Lock contention exits 75 and is a deferral, not a failure. Successful actions only log; failures invoke the configured
-notification command, retaining failed notifications in a durable outbox for subsequent delivery attempts.
+HEAD appears. Lock contention exits 75 and is a deferral, not a failure. The deploy script's explicit checkout-behind-origin
+message with exit 2 also defers the target without notification or a failure-budget charge; the next round fetches the newest HEAD.
+Other exit-2 errors still count as failures, and the freshness guard is never bypassed.
+
+Failures invoke the configured notification command once per target and consecutive failure cause, even across new commits.
+The worker hashes the step/result and first diagnostic line (or first nonempty output line), normalizing revision identifiers and
+timestamps; raw summaries never enter notification payloads or state. Each target's successful action clears its remembered failure, so the
+same cause notifies again if it recurs after recovery. Successful actions only log, including recovery; there is no extra recovery
+push. Preflight failures have a separate worker identity, cleared when preflight completes. Lock contention and stale checkouts
+neither clear incidents nor create them. Failed notification deliveries remain in the durable at-least-once outbox, retried without
+queuing another copy of a continuing failure. There is no periodic reminder for an unchanged cause.
+
+For a worker upgrade, pause future timer runs and let any active service finish, copy the verified main worker to its installed
+path with mode 0600, and resume the same timer. Keep configuration, targets, retry state, checkpoints, adapters and unit files intact;
+record the source revision and installed file hash in the private STATE document.
 
 Use a dedicated detached clean worktree on the hub and another on the build computer. The worker refuses to discard dirty files.
 `scripts/operations/hub_action.py deploy` retains the deployment lock through a live API and serving-binary verification;
@@ -296,7 +309,10 @@ python3 scripts/release/asc_testflight.py external   # create the group, enable/
   (requires `app.push_relay` in the release config and successful device registration; see `docs/operations/push-relay.md`); older versions without a relay only receive live updates while the App is open.
   For Gmail login they must create their own Google OAuth client and put it in their manager's `manager.json` on the hub machine (`docs/extensions/mail.md`).
 - Test info needs a privacy policy URL (`app_store.external.privacy_url`); Chinese and English descriptions live in `BETA_INFO` in `asc_testflight.py`.
-- Without a hub, the App only has a pairing page: review notes (`review.notes`) must explain that this App works with a self-hosted hub, or reviewers may ask how to use it.
+- Without a hub, reviewers can choose **"Try it first (made-up data)"** on the welcome page. This offline demo ships in Release,
+  needs no account or server, and uses bundled fictional data with canned replies; external operations are not performed
+  (`docs/apple/ios.md`, "Demo mode"). Review notes (`review.notes`) must give that entry and its limits, and explain that full use
+  requires the user's own self-hosted hub. Never give reviewers access to a developer's personal hub or private data.
 
 ## Mac version (2026-11-02)
 
@@ -462,8 +478,9 @@ A private configuration has only these fields, with no secrets:
   commit's build is VALID and in Internal. The embedded Watch app shares that
   archive. The frozen native Mac app is not restarted by a generic release;
   desktop uses the web artifact and Persona Link.
-- `android` uses the existing signed-APK pipeline (`android_release_worker.py`)
-  and its private signing configuration. If that configuration is absent, the
+- `android` runs `scripts/release/android_tag_release.py` with the existing
+  signed-APK pipeline's private configuration (`android_release_worker.py`;
+  "Android on version tags" below). If that configuration is absent, the
   platform is blocked and reported as such, not silently omitted. A signed APK
   must pass package, version, source and certificate checks before upload.
 - `hub` uses `publish.sh`, its publication lock, and live download verification;
@@ -478,15 +495,54 @@ A private configuration has only these fields, with no secrets:
   sha256s. Every binary must be its build, and this machine's `personad
   version -v` must say its version and build. Otherwise the platform fails
   (#4522: v0.2.1's manifest named another build than its binaries). The
-  downloads go up first; `VERSION`, `SHA256SUMS` and then `latest.json` go
-  last, each on its own, so a hub reading `releases/latest/download` never sees
-  a manifest whose files are not there yet.
+  downloads go up first; `VERSION`, `SHA256SUMS`, `android.json` and then
+  `latest.json` go last, each on its own, so a hub reading
+  `releases/latest/download` never sees a manifest whose files are not there yet.
+- A receipt that carries `android.json` (the Android platform's) must ship the
+  APK it names, at its size and sha256, for the tag's version.
 
 For the first release, merge this consumer's PR before pushing `v0.1.0` from
 the merged `main` commit. The public workflow creates the Release and image;
 the separately configured private loops then publish their platforms and
 attach verified artifacts. Inspect the Release assets and every platform's
 actual store/publication receipt before declaring the whole release complete.
+
+### Android on version tags
+
+The `android` tag-release configuration runs the tag's own publisher, with the main-branch worker's private
+configuration, so an APK from a Release and one a hub got from the main branch share their package, certificate and
+version codes and update each other:
+
+```json
+"command": ["python3", "{worktree}/scripts/release/android_tag_release.py",
+            "--config", "/absolute/path/to/android-release-worker.json",
+            "--worktree", "{worktree}", "--commit", "{commit}", "--version", "{version}",
+            "--receipt", "/absolute/path/to/private/platform-state/artifacts.json"]
+```
+
+- It builds the tag's commit with the worker's tests, R8 check and version code (`version_base` + first-parent commit
+  count; the same commit gets the same code in both lanes), named with the release version (`0.3.0`) instead of the
+  main branch's `0.1.<code>-<commit>`. Runs live in the worker's `state_directory` under `tags/<version>`, apart from
+  the main branch's `runs/`.
+- It signs with the worker's `signing_queue` (the signing host, `android_signing_worker.py`) when the configuration has
+  one, else with `local_signing` on this machine: `{"keystore", "alias", "password_command", "key_password_command"?,
+  "sdk_dir"?}`, the signing host's own fields. With neither it stops with a prerequisite error. It holds the worker's
+  `worker.lock` while building and signing (the queue takes one request at a time), waiting up to
+  `lock_timeout_seconds` (default 7200) for a main-branch cycle to finish.
+- `aapt2` and `apksigner` then read the signed APK itself (package, version code and name, certificate against
+  `certificate_sha256`); only then does it write the receipt, with two assets: `Persona-<version>-android.apk` and
+  `android.json`. The SDK tools come from `build_environment` (`ANDROID_HOME`), as the build's do.
+- `android.json` is the hub's `apps/android/latest.json` (what `publish_android_apk.py` writes) plus the release
+  version and the APK's file name beside it:
+
+  ```json
+  {"version": "0.3.0", "name": "Persona-0.3.0-android.apk", "package_name": "<application id>",
+   "version_code": 105432, "version_name": "0.3.0", "min_sdk": 29, "certificate_sha256": "<64 hex>",
+   "sha256": "<64 hex>", "size": 19476047, "source_sha": "<commit>", "notes": ""}
+  ```
+
+  A hub reads it beside `latest.json` to offer the APK to its phones (#5563). A prerelease tag's APK is attached to
+  its Release, but `releases/latest/download` never points at a prerelease.
 
 ## Android publisher repository migration and status retries
 

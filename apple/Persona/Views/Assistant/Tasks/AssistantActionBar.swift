@@ -360,7 +360,7 @@ struct AssistantActionBar: View {
             HStack(spacing: Theme.Space.s) {
                 ForEach(ActionTray.allCases) { entry($0, count: content.count($0)) }
                 if ComputerActivityPill.shows(computer) {
-                    ComputerActivityPill(activity: computer)
+                    ComputerActivityPill(activity: computer).background(Theme.pageBackground, in: .capsule) // as the entries
                 }
             }
             .padding(.horizontal, Theme.Space.xs)
@@ -369,13 +369,7 @@ struct AssistantActionBar: View {
             #endif
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        #if !os(macOS)
-        // On the whole bar, after its full-width frame (#3643): as wide as the chat, and over whatever is topmost, the
-        // capsules or the open tray. On the capsule row it was as wide as the capsules and under the tray.
-        .dockChatFade()
-        // Drawn under the question and the @ list over it in the footer, so the fade reaches only the chat.
-        .zIndex(-1)
-        #endif
+        // No fade of its own: the chat runs on behind the bar and fades out there (`FooterFog`, #3696).
         .onChange(of: conversation) { open = nil }
         #if DEBUG
         .onAppear {
@@ -428,9 +422,12 @@ struct AssistantActionBar: View {
         } label: {
             HStack(spacing: Theme.Space.xs) {
                 Text(tray.title)
-                if count > 0 { Text(count > 99 ? "99+" : "\(count)").monospacedDigit() }
+                if let text = CountBadge.text(count) { Text(text).monospacedDigit() }
             }
             .dockCapsule(look)
+            // On the page under its see-through fill: the chat fading out behind the row does not read through the
+            // words (#3696); with nothing behind, the same pixels as before.
+            .background(Theme.pageBackground, in: .capsule)
             .fixedSize()
         }
         .buttonStyle(.plain)
@@ -449,7 +446,10 @@ struct AssistantActionBar: View {
                     open = nil
                     store.showBoard = true
                 } label: {
+                    // A finger's height around the capsule (#5392).
                     Text("All").dockCapsule().fixedSize()
+                        .tapTargetHeight()
+                        .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("action-tray.board")
@@ -458,14 +458,15 @@ struct AssistantActionBar: View {
                 } label: {
                     ThemedIcon(Theme.Icon.close).font(Theme.Font.labelStrong).foregroundStyle(.secondary)
                         .scaledFrame(width: Theme.Size.badge, height: Theme.Size.badge)
-                        .contentShape(.circle)
+                        .tapTargetFrame()
+                        .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Close")
                 .accessibilityIdentifier("action-tray.close")
             }
-            .padding(.horizontal, Theme.Space.m)
-            .padding(.vertical, Theme.Space.s)
+            // No vertical padding: the 44 pt targets are the row's height, as the capsule and its padding were.
+            .padding(.leading, Theme.Space.m)
             if rows.isEmpty && (tray == .needsYou || content.shelved.isEmpty) {
                 Text(tray.empty).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(2)
                     .padding(.horizontal, Theme.Space.m)

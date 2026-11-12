@@ -560,6 +560,10 @@ func (h *Hub) fleetRoutesRelayed(api *http.ServeMux) {
 			writeErr(w, http.StatusBadRequest, err)
 			return
 		}
+		r, ok := h.handoffGate(w, r, r.PathValue("id"), res) // who may approve a hand-off card (secret_handoff.go)
+		if !ok {
+			return
+		}
 		if answerOnly(r) && (!answerMayResolve(res) || h.picksFreeText(r.PathValue("id"), res)) {
 			writeErr(w, http.StatusForbidden, errors.New("this device can only answer with a card's own choices"))
 			return
@@ -638,6 +642,16 @@ func (h *Hub) fleetAppCall(ctx context.Context, p assistantwire.AppCall) (json.R
 
 // ---- the pushes the manager decided on ----
 
+// pushRecordingID is the recording id a manager's push names (assistantwire.Notification.RecordingID), lowercased, or
+// "" when it is not a recording id (a UUID): the push carries it as it is and an app opens it.
+func pushRecordingID(id string) string {
+	id = strings.ToLower(strings.TrimSpace(id))
+	if !clientOpUUID.MatchString(id) {
+		return ""
+	}
+	return id
+}
+
 // deliverPush is deliverPushFrom the assistant the hub starts.
 func (h *Hub) deliverPush(n assistantwire.Notification) error {
 	return h.deliverPushFrom(assistantwire.AssistantID, n)
@@ -667,8 +681,9 @@ func (h *Hub) deliverPushFrom(from string, n assistantwire.Notification) error {
 		}
 	}
 	switch n.Kind {
-	case assistantwire.NotifyPush:
-		h.notifyDone(from, "assistant", n.DeviceID, n.Subtitle, n.SessionID, n.Title, n.Body, pushWants{})
+	case assistantwire.NotifyPush: // one with an id shows once, sent again however late (a day recap's push)
+		h.notifyDoneUnder(from, "assistant", n.DeviceID, n.Subtitle, n.SessionID, n.Title, n.Body, pushWants{}, managerPushCollapseID(from, n.ID),
+			pushRecordingID(n.RecordingID))
 	case assistantwire.NotifyDone:
 		h.notifyDone(from, "done", n.DeviceID, n.Subtitle, n.SessionID, n.Title, n.Body,
 			pushWants{Kind: "done", Took: time.Duration(n.TookMS) * time.Millisecond, Long: time.Duration(n.LongMS) * time.Millisecond})

@@ -126,7 +126,7 @@ func TestMeetingRoomStarts(t *testing.T) {
 	start := sends[0]
 	guest, _ := start["guest"].(map[string]any)
 	text, _ := start["text"].(string)
-	if start["new_session_id"] != sid || start["client_msg_id"] != "meeting-"+meetingRec || guest["kind"] != "meeting" || len(guest["tools"].([]any)) != 2 || start["is_main"] != false ||
+	if start["new_session_id"] != sid || start["client_msg_id"] != "meeting-"+meetingRec || guest["kind"] != "meeting" || len(guest["tools"].([]any)) != 3 || start["is_main"] != false ||
 		start["config_dir"] != meetingProfile || !strings.Contains(text, "Title: Design review") || !strings.Contains(text, `"kind":"meeting"`) || !strings.Contains(text, "Role: participant") {
 		t.Fatalf("start %v", start)
 	}
@@ -335,7 +335,7 @@ func TestMeetingRoomTools(t *testing.T) {
 	for _, tl := range tools {
 		names = append(names, tl.Name)
 	}
-	if !slices.Equal(names, []string{"meeting_lines", "meeting_earlier"}) {
+	if !slices.Equal(names, []string{"meeting_lines", "meeting_earlier", "meeting_photo_note"}) {
 		t.Fatalf("tools %v", names)
 	}
 	d := newFleetDevs() // the nodes' requests are the fleet's
@@ -457,6 +457,24 @@ func TestMeetingRoomAsk(t *testing.T) {
 	}
 	// The same id with another spoken flag is another request.
 	wantCode(t, r.do("POST", askPath(meetingRec), "", map[string]any{"id": askOne, "question": "Who owns the test?"}, http.StatusConflict), codeOpIDReused)
+}
+
+// A main chat on the Agent SDK does not keep its room from starting: the room takes the main chat's launcher and model
+// on the CLI, the only runtime a guest conversation runs on.
+func TestMeetingRoomRunsOnTheCLI(t *testing.T) {
+	r := newRoomFixture(t)
+	if err := r.s.saveModelRecord(context.Background(), "assistant", 0, ModelBinding{Runtime: proto.AssistantRuntimeAgentSDK}); err != nil {
+		t.Fatal(err)
+	}
+	main := map[string]any{}
+	if err := r.s.applyModel(context.Background(), "assistant", main); err != nil || main["runtime"] != proto.AssistantRuntimeAgentSDK {
+		t.Fatalf("the main chat's runtime %v %v", main, err)
+	}
+	r.roomUp(meetingRec, "participant")
+	sends := r.sends()
+	if len(sends) != 1 || sends[0]["runtime"] != nil || sends[0]["launcher"] != main["launcher"] || sends[0]["model_fingerprint"] == main["model_fingerprint"] {
+		t.Fatalf("room start %v, main chat %v", sends, main)
+	}
 }
 
 // A room whose turn ended in Claude Code's own words for a failed request (signed out) gives no answer: the ask fails

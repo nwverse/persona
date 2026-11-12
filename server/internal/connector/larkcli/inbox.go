@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,6 +25,15 @@ const (
 	inboxTopicLimit      = 2048
 	inboxSeedPages       = 2
 	inboxInitialLookback = 2 * time.Minute
+	// Message search indexes most messages at once but some only minutes later (a direct message was seen
+	// arriving in search about ten minutes after it was sent). The cursor keeps this much behind the newest
+	// message it saw so a late-indexed one is still inside the next rounds' window; the seen ledger drops
+	// what was already collected.
+	inboxCursorOverlap = 10 * time.Minute
+	// Direct chats are also read from their own history (sweepDirectChats), which has no indexing delay:
+	// the most recently active inboxDirectChats of them, each back to inboxDirectLookback.
+	inboxDirectChats    = 10
+	inboxDirectLookback = time.Hour
 )
 
 // StateStore is the small part of the manager's Postgres-backed settings store
@@ -89,8 +99,9 @@ func (c *Connector) SetPollInterval(interval time.Duration) {
 	c.inboxPoll = interval
 }
 
-// Poll performs one bounded Inbox round. It is exported for focused connector
-// tests and for embedders that already own a scheduler.
+// Poll performs one bounded Inbox round for both chat messages and watched
+// document comments. It is exported for focused connector tests and for
+// embedders that already own a scheduler.
 func (c *Connector) Poll(ctx context.Context) (bool, error) {
 	if c == nil || c.runner == nil {
 		return false, &adapter.Error{Kind: adapter.KindNotInstalled}
@@ -100,8 +111,20 @@ func (c *Connector) Poll(ctx context.Context) (bool, error) {
 		c.inboxThings = map[string]connector.InboxThing{}
 		c.inboxCollecting = false
 		c.inboxMu.Unlock()
+		c.clearDocumentThings()
 		return false, nil
 	}
+	chatMoved, chatErr := c.pollChat(ctx)
+	docMoved := c.pollDocumentsRound(ctx)
+	if chatErr != nil {
+		return chatMoved || docMoved, chatErr
+	}
+	return chatMoved || docMoved, nil
+}
+
+// pollChat performs the bounded chat Inbox round. Source selection is handled
+// by Poll so the document poller and chat poller share one primary-source rule.
+func (c *Connector) pollChat(ctx context.Context) (bool, error) {
 	auth, err := c.runner.AuthStatus(ctx)
 	if err != nil {
 		return false, err
@@ -193,6 +216,17 @@ func (c *Connector) Poll(ctx context.Context) (bool, error) {
 
 	// Search results are normally newest first, but ordering is not part of
 	// the shortcut contract. Sort before applying the consecutive grouping rule.
+	// Direct chats read from their own history: what search has not indexed yet still comes in. A failed sweep
+	// doesn't lose what search found; the round keeps it and reports the error at the end.
+	direct, directErr := c.sweepDirectChats(ctx)
+	for _, message := range direct {
+		if isBoundAppMessage(message, auth.AppID) {
+			c.markSeen(message.MessageID)
+			continue
+		}
+		found = append(found, message)
+	}
+
 	sort.SliceStable(found, func(i, j int) bool {
 		ti, tj := messageTime(found[i]), messageTime(found[j])
 		if ti.Equal(tj) {
@@ -220,7 +254,7 @@ func (c *Connector) Poll(ctx context.Context) (bool, error) {
 
 	c.inboxMu.Lock()
 	if !newest.IsZero() {
-		candidate := newest.Add(-time.Minute).UTC()
+		candidate := newest.Add(-inboxCursorOverlap).UTC()
 		if previous, err := time.Parse(time.RFC3339Nano, state.Cursor); err == nil && previous.After(candidate) {
 			candidate = previous
 		}
@@ -236,22 +270,85 @@ func (c *Connector) Poll(ctx context.Context) (bool, error) {
 		return changed, err
 	}
 	c.inboxMu.Unlock()
-	return changed, nil
+	return changed, directErr
 }
 
-// Watch owns the two-minute background poll and emits the protocol's inbox
-// change event only when a round produced a new or updated item.
+// sweepDirectChats reads the most recently active direct chats from their own history, back to inboxDirectLookback.
+// Message search is the round's main source, but it indexes some messages minutes late: one indexed after the cursor
+// had passed its time was never collected. Every direct message belongs in the Inbox, and chat history has no
+// indexing delay, so these chats are read here as well; the seen ledger drops what search already delivered. Search
+// results carry the chat's type and partner; history does not, so they are filled in from the chat list.
+func (c *Connector) sweepDirectChats(ctx context.Context) ([]adapter.Message, error) {
+	list, err := c.runner.ListDirectChats(ctx, inboxDirectChats)
+	if err != nil {
+		return nil, err
+	}
+	floor := c.currentTime().Add(-inboxDirectLookback).UTC()
+	start := floor.Format(time.RFC3339)
+	var out []adapter.Message
+	read := 0
+	for _, chat := range list.Chats {
+		if chat.ChatID == "" || (chat.ChatMode != "p2p" && chat.ChatType != "p2p") {
+			continue
+		}
+		if read == inboxDirectChats {
+			break
+		}
+		read++
+		page, err := c.runner.ListMessagesSince(ctx, chat.ChatID, start, 50)
+		if err != nil {
+			return out, err
+		}
+		partner := directPartner(chat)
+		for _, message := range page.Messages {
+			if message.MessageID == "" || message.Deleted || (message.ChatID != "" && message.ChatID != chat.ChatID) {
+				continue
+			}
+			// The CLI prints minutes; a message in floor's own minute reads as just before it.
+			if t := messageTime(message); !t.IsZero() && t.Before(floor.Add(-time.Minute)) {
+				continue
+			}
+			message.ChatID = firstNonEmpty(message.ChatID, chat.ChatID)
+			message.ChatType = "p2p"
+			message.ChatName = firstNonEmpty(message.ChatName, chat.Name)
+			if len(message.ChatPartner) == 0 {
+				message.ChatPartner = partner
+			}
+			out = append(out, message)
+		}
+	}
+	return out, nil
+}
+
+// directPartner is the chat partner a search result would carry, from a direct chat's list entry.
+func directPartner(chat adapter.Chat) json.RawMessage {
+	if chat.P2PTargetID == "" && chat.Name == "" {
+		return nil
+	}
+	senderType := "user"
+	if strings.EqualFold(chat.P2PTargetType, "bot") {
+		senderType = "app"
+	}
+	b, err := json.Marshal(map[string]string{"id": chat.P2PTargetID, "sender_type": senderType, "name": chat.Name})
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+// Watch owns the background poll and emits the protocol's inbox change event
+// only when either poller produced a new or updated item.
 func (c *Connector) Watch(ctx context.Context, changed func(connector.Scope)) error {
 	for {
 		moved, err := c.Poll(ctx)
+		if moved && changed != nil {
+			changed(connector.ScopeInbox)
+		}
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
 			return err
-		}
-		if moved && changed != nil {
-			changed(connector.ScopeInbox)
 		}
 		c.inboxMu.Lock()
 		wait := c.inboxPoll
@@ -275,14 +372,21 @@ func (c *Connector) Watch(ctx context.Context, changed func(connector.Scope)) er
 // method never invokes lark-cli, matching inbox.collect's protocol semantics.
 func (c *Connector) Collect(context.Context) ([]connector.InboxThing, error) {
 	c.inboxMu.Lock()
-	defer c.inboxMu.Unlock()
-	if !c.inboxCollecting {
-		return []connector.InboxThing{}, nil
-	}
 	out := make([]connector.InboxThing, 0, len(c.inboxThings))
-	for _, thing := range c.inboxThings {
+	if c.inboxCollecting {
+		for _, thing := range c.inboxThings {
+			out = append(out, thing)
+		}
+	}
+	c.inboxMu.Unlock()
+
+	c.ensureDocuments()
+	c.docs.mu.Lock()
+	for _, thing := range c.docs.things {
 		out = append(out, thing)
 	}
+	c.docs.mu.Unlock()
+
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].At.Equal(out[j].At) {
 			return out[i].Thread < out[j].Thread
@@ -297,6 +401,9 @@ func (c *Connector) Collect(context.Context) ([]connector.InboxThing, error) {
 // the L4 plan. A message id lets us preserve a topic reply; a chat-only thing
 // falls back to messages-send.
 func (c *Connector) Reply(ctx context.Context, r connector.InboxReply) error {
+	if strings.HasPrefix(r.Thread, "doc:") {
+		return fmt.Errorf("lark-cli document comments are read-only")
+	}
 	if c == nil || c.runner == nil {
 		return &adapter.Error{Kind: adapter.KindNotInstalled}
 	}
@@ -325,6 +432,9 @@ func (c *Connector) Reply(ctx context.Context, r connector.InboxReply) error {
 }
 
 func (c *Connector) inboxShouldCollect(ctx context.Context) bool {
+	if c == nil || c.runner == nil {
+		return false
+	}
 	c.inboxMu.Lock()
 	prefer, available := c.inboxPrefer, c.gatewayAvailable
 	c.inboxMu.Unlock()
@@ -618,7 +728,22 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 		Last:     latest.MessageID,
 		ReplyTo:  latest.MessageID,
 		CanReply: latest.MessageID != "",
+		Rules:    c.rules(),
 		Tags:     tags,
+	}
+	// Keep the CLI's link opaque: it includes the message position and, for a
+	// topic, the source thread. Do not guess a link from a sender or a thread id.
+	for _, message := range contextMessages {
+		if message.MessageID != latest.MessageID || message.ChatID != group.chatID || group.threadID != "" && topicID(message) != group.threadID {
+			continue
+		}
+		link, err := url.Parse(message.MessageAppLink)
+		if err == nil && link.Scheme == "https" && link.User == nil &&
+			(link.Host == "applink.feishu.cn" || link.Host == "applink.larksuite.com") &&
+			(link.Path == "/client/chat/open" || link.Path == "/client/thread/open") {
+			thing.OpenURL = message.MessageAppLink
+		}
+		break
 	}
 	if thing.At.IsZero() {
 		thing.At = time.Now().UTC()
@@ -819,7 +944,7 @@ func messageTime(message adapter.Message) time.Time {
 	// lark-cli 1.0.99 prints message times as local wall-clock minutes ("2006-01-02 15:04") in the time zone of the
 	// machine running it, which is the hub's. Without this the Inbox cursor never moved past its first two minutes.
 	for _, layout := range []string{"2006-01-02 15:04:05", "2006-01-02 15:04"} {
-		if t, err := time.ParseInLocation(layout, value, time.Local); err == nil {
+		if t, err := time.ParseInLocation(layout, value, cliLocation()); err == nil {
 			return t.UTC()
 		}
 	}

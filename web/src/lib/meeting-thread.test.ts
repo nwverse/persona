@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { RecordingAsk } from "./kb";
 import { meetingMeta } from "./kb";
-import { followupThread, fromMeeting, meetingClock, meetingLines, meetingRunning, newerParts, roomState, roomThread } from "./meeting-thread";
+import { followupThread, fromMeeting, hasMaterial, meetingClock, meetingLines, meetingRunning, newerParts, offersTalk, photoOf, roomState, roomThread } from "./meeting-thread";
 import type { Item } from "./types";
 
 const rid = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -89,6 +89,61 @@ describe("the room's thread", () => {
   });
 });
 
+// Phase 3: a photo goes into the room as its image and a line from the meeting, both `photo-<id>`; a deleted one that went
+// there gets a line withdrawing it (`photo-withdrawn-<id>`).
+describe("photos in the room's thread", () => {
+  const photoID = "33333333-3333-4333-8333-333333333333";
+  const otherID = "44444444-4444-4444-8444-444444444444";
+  const photoText = (id: string, n: number) => item({
+    client_msg_id: `photo-${id}`,
+    source: { kind: "meeting", title: "Design review" },
+    text: `${source()}Photo ${n} was taken in the meeting at 14:32. Describe what matters in it with meeting_photo_note, then write nothing.\n\n<persona-context kind="context" title="Photo ${n} · 14:32" url="">\nCaption: Whiteboard\nText recognized on the phone: Q3 budget\n</persona-context>`,
+  });
+  const photoImage = (id: string) => item({ client_msg_id: `photo-${id}`, kind: "image", image: { mime: "image/jpeg", lazy: true }, source: { kind: "meeting" } });
+
+  it("makes the image and the text of one photo one entry, by the photo's id", () => {
+    const entries = roomThread([
+      header,
+      photoImage(photoID.toUpperCase()),
+      photoText(photoID.toUpperCase(), 1),
+      item({ role: "assistant", kind: "tool_use", tool_name: "mcp__persona__meeting_photo_note", tool_input: { photo: 1, text: "A budget table." } }),
+      item({ role: "user", kind: "tool_result", tool_use_id: "t1", text: "Noted." }),
+      photoText(otherID, 2),
+      photoImage(otherID),
+      batch(["[32:10] Ada: Next item."]),
+    ], rid);
+    expect(entries.map((e) => e.kind)).toEqual(["joined", "photo", "photo", "lines"]);
+    expect(entries.filter((e) => e.kind === "photo").map((e) => ("photo" in e ? e.photo : ""))).toEqual([photoID, otherID]);
+    // Nothing of the photo's text or the note's tool call reads as a batch, the end batch or an answer.
+    expect(entries.some((e) => e.kind === "ended" || e.kind === "answer" || e.kind === "image")).toBe(false);
+  });
+
+  it("leaves out the line withdrawing a deleted photo, which would otherwise read as the meeting's end", () => {
+    const withdrawn = item({
+      client_msg_id: `photo-withdrawn-${photoID}`,
+      source: { kind: "meeting", title: "Design review" },
+      text: `${source()}Photo 1 was withdrawn: do not describe or use it again. Write nothing in reply.`,
+    });
+    expect(roomThread([photoText(photoID, 1), withdrawn], rid).map((e) => e.kind)).toEqual(["photo"]);
+    // The same line without its id is the end batch's shape: the id is what tells them apart.
+    expect(roomThread([{ ...withdrawn, client_msg_id: undefined }], rid).map((e) => e.kind)).toEqual(["ended"]);
+  });
+
+  it("knows a photo's message id and nothing else", () => {
+    expect(photoOf(`photo-${photoID}`)).toBe(photoID);
+    expect(photoOf(`PHOTO-${photoID.toUpperCase()}`)).toBe(photoID);
+    expect(photoOf(`photo-withdrawn-${photoID}`)).toBeUndefined();
+    expect(photoOf(`ask-${photoID}-1`)).toBeUndefined();
+    expect(photoOf("photo-1")).toBeUndefined();
+    expect(photoOf(undefined)).toBeUndefined();
+  });
+
+  it("keeps a photo the owner's app sent as an image, and a follow-up's images as they were", () => {
+    expect(roomThread([item({ role: "user", kind: "image", client_msg_id: "web-1" })], rid).map((e) => e.kind)).toEqual(["image"]);
+    expect(followupThread([item({ role: "user", kind: "image", client_msg_id: `followup-${photoID}` })]).map((e) => e.kind)).toEqual(["image"]);
+  });
+});
+
 describe("the follow-up's thread", () => {
   it("folds the seed and keeps the owner's words and the replies", () => {
     const entries = followupThread([
@@ -126,6 +181,30 @@ describe("meeting fields", () => {
     for (const state of ["starting", "ready", "unavailable", "something_new"]) expect(meetingRunning(ended, { state }, now), state).toBe(true);
     for (const state of ["none", "ended", "deleted"]) expect(meetingRunning(ended, { state }, now), state).toBe(false);
     expect(meetingRunning({ trimmed_at: "2026-11-10T07:00:00Z" }, { state: "ready" }, now)).toBe(false);
+  });
+
+  it("offers a talk about any recording with text or minutes, as the hub's no_material counts them", () => {
+    const rec = (over: Record<string, unknown> = {}) => ({ kind: "recordings", meta: {}, ...over });
+    const minutes = { version: 1, revision: 1, generated_at: "2026-11-10T08:00:00Z", title: "Design review", when: "", markdown: "# Design review" };
+    expect(hasMaterial(rec({ meta: { kind: "note", chars: 120 } }))).toBe(true);
+    expect(hasMaterial(rec({ segments: [{ start: 0, end: 4, text: "Call the vendor." }] }))).toBe(true);
+    expect(hasMaterial(rec({ meta: { chars: 0 }, segments: [{ start: 0, end: 4, text: "  " }] }))).toBe(false);
+    expect(hasMaterial(rec({ minutes }))).toBe(true);
+    // A trimmed recording keeps only its minutes.
+    expect(hasMaterial(rec({ meta: { chars: 120, trimmed_at: "2026-11-10T07:00:00Z" } }))).toBe(false);
+    expect(hasMaterial(rec({ meta: { chars: 120, trimmed_at: "2026-11-10T07:00:00Z" }, minutes }))).toBe(true);
+    expect(hasMaterial({ kind: "events", meta: { chars: 120 } })).toBe(false);
+    expect(hasMaterial(null)).toBe(false);
+  });
+
+  it("offers a talk about meetings and notes, not about an all-day recording, whose page is its day recap", () => {
+    const rec = (meta: Record<string, unknown>) => ({ kind: "recordings", meta: { chars: 120, ...meta } });
+    expect(offersTalk(rec({ kind: "meeting" }))).toBe(true);
+    expect(offersTalk(rec({ kind: "note" }))).toBe(true);
+    expect(offersTalk(rec({}))).toBe(true);
+    expect(offersTalk(rec({ kind: "day", day: "2026-11-10", part: 1 }))).toBe(false);
+    expect(offersTalk(rec({ kind: "note", chars: 0 }))).toBe(false);
+    expect(offersTalk(null)).toBe(false);
   });
 
   it("reads only the parts of an event that are newer", () => {

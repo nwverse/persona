@@ -484,6 +484,58 @@ func (r *Runner) ListMessages(ctx context.Context, chatID, thread, before string
 	return page, nil
 }
 
+// ListDirectChats lists the user's direct (p2p) chats, most recently active
+// first. It needs the user identity, like every Inbox read.
+func (r *Runner) ListDirectChats(ctx context.Context, limit int) (ChatList, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	out, err := r.execute(ctx, []string{"im", "+chat-list", "--types", "p2p", "--sort", "active_time", "--page-size", fmt.Sprint(limit)}, outputJSON)
+	if err != nil {
+		return ChatList{}, err
+	}
+	var page ChatList
+	if err := decodeData(out, &page); err != nil {
+		return ChatList{}, cliError(KindOther, errors.New("invalid chat list JSON"))
+	}
+	return page, nil
+}
+
+// ListMessagesSince reads one chat's messages created at or after start
+// (RFC 3339), newest page only, returned oldest first. Unlike message search it
+// reads the chat history itself, which has no indexing delay.
+func (r *Runner) ListMessagesSince(ctx context.Context, chatID, start string, limit int) (MessagePage, error) {
+	if chatID == "" {
+		return MessagePage{}, errors.New("chat_id is required")
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	args := []string{"im", "+chat-messages-list", "--chat-id", chatID}
+	if start != "" {
+		args = append(args, "--start", start)
+	}
+	args = append(args, "--order", "desc", "--page-size", fmt.Sprint(limit), "--no-reactions")
+	out, err := r.execute(ctx, args, outputJSON)
+	if err != nil {
+		return MessagePage{}, err
+	}
+	var page MessagePage
+	if err := decodeData(out, &page); err != nil {
+		return MessagePage{}, cliError(KindOther, errors.New("invalid message list JSON"))
+	}
+	for i, j := 0, len(page.Messages)-1; i < j; i, j = i+1, j-1 {
+		page.Messages[i], page.Messages[j] = page.Messages[j], page.Messages[i]
+	}
+	return page, nil
+}
+
 // SearchMessages searches the user's messages. It deliberately disables
 // reaction enrichment: reactions are an optional second permission and are not
 // needed by the read-tool contract.
@@ -515,26 +567,360 @@ func (r *Runner) SearchMessages(ctx context.Context, query string, opts SearchOp
 	return page, nil
 }
 
+// InspectDocument resolves a document or wiki link to the title and the
+// underlying Drive metadata. It is deliberately read-only and always runs as
+// the lark-cli user identity.
+// OwnedDocument is one document the signed-in user owns, from `drive +search --mine`.
+type OwnedDocument struct {
+	URL     string
+	Token   string
+	Type    string
+	Title   string
+	Owner   string
+	Updated time.Time
+	Opened  time.Time
+}
+
+// OwnedDocuments lists documents the user owns, most recently edited first, one page of at most 20 (`drive +search
+// --mine --sort edit_time`). next is the token for the following page, empty at the end.
+func (r *Runner) OwnedDocuments(ctx context.Context, pageToken string) (docs []OwnedDocument, next string, err error) {
+	// Only types whose comments lark-cli can list: folders and mind notes would only fail every read.
+	args := []string{"drive", "+search", "--mine", "--sort", "edit_time", "--page-size", "20", "--doc-types", commentableDocTypes}
+	if pageToken != "" {
+		args = append(args, "--page-token", pageToken)
+	}
+	out, err := r.execute(ctx, args, outputJSON)
+	if err != nil {
+		return nil, "", err
+	}
+	var raw struct {
+		HasMore   bool   `json:"has_more"`
+		PageToken string `json:"page_token"`
+		Results   []struct {
+			Title string `json:"title_highlighted"`
+			Meta  struct {
+				URL      string `json:"url"`
+				Token    string `json:"token"`
+				DocTypes string `json:"doc_types"`
+				Owner    string `json:"owner_id"`
+				Updated  int64  `json:"update_time"`
+				Opened   int64  `json:"last_open_time"`
+			} `json:"result_meta"`
+		} `json:"results"`
+	}
+	if err := decodeData(out, &raw); err != nil {
+		return nil, "", cliError(KindOther, errors.New("invalid document search JSON"))
+	}
+	for _, res := range raw.Results {
+		if res.Meta.URL == "" {
+			continue
+		}
+		d := OwnedDocument{URL: res.Meta.URL, Token: res.Meta.Token, Type: strings.ToLower(res.Meta.DocTypes), Title: stripHighlight(res.Title), Owner: res.Meta.Owner}
+		if res.Meta.Updated > 0 {
+			d.Updated = time.Unix(res.Meta.Updated, 0).UTC()
+		}
+		if res.Meta.Opened > 0 {
+			d.Opened = time.Unix(res.Meta.Opened, 0).UTC()
+		}
+		docs = append(docs, d)
+	}
+	if raw.HasMore {
+		next = raw.PageToken
+	}
+	return docs, next, nil
+}
+
+// commentableDocTypes are the drive search types `drive +list-comments` accepts (lark-cli 1.0.99).
+const commentableDocTypes = "doc,docx,sheet,bitable,file,slides,wiki"
+
+// stripHighlight drops the search's <em> marks from a title.
+func stripHighlight(s string) string {
+	return strings.TrimSpace(strings.NewReplacer("<em>", "", "</em>", "", "<b>", "", "</b>", "").Replace(s))
+}
+
+// DocumentOwner returns the open_id of a document's owner (`drive metas batch_query`). token and docType are the
+// underlying document's, as InspectDocument returns them (a wiki link is unwrapped there).
+func (r *Runner) DocumentOwner(ctx context.Context, token, docType string) (string, error) {
+	if strings.TrimSpace(token) == "" || strings.TrimSpace(docType) == "" {
+		return "", errors.New("document token and type are required")
+	}
+	body, err := json.Marshal(map[string]any{"request_docs": []map[string]string{{"doc_token": token, "doc_type": docType}}})
+	if err != nil {
+		return "", err
+	}
+	out, err := r.execute(ctx, []string{"drive", "metas", "batch_query", "--user-id-type", "open_id", "--data", string(body)}, outputJSON)
+	if err != nil {
+		return "", err
+	}
+	var raw struct {
+		Metas []struct {
+			Token string `json:"doc_token"`
+			Owner string `json:"owner_id"`
+		} `json:"metas"`
+		Failed []struct {
+			Code int `json:"code"`
+		} `json:"failed_list"`
+	}
+	if err := decodeData(out, &raw); err != nil {
+		return "", cliError(KindOther, errors.New("invalid document metadata JSON"))
+	}
+	for _, meta := range raw.Metas {
+		if meta.Owner != "" {
+			return meta.Owner, nil
+		}
+	}
+	if len(raw.Failed) > 0 {
+		return "", &Error{Kind: KindMissingPermission}
+	}
+	return "", nil
+}
+
+func (r *Runner) InspectDocument(ctx context.Context, link string) (Document, error) {
+	if strings.TrimSpace(link) == "" {
+		return Document{}, errors.New("document URL is required")
+	}
+	out, err := r.execute(ctx, []string{"drive", "+inspect", "--url", link}, outputJSON)
+	if err != nil {
+		return Document{}, err
+	}
+	var raw struct {
+		Document
+		Canonical string `json:"canonical_url"`
+		FileToken string `json:"file_token"`
+		FileType  string `json:"file_type"`
+		ObjToken  string `json:"obj_token"`
+		ObjType   string `json:"obj_type"`
+		Metas     []struct {
+			URL   string `json:"url"`
+			Token string `json:"doc_token"`
+			Type  string `json:"doc_type"`
+			Title string `json:"title"`
+		} `json:"metas"`
+		Failed []struct {
+			Code int `json:"code"`
+		} `json:"failed_list"`
+	}
+	if err := decodeData(out, &raw); err != nil {
+		return Document{}, cliError(KindOther, errors.New("invalid document metadata JSON"))
+	}
+	if len(raw.Failed) > 0 && len(raw.Metas) == 0 {
+		return Document{}, &Error{Kind: KindMissingPermission}
+	}
+	d := raw.Document
+	if d.URL == "" {
+		d.URL = link
+	}
+	if d.CanonicalURL == "" {
+		d.CanonicalURL = raw.Canonical
+	}
+	if d.Token == "" {
+		d.Token = raw.FileToken
+	}
+	if d.Token == "" {
+		d.Token = raw.ObjToken
+	}
+	if d.Type == "" {
+		d.Type = raw.FileType
+	}
+	if d.Type == "" {
+		d.Type = raw.ObjType
+	}
+	if len(raw.Metas) > 0 {
+		meta := raw.Metas[0]
+		if d.URL == "" {
+			d.URL = meta.URL
+		}
+		if d.CanonicalURL == "" {
+			d.CanonicalURL = meta.URL
+		}
+		if d.Token == "" {
+			d.Token = meta.Token
+		}
+		if d.Type == "" {
+			d.Type = meta.Type
+		}
+		if d.Title == "" {
+			d.Title = meta.Title
+		}
+	}
+	return d, nil
+}
+
+// ListComments lists unresolved comments on a document. The returned page
+// token is an opaque value for the next page in the same poll.
+func (r *Runner) ListComments(ctx context.Context, link, pageToken string, limit int) (CommentPage, error) {
+	if strings.TrimSpace(link) == "" {
+		return CommentPage{}, errors.New("document URL is required")
+	}
+	args := []string{"drive", "+list-comments", "--url", link, "--solved-status", "false", "--page-size", fmt.Sprint(pageLimit(limit))}
+	if pageToken != "" {
+		args = append(args, "--page-token", pageToken)
+	}
+	out, err := r.execute(ctx, args, outputJSON)
+	if err != nil {
+		return CommentPage{}, err
+	}
+	var raw struct {
+		Items     []Comment `json:"items"`
+		Comments  []Comment `json:"comments"`
+		HasMore   bool      `json:"has_more,omitempty"`
+		PageToken string    `json:"page_token,omitempty"`
+	}
+	if err := decodeData(out, &raw); err != nil {
+		return CommentPage{}, cliError(KindOther, errors.New("invalid document comments JSON"))
+	}
+	if len(raw.Items) == 0 {
+		raw.Items = raw.Comments
+	}
+	return CommentPage{Comments: raw.Items, HasMore: raw.HasMore, PageToken: raw.PageToken}, nil
+}
+
+// ListReplies lists one comment's root body and replies. The first page's
+// first item is the root body according to lark-cli's documented contract.
+func (r *Runner) ListReplies(ctx context.Context, link, commentID, pageToken string, limit int) (ReplyPage, error) {
+	if strings.TrimSpace(link) == "" || strings.TrimSpace(commentID) == "" {
+		return ReplyPage{}, errors.New("document URL and comment id are required")
+	}
+	args := []string{"drive", "+list-replies", "--url", link, "--comment-id", commentID, "--page-size", fmt.Sprint(pageLimit(limit))}
+	if pageToken != "" {
+		args = append(args, "--page-token", pageToken)
+	}
+	out, err := r.execute(ctx, args, outputJSON)
+	if err != nil {
+		return ReplyPage{}, err
+	}
+	var raw struct {
+		Items     []Reply `json:"items"`
+		Replies   []Reply `json:"replies"`
+		HasMore   bool    `json:"has_more,omitempty"`
+		PageToken string  `json:"page_token,omitempty"`
+	}
+	if err := decodeData(out, &raw); err != nil {
+		return ReplyPage{}, cliError(KindOther, errors.New("invalid document replies JSON"))
+	}
+	if len(raw.Items) == 0 {
+		raw.Items = raw.Replies
+	}
+	return ReplyPage{Replies: raw.Items, HasMore: raw.HasMore, PageToken: raw.PageToken}, nil
+}
+
+// ListDocumentComments is a descriptive alias used by the connector.
+func (r *Runner) ListDocumentComments(ctx context.Context, link, pageToken string, limit int) (CommentPage, error) {
+	return r.ListComments(ctx, link, pageToken, limit)
+}
+
+func (r *Runner) ListWikiSpaces(ctx context.Context, pageToken string, limit int) (WikiSpaceList, error) {
+	args := []string{"wiki", "spaces", "list", "--page-size", fmt.Sprint(wikiPageLimit(limit))}
+	if pageToken != "" {
+		args = append(args, "--page-token", pageToken)
+	}
+	out, err := r.execute(ctx, args, outputJSON)
+	if err != nil {
+		return WikiSpaceList{}, err
+	}
+	var raw struct {
+		Items     []WikiSpace `json:"items"`
+		Spaces    []WikiSpace `json:"spaces"`
+		HasMore   bool        `json:"has_more,omitempty"`
+		PageToken string      `json:"page_token,omitempty"`
+	}
+	if err := decodeData(out, &raw); err != nil {
+		return WikiSpaceList{}, cliError(KindOther, errors.New("invalid wiki spaces JSON"))
+	}
+	if len(raw.Items) == 0 {
+		raw.Items = raw.Spaces
+	}
+	return WikiSpaceList{Spaces: raw.Items, HasMore: raw.HasMore, PageToken: raw.PageToken}, nil
+}
+
+func (r *Runner) ListWikiNodes(ctx context.Context, spaceID, parentToken, pageToken string, limit int) (WikiNodeList, error) {
+	if strings.TrimSpace(spaceID) == "" {
+		return WikiNodeList{}, errors.New("wiki space id is required")
+	}
+	args := []string{"wiki", "nodes", "list", "--space-id", spaceID, "--page-size", fmt.Sprint(wikiPageLimit(limit))}
+	if parentToken != "" {
+		args = append(args, "--parent-node-token", parentToken)
+	}
+	if pageToken != "" {
+		args = append(args, "--page-token", pageToken)
+	}
+	out, err := r.execute(ctx, args, outputJSON)
+	if err != nil {
+		return WikiNodeList{}, err
+	}
+	var raw struct {
+		Items     []WikiNode `json:"items"`
+		Nodes     []WikiNode `json:"nodes"`
+		HasMore   bool       `json:"has_more,omitempty"`
+		PageToken string     `json:"page_token,omitempty"`
+	}
+	if err := decodeData(out, &raw); err != nil {
+		return WikiNodeList{}, cliError(KindOther, errors.New("invalid wiki nodes JSON"))
+	}
+	if len(raw.Items) == 0 {
+		raw.Items = raw.Nodes
+	}
+	return WikiNodeList{Nodes: raw.Items, HasMore: raw.HasMore, PageToken: raw.PageToken}, nil
+}
+
+func pageLimit(limit int) int {
+	if limit <= 0 {
+		return 50
+	}
+	if limit > 100 {
+		return 100
+	}
+	return limit
+}
+
+func wikiPageLimit(limit int) int {
+	if limit <= 0 {
+		return 50
+	}
+	if limit > 50 {
+		return 50
+	}
+	return limit
+}
+
 // Search runs the lark_search kind mappings that are safe and read-only in L2.
 // Message search is typed; the other supported kinds are returned as the CLI's
 // normalized JSON data because their schemas belong to later connector steps.
 func (r *Runner) Search(ctx context.Context, kind, query string) (json.RawMessage, error) {
+	return r.SearchLimit(ctx, kind, query, 0)
+}
+
+// SearchLimit bounds the requested search page. A nonpositive limit preserves
+// the CLI's default page size; message search retains its existing default.
+func (r *Runner) SearchLimit(ctx context.Context, kind, query string, limit int) (json.RawMessage, error) {
+	var args []string
+	maximum := 0
 	switch kind {
 	case "", "messages":
-		page, err := r.SearchMessages(ctx, query, SearchOptions{})
+		page, err := r.SearchMessages(ctx, query, SearchOptions{Limit: limit})
 		if err != nil {
 			return nil, err
 		}
 		return json.Marshal(page)
 	case "chats":
-		return r.rawSearch(ctx, []string{"im", "+chat-search", "--query", query})
+		args = []string{"im", "+chat-search", "--query", query}
+		maximum = 50
 	case "docs":
-		return r.rawSearch(ctx, []string{"drive", "+search", "--query", query})
+		args = []string{"drive", "+search", "--query", query}
+		maximum = 20
 	case "people":
-		return r.rawSearch(ctx, []string{"contact", "+search-user", "--query", query})
+		args = []string{"contact", "+search-user", "--query", query}
+		maximum = 30
 	default:
 		return nil, fmt.Errorf("unknown search kind %q", kind)
 	}
+	if limit > 0 {
+		if limit > maximum {
+			limit = maximum
+		}
+		args = append(args, "--page-size", fmt.Sprint(limit))
+	}
+	return r.rawSearch(ctx, args)
 }
 
 // SendText sends a plain text message as the bot identity. The idempotency key
@@ -867,7 +1253,7 @@ func classifyFailure(result commandResult) *Error {
 			scopes = scopesFromMessage(env.Error.Message)
 		}
 		switch {
-		case sub == "missing_scope" || sub == "permission_denied" || sub == "forbidden" || typ == "permission":
+		case sub == "missing_scope" || sub == "permission_denied" || sub == "forbidden" || sub == "not_found" || sub == "resource_not_found" || sub == "document_not_found" || typ == "permission":
 			return &Error{Kind: KindMissingPermission, MissingScopes: scopes}
 		case sub == "rate_limited" || sub == "too_many_requests" || typ == "rate_limit":
 			return &Error{Kind: KindRateLimited}
@@ -886,6 +1272,8 @@ func classifyFailure(result commandResult) *Error {
 		return &Error{Kind: KindRateLimited}
 	case strings.Contains(text, "token expired") || strings.Contains(text, "expired"):
 		return &Error{Kind: KindExpired}
+	case strings.Contains(text, "not found") || strings.Contains(text, "does not exist"):
+		return &Error{Kind: KindMissingPermission}
 	case strings.Contains(text, "not logged in") || strings.Contains(text, "not signed in"):
 		return &Error{Kind: KindNotLoggedIn}
 	}

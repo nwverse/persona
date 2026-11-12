@@ -34,16 +34,19 @@ private fun hubPreferences(raw: String): AgentPreferences {
 
 /** Display settings stay local; pins, mutes and read receipts belong to the paired hub. */
 @Singleton
-class AgentsPreferences @Inject constructor(private val store: DataStore<Preferences>, private val hub: HubPreferences) {
+class AgentsPreferences @Inject constructor(private val store: DataStore<Preferences>, private val hub: HubPreferences) :
+    AgentListDisplaySettings {
     val snapshots: Flow<AgentsPreferencesSnapshot> get() = snapshots("")
     fun snapshots(scope: String): Flow<AgentsPreferencesSnapshot> = combine(store.data, hub.preferences) { p, remote ->
         AgentsPreferencesSnapshot(
             range = AgentRange.entries.firstOrNull { it.name == p[agentRangeKey(scope)] } ?: AgentRange.Running,
             grouping = AgentGrouping.fromPreference(p[stringPreferencesKey("grouping")]),
-            compact = p[booleanPreferencesKey("compact")] ?: false,
+            compact = p[compactKey] ?: false,
+            rowStyle = AgentRowStyle.fromPreference(p[rowStyleKey]),
             sort = AgentSort.fromPreference(p[stringPreferencesKey("sort")]),
             hideBotmux = p[booleanPreferencesKey("hide-botmux")] ?: false,
             foldedTabs = p[foldedTabsKey].orEmpty(),
+            folds = AgentGrouping.entries.associateWith { p[foldsKey(it)].orEmpty() },
             pins = AgentPreferences(remote.pins.spaces, remote.pins.sessions, remote.pins.allowed),
             mutes = AgentPreferences(remote.mutes.spaces, remote.mutes.sessions, remote.mutes.allowed),
             seen = remote.seen,
@@ -68,11 +71,26 @@ class AgentsPreferences @Inject constructor(private val store: DataStore<Prefere
     suspend fun sort(value: AgentSort) { store.edit { it[stringPreferencesKey("sort")] = value.name } }
     suspend fun hideBotmux(value: Boolean) { store.edit { it[booleanPreferencesKey("hide-botmux")] = value } }
     suspend fun range(scope: String, value: AgentRange) { store.edit { it[agentRangeKey(scope)] = value.name } }
-    suspend fun compact(value: Boolean) { store.edit { it[booleanPreferencesKey("compact")] = value } }
+    suspend fun compact(value: Boolean) { store.edit { it[compactKey] = value } }
+    /**
+     * The list's display, in the two values iOS keeps it in (`AgentListDisplayChoice`): Compact List is the `compact` the
+     * phone always kept (Brief and Board's Compact), so a phone that chose Compact before the styles came keeps it, and one
+     * that chose Detailed, with no style stored, reads as Avatar, the row Glass's Detailed list already drew. Compact List
+     * keeps the style chosen before it.
+     */
+    override val display: Flow<AgentListDisplay> get() = store.data.map { AgentListDisplay.of(AgentRowStyle.fromPreference(it[rowStyleKey]), it[compactKey] ?: false) }
+    override suspend fun setDisplay(value: AgentListDisplay) {
+        store.edit { p ->
+            value.style?.let { p[rowStyleKey] = it.name }
+            p[compactKey] = value == AgentListDisplay.CompactList
+        }
+    }
     /** Folds or opens a herdr tab's agents in the list (#2320), kept on this phone by [AgentTab.foldKey]. */
     suspend fun foldTab(key: String, folded: Boolean) {
         store.edit { it[foldedTabsKey] = it[foldedTabsKey].orEmpty().let { keys -> if (folded) keys + key else keys - key } }
     }
+    /** The list's folded sections for [grouping], kept on this phone through relaunches, as iOS keeps them (#4338 A6). */
+    suspend fun folds(grouping: AgentGrouping, folded: Set<String>) { store.edit { it[foldsKey(grouping)] = folded } }
     /** "Expand all" opens every tab group too, as it opens every space (#2792). */
     suspend fun openAllTabs() { store.edit { it.remove(foldedTabsKey) } }
     suspend fun togglePin(id: String) = hub.togglePin(id)
@@ -83,20 +101,31 @@ class AgentsPreferences @Inject constructor(private val store: DataStore<Prefere
 }
 
 private val foldedTabsKey = stringSetPreferencesKey("folded-tabs")
+private val compactKey = booleanPreferencesKey("compact")
+private val rowStyleKey = stringPreferencesKey("row-style")
+private fun foldsKey(grouping: AgentGrouping) = stringSetPreferencesKey("folds-${grouping.name}")
 
 data class AgentsPreferencesSnapshot(
     val grouping: AgentGrouping = AgentGrouping.Repo,
+    /** Compact List (Brief and Board: Compact) over the [rowStyle]. */
     val compact: Boolean = false,
+    /** The row style Glass draws while the list is not compact ([AgentsPreferences.display]). */
+    val rowStyle: AgentRowStyle = AgentRowStyle.Default,
     val sort: AgentSort = AgentSort.State,
     /** botmux's sessions hidden from the list on this phone (web #2786). */
     val hideBotmux: Boolean = false,
     /** The herdr tabs whose agents the list folds to the tab's row ([AgentTab.foldKey]); every other tab is open. */
     val foldedTabs: Set<String> = emptySet(),
+    /** Each grouping's folded sections and computers ([AgentsPreferences.folds]). */
+    val folds: Map<AgentGrouping, Set<String>> = emptyMap(),
     val pins: AgentPreferences = AgentPreferences(),
     val mutes: AgentPreferences = AgentPreferences(),
     val seen: Map<String, String> = emptyMap(),
     val range: AgentRange = AgentRange.Running,
-)
+) {
+    /** What Glass draws the agents as (iOS `AgentListDisplay`); Brief and Board read [compact] alone. */
+    val display: AgentListDisplay get() = AgentListDisplay.of(rowStyle, compact)
+}
 
 /** Shared metadata supplied by the composition root for the active hub scope. */
 data class AgentsMetadata(
@@ -127,6 +156,15 @@ fun Session.listSession(preferences: AgentsPreferencesSnapshot): AgentSession {
     val visible = if (agentState == AgentState.Unread && preferences.seen[key.path] == readVersion) copy(state = "idle") else this
     return AgentSession(visible, stateSince, (runningSubagents ?: subagents.orEmpty().count { it.running == true }) > 0)
 }
+
+/**
+ * The [kept] rows [previous] drew as rows of their own. They stay so while the quick filter remains selected: a subtask
+ * that needed the user, opened and answered, would otherwise hang under its parent again and leave the list at once
+ * (#4494), where [retainOpenedRows] keeps every other opened row. One opened from under "Subtasks" stays there.
+ */
+internal fun openedRowsOfTheirOwn(previous: AgentListResult?, kept: Set<String>): Set<String> =
+    if (previous == null || kept.isEmpty()) emptySet()
+    else previous.groups.flatMapTo(HashSet()) { group -> group.rows.mapNotNull { row -> row.id.takeIf { it in kept } } }
 
 /** Keep opened rows in their old group and slot while the quick filter remains selected. */
 internal fun retainOpenedRows(

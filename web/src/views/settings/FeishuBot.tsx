@@ -5,7 +5,7 @@
 import { ChannelLink } from "./Channels";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { errorText } from "../../lib/api";
-import { connectorState, connectorSummary, signsInHere, connectorTone, isEnabled, listConnectors, setConnector, type ConnectorTone, type HubConnector } from "../../lib/connectors";
+import { connectorState, connectorSummary, signsInHere, connectorTone, isEnabled, larkcliOptions, listConnectors, setConnector, type ConnectorTone, type HubConnector } from "../../lib/connectors";
 import { t } from "../../i18n";
 import { ago } from "../../lib/format";
 import { documentPage, visiblePoll } from "../../lib/visible-poll";
@@ -58,6 +58,7 @@ const FEATURES: { key: keyof BotFeatures; icon: IconName; title: string; detail:
   { key: "cards", icon: "hand", title: t("settings-feishubot.feature_cards_title"), detail: t("settings-feishubot.feature_cards_detail") },
   { key: "all_cards", icon: "bell", title: t("settings-feishubot.feature_all_cards_title"), detail: t("settings-feishubot.feature_all_cards_detail") },
   { key: "pushes", icon: "send", title: t("settings-feishubot.feature_pushes_title"), detail: t("settings-feishubot.feature_pushes_detail") },
+  { key: "answer_new_card", icon: "bell", title: t("settings-feishubot.feature_answer_new_card_title"), detail: t("settings-feishubot.feature_answer_new_card_detail") },
   { key: "sync", icon: "loop", title: t("settings-feishubot.feature_sync_title"), detail: t("settings-feishubot.feature_sync_detail") },
   { key: "reports", icon: "list", title: t("settings-feishubot.feature_reports_title"), detail: t("settings-feishubot.feature_reports_detail") },
   { key: "board", icon: "pin", title: t("settings-feishubot.feature_board_title"), detail: t("settings-feishubot.feature_board_detail") },
@@ -372,10 +373,11 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
           </Group>
 
           <Group title={t("settings-feishubot.features")} footer={t("settings-feishubot.features_footer")}>
-            {FEATURES.filter((f) => f.key !== "report_steps" || features.report_steps !== undefined).map((f) => {
+            {FEATURES.filter((f) => (f.key !== "report_steps" && f.key !== "answer_new_card") || features[f.key] !== undefined).map((f) => {
               // "All cards" needs "cards"; "only conclusions" needs task progress, without which the hub sends no conclusions either,
               // and trims only the execution steps, which a current hub pushes only with "report_steps" on (#3218).
-              // "report_steps" needs task progress too; a hub from before it leaves the key out and the switch is hidden.
+              // "report_steps" needs task progress too; a hub from before it leaves the key out and the switch is hidden,
+              // as is "answer_new_card" on a hub from before it.
               const off =
                 (f.key === "all_cards" && !features.cards) ||
                 (f.key === "only_conclusions" && (features.reports === false || (features.report_steps === false && !features.only_conclusions))) ||
@@ -451,6 +453,20 @@ function LarkReadSection({ connector, status, reload, onOpen }: { connector: Hub
       await reload();
     } catch (e) {
       toast(t("settings-feishubot.error_with", { what: t("settings-feishubot.read_section"), error: errorText(e) }), "error");
+    } finally {
+      setSwitching(false);
+    }
+  };
+  // "All comments on documents I own" sits here, next to the account, rather than only on the connector's page.
+  const owned = larkcliOptions(connector.options);
+  const setOwned = async (v: boolean) => {
+    if (!owned) return;
+    setSwitching(true);
+    try {
+      await setConnector(connector.id, { options: { ...owned, owned_all_comments: v } });
+      await reload();
+    } catch (e) {
+      toast(t("settings-feishubot.error_with", { what: t("settings-hubconnector.lark_docs_owned"), error: errorText(e) }), "error");
     } finally {
       setSwitching(false);
     }
@@ -553,6 +569,11 @@ function LarkReadSection({ connector, status, reload, onOpen }: { connector: Hub
               </option>
             ))}
           </select>
+        </Row>
+      )}
+      {on && owned && (
+        <Row label={t("settings-hubconnector.lark_docs_owned")} hint={t("settings-hubconnector.lark_docs_owned_sub")} wrapHint>
+          <Switch on={owned.owned_all_comments} disabled={switching} label={t("settings-hubconnector.lark_docs_owned")} onChange={(v) => void setOwned(v)} />
         </Row>
       )}
       <Row label={t("settings-feishubot.read_more")} hint={t("settings-feishubot.read_more_hint")} onClick={onOpen} />

@@ -39,6 +39,11 @@ data class ExtensionManifest(
     val publisher: String? = null,
     val homepage: String? = null,
     /**
+     * Source-only square PNG artwork: 256–4096 pixels, at most 2 MiB. Catalog entry icon carries this path; strip it
+     * from packaged and runtime manifests for compatibility.
+     */
+    val icon: String? = null,
+    /**
      * What the market shows and searches (docs "Extension market"): at most 16, each 1 to 24 characters. Packages and
      * indexes carry the manifest without them (hubs before tags refuse an unknown field); the index entry carries
      * them instead.
@@ -83,6 +88,20 @@ data class ExtensionManifest(
      */
     val tools: List<ExtensionToolSpec>? = null,
     val auth: ExtensionAuthSpec? = null,
+    /**
+     * Configured host CLI integrations the program may use through a bounded, read-only typed RPC. IDs never name an
+     * executable; writes and arbitrary command lines are not part of this contract.
+     */
+    @SerialName("host_integrations") val hostIntegrations: List<ExtensionHostIntegrationSpec>? = null,
+)
+
+/**
+ * A configured CLI integration, selected by a closed ID rather than by an extension-provided executable.
+ */
+@Serializable
+data class ExtensionHostIntegrationSpec(
+    val id: String = "",
+    val version: String = "",
 )
 
 /**

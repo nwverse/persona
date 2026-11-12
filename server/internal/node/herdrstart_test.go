@@ -255,30 +255,39 @@ func refusalData(t *testing.T, err error) string {
 	return string(re.Data)
 }
 
-// A start finds herdr down: the node starts it, then goes on to make the workspace in it.
+// A start finds herdr down: the node starts it, then goes on to make the workspace in it — also a start into a
+// workspace it names (a task's worktree, #4754), which goes straight to the tab.
 func TestStartStartsHerdrFirst(t *testing.T) {
-	n, f, home := herdrNode(t)
-	real := f.sock
-	dir, err := os.MkdirTemp("/tmp", "hs")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	down := filepath.Join(dir, "herdr.sock")
-	h := n.hosts.Get(host.Herdr).(*herdrHost)
-	h.c.Socket = down // herdr is not running…
-	fl := &fakeLaunch{}
-	withLaunchHerdr(t, fl)
-	launchHerdr = func(_ context.Context, _, sock string) (<-chan error, error) { // …until it is started: the fake
-		fl.starts.Add(1)
-		return make(chan error), os.Symlink(real, sock)
-	}
-	f.reply("workspace.list", map[string]any{"workspaces": []any{}})
-	f.reply("workspace.create", herdrFail{Code: "internal", Message: "stop here"})
-	began := time.Now()
-	_, _ = request(t, n, "session.start", map[string]any{"cwd": home})
-	if fl.starts.Load() != 1 || len(f.trace("workspace.list")) != 1 || time.Since(began) > 2*time.Second {
-		t.Fatalf("%d starts in %s; calls %v", fl.starts.Load(), time.Since(began), f.trace())
+	for _, ws := range []string{"", "w1"} {
+		n, f, home := herdrNode(t)
+		real := f.sock
+		dir, err := os.MkdirTemp("/tmp", "hs")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.RemoveAll(dir) })
+		down := filepath.Join(dir, "herdr.sock")
+		h := n.hosts.Get(host.Herdr).(*herdrHost)
+		h.c.Socket = down // herdr is not running…
+		fl := &fakeLaunch{}
+		withLaunchHerdr(t, fl)
+		launchHerdr = func(_ context.Context, _, sock string) (<-chan error, error) { // …until it is started: the fake
+			fl.starts.Add(1)
+			return make(chan error), os.Symlink(real, sock)
+		}
+		f.reply("workspace.list", map[string]any{"workspaces": []any{}})
+		f.reply("workspace.create", herdrFail{Code: "internal", Message: "stop here"})
+		f.reply("tab.create", herdrFail{Code: "internal", Message: "stop here"})
+		began := time.Now()
+		params := map[string]any{"cwd": home}
+		next := "workspace.list"
+		if ws != "" {
+			params["workspace_id"], next = ws, "tab.create"
+		}
+		_, _ = request(t, n, "session.start", params)
+		if fl.starts.Load() != 1 || len(f.trace(next)) != 1 || time.Since(began) > 2*time.Second {
+			t.Fatalf("workspace %q: %d starts in %s; calls %v", ws, fl.starts.Load(), time.Since(began), f.trace())
+		}
 	}
 }
 
@@ -434,7 +443,7 @@ func TestClaudeResumeArgv(t *testing.T) {
 		Model: "opus[1m]", Hooks: "/Users/me/my hooks"}, startID)
 	want := inAgentEnv(n.dir, "HERDR_AGENT=claude /Users/me/.persona/bin/personad launch work_gw --resume "+startID+
 		" --settings /Users/me/.persona/launcher-settings/work_gw.json --mcp-config "+filepath.Join(n.dir, "mcp.json")+
-		` --model "opus[1m]" --plugin-dir "/Users/me/my hooks"`, dquote)
+		" --allowedTools "+ownToolsRule+` --model "opus[1m]" --plugin-dir "/Users/me/my hooks"`, dquote)
 	if !ok || len(argv) != 2 || argv[0] != "eval" || argv[1] != want {
 		t.Fatalf("argv %q\nwant eval %q", argv, want)
 	}
@@ -479,7 +488,7 @@ func TestPersonaClaudeIsNotResumedBare(t *testing.T) {
 	launch := n.hosts.Get(host.Herdr).(*herdrHost)
 	spec := claudeLaunch{Launcher: "work_claude", Settings: filepath.Join(personaDir(home), "claude-settings.json")}
 	n.holdResume(context.Background(), launch, "w1:p2", startID, spec)
-	cmd := func(id string) string { return startCmd("work_claude", "--resume "+id, personaDir(home)) }
+	cmd := func(id string) string { return resumeCmd("work_claude", "--resume "+id, personaDir(home)) }
 	held := resumeHeld("w1:p2", startID, cmd(startID))
 	assertTrace(t, f.trace(), held[:])
 	for _, c := range f.calls() {

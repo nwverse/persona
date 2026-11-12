@@ -99,6 +99,8 @@ extension Theme {
         static let askFirst = "hand.raised"
         /// bypassPermissions: nothing is asked.
         static let allowEverything = "exclamationmark.shield"
+        /// The auto permission mode: the agent judges the risk itself.
+        static let autoMode = "wand.and.sparkles"
         static let permissions = "lock.shield"
         /// The two little arrows after a value that opens a menu of choices.
         static let choices = "chevron.up.chevron.down"
@@ -122,12 +124,27 @@ extension Theme {
         static let edit = "pencil"
         /// Draw on a picture (the image viewer's Markup, into the composer).
         static let markup = "pencil.tip.crop.circle"
+        /// The image editor's tools (`ImageEditor`): a box round what matters, a free line, cropping and turning the
+        /// picture, the line's width, a crop's shape.
+        static let markupBox = "rectangle"
+        static let markupPen = "scribble"
+        static let crop = "crop"
+        static let rotateLeft = "rotate.left"
+        static let lineWidth = "lineweight"
+        static let cropRatio = "aspectratio"
         static let compose = "square.and.pencil"
         /// Speech to text in the composer (a tap starts, a second one ends).
         static let dictate = "mic"
         static let dictating = "mic.fill"
         /// A long recording as context, distinct from the composer's dictation.
         static let recording = "waveform.circle"
+        /// All-Day Recording (docs/assistant/day-recap.md): the mode, its switch on the phone, its button and page on the
+        /// watch, and its state while it records. A record mark, not `recording`'s waveform: that is one recording, this
+        /// the mode that keeps recording all day.
+        static let allDay = "record.circle"
+        /// All-day recording paused by the system or a failure, waiting for a tap to continue: a state, beside its words,
+        /// not the Pause control (`pause`).
+        static let allDayPaused = "pause.circle"
         static let pause = "pause.fill"
         /// Back and ahead 15 seconds in something that plays (an audio file).
         static let skipBack = "gobackward.15"
@@ -171,6 +188,7 @@ extension Theme {
         /// Loads the in-app page again (the link sheet's header).
         static let reload = retry
         static let undo = "arrow.uturn.backward"
+        static let redo = "arrow.uturn.forward"
         static let interrupt = "stop.fill"
         static let stopLoop = "stop.circle"
         static let run = "play.fill"
@@ -265,6 +283,8 @@ extension Theme {
         static let unmute = "bell"
         /// An Inbox rule: where a chat's, sender's or repository's items go and what the AI twin does with them.
         static let inboxRule = "signpost.right"
+        /// Source subscriptions (#2041): what a connector's read-only tools pull into the Inbox or the knowledge base.
+        static let subscriptions = "arrow.2.circlepath"
         static let collapseAll = "rectangle.compress.vertical"
         static let expandAll = "rectangle.expand.vertical"
         static let newConversation = "plus.bubble"
@@ -311,6 +331,8 @@ extension Theme {
         static let place = "mappin.and.ellipse"
         /// The phone's current location (Use Current Location).
         static let currentLocation = "location"
+        /// Directions to a place, handed to Apple Maps (the chat's place map, #5543).
+        static let directions = "arrow.triangle.turn.up.right.diamond"
         /// The phone's own health trends (steps, sleep, weight drawn from Apple Health, #3272).
         static let healthTrends = "chart.line.uptrend.xyaxis"
         /// Persona itself (the brand's four-point star).
@@ -333,6 +355,8 @@ extension Theme {
         static let context = "gauge.with.dots.needle.33percent"
         /// A piece of context a message carries (a page excerpt, a part of a Feishu /agent request's context).
         static let quote = "text.quote"
+        /// The mark at the top of a quote in a reply (#2984).
+        static let quoteMark = "quote.closing"
         /// The context a message carries, folded into one row.
         static let contexts = "rectangle.stack"
         static let space = "square.stack.3d.up"
@@ -366,6 +390,8 @@ extension Theme {
         static let photo = "photo"
         static let photos = "photo.on.rectangle"
         static let camera = "camera"
+        /// Scan Document: the document camera (VisionKit), the composer's item next to Take Photo (#3720).
+        static let scanDocument = "doc.viewfinder"
         /// Glasses Photo: a photo taken with the Meta glasses (Persona/Glasses), the composer's glasses item.
         static let glasses = "eyeglasses"
         static let list = "list.bullet.rectangle"
@@ -429,6 +455,9 @@ extension Theme {
         /// A hub behind Cloudflare Access and the service token that lets the app through (Settings › hub › Cloudflare
         /// Access, docs/operations/network.md "Behind Cloudflare Access").
         static let cloudflareAccess = "person.badge.shield.checkmark"
+        /// A paired hub's other addresses, tried after its paired one (Settings › hub › Addresses, docs/operations/network.md
+        /// "Client-added candidates").
+        static let hubAddresses = "signpost.right.and.left"
         /// This device's own SSH key (its public half, to copy onto the server).
         static let sshKey = "key.horizontal"
         /// The SSH server's key fingerprint, confirmed and pinned.
@@ -460,6 +489,8 @@ extension Theme {
         /// The assistant operating an iPhone through a Mac (the extension iphone): its section, its tools.
         static let phoneControl = "iphone.radiowaves.left.and.right"
         static let watch = "applewatch"
+        static let storage = "internaldrive"
+        static let scanCode = "qrcode.viewfinder"
         static let handoff = "iphone.and.arrow.forward"
         /// The default web browser (open a link outside the app).
         static let safari = "safari"
@@ -467,6 +498,12 @@ extension Theme {
         static let servedPage = "globe"
         /// The web: a page an agent fetches, a browser it drives (the same globe).
         static let web = servedPage
+        /// A dev server's preview (#150): a picture of the page for the message (the link card's bar).
+        static let pageScreenshot = "camera.viewfinder"
+        /// Picking an element of the page to comment on (the link card's bar), and the element comment's card.
+        static let pickElement = pointer
+        /// Runs a launch.json entry's command (the preview's Start…).
+        static let startServer = run
         /// Something opened in a window of its own (Mac).
         static let newWindow = "macwindow.badge.plus"
         /// The Mac code viewer's find bar: the previous / next match.
@@ -522,6 +559,8 @@ extension Theme {
         static let handToAI = "paperplane"
         /// Mentions of the user (@Me).
         static let mention = "at"
+        /// An Agent's Quick Commands (Continue, Report Progress, /compact…): the submenu of the composer's + (#3225).
+        static let quickCommands = "slash.circle"
         /// The day's Today card at the top of the assistant's conversation (docs/assistant/unified-entry.md).
         static let today = "sun.max.fill"
         /// Something done on the phone from the conversation: an event added to its calendar, a reminder.
@@ -533,6 +572,8 @@ extension Theme {
         static let taskPlan = "list.clipboard"
         /// Saying something straight to a task (Message, and Message “xx”).
         static let routeToTask = "arrowshape.turn.up.right"
+        /// Forward a message to another chat (#3807): sending it on, the same arrow as saying something to a task.
+        static let forwardMessage = routeToTask
         /// A pull request a task opened.
         static let pullRequest = "arrow.triangle.pull"
         /// GitHub's thread page: a merged pull request, an open issue, a review asking for changes, a check skipped
@@ -613,6 +654,18 @@ extension Theme {
         static let openQuestion = "questionmark.circle.dashed"
         /// A meeting's minutes as a whole (the watch's Meeting Minutes).
         static let minutes = "note.text"
+        /// A meeting's private mark (#3862, Private Meeting): its minutes are never used when Persona answers in later
+        /// meetings. What stays private, as Health's note says it.
+        static let privateMeeting = privacy
+        /// Just Me (#3862): a question asked during a meeting that only its asker sees, answered in the main chat and
+        /// never said aloud.
+        static let justMe = "person.crop.circle.badge.questionmark"
+        /// A meeting marked inside an all-day recording (the watch's Mark Meeting, the day's timeline): a meeting, so the
+        /// same symbol.
+        static let meetingMark = meeting
+        /// The hub's recap of a recorded day (docs/assistant/day-recap.md): the Day Recap section and the Today row. Its own
+        /// symbol rather than `minutes`: a recap covers a whole day, a meeting's minutes one meeting.
+        static let dayRecap = "text.book.closed"
         /// People in the knowledge base.
         static let people = "person.3"
         /// A tap on the screen, in tips and features.

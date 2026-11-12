@@ -13,6 +13,11 @@ export interface Manifest {
   publisher?: string;
   homepage?: string;
   /**
+   * Source-only square PNG artwork: 256–4096 pixels, at most 2 MiB. Catalog entry icon carries this path; strip it
+   * from packaged and runtime manifests for compatibility.
+   */
+  icon?: "assets/icon.png";
+  /**
    * What the market shows and searches (docs "Extension market"): at most 16, each 1 to 24 characters. Packages and
    * indexes carry the manifest without them (hubs before tags refuse an unknown field); the index entry carries them
    * instead.
@@ -54,6 +59,19 @@ export interface Manifest {
    */
   tools?: ToolSpec[];
   auth?: AuthSpec;
+  /**
+   * Configured host CLI integrations the program may use through a bounded, read-only typed RPC. IDs never name an
+   * executable; writes and arbitrary command lines are not part of this contract.
+   */
+  host_integrations?: HostIntegrationSpec[];
+}
+
+/**
+ * A configured CLI integration, selected by a closed ID rather than by an extension-provided executable.
+ */
+export interface HostIntegrationSpec {
+  id: string;
+  version: string;
 }
 
 /**

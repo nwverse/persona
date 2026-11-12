@@ -36,6 +36,8 @@ class HomeChrome(
     val selected: String,
     val onSelect: (String) -> Unit,
     val leading: @Composable () -> Unit,
+    /** Where the home bar ends, in pixels from the page's top: what floats under it starts there (the link pill). */
+    val barHeight: androidx.compose.runtime.MutableIntState? = null,
 )
 
 val LocalHomeChrome = staticCompositionLocalOf<HomeChrome?> { null }
@@ -70,7 +72,7 @@ fun JShellDrawer(
             shadowElevation = with(density) { HomeTokens.drawerShadow.toPx() } * progress
             ambientShadowColor = Color.Black.copy(alpha = HomeTokens.drawerShadowAlpha)
             spotShadowColor = Color.Black.copy(alpha = HomeTokens.drawerShadowAlpha)
-        }.then(if (progress > 0f) Modifier.border(Tokens.Space.xxs / 2, palette.line, shape) else Modifier)) {
+        }.then(if (progress > 0f) Modifier.border(Tokens.Space.Standard.xxs / 2, palette.line, shape) else Modifier)) {
             Box(Modifier.fillMaxSize().focusProperties { canFocus = !opened }
                 .then(if (opened) Modifier.clearAndSetSemantics {} else Modifier)) { content() }
             if (opened || progress > 0f) Box(Modifier.fillMaxSize().background(palette.scrim.copy(alpha = palette.scrim.alpha * progress))

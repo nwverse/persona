@@ -13,6 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/shellcmd"
 )
 
 // launcherCheckDir starts the name of the temp directory a check runs in; Claude Code names the projects directory it
@@ -26,7 +27,7 @@ var launcherCheckTimeout = 90 * time.Second
 // directory, and says whether an answer came back, how long it took and which model answered. It is a real request
 // (a few tokens).
 func (n *Node) launcherCheck(ctx context.Context, name string) proto.LauncherCheck {
-	if name != "claude" && !nameRe.MatchString(name) {
+	if name != "claude" && !shellcmd.NameRe.MatchString(name) {
 		return proto.LauncherCheck{Error: fmt.Sprintf("invalid launcher %q", name)}
 	}
 	agent := "claude"
@@ -76,12 +77,12 @@ func (n *Node) launcherCheck(ctx context.Context, name string) proto.LauncherChe
 		if err := os.WriteFile(ours, []byte(`{"disableAllHooks":true}`), 0o600); err != nil {
 			return proto.LauncherCheck{Error: err.Error()}
 		}
-		after += ` --settings ` + shellQuote(n.claudeSettings(ctx, name, ours, dir))
+		after += scriptSettingsFlag(n.claudeSettings(ctx, name, ours, dir))
 	}
 	ctx, cancel := context.WithTimeout(ctx, launcherCheckTimeout)
 	defer cancel()
 	run := func(flag string) (string, error) {
-		cmd := loginShell(ctx, "cd "+shellQuote(dir)+" && "+n.launcherCommand(name)+before+flag+after+" </dev/null")
+		cmd := loginShell(ctx, n.launcherInDirScript(name, dir, before+flag+after))
 		killGroupOnCancel(cmd)
 		out, err := cmd.CombinedOutput()
 		return strings.TrimSpace(string(out)), err

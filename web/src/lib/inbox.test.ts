@@ -111,11 +111,13 @@ describe("筛选和分段", () => {
     expect(sections(items, { ...all, source: "acc2" }).tiers.action).toEqual([]);
   });
 
-  it("@我 含文档和 @我 的公司圈，群聊含机器人，Agent 不含任何一件", () => {
+  it("@我 含文档和 @我 的公司圈，群聊不含机器人（机器人单独一类），Agent 不含任何一件", () => {
     const m = sections(items, { ...all, kind: "mention" });
     expect([...ids(m.tiers.action), ...ids(m.tiers.fyi)].sort()).toEqual([atAll.id, comment.id, doc.id, mention.id, moment.id].sort());
     const g = sections(items, { ...all, kind: "group" });
-    expect([...ids(g.tiers.fyi), ...ids(g.tiers.noise)].sort()).toEqual([bot.id, group.id].sort());
+    expect([...ids(g.tiers.fyi), ...ids(g.tiers.noise)]).toEqual([group.id]);
+    const b = sections(items, { ...all, kind: "bot" });
+    expect([...ids(b.tiers.fyi), ...ids(b.tiers.noise)]).toEqual([bot.id]);
     const a = sections(items, { ...all, kind: "agent" });
     expect([...a.tiers.action, ...a.tiers.fyi, ...a.tiers.noise, ...a.done]).toEqual([]);
   });
@@ -150,6 +152,11 @@ describe("等你的 Agent", () => {
     expect(interactionMuted(ix("s-free"), sessions, mutes)).toBe(false);
   });
 
+  it("a child session's card goes by its parent's switch alone (#5120), as the switcher counts it", () => {
+    expect(interactionMuted(ix("kid", { folded_under: "s-muted" }), sessions, mutes)).toBe(true);
+    expect(interactionMuted(ix("s-muted", { folded_under: "s-free" }), sessions, mutes)).toBe(false);
+  });
+
   it("只在没选来源时出现，Agent 筛选只看它们，老的在前，能搜", () => {
     const list = [ix("s-new", { created_at: at(1), session_title: "新的" }), ix("s-old", { created_at: at(9), summary: "要不要合并" }), ix("s-muted")];
     expect(ids(waitingAgents(list, sessions, mutes, all))).toEqual(["s-old", "s-new"]);
@@ -163,7 +170,7 @@ describe("等你的 Agent", () => {
     expect(interactionTitle(ix("a"))).toBe("Claude 在问你");
     expect(interactionTitle(ix("a", { kind: "plan" }))).toBe("计划等你审批");
     expect(interactionTitle(ix("a", { tool_name: "ask_user" }))).toBe("Persona 在问你");
-    expect(interactionTitle(ix("a", { agent: "codex", kind: "permission" }))).toBe("Codex 需要你授权");
+    expect(interactionTitle(ix("a", { agent: "codex", kind: "permission" }))).toBe("Codex 在等你批准");
     expect(interactionAsk(ix("a", { questions: [{ question: "用哪种格式？", options: [] }] }))).toBe("用哪种格式？");
     expect(interactionAsk(ix("a", { kind: "permission", tool_name: "Bash", tool_input: { command: "swift test" } }))).toBe("swift test");
   });
@@ -753,6 +760,22 @@ describe("列表状态", () => {
     await vi.waitFor(() => expect(toast).toHaveBeenCalled());
     expect(JSON.parse(fetcher.mock.calls[0][1].body)).toEqual({ action: "reopen", items: [{ id: a.id, version: "v1" }] });
     expect(vi.mocked(toast).mock.lastCall).toEqual(["已移回 1 件", "ok", undefined]);
+
+    // Undo reopens what was filed even when the list no longer carries it (only the newest done items, #5549).
+    vi.mocked(toast).mockClear();
+    fetcher.mockReset().mockResolvedValueOnce(ok({ changed: [{ ...a, done_at: at(0), done_by: "user" }], unchanged: [], skipped: [] }));
+    await setAllDone([a], true);
+    const undo = vi.mocked(toast).mock.lastCall![2]!;
+    fetcher.mockReset().mockResolvedValueOnce(ok({ items: versioned.slice(1) }));
+    await reloadInbox();
+    expect(getInbox().items.some((x) => x.id === a.id)).toBe(false);
+    vi.mocked(toast).mockClear();
+    fetcher.mockReset().mockResolvedValueOnce(ok({ changed: [a], unchanged: [], skipped: [] }));
+    undo.run();
+    await vi.waitFor(() => expect(toast).toHaveBeenCalled());
+    expect(JSON.parse(fetcher.mock.calls[0][1].body)).toEqual({ action: "reopen", items: [{ id: a.id, version: "v1" }] });
+    fetcher.mockReset().mockResolvedValueOnce(ok({ items: versioned }));
+    await reloadInbox();
 
     // A failure puts every item back.
     fetcher.mockReset().mockResolvedValueOnce(fail(502, "boom"));

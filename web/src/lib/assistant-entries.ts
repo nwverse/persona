@@ -5,6 +5,7 @@ import { reviewState } from "./supervision";
 import { supersededFailedStarts } from "./todo-triage";
 import { dockAgents, makeSessionLookup, openAsk, todoRank, todoStatus, type SessionLookup, type Todo, type TodoStatus } from "./todos";
 import { byTime } from "./times";
+import { homeKey } from "./folded-rows";
 import type { Interaction, Session } from "./types";
 
 /**
@@ -52,7 +53,7 @@ export interface AssistantEntriesInput {
   feed: FeedItem[];
   /** The hub's task card slots for the conversation (`task_cards`). */
   cards?: TaskCardMetadata[];
-  /** Message cards the user put off locally (`later`), by card id. */
+  /** Message cards and task-decision rounds the user put off locally (`later`). */
   deferred?: Record<string, unknown>;
   /** Looks up a task's agents; defaults to `sessions`. */
   lookup?: SessionLookup;
@@ -85,6 +86,15 @@ export function messageWaits(it: FeedItem, deferred: Record<string, unknown> = {
   return it.kind === "message" && !cardSent(it) && !cardFiled(it) && !cardDismissed(it) && !deferred[it.id];
 }
 
+/** The review round, not the task id alone: a later decision must remain visible. */
+export function decisionRound(todo: Todo): string {
+  return todo.supervision?.reviews?.at(-1)?.at || todo.decision_review?.review_at || todo.ask?.asked_at || "";
+}
+
+export function decisionLaterKey(todo: Todo): string {
+  return `decision:${todo.manager || ""}:${todo.id}:${decisionRound(todo)}`;
+}
+
 export function assistantEntries(input: AssistantEntriesInput): AssistantEntries {
   const { conversation, main, todos, sessions, interactions, plans, feed } = input;
   const now = input.now ?? Date.now();
@@ -95,7 +105,8 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
   const superseded = supersededFailedStarts(todos);
   const asksOf = new Map<string, Interaction[]>();
   for (const ix of [...interactions].sort((a, b) => byTime(a.created_at, b.created_at) || a.id.localeCompare(b.id))) {
-    const k = sessionKey(ix.machine_id, ix.session_id);
+    // a child session's card is asked under its parent (#5120): the parent's task or Agent row holds it
+    const k = homeKey(ix);
     asksOf.set(k, [...(asksOf.get(k) ?? []), ix]);
   }
 
@@ -115,8 +126,14 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
     const bucket = cardBucket(card, todo, plans, lookup, now, input.restored?.get(todo.id) ?? 0, superseded.has(todo.id));
     // a failed start carries done_at (the hub ends it), yet it is the user's to retry while its bucket says open
     const waits = status === "failed" ? bucket === "open" : !todo.done_at && WAITS_ON_YOU.has(status);
+    const decision = taskAwaitsDecision(todo);
     if (asks.length) asking.push({ kind: "task", key, todo, status, asks });
-    else if (waits || taskAwaitsDecision(todo)) deciding.push({ item: { kind: "task", key, todo, status, asks }, rank: todoRank(todo, status), at: card.at });
+    else if (waits || decision) {
+      // Only the review decision is hidden; a live Agent question above still has its home.
+      if (!(status !== "needs_you" && decision && (todo.decision_review?.dismissal_id && todo.decision_review.review_at === decisionRound(todo) || input.deferred?.[decisionLaterKey(todo)]))) {
+        deciding.push({ item: { kind: "task", key, todo, status, asks }, rank: todoRank(todo, status), at: card.at });
+      }
+    }
     // a parked task waits on purpose (#3804): with the tasks in progress however long it has been still, never folded away
     else if (bucket === "open" || reviewState(todo) === "parked") open.push({ item: { kind: "task", key, card, todo, status, activity: taskBackgroundWork(todo, lookup) }, rank: todoRank(todo, status), at: card.at });
     else if (bucket === "shelved") shelved.push({ item: { kind: "task", key, card, todo, status }, at: card.at });
