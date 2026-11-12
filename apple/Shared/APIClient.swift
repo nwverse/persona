@@ -238,6 +238,17 @@ nonisolated struct APIClient: Sendable {
         return c
     }
 
+    /// Freeze the current assistant for a settings page, including routes outside `/assistant`.
+    /// An explicit item manager takes precedence; the default still sends no manager header.
+    func currentAssistantSettings() -> APIClient { manager(managerID ?? shownManager) }
+
+    /// Whether two captured settings requests still belong to the same hub and assistant.
+    func sameSettingsScope(as other: APIClient?) -> Bool {
+        guard let other else { return false }
+        return config == other.config && group == other.group
+            && (managerID ?? shownManager) == (other.managerID ?? other.shownManager)
+    }
+
     /// This client for the Persona page while it shows manager `id` (nil or empty: the default's).
     func showing(_ id: String?) -> APIClient {
         var c = self
@@ -256,8 +267,19 @@ nonisolated struct APIClient: Sendable {
         return !(parts.count > 1 && parts[0] == "conversations")
     }
 
-    /// What a request to `path` carries besides the caller's own headers: the manager it names.
+    /// The recordings' part of the knowledge base (`/api/v1/kb/recordings…`: a recording's minutes, a day's recap, the
+    /// hub's list of them). This device syncs its recordings to the default manager whichever assistant is current
+    /// (`/api/v1/recordings` names none), so what was made of them is read there too.
+    nonisolated static func recordingsRoute(_ path: String) -> Bool {
+        let base = "/api/v1/kb/recordings"
+        return path == base || path.hasPrefix(base + "/") || path.hasPrefix(base + "?")
+    }
+
+    /// What a request to `path` carries besides the caller's own headers: the manager it names. None for the
+    /// recordings' part of the knowledge base, whichever manager this client is for (`recordingsRoute`): the knowledge
+    /// page's client names the current assistant on everything else.
     func routing(_ path: String, _ query: [String: String]) -> [String: String] {
+        if Self.recordingsRoute(path) { return [:] }
         let named = managerID ?? (Self.assistantRoute(path, query: query) ? shownManager : nil)
         return named.map { [Self.managerHeader: $0] } ?? [:]
     }
@@ -274,11 +296,13 @@ nonisolated struct APIClient: Sendable {
     /// `opID`: the write's op id (`X-Persona-Op-Id`, docs/protocol/protocol.md「操作回执」): the hub does it once however often
     /// it arrives. A repeat it cannot answer yet comes back `202 {"state":"pending" | "unknown"}`: thrown as an
     /// APIError with `OpReceipt.pendingCode` / `unknownCode`, so no caller takes it for done.
+    /// `extraHeaders`: what this one request says besides (a hand-off card's approval declares its feature).
     func request(_ method: String, _ path: String, query: [String: String] = [:], body: (any Encodable)? = nil,
-                 timeout: TimeInterval = 30, opID: UUID? = nil) async throws -> Data {
+                 timeout: TimeInterval = 30, opID: UUID? = nil, extraHeaders: [String: String] = [:]) async throws -> Data {
         let query = larkScoped(path, query)
         let headers = clientMetadata.headers.merging(opID.map(HubNaming.operationHeaders) ?? [:]) { _, operation in operation }
             .merging(routing(path, query)) { _, manager in manager }
+            .merging(extraHeaders) { _, extra in extra }
         if let answer = transport ?? (config.isDemo ? Self.local : nil) {
             let data: Data
             do {
@@ -494,8 +518,9 @@ nonisolated struct APIClient: Sendable {
     }
 
     @discardableResult
-    func post(_ path: String, body: (any Encodable)? = nil, timeout: TimeInterval = 30, opID: UUID? = nil) async throws -> Data {
-        try await request("POST", path, body: body ?? [String: String](), timeout: timeout, opID: opID)
+    func post(_ path: String, body: (any Encodable)? = nil, timeout: TimeInterval = 30, opID: UUID? = nil,
+              extraHeaders: [String: String] = [:]) async throws -> Data {
+        try await request("POST", path, body: body ?? [String: String](), timeout: timeout, opID: opID, extraHeaders: extraHeaders)
     }
 
     func delete(_ path: String) async throws {
@@ -886,6 +911,18 @@ nonisolated struct APIClient: Sendable {
         return try await Task.detached(priority: .utility) { try JSON.decoder.decode(NewerResponse.self, from: data) }.value
     }
 
+    /// How the app sent a message when it was not typed in the app itself (docs/protocol/protocol.md, `via`): such a
+    /// message never counts as the user's own words for a secret hand-off's Always rule.
+    enum MessageVia: String, Codable, Sendable {
+        /// Siri, Shortcuts or another App Intent ("Ask Persona", which runs on a locked phone too).
+        case intent
+        /// The share sheet.
+        case share
+        /// A card's button that writes the message for the user from what the app read (the Today card's Prep, with a
+        /// calendar event's title in it).
+        case card
+    }
+
     struct SendBody: Encodable {
         var text: String
         var images: [ImagePayload]?
@@ -894,18 +931,20 @@ nonisolated struct APIClient: Sendable {
         var clientMsgID: String?
         var clearDraft: String?
         var todoID: String?
+        var via: MessageVia?
         enum CodingKeys: String, CodingKey {
-            case text, images, launcher, model, clientMsgID = "client_msg_id", clearDraft = "clear_draft", todoID = "todo_id"
+            case text, images, launcher, model, via, clientMsgID = "client_msg_id", clearDraft = "clear_draft", todoID = "todo_id"
         }
     }
     /// launcher / model switch what a headless (assistant) conversation runs on from this message on. clientMsgID
     /// stays the same on a retry (the node types it once); clearDraft is the computer's draft the user agreed to
     /// clear first.
     /// opID: the message's op id (the outbox passes its id, the same as clientMsgID: docs/protocol/protocol.md「Operation receipts」).
+    /// via: how the app sent it when not typed in the app itself (Siri, the share sheet).
     func send(_ k: SessionKey, text: String, images: [ImagePayload] = [], launcher: String? = nil, model: String? = nil,
-              clientMsgID: String? = nil, clearDraft: String? = nil, todoID: String? = nil, opID: UUID? = nil) async throws {
+              clientMsgID: String? = nil, clearDraft: String? = nil, todoID: String? = nil, via: MessageVia? = nil, opID: UUID? = nil) async throws {
         try await post(sp(k) + "/messages", body: SendBody(text: HubNaming.outbound(text, canonical: personaNaming), images: images.isEmpty ? nil : images, launcher: launcher,
-                                                           model: model, clientMsgID: clientMsgID, clearDraft: clearDraft, todoID: todoID),
+                                                           model: model, clientMsgID: clientMsgID, clearDraft: clearDraft, todoID: todoID, via: via),
                        timeout: 100, opID: opID)
     }
     func interrupt(_ k: SessionKey) async throws { try await post(sp(k) + "/interrupt") }
@@ -1028,6 +1067,9 @@ nonisolated struct APIClient: Sendable {
         return try await get(sp(k) + "/screen", query: q)
     }
     func close(_ k: SessionKey) async throws { try await post(sp(k) + "/close") }
+    /// Closes a headless Persona conversation so its next start uses the configured model (#4489, docs/protocol/protocol.md
+    /// 「Going back to the configured model」). Claims nothing: the session's `model_restore` says it is pending.
+    func restoreModel(_ k: SessionKey) async throws { try await post(sp(k) + "/restore-model") }
     private struct ForkBody: Encodable { var at_item_id: String }
     private struct Forked: Decodable { var session_id: String }
     /// Branch to New Chat (#2137): a new session with the conversation up to the end of item's turn; its id.
@@ -1158,11 +1200,25 @@ nonisolated struct APIClient: Sendable {
         /// conversations"), in the hub's order; nil when there are none or from an older hub. The sidebar shows them as
         /// the Directions group, under the names `assistantLeaders()` gives.
         var leaders: [String]?
+        /// The Main Chat Supervises Its Own Tasks (#4927, docs/assistant/unified-entry.md "Background supervisor"): the
+        /// value in effect. Off (the default) means the built-in background supervisor follows up the tasks no leader
+        /// supervises; nil from a hub without the background supervisor, which hides the switch.
+        var mainSupervisesOwnTasks: Bool?
+        /// The background supervisor's session id once the hub has made it (read-only); nil until then and from an
+        /// older hub.
+        var backgroundSupervisor: String?
         enum CodingKeys: String, CodingKey {
             case launcher, cwd, conversations, timezone, main, leaders
             case machineID = "machine_id", notes = "notes_effective", mainTasksQuiet = "main_tasks_quiet"
             case mainBackgroundFolded = "main_background_folded"
             case meetingAttendanceDefault = "meeting_attendance_default", timezonePicked = "timezone_picked"
+            case mainSupervisesOwnTasks = "main_supervises_own_tasks", backgroundSupervisor = "background_supervisor"
+        }
+
+        /// Whether conversation `id` is the built-in background supervisor (#5083): listed with the scheduled tasks'
+        /// conversations, never archived, ended or made a direction. Never the main conversation, as on the hub.
+        func isBackgroundSupervisor(_ id: String) -> Bool {
+            !id.isEmpty && id == backgroundSupervisor && id != main
         }
 
         /// Whether the main conversation folds its background rounds: on unless the hub says off (an older hub omits it).
@@ -1282,18 +1338,20 @@ nonisolated struct APIClient: Sendable {
         var mainTasksQuiet: Bool?
         var mainBackgroundFolded: Bool?
         var meetingAttendanceDefault: String?
+        var mainSupervisesOwnTasks: Bool?
         enum CodingKeys: String, CodingKey {
             case launcher, timezone, notes
             case machineID = "machine_id", mainTasksQuiet = "main_tasks_quiet", meetingAttendanceDefault = "meeting_attendance_default"
-            case mainBackgroundFolded = "main_background_folded"
+            case mainBackgroundFolded = "main_background_folded", mainSupervisesOwnTasks = "main_supervises_own_tasks"
         }
     }
     func setAssistant(machine: String? = nil, launcher: String? = nil, timezone: String? = nil, notes: String? = nil,
                       mainTasksQuiet: Bool? = nil, mainBackgroundFolded: Bool? = nil,
-                      meetingAttendanceDefault: String? = nil) async throws -> AssistantState {
+                      meetingAttendanceDefault: String? = nil, mainSupervisesOwnTasks: Bool? = nil) async throws -> AssistantState {
         owned(try JSON.decoder.decode(AssistantState.self, from: try await request("PUT", "/api/v1/assistant",
             body: AssistantConfigBody(machineID: machine, launcher: launcher, timezone: timezone, notes: notes, mainTasksQuiet: mainTasksQuiet,
-                                      mainBackgroundFolded: mainBackgroundFolded, meetingAttendanceDefault: meetingAttendanceDefault))))
+                                      mainBackgroundFolded: mainBackgroundFolded, meetingAttendanceDefault: meetingAttendanceDefault,
+                                      mainSupervisesOwnTasks: mainSupervisesOwnTasks))))
     }
     /// The Chat tab is open: the hub gets a claude process ready so the first message starts at once. With no launcher
     /// chosen the field is omitted and the hub warms its own default (#4200: the client never sends a made-up name).
@@ -1591,14 +1649,16 @@ nonisolated struct APIClient: Sendable {
         var main: Bool?
         /// "health": the conversation opens in the health space (docs/assistant/health.md); never with `main`.
         var space: String?
-        enum CodingKeys: String, CodingKey { case prompt, images, launcher, effort, main, space; case permissionMode = "permission_mode" }
+        var via: MessageVia?
+        enum CodingKeys: String, CodingKey { case prompt, images, launcher, effort, main, space, via; case permissionMode = "permission_mode" }
     }
     /// `main`: the new conversation becomes the main one. `space`: the space it opens in (nil: the assistant's own).
+    /// `via`: how the app sent the prompt when not typed in the app itself (Siri, the share sheet).
     /// `opID`: the first message's op id (`AssistantStart`, hub feature `assistant_start_ops`): the hub starts it once.
     func startConversation(prompt: String, images: [ImagePayload] = [], launcher: String? = nil, permissionMode: String? = nil,
-                           effort: String? = nil, main: Bool = false, space: String? = nil, opID: UUID? = nil) async throws -> Session {
+                           effort: String? = nil, main: Bool = false, space: String? = nil, via: MessageVia? = nil, opID: UUID? = nil) async throws -> Session {
         let body = NewConversation(prompt: HubNaming.outbound(prompt, canonical: personaNaming), images: images.isEmpty ? nil : images,
-                                   launcher: launcher, permissionMode: permissionMode, effort: effort, main: main ? true : nil, space: space)
+                                   launcher: launcher, permissionMode: permissionMode, effort: effort, main: main ? true : nil, space: space, via: via)
         // The health space is the default manager's (docs/assistant/health.md), whichever the Persona page shows.
         let api = space == nil ? self : showing(nil)
         var s = try JSON.decoder.decode(SessionResponse.self, from: try await api.post("/api/v1/assistant/conversations", body: body, timeout: 110, opID: opID)).session
@@ -1686,8 +1746,11 @@ nonisolated struct APIClient: Sendable {
     }
     @discardableResult
     /// opID: one per answer (the same on every retry of it), so a retry through a hub restart presses nothing twice.
-    func resolve(_ id: String, _ r: Resolution, opID: UUID = UUID()) async throws -> ResolveResult {
-        try JSON.decoder.decode(ResolveResult.self, from: try await post("/api/v1/interactions/\(id)/resolve", body: r, opID: opID))
+    /// `handoffCard`: a hand-off card's own approval, which says so (`SecretHandoff.feature`) on this request alone.
+    func resolve(_ id: String, _ r: Resolution, opID: UUID = UUID(), handoffCard: Bool = false) async throws -> ResolveResult {
+        let headers = handoffCard ? ["X-Persona-Features": SecretHandoff.feature] : [:]
+        return try JSON.decoder.decode(ResolveResult.self, from: try await post("/api/v1/interactions/\(id)/resolve", body: r, opID: opID,
+                                                                                 extraHeaders: headers))
     }
 
     /// One session's cards and how they ended (GET /api/v1/interactions/history), newest first; a row this app can't read

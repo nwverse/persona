@@ -8,7 +8,8 @@ final class MeetingRecordingUITests: XCTestCase {
     private let live = "00000000-0000-0000-0000-000000000002"
     private let past = "00000000-0000-0000-0000-000000000003"
 
-    /// The Recordings page leads with Meeting Recording; the drawer has it first among the places.
+    /// The Recordings page leads with Record, its one prominent button (#5243); the drawer has the page first among its
+    /// places (#5517).
     @MainActor func testMeetingRecordingIsOneTapAway() throws {
         let hub = try mockHub()
         let app = XCUIApplication()
@@ -16,16 +17,17 @@ final class MeetingRecordingUITests: XCTestCase {
         app.launchPinned()
         let start = app.buttons["recording-meeting-start"]
         XCTAssertTrue(start.waitForExistence(timeout: 15), app.debugDescription)
-        XCTAssertEqual(start.label, "会议录音")
-        XCTAssertTrue(app.buttons["recording-start"].exists, "the plain recording stays")
+        XCTAssertEqual(start.label, "录音")
+        XCTAssertFalse(app.buttons["recording-start"].exists, "one Record button: a note is the Type choice under it")
         try shot(app, "recordings")
 
         app.terminate()
-        app.launchArguments = ["-pairURL", pair(hub), "-tab", "assistant", "-newAssistant", "YES", "-openAssistantSidebar", "YES"]
+        app.launchArguments = ["-pairURL", pair(hub), "-tab", "assistant", "-newAssistant", "YES"]
         app.launchPinned()
+        openDrawer(app)
         let row = app.buttons["sidebar-meeting-recording"].firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 15), app.debugDescription)
-        XCTAssertTrue(row.label.contains("会议录音"), row.label)
+        XCTAssertTrue(row.label.contains("录音") && !row.label.contains("会议"), row.label)
     }
 
     /// A meeting being recorded: its name from the calendar, the time, Meeting, its bookmarks; the drawer's row opens it;
@@ -49,9 +51,9 @@ final class MeetingRecordingUITests: XCTestCase {
         XCTAssertTrue(try stored(hub, live)?.contains("产品周会") == true)
 
         app.terminate()
-        app.launchArguments = ["-pairURL", pair(hub), "-tab", "assistant", "-newAssistant", "YES", "-openAssistantSidebar", "YES",
-                               "-showMeetingSample", "recording"]
+        app.launchArguments = ["-pairURL", pair(hub), "-tab", "assistant", "-newAssistant", "YES", "-showMeetingSample", "recording"]
         app.launchPinned()
+        openDrawer(app)
         let row = app.buttons["sidebar-meeting-recording"].firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 15), app.debugDescription)
         XCTAssertTrue(row.label.contains("录音中"), row.label)
@@ -109,7 +111,8 @@ final class MeetingRecordingUITests: XCTestCase {
         sleep(1)
     }
 
-    /// The hub's minutes on the meeting's page: the sections, a time that shows its line of the transcript, Copy and Share.
+    /// The hub's minutes on the meeting's page: the Summary's cards (#5026; `MinutesCardsUITests` has the rest), a time that
+    /// shows its line of the transcript, Copy and Share.
     @MainActor func testMinutesJumpToTheTranscript() throws {
         let hub = try mockHub()
         try minutesMode(hub, "ready")
@@ -119,35 +122,38 @@ final class MeetingRecordingUITests: XCTestCase {
         // Uploaded, written by the hub, read again (every 15 s while it waits).
         let copy = app.buttons["minutes-copy"]
         XCTAssertTrue(copy.waitForExistence(timeout: 45), app.debugDescription)
-        XCTAssertTrue(app.staticTexts["纪要"].firstMatch.exists, app.debugDescription)
+        XCTAssertTrue(app.segmentedControls["recording-view-switch"].firstMatch.exists, app.debugDescription)
         XCTAssertTrue(app.buttons["minutes-share"].exists)
-        // Brought to the top of the screen for the picture: the minutes, then the transcript under them.
+        // Brought to the top of the screen for the picture: the switch, then the Summary's cards.
         app.swipeUp()
         try shot(app, "minutes")
-        // The sections below, scrolled into view one by one.
-        for text in ["要点", "决定", "待办", "张三 · 周五前", "未决问题"] {
-            let element = app.staticTexts[text].firstMatch
+        // The cards below, scrolled into view one by one, and the action item's owner and date.
+        let cards = ["minutes-card-points", "minutes-card-decisions", "minutes-card-open", "minutes-card-actions"]
+            .map { app.descendants(matching: .any).matching(identifier: $0).firstMatch }
+        for element in cards + [app.staticTexts["张三 · 周五前"].firstMatch] {
             var swipes = 0
             while !element.exists || !element.isHittable, swipes < 4 { app.swipeUp(); swipes += 1 }
             // Scrolled past (rows above the screen are not in the tree): back up.
             while !element.exists || !element.isHittable, swipes < 10 { app.swipeDown(); swipes += 1 }
-            XCTAssertTrue(element.exists, "no \(text):\n\(app.debugDescription)")
+            XCTAssertTrue(element.exists, "no \(element.description):\n\(app.debugDescription)")
         }
         // The meeting's fields went up with it.
         let body = try stored(hub, past) ?? ""
         XCTAssertTrue(body.contains("\"kind\":\"meeting\""), body)
         XCTAssertTrue(body.contains("\"attendees\":[\"张三\",\"李四\",\"王五\"]"), body)
         try shot(app, "minutes-sections")
-        // The open question was said at 1:26: its time shows that line, lit.
-        let time = app.buttons.matching(identifier: "minutes-time").allElementsBoundByIndex.last
-        XCTAssertNotNil(time)
-        if let time {
-            if !time.isHittable { app.swipeUp() }
-            time.tap()
-        }
+        // The last action item (the last card) was said at 1:45: its time switches to the transcript and shows that line,
+        // lit. The time is found again after each swipe (a list's rows, and so their places in a query, change as it
+        // scrolls); the line is lit as the transcript appears, and the scroll to it follows on the next turn.
+        let times = app.descendants(matching: .any).matching(identifier: "minutes-card-actions").firstMatch
+            .buttons.matching(identifier: "minutes-time")
+        let last = { times.element(boundBy: max(0, times.count - 1)) }
+        for _ in 0..<6 where !onScreen(last(), in: app) { app.swipeUp(velocity: .slow) }
+        XCTAssertTrue(onScreen(last(), in: app), "the last action item's time is not on the screen:\n\(app.debugDescription)")
+        last().tap()
         let lit = app.descendants(matching: .any)["recording-sentence-lit"].firstMatch
         XCTAssertTrue(lit.waitForExistence(timeout: 3), app.debugDescription)
-        XCTAssertTrue(lit.isHittable, "the line is not in view")
+        XCTAssertTrue(wait(2) { lit.exists && lit.isHittable }, "the line is not in view")
         try shot(app, "minutes-jump")
     }
 
@@ -190,13 +196,18 @@ final class MeetingRecordingUITests: XCTestCase {
                                    "-ui.scheme", look == "dark" ? "dark" : "light"]
                 + (look == "large" ? ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] : [])
             app.launchPinned()
-            // At the largest text the meeting's own card fills the first screens, and a list builds no rows below them:
-            // scroll a little while the minutes load.
+            // At the largest text the meeting's own card fills the first screens, the minutes run many screens more, and a
+            // list builds no rows away from the screen: go down slowly to the transcript, then back up until Copy (at the
+            // minutes' top) has been on the screen, again while they load (#5144).
             let copy = app.buttons["minutes-copy"]
-            var swipes = 0
-            XCTAssertTrue(wait(45) {
+            let transcript = app.descendants(matching: .any)["recording-sentence"].firstMatch
+            var down = true, swipes = 0
+            XCTAssertTrue(wait(150) {
                 if copy.exists { return true }
-                if look == "large", swipes < 4 { app.swipeUp(); swipes += 1 }
+                guard look == "large" else { return false }
+                if down { app.swipeUp(velocity: .slow) } else { app.swipeDown(velocity: .slow) }
+                swipes += 1
+                if (down && transcript.exists) || swipes >= 30 { down.toggle(); swipes = 0 }
                 return false
             }, "\(look): no minutes:\n\(app.debugDescription)")
             let regenerate = app.buttons["minutes-regenerate"]
@@ -206,7 +217,7 @@ final class MeetingRecordingUITests: XCTestCase {
                 try shot(app, "minutes-regenerate", look: look)
             }
             let addAll = app.buttons["minutes-add-all"]
-            scroll(to: addAll, in: app, swipes: look == "large" ? 30 : 8)
+            scroll(to: addAll, in: app, swipes: look == "large" ? 40 : 8, slow: look == "large")
             XCTAssertTrue(onScreen(addAll, in: app), "\(look): no Add All with two left:\n\(app.debugDescription)")
             let add = app.buttons.matching(identifier: "minutes-add")
             if look != "large" { XCTAssertEqual(add.count, 2, "\(look): each action item has Add to To-Dos") }
@@ -239,6 +250,27 @@ final class MeetingRecordingUITests: XCTestCase {
             XCTAssertTrue(updating.waitForNonExistence(timeout: 30), "\(look): the next version never came:\n\(app.debugDescription)")
             XCTAssertTrue(regenerate.waitForExistence(timeout: 5), "\(look): Regenerate not back")
             app.terminate()
+        }
+    }
+
+    /// The minutes' time in the app's own date style, as the recording's header above it, not the hub's fixed format
+    /// (#4875): Chinese and Japanese, light and dark. The mock's minutes carry `start` / `end` as the hub writes them.
+    @MainActor func testMinutesTimeInTheAppsDateStyle() throws {
+        let hub = try mockHub()
+        for (language, locale) in [("zh-Hans", "zh_CN"), ("ja", "ja_JP")] {
+            for look in ["light", "dark"] {
+                try minutesMode(hub, "ready")
+                let app = XCUIApplication()
+                app.launchArguments = ["-pairURL", pair(hub), "-tab", "assistant", "-openShellPage", "recordings", "-showMeetingSample", "minutes",
+                                       "-ui.scheme", look, "-AppleLanguages", "(\(language))", "-AppleLocale", locale]
+                app.launchPinned()
+                let when = app.descendants(matching: .any)["minutes-when"].firstMatch
+                XCTAssertTrue(when.waitForExistence(timeout: 45), "\(language) \(look): no minutes:\n\(app.debugDescription)")
+                acceptIconAlert(timeout: 2)
+                XCTAssertTrue(when.label.contains("月") && !when.label.contains("2027-"), "\(language) \(look): \(when.label)")
+                try shot(app, "minutes-when-\(language)", look: look)
+                app.terminate()
+            }
         }
     }
 
@@ -301,8 +333,10 @@ final class MeetingRecordingUITests: XCTestCase {
 
     /// Scrolls until `el` is on the screen and clear of the navigation bar: a button under the bar's blur still reads as
     /// hittable, and a tap there lands on the bar (Regenerate after an add, in the first run).
-    @MainActor private func scroll(to el: XCUIElement, in app: XCUIApplication, swipes: Int = 8, up: Bool = false) {
-        for _ in 0..<swipes where !onScreen(el, in: app) { if up { app.swipeDown() } else { app.swipeUp() } }
+    /// `slow` swipes without momentum, so a short row is not flung past at the largest text.
+    @MainActor private func scroll(to el: XCUIElement, in app: XCUIApplication, swipes: Int = 8, up: Bool = false, slow: Bool = false) {
+        let velocity: XCUIGestureVelocity = slow ? .slow : .default
+        for _ in 0..<swipes where !onScreen(el, in: app) { if up { app.swipeDown(velocity: velocity) } else { app.swipeUp(velocity: velocity) } }
     }
 
     @MainActor private func onScreen(_ el: XCUIElement, in app: XCUIApplication) -> Bool {
@@ -334,6 +368,15 @@ final class MeetingRecordingUITests: XCTestCase {
         guard let dir = env["PERSONA_SHOTS"] else { return }
         let appearance = env["PERSONA_SHOTS_APPEARANCE"] ?? "unknown"
         try png.write(to: URL(fileURLWithPath: "\(dir)/meeting-\(appearance)-\(name).png"))
+    }
+
+    /// Opens the drawer with its button, as a finger does: one opened by `-openAssistantSidebar` can come up without
+    /// its rows.
+    @MainActor private func openDrawer(_ app: XCUIApplication) {
+        let menu = app.buttons["assistant-sidebar-button"].firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 20), app.debugDescription)
+        sleep(1)
+        menu.tapCenter()
     }
 
     private func mockHub() throws -> String {

@@ -227,7 +227,9 @@ class HubChatRepository(
             return result
         }
         override suspend fun editQueue(session: Session, keep: List<Int>) = delegate.editQueue(session, keep)
+        override suspend fun sendQueuedNow(session: Session) = delegate.sendQueuedNow(session)
         override suspend fun info(session: Session) = delegate.info(session)
+        override suspend fun interactionHistory(session: Session) = delegate.interactionHistory(session)
         override suspend fun restoreModel(session: Session) = delegate.restoreModel(session)
         override suspend fun fork(session: Session, atItemId: String): String {
             // A finished streamed reply keeps showing its draft id; the node only knows the transcript one (#5305).

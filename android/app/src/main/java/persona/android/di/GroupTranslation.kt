@@ -167,7 +167,10 @@ internal fun ChatActions.inGroup(names: GroupNames): ChatActions {
         override suspend fun execute(session: Session, action: ChatAction) = source.execute(names.rawSession(session), action)
         override suspend fun verify(session: Session, action: ChatAction) = source.verify(names.rawSession(session), action)
         override suspend fun editQueue(session: Session, keep: List<Int>) = source.editQueue(names.rawSession(session), keep)
+        override suspend fun sendQueuedNow(session: Session) = source.sendQueuedNow(names.rawSession(session))
         override suspend fun info(session: Session) = source.info(names.rawSession(session))
+        override suspend fun interactionHistory(session: Session) = source.interactionHistory(names.rawSession(session))
+            .map { it.copy(interaction = names.interaction(it.interaction)) }
         override suspend fun restoreModel(session: Session) = source.restoreModel(names.rawSession(session))
         override suspend fun fork(session: Session, atItemId: String) = source.fork(names.rawSession(session), atItemId)
         override suspend fun rewind(session: Session, target: RewindTarget, restore: RewindRestore) = source.rewind(names.rawSession(session), target, restore)
@@ -256,6 +259,9 @@ internal fun AssistantManagement.inGroup(names: GroupNames): AssistantManagement
         override suspend fun endConversation(session: SessionKey) = source.endConversation(names.raw(session))
         override suspend fun compactConversation(session: SessionKey) = source.compactConversation(names.raw(session))
         override suspend fun archiveConversation(session: SessionKey) = source.archiveConversation(names.raw(session))
+        override suspend fun unarchiveConversation(session: SessionKey) = source.unarchiveConversation(names.raw(session))
+        override suspend fun archivedConversations() = source.archivedConversations().map(names::session)
+        override suspend fun renameConversation(session: SessionKey, title: String) = source.renameConversation(names.raw(session), title)
         override suspend fun makeDirection(session: SessionKey) = source.makeDirection(names.raw(session))
         override suspend fun endDirection(session: SessionKey) = source.endDirection(names.raw(session))
         override suspend fun newMainConversation(carrySummary: Boolean, expect: String?) =
@@ -298,7 +304,8 @@ internal fun AssistantConversations.inGroup(names: GroupNames, scope: CoroutineS
     return object : AssistantConversations {
         override val assistant = source.assistant.mapIn(scope) { snapshot ->
             AssistantSnapshot(snapshot.mainSession?.let(names::key), snapshot.conversations.map(names::session), snapshot.manager, snapshot.managerId,
-                snapshot.leaders, snapshot.directionNames, leaderCounts = snapshot.leaderCounts)
+                snapshot.leaders, snapshot.directionNames, leaderCounts = snapshot.leaderCounts,
+                backgroundSupervisor = snapshot.backgroundSupervisor)
         }
         override val pinned = source.pinned.mapIn(scope) { keys -> keys.mapTo(LinkedHashSet(), names::key) }
         override suspend fun refresh() = source.refresh()

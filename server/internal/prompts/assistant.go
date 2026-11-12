@@ -32,6 +32,9 @@ type AssistantClaudeMD struct {
 	PersonaView bool
 	// Language is the language the user reads, by its own name ("English", or Japanese written in Japanese); "" is Chinese, as before i18n.
 	Language string
+	// BackgroundSupervisor: the background supervisor follows up the tasks no leader supervises (#4927), so the main
+	// conversation is told it no longer reviews them itself. False keeps the text as it was.
+	BackgroundSupervisor bool
 }
 
 func RenderAssistantClaudeMD(d AssistantClaudeMD) string { return render("assistant/claude_md", d) }
@@ -344,7 +347,18 @@ type AssistantContext struct {
 	// LeaderName: for a leader, its direction's name.
 	Directions []ContextDirection
 	LeaderName string
+	// Background: this is the background supervisor (#4927), which follows up the tasks no leader supervises.
+	// BackgroundStarted: for the main conversation, once: the background supervisor's id, the first message after it
+	// began to follow up the main conversation's tasks.
+	Background        bool
+	BackgroundStarted string
 }
+
+// SupervisorStart is the message the background supervisor's conversation starts with (assistant/supervisor_start):
+// what it is for, before its first supervision message.
+type SupervisorStart struct{ Owner string }
+
+func RenderSupervisorStart(d SupervisorStart) string { return render("assistant/supervisor_start", d) }
 
 // ContextDirection is one current leader as the main conversation is told of it: its conversation id and name.
 type ContextDirection struct{ ID, Name string }
@@ -398,6 +412,8 @@ type BriefFacts struct {
 	Briefs, BriefsDone []BriefTask
 	// Day: the evening routine's today's all-day recording (#4741), for the model only; nil leaves the section out.
 	Day *BriefDay
+	// Setup: the lines of the weekly recommended-setup block (#5085), ready to read; none leaves the section out.
+	Setup []string
 }
 
 // BriefDay is today's all-day recording in the evening routine's facts (#4741), the day's parts merged by time; the
@@ -609,6 +625,22 @@ type AskTodoChoice struct {
 
 func RenderAskTodoAnswer(a AskTodoAnswer) string { return render("assistant/ask_answer", a) }
 
+// AskLater is the message to the conversation that asked with ask_user and wait false (#4928) once its card ended:
+// the user's answers (Answers; Missing: some of the questions got none), that it expired (Expired: what became of
+// it, as a waiting ask_user would have been told), that its time ran out after the user wrote in the conversation
+// (Spoke: no to-do, no default), or, with none of them, that the card ended unanswered. The questions and answers
+// are escaped by the caller.
+type AskLater struct {
+	When      string // when it was asked, MM-DD HH:MM in the user's zone
+	Questions []string
+	Answers   []AskTodoChoice
+	Missing   bool
+	Expired   string
+	Spoke     bool
+}
+
+func RenderAskLater(a AskLater) string { return render("assistant/ask_later", a) }
+
 // Supervise is a supervise message: the tasks the main conversation handed out that need it now (#3124), what waits on a
 // decision first.
 type Supervise struct {
@@ -617,6 +649,12 @@ type Supervise struct {
 	// Leader: it goes to a leader conversation, for the tasks it handed out (#3133); Escalated: an entry is a leader's
 	// needs_user, told the main conversation.
 	Leader, Escalated bool
+	// Background: with Leader, it goes to the background supervisor (#4927): the leader's message, for tasks other
+	// conversations handed out, whose cards go from it to the user.
+	Background bool
+	// BackgroundEscalated: with Escalated, one of those entries is the background supervisor's needs_user (#4927): no
+	// leader is named for it.
+	BackgroundEscalated bool
 	// Side: it goes to an ordinary side conversation, for the tasks that conversation handed out itself.
 	Side bool
 	// LeaderStuck: an entry is a leader's task stuck over a day (sigLeaderStuck), told the main conversation (#3609).
@@ -645,6 +683,7 @@ type SuperviseEntry struct {
 	Ask             string             // needs_you: what it asks
 	Recommend       string             // escalated: the option the leader recommends
 	LeaderGone      bool               // decide: its task leader agent cannot be reached, so the supervisor takes the task over
+	Background      bool               // escalated: by the background supervisor, not a leader conversation (#4927)
 	DoneWhen        []string           // what done means
 	Round           int                // reworks so far
 	Machine         string             // where its agent runs (a name)
