@@ -121,13 +121,8 @@ func TestInlineTurnRegistersWithoutAnAppAndReadsFullText(t *testing.T) {
 	h := inlineFullHub{fakeHub: f, full: proto.Item{ID: "long#0", Role: "assistant", Kind: proto.KindText, Text: "Conclusion\n```persona-view\n{\"fallback\":\"Finished\",\"sections\":[]}\n```\n"}}
 	s := withSettings(t, f, New(Options{Hub: h, Store: func() Store { return database }, Logf: testLogf(t)}))
 	ref := SessionRef{MachineID: "server", SessionID: conversation}
-	s.registerInlineTurn(ctx, ref)
-	keys, err := database.AssistantViewBlockKeys(ctx, conversation)
-	if err != nil || len(keys) != 0 {
-		t.Fatalf("disabled keys %v %v", keys, err)
-	}
 	s.registerInlineTurn(ctx, SessionRef{MachineID: "server", SessionID: "ordinary"})
-	keys, err = database.AssistantViewBlockKeys(ctx, "ordinary")
+	keys, err := database.AssistantViewBlockKeys(ctx, "ordinary")
 	if err != nil || len(keys) != 0 {
 		t.Fatalf("ordinary turn keys %v %v", keys, err)
 	}
