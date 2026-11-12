@@ -192,6 +192,8 @@ extension Theme {
         static let interrupt = "stop.fill"
         static let stopLoop = "stop.circle"
         static let run = "play.fill"
+        /// Resume a stopped Agent in a terminal on its computer (#5521): the web's Resume shows the same play mark.
+        static let resume = run
         static let add = "plus"
         static let send = "arrow.up"
         /// Move up, the up-arrow key: the same arrow as `send`.

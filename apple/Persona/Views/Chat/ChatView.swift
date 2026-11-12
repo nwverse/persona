@@ -38,6 +38,9 @@ struct ChatView: View {
     /// The pin is bringing a header up to show what opened under it (`ChatPin.onRising`): no ↓ for that moment.
     @State private var pinRising = false
     @State private var showTerminal = false
+    /// The terminal comes up to resume a stopped Agent at once (Resume in Terminal, #5521): it shows the resume's progress
+    /// and connects as soon as the Agent is up.
+    @State private var resumeOnOpen = false
     #if os(macOS)
     /// The Mac's terminal takes the chat's place (Terminal | Chat, #3183): mounted the first time it is shown, then kept under
     /// the chat, still subscribed and at the same size, so coming back to it does not connect again.
@@ -745,8 +748,9 @@ struct ChatView: View {
         .onChange(of: status) { _, st in if !st.isActive { Task { await loadGit() } } }
         // One stack: the chat takes the whole screen. Beside the list (split) the tab bar stays, or there is no way out.
         .hidesTabBarWhenShown(style == .dev && split == nil)
-        .fullScreenCover(isPresented: Binding(get: { showTerminal && session?.canTerminal == true }, set: { showTerminal = $0 })) {
-            TerminalCover(key: key, switchTo: switchTo).presentationBackground(.clear)
+        .fullScreenCover(isPresented: Binding(get: { showTerminal && session?.canTerminal == true },
+                                              set: { showTerminal = $0; if !$0 { resumeOnOpen = false } })) {
+            TerminalCover(key: key, switchTo: switchTo, resumeOnOpen: resumeOnOpen).presentationBackground(.clear)
         }
         .renameSessionAlert($renaming)
         .confirmClose($closing) { closedAgent($0, order: []) }
@@ -2563,7 +2567,8 @@ struct ChatView: View {
                         .padding(.leading, Theme.Space.xs)
                 }
                 if let s = session, s.isStopped {
-                    StoppedAgentBar(openTerminal: openTerminal) // read-only: its terminal page has the shell and Resume (#4754)
+                    // read-only: its terminal page has the shell it left and Resume (#4754), which Resume here opens (#5521)
+                    StoppedAgentBar(openTerminal: openTerminal, resume: resumeHere)
                 } else if let s = session, !s.canSend, let reason = s.sourceSubtitle {
                     Text(reason).font(Theme.Font.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -3247,6 +3252,9 @@ struct ChatView: View {
                 if session?.canTerminal == true {
                     Button { openTerminal() } label: { Label("Terminal", systemImage: Theme.Icon.terminal).lineLimit(1) }
                 }
+                #if os(iOS)
+                if let s = session { resumeMenuItem(s) }
+                #endif
                 if pane != .chat {
                     Button { withAnimation(Theme.Motion.standard) { pane = .chat } } label: { Label("Back to Chat", systemImage: SessionPane.chat.symbol) }
                 }
@@ -3853,6 +3861,44 @@ struct ChatView: View {
         else if backShowsList, let showList { showList.show() } else { dismissChat() }
         #endif
     }
+
+    /// Resume in Terminal (#5521): the terminal comes up over the page and resumes the stopped Agent there (TerminalPanel's
+    /// Resume Session, `session.start` with its id), so its progress, an error and then the Agent itself show in one place.
+    private func resumeInTerminal() {
+        resumeOnOpen = true
+        openTerminal()
+    }
+
+    /// The stopped line's Resume: as Resume in Terminal on the phone; the frozen Mac app keeps its line as it was.
+    private var resumeHere: (() -> Void)? {
+        #if os(macOS)
+        nil
+        #else
+        resumeInTerminal
+        #endif
+    }
+
+    #if os(iOS)
+    /// ⋯'s Resume in Terminal, as `Session.terminalResume(on:)` says: there for a stopped Agent, disabled with why where
+    /// its computer has no terminal engine, gone otherwise (running, starting, an assistant's, a desktop app's).
+    @ViewBuilder private func resumeMenuItem(_ s: Session) -> some View {
+        let machine = model.machine(s.machineRef)
+        switch s.terminalResume(on: machine) {
+        case .available:
+            Button { resumeInTerminal() } label: { Label("Resume in Terminal", systemImage: Theme.Icon.resume).lineLimit(1) }
+                .accessibilityIdentifier("chat-resume-terminal")
+        case .noEngine:
+            Button {} label: {
+                Label("Resume in Terminal", systemImage: Theme.Icon.resume)
+                Text("No terminal engine on \(machine?.name ?? s.machineID)", comment: "Why Resume in Terminal is off: the computer enables no terminal engine")
+            }
+            .disabled(true)
+            .accessibilityIdentifier("chat-resume-terminal")
+        case .hidden:
+            EmptyView()
+        }
+    }
+    #endif
 
     /// Terminal: on the Mac it takes the chat's place (Terminal | Chat, #3183); elsewhere it comes up from the bottom over the page.
     private func openTerminal() {
@@ -5665,10 +5711,12 @@ struct TerminalCover: View {
     @Environment(\.dismiss) private var dismiss
     let key: SessionKey
     var switchTo: ((SessionKey) -> Void)?
+    /// Resume in Terminal (#5521): resume the stopped Agent as the terminal comes up.
+    var resumeOnOpen = false
     @State private var offset: CGFloat = 0
 
     var body: some View {
-        TerminalPanel(key: key, switchTo: switchTo, grab: TerminalGrab(
+        TerminalPanel(key: key, switchTo: switchTo, resumeOnOpen: resumeOnOpen, grab: TerminalGrab(
             dragged: { offset = max(0, $0) },
             released: { distance, predicted in
                 if distance > 140 || predicted > 420 { close() } else { withAnimation(.spring(duration: 0.3)) { offset = 0 } }
@@ -5688,22 +5736,46 @@ struct TerminalCover: View {
 }
 
 /// Above a stopped Agent's composer (#4754, docs/integrations/engines.md「Agents run in a terminal」): it takes no messages;
-/// its terminal page shows the shell it left and offers Resume, the one way it runs again.
+/// its terminal page shows the shell it left and offers Resume, the one way it runs again. Resume Session here opens that
+/// page and resumes it there (#5521), as the web's line does; the words go above the two buttons, which stay on one line.
 private struct StoppedAgentBar: View {
     var openTerminal: () -> Void
+    /// Nil keeps the line as it was (the frozen Mac app).
+    var resume: (() -> Void)?
 
     var body: some View {
-        HStack(spacing: Theme.Space.s) {
-            Text("This Agent has stopped. Its conversation and terminal stay; it doesn't take messages.")
-                .font(Theme.Font.caption).foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Button(action: openTerminal) {
-                Label("Terminal", systemImage: Theme.Icon.terminal).font(Theme.Font.labelStrong).lineLimit(1)
+        Group {
+            if let resume {
+                VStack(alignment: .leading, spacing: Theme.Space.s) {
+                    note
+                    HStack(spacing: Theme.Space.s) {
+                        terminal
+                        Button(action: resume) {
+                            Label("Resume Session", systemImage: Theme.Icon.resume).font(Theme.Font.labelStrong).lineLimit(1)
+                        }
+                        .themedButton(prominent: true)
+                        .accessibilityIdentifier("chat.stopped.resume")
+                    }
+                }
+            } else {
+                HStack(spacing: Theme.Space.s) { note; terminal }
             }
-            .themedButton()
-            .accessibilityIdentifier("chat.stopped.terminal")
         }
         .accessibilityElement(children: .contain)
+    }
+
+    private var note: some View {
+        Text("This Agent has stopped. Its conversation and terminal stay; it doesn't take messages.")
+            .font(Theme.Font.caption).foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var terminal: some View {
+        Button(action: openTerminal) {
+            Label("Terminal", systemImage: Theme.Icon.terminal).font(Theme.Font.labelStrong).lineLimit(1)
+        }
+        .themedButton()
+        .accessibilityIdentifier("chat.stopped.terminal")
     }
 }
 

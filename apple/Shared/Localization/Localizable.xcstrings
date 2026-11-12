@@ -415,6 +415,30 @@
         }
       }
     },
+    "No terminal engine on %@" : {
+      "comment" : "Why Resume in Terminal is off: the computer enables no terminal engine",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No terminal engine on %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ ではターミナルエンジンが有効になっていません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 没有启用终端引擎"
+          }
+        }
+      }
+    },
     "Note [Recording Kind]": {
       "extractionState": "manual",
       "localizations": {
@@ -503,6 +527,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "録音のオプション"
+          }
+        }
+      }
+    },
+    "Resume in Terminal" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Resume in Terminal"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ターミナルで再開"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在终端里恢复"
           }
         }
       }
@@ -641,6 +688,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "このアシスタントにはオンラインのコンピュータがありません。接続すると Agent 設定を変更できます。"
+          }
+        }
+      }
+    },
+    "This session isn't running, and %@ has no terminal engine to resume it in." : {
+      "comment" : "The terminal of a session that isn't running, on a computer that enables no terminal engine",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This session isn't running, and %1$@ has no terminal engine to resume it in."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このセッションは実行されておらず、%1$@ ではターミナルエンジンが有効になっていないため、ターミナルで再開できません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个会话没在运行，%1$@ 也没有启用终端引擎，没法在终端里恢复。"
           }
         }
       }
