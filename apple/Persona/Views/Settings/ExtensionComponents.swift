@@ -81,12 +81,6 @@ extension ExtensionComponentRowLabel where Trailing == EmptyView {
     }
 }
 
-extension ExtensionComponentRowLabel where Trailing == EmptyView {
-    init(row: ExtensionRowComponent, model: (any ExtensionViewControlling)?, chevron: Bool) {
-        self.init(row: row, model: model, chevron: chevron) { EmptyView() }
-    }
-}
-
 /// A picture an extension points at (a row's avatar or thumbnail): loaded with a session that sends no cookies or
 /// credentials, a placeholder while it loads and when it cannot be loaded.
 struct ExtensionRemoteImage: View {
