@@ -95,7 +95,7 @@ A component with a composable slot ends with a function-typed parameter, so a ca
 | `JButton` (Primary / Secondary / Quiet / Destructive, Large / Medium / Small), `JTextButton`, `JIconButton` | Buttons. Text is always one line |
 | `Modifier.stableAlpha` | Changing opacity (dimming when disabled). Do not use `Modifier.alpha`: switching between 1 and another value adds or removes a layer, and placed after `clip` + `background` the background color gets lost (`docs/android/android.md` lessons) |
 | `JTextField` / `JSearchField` | Input fields |
-| `JSegmented`, `JChip`, `QuickFilterBar` | Mutually exclusive filters, chips, quick filters at the top of a list (chips in Glass, underlined text tabs in Brief, a big-number count board in Board) |
+| `JSegmented`, `JChip`, `QuickFilterBar` | Mutually exclusive filters, chips, quick filters at the top of a list (chips in Glass, underlined text tabs in Brief, a big-number count board in Board). `JChip(boundedLabel = true)` inside a weighted slot gives the label the remaining width after its icons / count so long text ellipsizes instead of being clipped |
 | `JSwitch` / `JCheckbox` / `JRadio` | Switch, checkbox, radio |
 | `JBadge` / `JTag` | Count of things waiting for you, small static tags (draft, demo) |
 | `JChangingText` | Values that change on redraw: numbers count to the new value, other text fades in (numbers in extension Views, row values) |
@@ -159,7 +159,7 @@ These rules apply to all three styles, including extension-rendered content.
 
 ### 2.3.2 Persistent Inbox event hand-off bar
 
-`InboxHandOffBar` is the event page's `JListPage.bottomBar`: one horizontally scrolling row of `JChip` presets and Draft Reply, then a `ComposerFrame` with a target `JChip` + `JMenu`, the one-line field and `SendButton`. All three styles use that same structure; their existing components supply the surface and geometry, with no page-local dimensions, colors, fonts or style branches. Target names ellipsize and every button label stays on one line.
+`InboxHandOffBar` is the event page's `JListPage.bottomBar`: one horizontally scrolling row of `JChip` presets and Draft Reply, then a `ComposerFrame` with a target `JChip` + `JMenu`, the one-line field and `SendButton`. All three styles use that same structure; their existing components supply the surface and geometry, with no page-local dimensions, colors, fonts or style branches. The target uses `boundedLabel` so its name ellipsizes within the remaining composer width, and every button label stays on one line. More expands the same menu with Agents 4–12 instead of replacing Main chat and the first three Agents; Mark done remains in place. A remembered Agent is resolved only after the session catalog's first load, so a temporarily empty catalog is not reported as gone.
 
 The bar applies `imePadding()` itself. `JListPage` measures it for the list's bottom inset, so the last chain entry can scroll above it and the keyboard leaves the target, input and Send usable. Its local `JToastHost` reuses the five-second action timeout for the local Undo window; it does not change the root feedback host. When the toast expires, a compact status row retains Sent View and Failure Retry. Done and missing items do not show interactive controls.
 

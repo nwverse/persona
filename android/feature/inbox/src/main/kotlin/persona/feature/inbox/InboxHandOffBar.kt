@@ -22,6 +22,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import persona.core.designsystem.ComposerFrame
 import persona.core.designsystem.ComposerTextField
 import persona.core.designsystem.FeedbackAction
@@ -51,7 +53,7 @@ internal fun rememberInboxHandOffBarModel(repository: InboxRepository, itemId: S
     if (shared is InboxHandOffBarOwner) {
         val bars by shared.handOffBars.collectAsStateWithLifecycle()
         val current = bars ?: return null
-        return remember(current, shared, itemId) { current.get(itemId, shared) }
+        return remember(current, shared, itemId) { current.get(itemId) }
     }
     val scope = rememberCoroutineScope()
     val resources = LocalResources.current
@@ -78,6 +80,9 @@ internal fun InboxHandOffBar(
     val state by model.state.collectAsStateWithLifecycle()
     val phase = state.phase
     val memory by repository.handOffMemory.collectAsStateWithLifecycle(initialValue = null)
+    val targetsReady by remember(repository) {
+        repository.snapshot.map { it.targetsReady }.distinctUntilChanged()
+    }.collectAsStateWithLifecycle(initialValue = repository.snapshot.value.targetsReady)
     val resources = LocalResources.current
     val haptics = rememberHaptics()
     val toast = rememberToastState()
@@ -86,7 +91,9 @@ internal fun InboxHandOffBar(
     var savedTarget by rememberSaveable(model.itemId) { mutableStateOf(state.target?.key) }
     LaunchedEffect(model.itemId) { model.restoreTarget(savedTarget) }
     LaunchedEffect(state.target?.key) { savedTarget = state.target?.key }
-    LaunchedEffect(memory) { memory?.let(model::preselect) }
+    LaunchedEffect(memory, targetsReady) {
+        if (targetsReady) memory?.let(model::preselect)
+    }
     LaunchedEffect(enabled, phase) { if (!enabled && phase is HandOffBarPhase.Queued) model.undo() }
 
     fun openSent() { model.openSent()?.let(currentOpen) }
@@ -235,6 +242,7 @@ private fun HandOffTargetMenu(
             trailingIcon = PhIcons.CaretDown,
             muted = !enabled,
             role = Role.Button,
+            boundedLabel = true,
             onClick = if (enabled) haptics.tapped {
                 targets = model.liveTargets()
                 more = false
@@ -242,25 +250,23 @@ private fun HandOffTargetMenu(
             } else null,
         )
         val agents = stringResource(R.string.inbox_handoff_agents)
-        val actions = if (more) {
-            targets.drop(INBOX_HAND_OFF_MENU_TARGETS).mapIndexed { index, target ->
-                JAction(target.title, PhIcons.Robot, checked = target == state.target, subtitle = target.machine,
-                    section = agents.takeIf { index == 0 }, onClick = haptics.tapped { model.selectTarget(target) })
+        val actions = buildList {
+            add(JAction(main, PhIcons.Sparkle, checked = state.target == null,
+                onClick = haptics.tapped { model.selectTarget(null) }))
+            targets.take(INBOX_HAND_OFF_MENU_TARGETS).forEachIndexed { index, target ->
+                add(JAction(target.title, PhIcons.Robot, checked = target == state.target, subtitle = target.machine,
+                    section = agents.takeIf { index == 0 }, onClick = haptics.tapped { model.selectTarget(target) }))
             }
-        } else {
-            buildList {
-                add(JAction(main, PhIcons.Sparkle, checked = state.target == null,
-                    onClick = haptics.tapped { model.selectTarget(null) }))
-                targets.take(INBOX_HAND_OFF_MENU_TARGETS).forEachIndexed { index, target ->
+            if (more) {
+                targets.drop(INBOX_HAND_OFF_MENU_TARGETS).forEach { target ->
                     add(JAction(target.title, PhIcons.Robot, checked = target == state.target, subtitle = target.machine,
-                        section = agents.takeIf { index == 0 }, onClick = haptics.tapped { model.selectTarget(target) }))
+                        onClick = haptics.tapped { model.selectTarget(target) }))
                 }
-                if (targets.size > INBOX_HAND_OFF_MENU_TARGETS) {
-                    add(JAction(stringResource(R.string.inbox_handoff_more), onClick = {
-                        more = true
-                        expanded = true
-                    }))
-                }
+            } else if (targets.size > INBOX_HAND_OFF_MENU_TARGETS) {
+                add(JAction(stringResource(R.string.inbox_handoff_more), onClick = {
+                    more = true
+                    expanded = true
+                }))
             }
         }
         JMenu(

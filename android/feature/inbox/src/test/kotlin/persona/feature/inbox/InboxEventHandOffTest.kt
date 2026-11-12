@@ -130,6 +130,7 @@ internal class HandOffBarTestRepository(
             AgentSession(Session(machineId = "machine", sessionId = "agent-$index", title = "Agent $index", status = "idle"))
         },
         machines = mapOf("machine" to "Example computer"),
+        targetsReady = true,
     ))
     override val connectionState = flowOf(ConnectionState.Online)
     override val handOffMemory = MutableStateFlow(emptyList<HandOffMemoryEntry>())
@@ -139,6 +140,8 @@ internal class HandOffBarTestRepository(
     var failure: Exception? = null
     var doneFailure: Exception? = null
     var handOffGate: CompletableDeferred<Unit>? = null
+    var memoryGate: CompletableDeferred<Unit>? = null
+    var doneGate: CompletableDeferred<Unit>? = null
     var doneCalls = 0
 
     override suspend fun handOff(request: InboxHandOffRequest): SessionKey? {
@@ -148,11 +151,15 @@ internal class HandOffBarTestRepository(
         return if (request.machineId != null && request.sessionId != null) SessionKey(request.machineId, request.sessionId) else result
     }
 
-    override suspend fun saveHandOffMemory(value: List<HandOffMemoryEntry>) { handOffMemory.value = value }
+    override suspend fun saveHandOffMemory(value: List<HandOffMemoryEntry>) {
+        memoryGate?.await()
+        handOffMemory.value = value
+    }
     override suspend fun personaContext(itemId: String): String = "Full example context"
     override suspend fun draftReply(itemId: String, instruction: String): String = "AI reply"
     override suspend fun setDone(itemId: String, done: Boolean) {
         doneCalls++
+        doneGate?.await()
         doneFailure?.let { throw it }
         snapshot.value = snapshot.value.copy(records = snapshot.value.records.map {
             if (it.item.id == itemId) it.copy(item = it.item.copy(doneAt = if (done) "2026-11-01T00:00:00Z" else null)) else it

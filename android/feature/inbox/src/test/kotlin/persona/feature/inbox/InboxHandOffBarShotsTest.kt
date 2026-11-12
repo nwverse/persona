@@ -21,8 +21,10 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -30,6 +32,7 @@ import java.io.File
 import java.io.IOException
 import kotlinx.coroutines.CompletableDeferred
 import org.junit.Rule
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
@@ -116,7 +119,7 @@ class InboxHandOffBarShotsTest {
     }
 
     @Test fun targetMenuAndDraftSheet() {
-        val repository = HandOffBarTestRepository(agentCount = 5)
+        val repository = HandOffBarTestRepository(agentCount = 12)
         rule.setContent {
             PersonaTheme(reduceMotion = true) {
                 Box(Modifier.testTag("shot").width(400.dp).height(1000.dp).background(PersonaTheme.palette.background)) {
@@ -127,7 +130,9 @@ class InboxHandOffBarShotsTest {
         rule.onNodeWithTag("inbox-handoff-target").performClick()
         save("inbox-handoff-target-menu-glass-light", rule.onAllNodes(isPopup()).onLast().captureToImage().asAndroidBitmap())
         rule.onNodeWithText("More…").performClick()
-        rule.onNodeWithText("Agent 4").assertExists()
+        rule.onNodeWithText("Main chat").assertExists()
+        rule.onNodeWithText("Also mark as done").assertExists()
+        for (index in 1..12) rule.onNodeWithText("Agent $index").assertExists()
         rule.onNodeWithText("Agent 4").performClick()
         rule.onNodeWithTag("inbox-handoff-chip-draft").performClick()
         rule.onNodeWithText("Existing AI reply").assertExists()
@@ -151,6 +156,7 @@ class InboxHandOffBarShotsTest {
     @Test fun japaneseKeepsActionsOnOneLine() = largeText("ja")
 
     private fun largeText(language: String) {
+        val longTarget = "An agent with a deliberately long target name"
         rule.mainClock.autoAdvance = false
         rule.setContent {
             val density = LocalDensity.current
@@ -162,7 +168,7 @@ class InboxHandOffBarShotsTest {
                     val model = remember {
                         InboxHandOffBarModel(repository.record.item.id, repository, scope,
                             resources, undoWindowMillis = 60_000).also {
-                            it.selectTarget(it.liveTargets().single().copy(title = "An agent with a deliberately long target name"))
+                            it.selectTarget(it.liveTargets().single().copy(title = longTarget))
                             it.queue("Investigate", typed = false)
                         }
                     }
@@ -187,6 +193,15 @@ class InboxHandOffBarShotsTest {
             "ja" -> "表示"
             else -> "View"
         }).assertHasClickAction()
+        val layouts = mutableListOf<TextLayoutResult>()
+        rule.onNodeWithText(longTarget, useUnmergedTree = true).fetchSemanticsNode()
+            .config[SemanticsActions.GetTextLayoutResult].action!!(layouts)
+        assertTrue("The target label must ellipsize in its bounded chip", layouts.single().isLineEllipsized(0))
+        val targetBounds = rule.onNodeWithTag("inbox-handoff-target").getUnclippedBoundsInRoot()
+        val fieldBounds = rule.onNodeWithTag("inbox-handoff-field").getUnclippedBoundsInRoot()
+        val sendBounds = rule.onNodeWithTag("inbox-handoff-send").getUnclippedBoundsInRoot()
+        assertTrue("The target must not cover the input", targetBounds.right <= fieldBounds.left)
+        assertTrue("The input must not cover Send", fieldBounds.right <= sendBounds.left)
         capture("inbox-handoff-queued-$language-large-text")
     }
 }

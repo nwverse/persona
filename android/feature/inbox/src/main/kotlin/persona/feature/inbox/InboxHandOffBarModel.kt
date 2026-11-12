@@ -17,14 +17,33 @@ import persona.core.contracts.SessionKey
 internal const val INBOX_HAND_OFF_UNDO_MILLIS = 5_000L
 internal const val INBOX_HAND_OFF_LISTED_TARGETS = 12
 internal const val INBOX_HAND_OFF_MENU_TARGETS = 3
+internal const val INBOX_HAND_OFF_RETAINED_MODELS = 64
 
-/** A pairing's bar models. The store has no page or hub transport of its own and dies with that pairing's scope. */
-class InboxHandOffBars(private val scope: CoroutineScope, private val resources: Resources) {
-    private val models = mutableMapOf<String, InboxHandOffBarModel>()
+/** A pairing's bar models. Every model keeps this store's fixed repository, never a currently-selected-group facade. */
+class InboxHandOffBars(
+    private val scope: CoroutineScope,
+    private val resources: Resources,
+    private val repository: InboxRepository,
+) {
+    private val models = LinkedHashMap<String, InboxHandOffBarModel>(0, 0.75f, true)
 
     @Synchronized
-    fun get(itemId: String, repository: InboxRepository): InboxHandOffBarModel = models.getOrPut(itemId) {
-        InboxHandOffBarModel(itemId, repository, scope, resources)
+    fun get(itemId: String): InboxHandOffBarModel {
+        val model = models.getOrPut(itemId) { InboxHandOffBarModel(itemId, repository, scope, resources) }
+        trimSettledModels(keeping = itemId)
+        return model
+    }
+
+    private fun trimSettledModels(keeping: String) {
+        val entries = models.entries.iterator()
+        while (models.size > INBOX_HAND_OFF_RETAINED_MODELS && entries.hasNext()) {
+            val entry = entries.next()
+            if (entry.key == keeping) continue
+            when (entry.value.state.value.phase) {
+                is HandOffBarPhase.Queued, is HandOffBarPhase.Sending -> Unit
+                else -> entries.remove()
+            }
+        }
     }
 }
 
@@ -91,6 +110,7 @@ class InboxHandOffBarModel internal constructor(
     @Synchronized
     fun preselect(entries: List<HandOffMemoryEntry>) {
         if (preselected || mutableState.value.phase !is HandOffBarPhase.Idle) return
+        if (!repository.snapshot.value.targetsReady) return
         val record = repository.snapshot.value.records.inboxRecord(itemId) ?: return
         preselected = true
         val key = InboxHandOffMemory.key(record.source, record.mutes) ?: return

@@ -61,6 +61,7 @@ class InboxDataOwner @Inject constructor(
 ) {
     private val app = application as PersonaApp
     private data class Repositories(val data: ScopedHubData, val inbox: persona.feature.inbox.InboxRepository,
+        val handOffInbox: persona.feature.inbox.InboxRepository,
         val assistant: AssistantConversations, val mail: StateFlow<MailTransport?>,
         val composers: ReplyComposers, val handOffBars: InboxHandOffBars, val reading: LarkReadingStore, val names: GroupNames,
         val conversations: InboxConversations)
@@ -133,9 +134,25 @@ class InboxDataOwner @Inject constructor(
             val assistant = RealAssistantRepository(connection, stack.repositories.shownRepository, data.coroutineScope, snapshots,
                 stack.repositories.preferences ?: preferences.takeIf { names.plain }, events = socket.events)
             persona = assistant.inGroup(names, data.coroutineScope)
+            // Hand-off work created in this pairing must never resolve the selected group again. This fixed view also
+            // keeps the group's namespaced targets and preferences for memory / Done after another group is selected.
+            val handOffInbox = object : persona.feature.inbox.InboxRepository by wrapped {
+                override val snapshot = if (names.plain) wrapped.snapshot else wrapped.snapshot.map { it.inGroup(names) }
+                    .stateIn(data.coroutineScope, SharingStarted.Eagerly, wrapped.snapshot.value.inGroup(names))
+                override val handOffMemory = data.listPreferences.data.map { saved ->
+                    saved[stringPreferencesKey("inbox.handOff")]?.let {
+                        runCatching { JsonCodec.decodeFromString(ListSerializer(HandOffMemoryEntry.serializer()), it) }.getOrNull()
+                    } ?: emptyList()
+                }
+                override suspend fun saveHandOffMemory(value: List<HandOffMemoryEntry>) {
+                    data.listPreferences.edit {
+                        it[stringPreferencesKey("inbox.handOff")] = JsonCodec.encodeToString(ListSerializer(HandOffMemoryEntry.serializer()), value)
+                    }
+                }
+            }
             val composers = ReplyComposers(wrapped, data.coroutineScope)
-            val handOffBars = InboxHandOffBars(data.coroutineScope, app.resources)
-            Repositories(data, wrapped, checkNotNull(persona), mail,
+            val handOffBars = InboxHandOffBars(data.coroutineScope, app.resources, handOffInbox)
+            Repositories(data, wrapped, handOffInbox, checkNotNull(persona), mail,
                 composers, handOffBars, reading, names, InboxConversations(wrapped, data.scope.path, data.coroutineScope, composers))
         }?.await()
     }.stateIn(app.scope, SharingStarted.Eagerly, null)
@@ -208,17 +225,10 @@ class InboxDataOwner @Inject constructor(
         }
         // Its own key: the list's filters are saved from a copy the screen holds, which must not write an older memory back.
         override val handOffMemory = current.flatMapLatest { repositories ->
-            repositories?.data?.listPreferences?.data?.map { saved ->
-                saved[stringPreferencesKey("inbox.handOff")]?.let {
-                    runCatching { JsonCodec.decodeFromString(ListSerializer(HandOffMemoryEntry.serializer()), it) }.getOrNull()
-                } ?: emptyList()
-            } ?: flowOf(emptyList())
+            repositories?.handOffInbox?.handOffMemory ?: flowOf(emptyList())
         }
         override suspend fun saveHandOffMemory(value: List<HandOffMemoryEntry>) = use { repositories ->
-            repositories.data.listPreferences.edit {
-                it[stringPreferencesKey("inbox.handOff")] = JsonCodec.encodeToString(ListSerializer(HandOffMemoryEntry.serializer()), value)
-            }
-            Unit
+            repositories.handOffInbox.saveHandOffMemory(value)
         }
         override suspend fun refresh() = use { it.inbox.refresh() }
         override suspend fun refreshNow() = use { it.inbox.refreshNow() }

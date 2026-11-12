@@ -32,11 +32,11 @@ class InboxExperienceRepository(
     private val local = MutableStateFlow(InboxLocalState())
     override val preferences = local.map { it.preferences }.distinctUntilChanged()
     internal val composers = ReplyComposers(this, ownerScope)
-    private val bars = InboxHandOffBars(ownerScope, resources)
+    private val bars = InboxHandOffBars(ownerScope, resources, this)
     override val handOffBars = MutableStateFlow<InboxHandOffBars?>(bars)
 
     /** One bar per item in this pairing: its wait and send outlive the event page, never the pairing. */
-    internal fun handOffBar(itemId: String): InboxHandOffBarModel = bars.get(itemId, this)
+    internal fun handOffBar(itemId: String): InboxHandOffBarModel = bars.get(itemId)
 
     private val ready = ownerScope.async {
         val document = storage.read()?.let { json.decodeFromString<InboxLocalState>(it) } ?: InboxLocalState()

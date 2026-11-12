@@ -186,15 +186,123 @@ class InboxHandOffBarModelTest {
 
     @Test fun pairingStoreReusesModelsAndCloseCancelsTheWait() = runTest {
         val owner = CoroutineScope(backgroundScope.coroutineContext + SupervisorJob(backgroundScope.coroutineContext[Job]))
-        val store = InboxHandOffBars(owner, resources)
         val repository = HandOffBarTestRepository()
-        val first = store.get(repository.record.item.id, repository)
-        assertSame(first, store.get(repository.record.item.id, repository))
+        val store = InboxHandOffBars(owner, resources, repository)
+        val first = store.get(repository.record.item.id)
+        assertSame(first, store.get(repository.record.item.id))
         first.queue("Ask", typed = false)
         owner.cancel()
         advanceTimeBy(10_000)
         runCurrent()
         assertTrue(repository.handOffRequests.isEmpty())
+    }
+
+    @Test fun delayedTargetCatalogKeepsMemoryPendingInsteadOfReportingLastGone() = runTest {
+        val key = "mail|sender:sender@example.com"
+        val repository = HandOffBarTestRepository(agentCount = 1)
+        val loadedTargets = repository.snapshot.value.sessions
+        repository.handOffMemory.value = listOf(HandOffMemoryEntry(key, "agent:machine/agent-1"))
+        repository.snapshot.value = repository.snapshot.value.copy(sessions = emptyList(), targetsReady = false)
+        val model = model(repository, backgroundScope)
+
+        model.preselect(repository.handOffMemory.value)
+        assertNull(model.state.value.target)
+        assertFalse(model.state.value.lastGone)
+        assertFalse(model.state.value.lastTime)
+
+        repository.snapshot.value = repository.snapshot.value.copy(sessions = loadedTargets, targetsReady = true)
+        model.preselect(repository.handOffMemory.value)
+        assertEquals("machine/agent-1", model.state.value.target?.key)
+        assertTrue(model.state.value.lastTime)
+        assertFalse(model.state.value.lastGone)
+    }
+
+    @Test fun queuedWorkKeepsItsOriginalRepositoryWhenTwoGroupsShareAnItemId() = runTest {
+        val oldGroup = HandOffBarTestRepository()
+        val newGroup = HandOffBarTestRepository()
+        val oldScope = CoroutineScope(backgroundScope.coroutineContext + SupervisorJob(backgroundScope.coroutineContext[Job]))
+        val newScope = CoroutineScope(backgroundScope.coroutineContext + SupervisorJob(backgroundScope.coroutineContext[Job]))
+        val oldStore = InboxHandOffBars(oldScope, resources, oldGroup)
+        val newStore = InboxHandOffBars(newScope, resources, newGroup)
+        val oldModel = oldStore.get(oldGroup.record.item.id)
+        oldModel.queue("Old group ask", typed = false)
+
+        newStore.get(newGroup.record.item.id)
+        advanceTimeBy(5_000)
+        runCurrent()
+
+        assertEquals(1, oldGroup.handOffRequests.size)
+        assertTrue(oldGroup.handOffRequests.single().text.endsWith("Old group ask"))
+        assertTrue(newGroup.handOffRequests.isEmpty())
+        assertEquals(0, newGroup.doneCalls)
+        assertTrue(newGroup.handOffMemory.value.isEmpty())
+    }
+
+    @Test fun handOffAlreadyInFlightKeepsMemoryAndDoneInItsOriginalGroup() = runTest {
+        val oldGroup = HandOffBarTestRepository()
+        val newGroup = HandOffBarTestRepository()
+        oldGroup.handOffGate = CompletableDeferred()
+        val oldScope = CoroutineScope(backgroundScope.coroutineContext + SupervisorJob(backgroundScope.coroutineContext[Job]))
+        val newScope = CoroutineScope(backgroundScope.coroutineContext + SupervisorJob(backgroundScope.coroutineContext[Job]))
+        val oldStore = InboxHandOffBars(oldScope, resources, oldGroup)
+        val newStore = InboxHandOffBars(newScope, resources, newGroup)
+        val oldModel = oldStore.get(oldGroup.record.item.id)
+        oldModel.selectTarget(oldModel.liveTargets().single())
+        oldModel.queue("Old group ask", typed = false)
+        oldModel.viewQueued()
+        runCurrent()
+        assertEquals(1, oldGroup.handOffRequests.size)
+
+        newStore.get(newGroup.record.item.id)
+        oldGroup.handOffGate?.complete(Unit)
+        runCurrent()
+
+        assertTrue(oldModel.state.value.phase is HandOffBarPhase.Sent)
+        assertEquals(1, oldGroup.doneCalls)
+        assertTrue(oldGroup.handOffMemory.value.isNotEmpty())
+        assertTrue(newGroup.handOffRequests.isEmpty())
+        assertEquals(0, newGroup.doneCalls)
+        assertTrue(newGroup.handOffMemory.value.isEmpty())
+    }
+
+    @Test fun doneAlreadyInFlightCannotBeRetargetedByAGroupSwitch() = runTest {
+        val oldGroup = HandOffBarTestRepository()
+        val newGroup = HandOffBarTestRepository()
+        oldGroup.doneGate = CompletableDeferred()
+        val oldScope = CoroutineScope(backgroundScope.coroutineContext + SupervisorJob(backgroundScope.coroutineContext[Job]))
+        val newScope = CoroutineScope(backgroundScope.coroutineContext + SupervisorJob(backgroundScope.coroutineContext[Job]))
+        val oldStore = InboxHandOffBars(oldScope, resources, oldGroup)
+        val newStore = InboxHandOffBars(newScope, resources, newGroup)
+        val oldModel = oldStore.get(oldGroup.record.item.id)
+        oldModel.selectTarget(oldModel.liveTargets().single())
+        oldModel.queue("Old group ask", typed = false)
+        oldModel.viewQueued()
+        runCurrent()
+        assertEquals(1, oldGroup.doneCalls)
+
+        newStore.get(newGroup.record.item.id)
+        oldGroup.doneGate?.complete(Unit)
+        runCurrent()
+
+        assertTrue(oldModel.state.value.phase is HandOffBarPhase.Sent)
+        assertEquals(1, oldGroup.handOffRequests.size)
+        assertEquals(1, oldGroup.doneCalls)
+        assertTrue(newGroup.handOffRequests.isEmpty())
+        assertEquals(0, newGroup.doneCalls)
+        assertTrue(newGroup.handOffMemory.value.isEmpty())
+    }
+
+    @Test fun settledModelsAreBoundedWithoutEvictingQueuedWork() = runTest {
+        val repository = HandOffBarTestRepository()
+        val store = InboxHandOffBars(backgroundScope, resources, repository)
+        val queued = store.get("active")
+        queued.queue("Keep waiting", typed = false)
+        val settled = store.get("settled")
+        repeat(INBOX_HAND_OFF_RETAINED_MODELS + 8) { store.get("item-$it") }
+
+        assertNotSame(settled, store.get("settled"))
+        assertSame(queued, store.get("active"))
+        queued.undo()
     }
 
     @Test fun experienceRepositoryKeepsOneBarPerItemInItsOwnerScope() = runTest {
