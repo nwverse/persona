@@ -112,13 +112,14 @@ describe("ScreenView on a Mac with two displays", () => {
     expect([screen().style.left, screen().style.top, screen().style.width, screen().style.height]).toEqual(["-480px", "0px", "960px", "300px"]);
     expect(button()?.getAttribute("aria-label")).toBe(t("screen-displays.displays_current", { current: t("screen-displays.display_n", { n: 2 }) }));
 
-    // a new page for the same Mac comes back on display 2
+    // a new page for the same Mac comes back on display 2, from its first live frame: the menu came while it connected
     act(() => root.unmount());
     root = createRoot(host);
     await open();
     await framebuffer(960, 300);
-    await connect();
+    act(() => void rfbs.at(-1)!.dispatchEvent(new CustomEvent("connect", { detail: {} })));
     expect(screen().style.left).toBe("-480px");
+    await flush();
     act(() => button()!.click());
     expect(rows().map((r) => r.getAttribute("aria-checked"))).toEqual(["false", "false", "true"]);
     act(() => rows()[0].click());

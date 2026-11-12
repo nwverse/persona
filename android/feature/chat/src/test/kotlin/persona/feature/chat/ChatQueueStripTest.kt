@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasAnyAncestor
@@ -24,6 +25,8 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import persona.core.contracts.ImagePayload
+import persona.core.contracts.QueueEdit
 import persona.core.contracts.Session
 import persona.core.contracts.api.ChatAction
 import persona.core.contracts.api.ChatActionResult
@@ -32,6 +35,7 @@ import persona.core.contracts.api.DraftUploadState
 import persona.core.contracts.api.HubCodedFailure
 import persona.core.designsystem.AppStyle
 import persona.core.designsystem.PersonaTheme
+import persona.core.designsystem.R as DesignSystemR
 
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35])
@@ -47,7 +51,9 @@ class ChatQueueStripTest {
         override suspend fun isMuted(session: Session) = false
         override suspend fun execute(session: Session, action: ChatAction): ChatActionResult = ChatActionResult.Done
         override suspend fun verify(session: Session, action: ChatAction): ChatActionResult = ChatActionResult.Done
-        override suspend fun editQueue(session: Session, keep: List<Int>): List<String> { kept += keep; return session.queued.orEmpty() }
+        /** The photos the hub returns beside the queue (a Persona conversation's), by message. */
+        var photos: List<List<ImagePayload>?> = emptyList()
+        override suspend fun editQueue(session: Session, keep: List<Int>): QueueEdit { kept += keep; return QueueEdit(session.queued.orEmpty(), photos) }
         override suspend fun sendQueuedNow(session: Session) { refusal?.let { throw it }; sentNow++ }
     }
 
@@ -310,5 +316,117 @@ class ChatQueueStripTest {
         val empty = ChatComposerState().apply { restoreQueued("[Image #6]Check the screen\n<attached_images>\n</attached_images>") }
         assertEquals("Check the screen", empty.value.text)
         assertTrue(empty.attachments.isEmpty())
+    }
+
+    // A Persona message taken back brings its photos (#4339 C6): the hub returns them beside the queue as base64, which the
+    // words do not carry; they go back into the draft as photos, written where a camera photo waits and ready to go up.
+    private val tinyPng = ImagePayload("image/png", "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAFklEQVR4nAAJAPb/AgAAAAAAAAAAAwAAGwADK+C1DwAAAABJRU5ErkJggg==")
+
+    @Test fun takingBackAPersonaMessageBringsItsPhotosBackIntoTheDraft() {
+        useChatFileProvider(ApplicationProvider.getApplicationContext())
+        val queue = Queue().apply { photos = listOf(listOf(tinyPng, tinyPng), null) }
+        val notices = mutableListOf<String>()
+        val composer = ChatComposerState()
+        rule.setContent {
+            PersonaTheme(style = AppStyle.Glass, reduceMotion = true) {
+                ChatQueueStrip(persona, queue, composer, { notices += it }, {}, initiallyExpanded = true)
+            }
+        }
+        rule.onNodeWithContentDescription("第 1 条", substring = true).performClick()
+        rule.onNodeWithText("撤回编辑").performClick()
+        rule.waitUntil(10_000) { notices.isNotEmpty() }
+        // The words back in the box, and both photos as photos of the draft, each a file the draft keeps and cleans up like a capture.
+        assertEquals("顺便把下周三的会也挪到下午", composer.value.text)
+        assertEquals(2, composer.attachments.size)
+        assertTrue(composer.attachments.all { it.image && !it.video && it.uri.contains("chat-captures") })
+        assertEquals(listOf(res.getString(R.string.chat_queue_restored)), notices)
+        assertEquals(listOf(listOf(1)), queue.kept)
+        // One with no photos brings none.
+        notices.clear()
+        rule.onNodeWithContentDescription("第 2 条", substring = true).performClick()
+        rule.onNodeWithText("撤回编辑").performClick()
+        rule.waitUntil(10_000) { notices.isNotEmpty() }
+        assertEquals("再查一下航班", composer.value.text.lines().last())
+        assertEquals(2, composer.attachments.size)
+    }
+
+    @Test fun aPhotoThatCannotBePutBackIsSaidNotSilentlyDropped() {
+        useChatFileProvider(ApplicationProvider.getApplicationContext())
+        val queue = Queue().apply { photos = listOf(listOf(tinyPng, ImagePayload("image/png", "%%%%"), ImagePayload("image/png", "")), null) }
+        val notices = mutableListOf<String>()
+        val composer = ChatComposerState()
+        rule.setContent {
+            PersonaTheme(style = AppStyle.Glass, reduceMotion = true) {
+                ChatQueueStrip(persona, queue, composer, { notices += it }, {}, initiallyExpanded = true)
+            }
+        }
+        rule.onNodeWithContentDescription("第 1 条", substring = true).performClick()
+        rule.onNodeWithText("撤回编辑").performClick()
+        rule.waitUntil(10_000) { notices.isNotEmpty() }
+        assertEquals(1, composer.attachments.size)
+        assertEquals(listOf(res.getQuantityString(R.plurals.chat_queue_photos_lost, 2, 2)), notices)
+    }
+
+    @Test fun deletingAMessageBringsNothingBack() {
+        val queue = Queue().apply { photos = listOf(listOf(tinyPng), null) }
+        val composer = ChatComposerState()
+        rule.setContent {
+            PersonaTheme(style = AppStyle.Glass, reduceMotion = true) {
+                ChatQueueStrip(persona, queue, composer, {}, {}, initiallyExpanded = true)
+            }
+        }
+        rule.onNodeWithContentDescription("第 1 条", substring = true).performClick()
+        rule.onNodeWithText("删除").performClick()
+        rule.waitForIdle()
+        assertEquals(listOf(listOf(1)), queue.kept)
+        assertTrue(composer.attachments.isEmpty())
+        assertEquals("", composer.value.text)
+    }
+
+    // iOS's "N images" under a Persona message's words, from what this phone sent (its photos ride in the words as paths).
+    private val twoPhotos = "看看这两张\n\n<attached_images>\n/tmp/a.jpg\n/tmp/b.jpg\n</attached_images>"
+    private val onePhotoAlone = "Please look at the image\n\n<attached_images>\n/tmp/c.jpg\n</attached_images>"
+    private val photoRows = persona.copy(queued = listOf(twoPhotos, onePhotoAlone, "只有文字"), queuedRelayed = 0)
+
+    @Test fun aQueuedPersonaRowSaysHowManyPhotosItCarriesOnGlass() {
+        assertEquals(2, composerPhotoCount(twoPhotos))
+        assertEquals(1, composerPhotoCount(onePhotoAlone))
+        assertEquals(0, composerPhotoCount("只有文字"))
+        rule.setContent {
+            PersonaTheme(style = AppStyle.Glass, reduceMotion = true) {
+                ChatQueueStrip(photoRows, Queue(), ChatComposerState(), {}, {}, initiallyExpanded = true)
+            }
+        }
+        val two = res.getQuantityString(DesignSystemR.plurals.designsystem_queue_photos, 2, 2)
+        val one = res.getQuantityString(DesignSystemR.plurals.designsystem_queue_photos, 1, 1)
+        // The count is a caption under the words, which no longer carry the mark ...
+        rule.onNodeWithText(two).assertExists()
+        rule.onNodeWithText(one).assertExists()
+        rule.onNodeWithText("看看这两张").assertExists()
+        rule.onAllNodesWithText("[图片]", substring = true).assertCountEquals(0)
+        // ... a photo alone leaves its row to say just that, and the row's spoken form carries it too.
+        rule.onNodeWithContentDescription("第 1 条：看看这两张。$two").assertExists()
+        rule.onNodeWithContentDescription("第 3 条：只有文字").assertExists()
+        assertEquals(1, rule.onAllNodesWithText(two).fetchSemanticsNodes().size)
+    }
+
+    @Test fun anAgentsQueueAndBriefAndBoardKeepThePhotoMarkAmongTheWords() {
+        var style by mutableStateOf(AppStyle.Glass)
+        var session by mutableStateOf(claude.copy(queued = photoRows.queued))
+        rule.setContent {
+            PersonaTheme(style = style, reduceMotion = true) {
+                ChatQueueStrip(session, Queue(), ChatComposerState(), {}, {}, initiallyExpanded = true)
+            }
+        }
+        val two = res.getQuantityString(DesignSystemR.plurals.designsystem_queue_photos, 2, 2)
+        // An Agent's chat on Glass: iOS puts its mark before the words; Android keeps its [Photo] among them.
+        rule.onNodeWithText("看看这两张\n\n[图片]").assertExists()
+        rule.onAllNodesWithText(two).assertCountEquals(0)
+        for (s in listOf(AppStyle.Brief, AppStyle.Board)) {
+            session = photoRows; style = s
+            rule.waitForIdle()
+            rule.onNodeWithText("看看这两张\n\n[图片]").assertExists()
+            rule.onAllNodesWithText(two).assertCountEquals(0)
+        }
     }
 }
