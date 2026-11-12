@@ -86,6 +86,14 @@ type fakeJob struct {
 	audio  int64                        // samples received
 	seeks  []float64
 	ended  bool
+	closed bool // its socket is over
+}
+
+// over says whether the job's socket is over.
+func (j *fakeJob) over() bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.closed
 }
 
 func (j *fakeJob) snapshot() ([]extwire.TranscriptionFrame, int64, []float64, bool) {
@@ -180,6 +188,11 @@ func (f *fakeTranscriber) serve(w http.ResponseWriter, r *http.Request) {
 	if json.Unmarshal(raw, &j.start) != nil || j.start.Type != extwire.TFStart {
 		return
 	}
+	defer func() {
+		j.mu.Lock()
+		j.closed = true
+		j.mu.Unlock()
+	}()
 	f.mu.Lock()
 	f.jobs = append(f.jobs, j)
 	script := f.live

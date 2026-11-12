@@ -220,3 +220,53 @@ func TestHubRunStoppedByDeleteAndRetention(t *testing.T) {
 		t.Fatalf("gone with the retention: %v", f)
 	}
 }
+
+// A replay job that keeps its socket open but stops answering is given up after jobDoneWait without a frame, and
+// tried again: after the retries the live sentences are final, the audio no longer held by a pass that never ends.
+func TestFinalPassReplayThatStopsAnswering(t *testing.T) {
+	h := newHubFixture(t)
+	h.meetingAudio(meetingRec)
+	h.tr.set(func(f *fakeTranscriber) { f.replay = jobScript{noAck: true} })
+	finalGapWait, replayAhead, jobDoneWait = 0, time.Second, 300*time.Millisecond
+	h.finalState(meetingRec, "final")
+	jobs := h.tr.jobsOf(extwire.TranscriptionReplay)
+	if len(jobs) != 3 {
+		t.Fatalf("%d tries", len(jobs))
+	}
+	for _, j := range jobs {
+		if !j.over() {
+			t.Fatal("a replay job given up is still open")
+		}
+	}
+	if got := h.hubTexts(meetingRec); !slices.Equal(got, []string{"Live one.", "Live two."}) {
+		t.Fatalf("the final transcript %q", got)
+	}
+}
+
+// The recording's delete ends its final pass at once: the replay job is closed, not left transcribing a meeting that
+// is gone; the trim (through the sweep) does too.
+func TestFinalPassEndsWithTheRecording(t *testing.T) {
+	h := newHubFixture(t)
+	h.meetingAudio(meetingRec)
+	h.tr.set(func(f *fakeTranscriber) { f.replay = jobScript{noAck: true} })
+	finalGapWait, replayAhead, jobDoneWait = 0, time.Second, time.Minute
+	h.s.finalRound(context.Background())
+	waitFor(t, "the replay waiting for its acks", func() bool {
+		jobs := h.tr.jobsOf(extwire.TranscriptionReplay)
+		if len(jobs) != 1 {
+			return false
+		}
+		_, audio, _, _ := jobs[0].snapshot()
+		return audio > kb.AudioRate
+	})
+	h.do("DELETE", "/api/v1/recordings/"+meetingRec, "", nil, http.StatusOK)
+	waitFor(t, "the replay job closed", func() bool { return h.tr.jobsOf(extwire.TranscriptionReplay)[0].over() })
+
+	h.meetingAudio(meetingOther)
+	h.s.finalRound(context.Background())
+	waitFor(t, "the replay waiting for its acks", func() bool { return len(h.tr.jobsOf(extwire.TranscriptionReplay)) == 2 })
+	e := h.engine()
+	e.PruneRecordings(time.Now().AddDate(0, 0, 40))
+	h.s.hubSweep(e)
+	waitFor(t, "the replay job closed", func() bool { return h.tr.jobsOf(extwire.TranscriptionReplay)[1].over() })
+}

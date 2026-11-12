@@ -8,6 +8,7 @@ import (
 	"math"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/extwire"
@@ -24,10 +25,11 @@ import (
 // completes is complete for the pass feedStale after its last upload. Once the pass stored its text the knowledge base
 // makes the minutes (again, quietly) and deletes the audio when no minutes will come (kb.FinalTranscriptStored).
 
-// finalPassState is one recording's final pass in this process: running, when it may be tried again, the windows it
-// finished (kept across tries) and where they end.
+// finalPassState is one recording's final pass in this process: running (cancel ends the try, its recording deleted
+// or trimmed), when it may be tried again, the windows it finished (kept across tries) and where they end.
 type finalPassState struct {
 	running bool
+	cancel  context.CancelFunc
 	nextAt  time.Time
 	doneTo  float64
 	windows []finalWindow
@@ -150,20 +152,40 @@ func (s *Service) finalLook(ctx context.Context, e *kb.Engine, id string, now ti
 		s.hubTr.mu.Unlock()
 		return
 	}
-	st.running = true
+	pctx, cancel := context.WithCancel(ctx)
+	st.running, st.cancel = true, cancel
 	s.hubTr.mu.Unlock()
 	s.hubTr.wg.Add(1)
 	go func() {
 		defer s.hubTr.wg.Done()
+		defer cancel()
 		defer func() {
 			s.hubTr.mu.Lock()
-			st.running = false
+			st.running, st.cancel = false, nil
 			s.hubTr.mu.Unlock()
 		}()
-		if err := s.finalPass(ctx, e, rec.ID, st); err != nil {
+		if err := s.finalPass(pctx, e, rec.ID, st); err != nil {
 			s.logf("recording %s: final pass: %v", rec.ID, err)
 		}
 	}()
+}
+
+// finalCancel ends recording id's final pass running in this process, if any (the recording deleted or trimmed): its
+// replay job is closed at once rather than transcribing what is gone; the try is not counted.
+func (s *Service) finalCancel(id string) {
+	id, ok := kb.RecordingID(id)
+	if !ok {
+		return
+	}
+	s.hubTr.mu.Lock()
+	var cancel context.CancelFunc
+	if st := s.hubTr.passes[id]; st != nil {
+		cancel = st.cancel
+	}
+	s.hubTr.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 // finalPass is one try of recording id's final pass.
@@ -212,7 +234,7 @@ func (s *Service) finalPass(ctx context.Context, e *kb.Engine, id string, st *fi
 	case err == nil, errors.Is(err, errNoReplay):
 		return s.finalEnd(e, id, st, live)
 	case ctx.Err() != nil:
-		return err // the manager stops: resumed after the restart
+		return err // the manager stops (resumed after the restart), or the recording went (finalCancel)
 	}
 	s.logf("recording %s: final pass try %d failed: %v", id, t.FinalTries, err)
 	if t.FinalTries <= len(finalRetries) {
@@ -349,6 +371,10 @@ func (s *Service) replay(ctx context.Context, e *kb.Engine, id string, held [][2
 
 	var mu sync.Mutex
 	acked := pos
+	// heard is when the job last sent anything: one that keeps its socket open but stops answering (its upstream
+	// stalled) is given up after jobDoneWait without a frame, and the pass is tried again.
+	var heard atomic.Int64
+	heard.Store(time.Now().UnixNano())
 	wake := make(chan struct{}, 1)
 	result := make(chan error, 1)
 	exited := make(chan struct{})
@@ -366,6 +392,7 @@ func (s *Service) replay(ctx context.Context, e *kb.Engine, id string, held [][2
 				result <- err
 				return
 			}
+			heard.Store(time.Now().UnixNano())
 			switch f.Type {
 			case extwire.TFSentence:
 				if f.Start != nil && f.End != nil && f.Text != nil {
@@ -438,13 +465,22 @@ func (s *Service) replay(ctx context.Context, e *kb.Engine, id string, held [][2
 			if behind <= ahead {
 				break
 			}
+			left := jobDoneWait - time.Since(time.Unix(0, heard.Load()))
+			if left <= 0 {
+				return errNoDone // the job stopped answering: tried again
+			}
+			t := time.NewTimer(left)
 			select {
 			case <-wake:
+			case <-t.C:
 			case err := <-result:
+				t.Stop()
 				return cmp.Or(err, errNoDone)
 			case <-ctx.Done():
+				t.Stop()
 				return ctx.Err()
 			}
+			t.Stop()
 		}
 		n, err := e.AudioRead(id, float64(pos)/kb.AudioRate, buf)
 		if errors.Is(err, io.EOF) {

@@ -667,22 +667,37 @@ func (r *hubRun) stop(code string) {
 	r.s.hubTr.mu.Unlock()
 }
 
-// hubStop ends recording id's run, when it has one, telling its socket code.
+// hubStop ends recording id's run, when it has one, telling its socket code; a recording deleted or trimmed ends its
+// final pass too.
 func (s *Service) hubStop(id, code string) {
 	if r := s.hubRunOf(id); r != nil {
 		r.stop(code)
 	}
+	if code == codeRecordingDeleted || code == codeTranscriptExpired {
+		s.finalCancel(id)
+	}
 }
 
-// hubSweep ends the runs of recordings deleted, trimmed or past their live pass (each retention pass, each final
-// round).
+// hubSweep ends the runs of recordings deleted, trimmed or past their live pass, and the final passes of recordings
+// deleted or trimmed (each retention pass, each final round).
 func (s *Service) hubSweep(e *kb.Engine) {
 	s.hubTr.mu.Lock()
 	runs := make([]*hubRun, 0, len(s.hubTr.by))
 	for _, r := range s.hubTr.by {
 		runs = append(runs, r)
 	}
+	var passes []string
+	for id, st := range s.hubTr.passes {
+		if st.running {
+			passes = append(passes, id)
+		}
+	}
 	s.hubTr.mu.Unlock()
+	for _, id := range passes {
+		if _, rec, err := e.MeetingRead(id); errors.Is(err, kb.ErrRecordingDeleted) || errors.Is(err, kb.ErrNotFound) || err == nil && rec.Trimmed() {
+			s.finalCancel(id)
+		}
+	}
 	for _, r := range runs {
 		_, rec, err := e.MeetingRead(r.id)
 		switch {
