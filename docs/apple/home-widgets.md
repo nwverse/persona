@@ -150,7 +150,8 @@ The gallery draws every widget at its Home Screen sizes in light and dark with m
 `-showHomeWidgets YES` in a Debug build. A view outside a widget gets no container background, family, margins or tint
 from the system, so the gallery supplies stand-ins for them. For the Home Screen itself, `-showHomeWidgetSample YES`
 writes the same made-up snapshot instead of the app's, so the widgets added to a simulator's Home Screen show it
-without a hub; those shots, on each PR, are the proof (both DEBUG launch arguments, in `release.sh`'s list).
+without a hub (`-showHomeWidgetSample ticked`: two to-dos just ticked, one on its way and one the hub refused); those
+shots, on each PR, are the proof (both DEBUG launch arguments, in `release.sh`'s list).
 
 ## Phases
 

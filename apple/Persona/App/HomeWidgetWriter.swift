@@ -27,11 +27,12 @@ final class HomeWidgetWriter {
     }
 
     #if DEBUG
-    /// `-showHomeWidgetSample YES`: write the gallery's made-up snapshot instead of the app's.
-    private var sample = false
+    /// `-showHomeWidgetSample YES`: write the gallery's made-up snapshot instead of the app's; `ticked`: the same with
+    /// two to-dos just ticked on the widget, one on its way and one the hub refused.
+    private var sample: String?
 
-    func showSample() {
-        sample = true
+    func showSample(_ which: String) {
+        sample = which
         flush()
     }
     #endif
@@ -92,7 +93,12 @@ final class HomeWidgetWriter {
 
     private func write(now: Date = .now) {
         #if DEBUG
-        let made: HomeSnapshot? = sample ? HomeSamples.busy(zh: LanguageStore.shared.launched.hasPrefix("zh"), now: now) : source()
+        let zh = LanguageStore.shared.launched.hasPrefix("zh")
+        let made: HomeSnapshot? = switch sample {
+        case nil: source()
+        case "ticked": HomeSamples.ticked(zh: zh, now: now)
+        default: HomeSamples.busy(zh: zh, now: now)
+        }
         #else
         let made = source()
         #endif

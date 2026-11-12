@@ -97,8 +97,8 @@ enum HomeSamples {
     }
 
     /// To-dos just ticked on the widget: one on its way to the hub, one the hub refused.
-    static func ticked(zh: Bool = false) -> HomeSnapshot {
-        var s = busy(zh: zh)
+    static func ticked(zh: Bool = false, now: Date = HomeSamples.now) -> HomeSnapshot {
+        var s = busy(zh: zh, now: now)
         s.todos?.items[1].tick = .ticking
         s.todos?.items[2].tick = .failed
         return s
