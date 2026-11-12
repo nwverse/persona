@@ -8,7 +8,7 @@ import XCTest
 /// until both titles have shown, and shoots it (light and dark). Runs on a mock hub:
 ///   PORT=18931 python3 scripts/mock/mock_hub.py &
 ///   TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:18931 TEST_RUNNER_PERSONA_SHOTS=<dir> xcodebuild test …
-/// The test runs in zh-Hans: 模型 is "Model", 思考强度 "Thinking Effort".
+/// The test runs in zh-Hans: 「模型」 is "Model", 「思考强度」 "Thinking Effort".
 final class MenuSectionTitleTests: XCTestCase {
     private var hub = ""
     private var app: XCUIApplication!
