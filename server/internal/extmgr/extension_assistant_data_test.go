@@ -80,6 +80,17 @@ func TestReadDataFile(t *testing.T) {
 	}
 	if _, err := readDataFile(dir, "big.md", 10); dataErrorCode(err) != dataTooLarge {
 		t.Fatalf("too large: %v", err)
+	} else if size, ok := tooLargeSize(err); !ok || size != 11 || err.Error() != "too_large: 11 bytes, at most 10" {
+		t.Fatalf("too large says what it weighs: %d %v %v", size, ok, err)
+	}
+	if _, ok := tooLargeSize(&dataFileError{code: dataUnreadable}); ok {
+		t.Fatal("an unreadable file has no size")
+	}
+	// A skill with a file over what is left: the size counted is the files read so far and that file as it weighs.
+	mustWrite(t, filepath.Join(dir, "skills", "notes", "SKILL.md"), "abc")
+	mustWrite(t, filepath.Join(dir, "skills", "notes", "z-big.md"), strings.Repeat("y", 20))
+	if _, size, err := readDataSkills(os.DirFS(dir), "skills", 10); dataErrorCode(err) != dataTooLarge || size != 23 {
+		t.Fatalf("skills over the limit: %d %v", size, err)
 	}
 	for _, rel := range []string{"link.md", "up/secret.md", "../secret.md"} {
 		if b, err := readDataFile(dir, rel, 100); err == nil || string(b) == "outside" {
@@ -169,8 +180,9 @@ func TestAssistantDataContributions(t *testing.T) {
 	}
 	_, out = call(t, mux, "POST", "/api/v1/extensions/notes/-/assistant-data/apply", master, "")
 	if first := out["items"].([]any)[0].(map[string]any); first["state"] != dataStateKept || first["reason"] != dataTooLarge ||
-		first["adopted_hash"] != textDigest("The user prefers long answers.") {
-		t.Fatalf("too large: %v", first)
+		first["adopted_hash"] != textDigest("The user prefers long answers.") ||
+		first["bytes"] != float64(dataInstructionsMost+1) || !strings.Contains(stringOf(first["detail"]), fmt.Sprint(dataInstructionsMost+1)) {
+		t.Fatalf("too large (bytes is what the file weighs, as the detail says): %v", first)
 	}
 
 	// Applied by the user: at once.

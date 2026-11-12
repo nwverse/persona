@@ -122,13 +122,14 @@ type MeetingJustMe struct {
 func RenderMeetingJustMe(d MeetingJustMe) string { return render("meeting/just_me", d) }
 
 // MeetingFollowupSeed is a follow-up's first message (meeting/followup_seed): the meeting's material, then the owner's
-// text. Photos are the listed photos with a caption or recognized text (PhotosCut: some of the texts were cut), Notes
+// text. Topics are the room's topics of the meeting. Photos are the listed photos with a caption or recognized text (PhotosCut: some of the texts were cut), Notes
 // those with the room's note on them, which belong to the room thread. Transcript is the transcript of record (Cut:
 // its start and end only); a trimmed recording has none, nor photos or a thread.
 type MeetingFollowupSeed struct {
 	Title, Calendar, Started, RecordingID string
 	PrivateSet, Private                   bool
 	Minutes                               string
+	Topics                                []MeetingTopic
 	Photos                                []MeetingPhoto
 	PhotosCut                             bool
 	Thread                                []MeetingQA

@@ -363,19 +363,31 @@ export interface SkillItem {
 export type ContentSource = "package" | "data" | (string & {});
 export const CONTENT_SOURCES = ["package", "data"] as const;
 
-export type PromptKind = "instructions" | "quick" | (string & {});
-export const PROMPT_KINDS = ["instructions", "quick"] as const;
+export type PromptKind = "instructions" | "quick" | "project_context" | "inbox_context" | (string & {});
+export const PROMPT_KINDS = ["instructions", "quick", "project_context", "inbox_context"] as const;
 
 /**
  * A prompt: instructions (a .md of the package, or with source data of the data directory, added to the assistant's
- * CLAUDE.md) or quick (a template the apps offer in the message box).
+ * CLAUDE.md), quick (a template the apps offer in the message box), project_context (a directory of the data
+ * directory whose <project slug>.md files go into a new Agent's project background) or inbox_context (a .md of the
+ * data directory added to the Inbox's triage and draft prompts).
  */
 export interface PromptItem {
   id: string;
   kind: PromptKind;
   source?: ContentSource;
-  /** instructions: the .md file (with source data: at most 6 KB, adopted at most once a day). */
+  /**
+   * instructions: the .md file (with source data: at most 6 KB, adopted at most once a day); inbox_context: the .md
+   * file (1 KB used).
+   */
   file?: string;
+  /** project_context: the directory of <project slug>.md files (1.5 KB of each used). */
+  dir?: string;
+  /**
+   * inbox_context: a text file of sentences, one a line, a draft must not repeat word for word (64 KB used); only
+   * checked, never in a prompt.
+   */
+  never_quote?: string;
   /** quick: what the apps show. */
   title?: string;
   /** quick: what goes into the message box. */
@@ -4739,6 +4751,60 @@ export interface KBDetail {
   recap?: unknown;
   /** A topic's knowledge points (docs/assistant/knowledge.md "Topics"). */
   points?: KBTopicPoint[];
+  /**
+   * A person's profiles by writer ("user", "ext:<id>"), as written; summary shows them too
+   * (docs/assistant/knowledge.md "Person profiles").
+   */
+  profiles?: Record<string, KBProfileRecord>;
+}
+
+export interface KBProfileRecord {
+  profile: KBPersonProfile;
+  at: string;
+}
+
+/**
+ * One writer's profile of a person, its four parts kept apart. Every item says where it comes from; at most 30 items
+ * a part, and 8000 bytes as summary.md shows it.
+ */
+export interface KBPersonProfile {
+  /** Their role, what they are in charge of, how they relate to the user. */
+  facts?: KBProfileItem[];
+  /** The user's own words about them, quoted. */
+  views?: KBProfileItem[];
+  /** Inferred, never stated: each needs its basis. Shown as only a hint. */
+  inferences?: KBProfileItem[];
+  /** Promises and to-dos between the user and them, either way. */
+  commitments?: KBProfileCommitment[];
+}
+
+export interface KBProfileItem {
+  text: string;
+  /** Inferences only (required there): what it rests on. */
+  basis?: string;
+  /**
+   * Where it comes from: a knowledge-base path (chats/<id>/messages/<day>.md, recordings/<id>), a URL, or "user" for
+   * the user's own word.
+   */
+  sources: string[];
+}
+
+export interface KBProfileCommitment {
+  text: string;
+  /** user: the user owes it to them; them: they owe it to the user. */
+  owes: string;
+  /** YYYY-MM-DD, when there is one. */
+  due?: string;
+  done?: boolean;
+  sources: string[];
+}
+
+/**
+ * A field an update carried that its kind does not use: not applied, and why.
+ */
+export interface KBIgnoredField {
+  field: string;
+  reason: string;
 }
 
 /**
@@ -4896,6 +4962,12 @@ export interface KBUpdateParams {
   projects?: string[];
   /** Refused (conflict) when the user or another extension holds anything on the project folded away; no before. */
   merge_into?: string;
+  /**
+   * People only: this extension's own profile of the person, replacing the one it wrote before (one with no items
+   * removes it). Nobody else's profile, nor pinned or note, is touched; before.profile is the one replaced. A profile
+   * breaking a rule is invalid_params and nothing is written.
+   */
+  profile?: KBPersonProfile;
   /** Kept as the provenance of the fields this write holds. */
   evidence?: KBEvidence[];
   /** Fields this extension holds, handed back to the built-in pipeline; unlocking pinned clears it. */
@@ -4905,10 +4977,15 @@ export interface KBUpdateParams {
 export interface KBUpdateResult {
   id: string;
   /**
-   * The previous value of each field written (null when unset; summary is the old text), for the extension's own
-   * undo.
+   * The previous value of each field written (null when unset; summary is the old text, profile this extension's own
+   * profile before), for the extension's own undo.
    */
   before?: Record<string, unknown>;
+  /**
+   * Fields the update carried that its kind does not use (a person's summary and log, for one): not applied, each
+   * with why.
+   */
+  ignored?: KBIgnoredField[];
 }
 
 /**
@@ -5270,10 +5347,10 @@ export interface AssistantDataStatusParams {
 }
 
 /**
- * What the assistant reads of the contribution: adopted (the content as it is now; skills: sent), pending
- * (instructions: an older version, the new one waits for next_adopt_at), kept (instructions: an older version, the
- * new one cannot be used, see reason), none (nothing: none written yet, none usable, or the extension or contribution
- * is switched off).
+ * What the assistant reads of the contribution: adopted (the content as it is now; skills: sent; project and Inbox
+ * context: used whenever their prompt is built), pending (instructions: an older version, the new one waits for
+ * next_adopt_at), kept (instructions: an older version, the new one cannot be used, see reason), none (nothing: none
+ * written yet, none usable, or the extension or contribution is switched off).
  */
 export type AssistantDataState = "adopted" | "pending" | "kept" | "none" | (string & {});
 export const ASSISTANT_DATA_STATES = ["adopted", "pending", "kept", "none"] as const;
@@ -5293,7 +5370,7 @@ export const ASSISTANT_DATA_REASONS = ["too_large", "invalid", "not_regular", "u
 export interface AssistantDataItem {
   /** Its id, as the manifest has it. */
   contribution: string;
-  /** instructions or skills. */
+  /** instructions, skills, project_context or inbox_context. */
   kind: string;
   /** Its file or directory, relative to the data directory. */
   path: string;
@@ -5324,6 +5401,12 @@ export interface AssistantDataItem {
   next_adopt_at?: string;
   /** skills: the skills sent. */
   skills?: string[];
+  /** project_context: the projects (slugs) with a file in use. */
+  files?: string[];
+  /** project_context, inbox_context: some content is used cut at its limit (detail says which). */
+  truncated?: boolean;
+  /** inbox_context: how many sentences drafts are checked against. */
+  never_quote?: number;
 }
 
 export interface AssistantDataStatusResult {

@@ -69,9 +69,18 @@ func (s *Service) meetingLiveFlush(id string) {
 				}
 			}
 		}
-		if slices.Contains(parts, kb.PartAsks) {
-			if l, _, err := e.LiveRead(id); err == nil {
-				revs[kb.PartAsks] = l.AsksRev
+		if slices.Contains(parts, kb.PartAsks) || slices.Contains(parts, kb.PartLines) || slices.Contains(parts, kb.PartTopics) {
+			if l, _, err := e.LiveRead(id); err == nil { // kept in live.json; lines' is the live log's length
+				for _, p := range parts {
+					switch p {
+					case kb.PartAsks:
+						revs[p] = l.AsksRev
+					case kb.PartLines:
+						revs[p] = int64(len(l.Segments))
+					case kb.PartTopics:
+						revs[p] = l.TopicsRev
+					}
+				}
 			}
 		}
 		if slices.Contains(parts, kb.PartPhotos) { // kept in photos.json, not meeting.json
