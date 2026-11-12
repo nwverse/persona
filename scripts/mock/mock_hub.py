@@ -14908,6 +14908,23 @@ def sessions_reads(reset):
     return out
 
 
+def summary_row(s):
+    """A summary=1 row as the hub's runtimeSummary (server/internal/hub/sessions_list.go) writes it: no background,
+    subagents or workflows arrays; counts and the newest running run's progress, without its agents and phases."""
+    runs = [w for w in s.get("workflows") or [] if w.get("running")]
+    bg = s.get("background") or []
+    out = {k: v for k, v in s.items() if k not in ("background", "subagents", "workflows", "queued")}
+    out["background_count"] = len(bg)
+    out["running_subagents"] = sum(1 for a in s.get("subagents") or [] if a.get("running"))
+    out["running_workflows"] = len(runs) or (0 if s.get("workflows") else sum(1 for b in bg if b.get("kind") == "workflow"))
+    out["background_tasks_count"] = sum(1 for b in bg if b.get("kind") not in ("workflow", "agent"))
+    if runs:
+        out["workflow_progress"] = {**{k: v for k, v in runs[0].items() if k not in ("agents", "phases")},
+                                    "phase_count": runs[0].get("phase_count") or len(runs[0].get("phases") or [])}
+    out["waiting"] = bool(s.get("loop") or bg or out["running_subagents"] or out["running_workflows"])
+    return out
+
+
 def paged_sessions(query):
     """Small screenshot fixture for paging hubs; unqueried reads retain the legacy full list.
 
@@ -14980,6 +14997,8 @@ def paged_sessions(query):
     selected = [s for kind, s in page if kind == "row"]
     if query.get("summary", [""])[0] == "1":
         selected = [{**s, "waiting": bool(s.get("background_waiting"))} for s in selected]
+        if os.environ.get("MOCK_SUMMARY_STRICT") == "1":  # the hub's runtimeSummary (#5888): scalars, no chat-only arrays
+            selected = [summary_row(s) for s in selected]
         for i, s in enumerate(selected):  # a row's closeout says where it stands, not what it did (hub sessions_list.go)
             if (s.get("work") or {}).get("closeout"):
                 row = {k: v for k, v in s["work"]["closeout"].items() if k not in ("did", "verified")}

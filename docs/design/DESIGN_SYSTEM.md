@@ -105,6 +105,7 @@ Colors are written light/dark. iOS sizes are at the default text size.
 | --- | --- | --- | --- | --- |
 | `accent` | from the theme color; blue `#007AFF`/`#0A84FF` | `apple/Shared/Design/Theme.swift:104` | `--accent` `#0285ff`/`#3d9aff` (differs; preset "blue" matches Apple) | Glass accent same as Apple |
 | `danger` | `#D93A3A`/`#FF5F57` | `apple/Shared/Design/Theme.swift:136` | `--red` `#bd3038`/`#ff9499` | same as Apple |
+| `danger` wash | `danger` at 12% | `apple/Shared/Design/Theme.swift` (the failed and interrupted conclusion cards) | `--danger-wash` = `--red` at 12% (#5569); `--red-tint` stays neutral | same as Apple |
 | `positive` | `#248A3D`/`#30D158` | `apple/Shared/Design/Theme.swift:137` | `--green` `#107638`/`#6dd697` | same as Apple |
 | `caution` / `cautionText` | `#F08A00`/`#FF9F0A`; `#B35400`/`#FF9F0A` | `apple/Shared/Design/Theme.swift:138` | `--orange` `#a64c00`/`#eea66d` (one token) | same as Apple |
 | `ai` | `#5B4FD6`/`#9C94FF` | `apple/Shared/Design/Theme.swift:140` | `--ai` same | same |
@@ -1279,6 +1280,16 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
 - **Questions**: one at a time, with single choice, multiple choice, Other and voice. An unsent answer is kept as a draft per request. On iOS, a long assistant `ask_user` or hook question form's choices (or its review) own one vertical scroll while Previous / Next / Submit stay outside it and visible in the actual pending-card area, in both interface styles. One such card never needs a second, outer scroll; that is reserved for moving between several cards. Dragging through choices only scrolls and never picks one.
 - **A question the assistant answered** (iOS `DelegatedCard`, web `Delegated.tsx`, Android on Glass): no longer a pending request, so it is counted nowhere and has no Needs you row. The newest one for the Agent is a card over its chat's composer, after the Agent's own cards, until its × puts it away: "Answered by the assistant", each question with the answer as it is now, "Why: …", and Change Answer while the chat takes messages. Change Answer's sheet starts from the answers so far and sends only what changed, as a message to the Agent. Session Info lists every one with the same body and Change Answer.
 - **Everywhere at once**: the first decision on any surface (phone, web, notification, watch) wins. Every other entry updates at once, with a light haptic, and offers Undo where the action can be undone.
+
+### 4.8.0 Task cards (web, #5569)
+
+The task cards follow `docs/design/task-cards.md`, which holds the state tables and the reasons.
+
+- **Conclusion cards.** The chat draws a card for each way a task ended (done, stopped, failed to start, interrupted); reviews and reports stay out of it. A failed card keeps Retry, an interrupted one Continue and View. Failed and interrupted cards sit on `--danger-wash`, and their words are `--ink`, not `--ink-2` / `--ink-3`: the wash over the light canvas is 4.31:1 for `--red` and 4.37:1 for `--ink-2`. The hand-off card of a task whose failed card says why only says it did not start.
+- **Accept and decision rows** stack when their container is narrow (a container query, not the viewport): the words take the whole width, the secondary buttons one row, the primary its own full-width line. Never a menu.
+- **Progress rows.** The status word is its own right-aligned column, then a fixed end slot: `›` where the row opens something, a check once finished, an info mark for a usage limit. A task whose Agent is not up says Starting. A usage limit's second line says when it resets.
+- **Needs you rows with something to answer are folded to one line** (mark, title, what it waits for, the kind) and open in place on a click of the line or its chevron (`aria-expanded`); the card leaves with the answer, and every row is folded again when the tray changes. The conversation's own cards stay in the chat, and their rows close the tray onto them.
+- **Hard-coded font sizes.** `text-[13px]` and its kin may only fall: `scripts/ci/web_font_ratchet.py` (`docs/operations/testing.md`).
 
 ### 4.8.1 Records of interruptions
 

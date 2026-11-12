@@ -400,7 +400,7 @@ Inbox (`POST /api/v1/inbox/{ref}/reply`, with `card` and `text`) and records `se
 The existing **Later** action only collapses the inbox ref in that client's memory;
 it does not record a decision and does not survive a reload.
 
-**Do not handle** records a decision on this exact draft without sending anything.
+**Don't handle** records a decision on this exact draft without sending anything.
 It removes only this card from **Needs you**. The Inbox item stays open, and the task,
 its Agents, supervision, permissions and unrelated pending questions are unchanged.
 The card retains its original draft and adds `dismissed_at` and `dismissal_id`; it
