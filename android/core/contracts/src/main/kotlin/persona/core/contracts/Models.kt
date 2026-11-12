@@ -395,6 +395,11 @@ data class Session(
     @SerialName("state") val state: String? = AgentState.of(null, status).wire,
     @WireTime @SerialName("seen_at") val seenAt: String? = null,
     @SerialName("queued") val queued: List<String>? = null,
+    /**
+     * A Persona conversation's last this many of [queued] came from other conversations or the system and arrive when
+     * the conversation is free (docs/protocol/protocol.md, `queued_relayed`): they are shown, never changed. Absent: none.
+     */
+    @SerialName("queued_relayed") val queuedRelayed: Int? = null,
     @SerialName("background") val background: List<BackgroundTask>? = null,
     /**
      * Its Workflow runs of the last day, newest first (docs/protocol/agent-states.md "Background workflows and Monitor"): a running one is
