@@ -48,8 +48,13 @@ func (p *pages) ask() (wire.ActionResult, error) {
 	if err != nil {
 		return p.errorResult(err)
 	}
-	q := strings.ReplaceAll(url.QueryEscape(text), "+", "%20") // a space as %20: the apps read the query as a URL's
-	return wire.ActionResult{OpenURL: AskURL + "?text=" + q}, nil
+	return wire.ActionResult{OpenURL: askOpenURL(text)}, nil
+}
+
+// askOpenURL is the open_url that hands text to the assistant, a space written as %20: the apps read the query as a
+// URL's.
+func askOpenURL(text string) string {
+	return AskURL + "?text=" + strings.ReplaceAll(url.QueryEscape(text), "+", "%20")
 }
 
 // askText is a sentence of what the user wants after a <persona-context> block about the source. The block is what the
