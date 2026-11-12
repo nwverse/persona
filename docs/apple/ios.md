@@ -1618,6 +1618,14 @@ The Files page (`Views/Session/FilesPane.swift`: an Agent's Files tab, and the c
 - **＋** (a folder that takes changes; #5828): New Folder and New Text File, each asking for a name (a taken one is refused, nothing replaced; the new item is marked, a text file opens), then Upload from Photos and from Files. **Download** in the selection bar and a folder's long press: one file as it is; several items or a folder are zipped on the computer first (`files/zip` into a temporary folder there, "Zipping on the computer…" in the transfers bar), then saved through Save to Files.
 - **Show in Files Page** (the preview's ⋯, where the preview was opened from the Files page or an Agent's chat): the Files page at the file's folder with the file marked for a moment.
 
+## Editing a file (#5829)
+
+**Edit**, the first item of the preview's ⋯ where the hub writes files (`file_write`), opens a text file in the editor (`FileEditSheet`, full screen): UTF-8 text up to 1 MB read whole; otherwise Edit is off with the reason under it (too large, not text, not read whole). The editor (`Code/CodeEditor.swift`) is the system's `UITextView` on TextKit 1, whose line fragments give the gutter where each line starts: line numbers beside it, the viewer's colors (`SyntaxLexer`, worked out off the main thread after a pause in typing, put on the lines in view only), the system's find and replace (`UIFindInteraction`) and undo, and a keyboard bar: Find and Replace, Undo, Redo, Indent (the file's own: a tab, or its smallest run of spaces), brackets and quotes, Hide Keyboard. No third-party editor.
+
+- **Save** sends the text with the file's revision as opened and the hash of what was opened (`files/write`, protocol.md "Changing files"): the computer writes only over that version. When it changed meanwhile, an alert offers **Save as Copy** ("name 2.ext", the first free name), **Discard Mine and Open the New Version**, **Overwrite Anyway** (asked a second time) and **Keep Editing**.
+- **Line endings and a byte order mark** go back as the file had them; the editor works in LF (a file mixing CRLF and LF is left as it is).
+- **Cancel** with changes asks to discard; the sheet does not swipe away while there are changes. After a save the preview reads the file again.
+
 ## File viewer (2026-10-31)
 
 Files mentioned in chats, tool rows and the chat's Files page all open in `FileViewer` (`Views/Chat/FileViewer.swift`, `Persona/Code/`).
