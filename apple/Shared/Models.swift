@@ -473,6 +473,9 @@ nonisolated struct Launcher: Codable, Identifiable, Hashable, Sendable {
     /// A Codex launcher the computer also starts with no first message (docs/integrations/codex.md「Starting without a
     /// first message」); nil from an older computer, whose Codex starts need one.
     var promptOptional: Bool? = nil
+    /// A Codex launcher the computer starts in a shell pane the user picked (Run Agent Here) and keeps that pane when the
+    /// start fails (#5504); nil from an older computer, where Run Agent Here offers Claude Code only.
+    var runHere: Bool? = nil
     var id: String { name }
     /// A Codex start sends its first message with it and waits for the thread Codex makes.
     var isCodex: Bool { agent == "codex" }
@@ -483,6 +486,7 @@ nonisolated struct Launcher: Codable, Identifiable, Hashable, Sendable {
         case name, model, agent, assistant, health
         case baseURL = "base_url"
         case promptOptional = "prompt_optional"
+        case runHere = "run_here"
     }
 }
 
@@ -497,6 +501,7 @@ nonisolated extension Launcher {
         assistant = try c.decodeIfPresent(Bool.self, forKey: .assistant)
         health = (try? c.decodeIfPresent(LauncherHealth.self, forKey: .health)) ?? nil
         promptOptional = try c.decodeIfPresent(Bool.self, forKey: .promptOptional)
+        runHere = try c.decodeIfPresent(Bool.self, forKey: .runHere)
     }
 }
 

@@ -1350,6 +1350,11 @@ if MOCK_CODEX_WAITING:
                          "", agent="codex", launcher="codex", awaiting_first_message=True, capabilities=CODEX_WAITING_CAPS))
 
 
+# MOCK_RUN_HERE_CODEX=<mid,…> (#5504): those computers start Codex in a shell pane the user picked and keep that pane when
+# the start fails (run_here), so Run agent here offers their Codex launchers; the others' stay out, as an older node's.
+RUN_HERE_CODEX = {x.strip() for x in os.environ.get("MOCK_RUN_HERE_CODEX", "").split(",") if x.strip()}
+
+
 def codex_launcher(name="codex", model="gpt-5.5"):
     l = {"name": name, "model": model, "agent": "codex", "agent_type": "codex"}
     if MOCK_CODEX_WAITING:
@@ -11829,6 +11834,8 @@ def machine_launchers(mid=""):
         out = [l for l in out if l["name"] != "codex"]
     if mid and mid in os.environ.get("MOCK_NO_CODEX", "").split(","):  # computers without a Codex launcher (#5275)
         out = [l for l in out if l["name"] != "codex"]
+    if mid in RUN_HERE_CODEX:
+        out = [dict(l, run_here=True, prompt_optional=True) if l.get("agent") == "codex" else l for l in out]
     if MOCK_PROVIDERS:
         out += [{k: l[k] for k in ("name", "display_name", "base_url", "model", "source") if l.get(k)}
                 for l in LAUNCHERS if l["source"] == "persona" and l.get("kind") != "api"]
@@ -19186,7 +19193,8 @@ PLUGINS["example-gateway"] = {
            {"plugin": "example-gateway", "plugin_name": "Example 网关面板", "id": "notes", "title": "笔记（组件 v3）", "placement": "plugin_page", "size": "full"}]}
 # MOCK_SECRET_HANDOFF=1 (with MOCK_EXTENSIONS=1): secret references (docs/extensions/secret-providers.md). Example Notes'
 # API key holds a reference of a made-up provider, Example Vault, whose page lists who uses its references and one Always
-# rule; Persona's main conversation waits on a hand-off card (secret_handoff) for an Agent on the MacBook.
+# rule; Persona's main conversation waits on a hand-off card (secret_handoff) for an Agent on the MacBook. The model
+# provider `gateway` keeps its key as one of Example Vault's references, the server's own key as another.
 SECRET_HANDOFF = os.environ.get("MOCK_SECRET_HANDOFF") == "1"
 if SECRET_HANDOFF and PLUGINS_MODE:
     PLUGINS["example-notes"]["secrets"][0].update({"set": True, "reference": {
@@ -19204,6 +19212,22 @@ if SECRET_HANDOFF and PLUGINS_MODE:
              "reference": "op://Example/Gateway/key"}],
         "handoff_rules": [{"id": "0123456789abcdef", "reference": "op://Example/Registry token/credential", "launcher": "claude",
                            "machine": "macbook", "by": "device:d1", "at": "2026-01-01T10:00:00Z"}]}
+    # The provider that uses Example Vault's reference: added in Persona, its key a reference, the server's own key
+    # another (launcher_secret_references, docs/extensions/secret-providers.md "Launcher keys"; #3962 step 4c), with the
+    # features its form's computers page (launcher_scope) and a preset's key step (builtin_presets) need.
+    LAUNCHERS.insert(0, {
+        "name": "gateway", "display_name": "Example 网关", "source": "persona", "kind": "launcher", "base_url": "https://gateway.example.com",
+        "model": "example-large", "has_key": True, "auth": "bearer", "models": [{"id": "example-large", "context_window": 200000}],
+        "key_reference": {"provider": "example-vault", "provider_name": "Example Vault", "reference": "op://Example/Gateway/key",
+                          "title": "Gateway › key"},
+        "share": "all", "delivery": "on_demand", "own_service": "skip", "key_machines": ["server"],
+        "machine_key_references": {"server": {"provider": "example-vault", "provider_name": "Example Vault",
+                                              "reference": "op://Example/Server gateway/key", "title": "Server gateway › key"}}})
+    _features_without_launcher_references = features
+
+    def features():
+        f = _features_without_launcher_references()
+        return f + [x for x in ("launcher_secret_references", "launcher_scope", "builtin_presets") if x not in f]
 
 
 # MOCK_EXTENSION_PICKERS=1 (with MOCK_EXTENSIONS): a chat extension whose form picks one machine (format machine, Macs and

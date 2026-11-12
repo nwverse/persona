@@ -749,3 +749,33 @@ test('a session with no open turn and running background commands reports backgr
   }])
 })
 
+test('a session waiting on a DSH Web dialog reports blocked with attention reason (#5980)', async (t) => {
+  const { n, ctl, ev, rt } = await setup(t) // default: liveClient = true, interactions = auto
+  ctl.add('session-dialog', { cwd: '/w/app', running: true })
+  rt.start()
+  await n.ready
+  await until('session-dialog is listed', () => rowOf(n, 'session-dialog'))
+  assert.equal(rowOf(n, 'session-dialog')?.status, 'working')
+
+  // When an approval is handed to Web GUI and still pending
+  let resolveBrowser
+  const browserPromise = new Promise((resolve) => { resolveBrowser = resolve })
+  const agent = { session: { id: 'session-dialog' } }
+
+  const waterfallPromise = ev.waterfall('approval/request', { agent, toolName: 'bash', callId: 'call_dialog' }, () => browserPromise)
+
+  await until('session-dialog is marked blocked', () => rowOf(n, 'session-dialog')?.status === 'blocked')
+  const blockedRow = rowOf(n, 'session-dialog')
+  assert.equal(blockedRow.status, 'blocked')
+  assert.equal(blockedRow.attention_reason, 'waiting for an answer in DSH Web')
+
+  // When Web GUI settles the request
+  resolveBrowser('allowed-once')
+  assert.equal(await waterfallPromise, 'allowed-once')
+
+  await until('session-dialog clears blocked state', () => rowOf(n, 'session-dialog')?.status !== 'blocked')
+  const settledRow = rowOf(n, 'session-dialog')
+  assert.equal(settledRow.attention_reason, undefined)
+})
+
+

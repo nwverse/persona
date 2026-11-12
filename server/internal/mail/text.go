@@ -146,9 +146,11 @@ func stripHTML(s string) string {
 	var b strings.Builder
 	lower := asciiLower(s) // same length as s: tags are matched at s's offsets
 	i := 0
+	var last byte // the last byte written
 	for i < len(s) {
 		if s[i] != '<' {
 			b.WriteByte(s[i])
+			last = s[i]
 			i++
 			continue
 		}
@@ -170,9 +172,27 @@ func stripHTML(s string) string {
 			i += j
 		} else if strings.HasPrefix(tag, "<br") || strings.HasPrefix(tag, "</p") || strings.HasPrefix(tag, "</div") {
 			b.WriteByte(' ')
+			last = ' '
+		} else if isBlockTag(tag) && b.Len() > 0 && !strings.ContainsRune(" \t\r\n", rune(last)) {
+			b.WriteByte(' ')
+			last = ' '
 		}
 	}
 	return html.UnescapeString(b.String())
+}
+
+// blockTags are the elements that lay out what is inside them apart from what is around them, as a paragraph does:
+// table cells and rows, lists and their items, headings and block quotes.
+var blockTags = map[string]bool{"td": true, "th": true, "tr": true, "table": true, "li": true, "ul": true, "ol": true,
+	"h1": true, "h2": true, "h3": true, "h4": true, "h5": true, "h6": true, "blockquote": true}
+
+// isBlockTag reports whether tag, lower-cased, starts or ends one of blockTags.
+func isBlockTag(tag string) bool {
+	name := strings.TrimPrefix(strings.TrimPrefix(tag, "<"), "/")
+	if end := strings.IndexFunc(name, func(r rune) bool { return !('a' <= r && r <= 'z' || '0' <= r && r <= '9') }); end >= 0 {
+		name = name[:end]
+	}
+	return blockTags[name]
 }
 
 // asciiLower lowers A–Z only, byte for byte. strings.ToLower can change the length (U+0130 and the Kelvin sign lower

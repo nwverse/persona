@@ -1496,6 +1496,29 @@
         }
       }
     },
+    "Type: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Type: %1$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "类型：%1$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "種類：%1$@"
+          }
+        }
+      }
+    },
     "settings.search.about": {
       "extractionState": "manual",
       "localizations": {
@@ -10605,13 +10628,13 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "已看 %1$lld / %2$lld"
+            "value": "已查看 %1$lld / %2$lld"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "確認済み %1$lld / %2$lld"
+            "value": "閲覧済み %1$lld / %2$lld"
           }
         }
       }
@@ -33619,6 +33642,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Checked when you save it: the reference must resolve. The connection test runs after that.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checked when you save it: the reference must resolve. The connection test runs after that."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保存時に参照から値を取れるか確認します。接続テストは保存後に行います。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保存时检查引用能否取到值，保存后再测连接。"
+          }
+        }
+      }
     },
     "Checking" : {
       "localizations" : {
@@ -69182,6 +69228,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Its provider gives the key whenever this provider needs it. Persona keeps only the reference.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Its provider gives the key whenever this provider needs it. Persona keeps only the reference."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "必要なときにプロバイダーがキーを渡します。Persona は参照だけを保存します。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "需要时由它的提供方给出 Key，Persona 只保存引用。"
+          }
+        }
+      }
     },
     "Its provider gives the value whenever this extension needs it. Persona keeps only the reference.": {
       "extractionState": "manual",
@@ -158502,13 +158571,13 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "已看"
+            "value": "已查看"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "確認済み"
+            "value": "閲覧済み"
           }
         }
       }
@@ -173872,29 +173941,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "サイトを検索"
-          }
-        }
-      }
-    },
-    "These sites will be signed out in ego lite on this Mac. This includes your own sign-ins in ego." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "These sites will be signed out in ego lite on this Mac. This includes your own sign-ins in ego."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "这些网站在这台 Mac 的 ego lite 里会退出登录。你自己在 ego 里的登录也一样。"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "これらのサイトはこのMacのego liteでログアウトされます。ego上でのご自身のログインも同様です。"
           }
         }
       }
