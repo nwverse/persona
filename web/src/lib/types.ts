@@ -224,6 +224,10 @@ export interface Session {
   cwd: string;
   status: string;
   starting?: boolean;
+  /** A Codex opened with no first message: it runs in its terminal but has no thread yet, so this row's id is the
+   *  computer's, not the thread's. Its first message (text only) goes in here or in the terminal; then the row goes and
+   *  the thread's comes, in the same pane (docs/integrations/codex.md "Starting without a first message"). */
+  awaiting_first_message?: boolean;
   start_error?: string;
   /** The failed start's coded refusal (launcher_missing, claude_missing…) and its details; start_error is the hub's sentence for it. */
   start_error_code?: string;
@@ -357,6 +361,9 @@ export interface Session {
    *  created), set by the hub's manager (docs/protocol/protocol.md "Session hierarchy", #5120): the web never lists or
    *  counts it on its own, and draws it as a card in that session's chat. */
   folded_under?: string;
+  /** How it folds under `folded_under`: `"worker"` for an Agent of a host tab whose lead (its first pane) is
+   *  `folded_under` (#5180, a Claude Code agent team's teammate): it is in the lead's Team panel, not a card in its chat. */
+  folded_as?: "worker";
   /** On a session other sessions fold under: how many, and how many of them work or need the user (by their own state). */
   children?: SessionChildren;
   /** When the session began, where the node knows it (child sessions at least). */
@@ -555,6 +562,16 @@ export interface FoldImage {
   height?: number;
 }
 
+/** A file a folded run's successful edits changed (proto.FoldChange): its lines added and removed as the chat counts an
+ *  edit's diff; `exact` false when an edit's text was clipped for good. A fold from a node that counts them always has
+ *  the list (empty when nothing was edited); one without it leaves the run's edits unknown. */
+export interface FoldChange {
+  path: string;
+  add: number;
+  del: number;
+  exact: boolean;
+}
+
 export interface Item {
   id: string;
   seq: number;
@@ -570,7 +587,7 @@ export interface Item {
   queued?: boolean;
   wake?: boolean;
   task?: TaskNote;
-  fold?: { items: number; tools: number; thoughts: number; until?: string; through_seq: number; through_id?: string; images?: FoldImage[]; tasks?: FoldTaskSnapshot[]; latest_thinking?: Item; supervision_user?: boolean };
+  fold?: { items: number; tools: number; thoughts: number; until?: string; through_seq: number; through_id?: string; images?: FoldImage[]; tasks?: FoldTaskSnapshot[]; latest_thinking?: Item; supervision_user?: boolean; changes?: FoldChange[] | null };
   image?: { mime: string; data?: string; lazy?: boolean; size?: number; width?: number; height?: number };
   /** Sent by another Claude session (cross-session messaging), not typed by you: its name. */
   from?: string;
@@ -693,6 +710,8 @@ export interface SessionChildren {
   total: number;
   working?: number;
   needs_you?: number;
+  /** How many of them are its tab's workers (`folded_as: "worker"`, #5180): a lead with workers has a Team panel. */
+  workers?: number;
 }
 
 export interface Interaction {
@@ -739,6 +758,8 @@ export interface Interaction {
   agent_type?: string;
   /** The session the card's session folds under (Session.folded_under, #5120): the card's home is that session's page. */
   folded_under?: string;
+  /** Session.folded_as of the card's session (#5180): `"worker"` when a lead's worker asks. */
+  folded_as?: "worker";
   elicitation?: Elicitation;
   /** What a permission card needs filled in before it is approved (a password): such a card is never approved in one tap. */
   fields?: { key: string; label: string; secret?: boolean }[];
@@ -771,6 +792,9 @@ export interface Launcher {
   /** What it starts when not Claude Code ("codex"); agent_type: what the hub's machine config says it runs. */
   agent?: string;
   agent_type?: string;
+  /** A Codex launcher the computer starts with no first message too; absent from an older computer, whose Codex
+   *  starts need one. */
+  prompt_optional?: boolean;
   /** How its last check or start went on the computer the list is for (GET /machines/{mid}/launchers,
    *  docs/server/launcher-health.md); absent: never checked, a failure too old to count, or an older hub. */
   health?: LauncherHealth;

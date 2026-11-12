@@ -53,6 +53,8 @@ const P: Record<string, React.ReactNode> = {
   copy: <g><rect x="9" y="9" width="12" height="12" rx="2.5" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></g>,
   quote: <path d="M4 11h5v5H4zM4 11c0-3 1.5-5 4-6M14 11h5v5h-5zM14 11c0-3 1.5-5 4-6" />,
   file: <g><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" /><path d="M14 3v5h5" /></g>,
+  // the changed-files card's mark (Lucide's file-diff, as cindy's TurnChangesCard)
+  fileDiff: <g><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z" /><path d="M9 10h6M12 13V7M9 17h6" /></g>,
   folder: <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />,
   git: <g><circle cx="6" cy="6" r="2.5" /><circle cx="6" cy="18" r="2.5" /><circle cx="18" cy="8" r="2.5" /><path d="M6 8.5v7M18 10.5c0 4-6 3-10.5 6" /></g>,
   more: <g fill="currentColor" stroke="none"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></g>,
@@ -103,6 +105,8 @@ const P: Record<string, React.ReactNode> = {
   square: <rect x="4" y="4" width="16" height="16" rx="2" />,
   at: <g><circle cx="12" cy="12" r="4" /><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94" /></g>,
   info: <g><circle cx="12" cy="12" r="9" /><path d="M12 16v-4M12 8h.01" /></g>,
+  // an error notice's mark (Lucide's circle-alert, as cindy's ErrorNotice)
+  alertCircle: <g><circle cx="12" cy="12" r="10" /><path d="M12 8v4M12 16h.01" /></g>,
   mail: <g><rect x="2" y="4" width="20" height="16" rx="2.5" /><path d="m22 7-10 6L2 7" /></g>,
   compose: <g><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.4 2.6a1.4 1.4 0 0 1 3 3l-9 9a2 2 0 0 1-.85.5l-2.9.85.85-2.9a2 2 0 0 1 .5-.85z" /></g>,
   translate: <g><path d="m5 8 6 6M4 14l6-6 2-3M2 5h12M7 2h1" /><path d="m22 22-5-10-5 10M14 18h6" /></g>,
@@ -132,6 +136,8 @@ const P: Record<string, React.ReactNode> = {
   money: <g><rect x="2" y="6" width="20" height="12" rx="2.5" /><circle cx="12" cy="12" r="2.5" /><path d="M6 12h.01M18 12h.01" /></g>,
   // a row's icons in an extension's view (docs/extensions/extensions.md "Declarative UI" row icon; the rest reuse the above)
   person: <g><circle cx="12" cy="8" r="4" /><path d="M4.5 21a7.5 7.5 0 0 1 15 0" /></g>,
+  // a lead's Team (#5180; Lucide's users-round, as cindy's Team tab)
+  users: <g><path d="M18 21a8 8 0 0 0-16 0" /><circle cx="10" cy="8" r="5" /><path d="M22 20c0-3.37-2-6.5-4-8a5 5 0 0 0-.45-8.3" /></g>,
   star: <path d="M12 2.8l2.84 5.76 6.36.92-4.6 4.49 1.09 6.33L12 17.31l-5.69 2.99 1.09-6.33-4.6-4.49 6.36-.92z" />,
   // the model panel (#5032, after Cindy's): its rail's Recent and All (Lucide's history and layout-grid), a row's
   // Customize (Lucide's sliders-horizontal)
