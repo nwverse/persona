@@ -3232,7 +3232,8 @@ in plan order (a task without `todo_id` did not start and has no link); no extra
 //         There's only one kind now: after scheduled tasks were skipped because the main chat wasn't set up, once ready, before the first run the main chat gets "Computers and models are set up; scheduled tasks are running again, this time 'Morning briefing'" (#4253)
 // review: ref is the to-do id; the supervisor did one acceptance review (#3124): {"title","verdict":"accepted|rework|needs_user|parked|cancelled","round":1,"note":"…",
 //         "checks":[{"criterion","met","evidence"}]}; a parked review (#3804) also has "until" (RFC 3339) and "waiting_on", and its note is what the task waits for
-//         when the review gave none; clients that don't know it skip this entry
+//         when the review gave none; "by":"background" when the background supervisor wrote it (#5084; absent for every other review and from a hub before it:
+//         such a review took no turn of this conversation, so a client may draw the entry here as its only record); clients that don't know it skip this entry
 // message: ref is the Inbox entry id; the AI twin drafted a reply to a message related to the task:
 //         {"todo_id","source":"lark|mail|…","account","chat","sender","text":"original words (truncated)","draft":"the draft"}; sending goes through the Inbox send endpoint
 // today: ref is the user's date for that day; {"date":"2026-11-03","done":[{"id","title"}],"waiting":[{"id","title"}],"pending_review":[{"id","title"}],"working":2,
