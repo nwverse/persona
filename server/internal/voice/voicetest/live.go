@@ -50,6 +50,9 @@ type Script struct {
 	RefuseCaptions bool
 	// TextOnlyRefused: a session start with output_modalities is refused with an unknown_parameter error.
 	TextOnlyRefused bool
+	// ExpiresIn: each session ends this long after it started (session.started's expires_at says when; the service
+	// then closes it); 0: far in the future, never.
+	ExpiresIn time.Duration
 	// RefuseVerbatim: the first n session starts of verbatim sessions (no caption extension asked) are refused with an
 	// upstream_unavailable error, as a service that is briefly overloaded does.
 	RefuseVerbatim int
@@ -333,7 +336,12 @@ func (c *conn) start(raw json.RawMessage) {
 	}
 	l.mu.Unlock()
 	c.started = true
-	out := map[string]any{"extensions": granted, "expires_at": int64(1) << 40,
+	expires := any(int64(1) << 40)
+	if d := l.s.ExpiresIn; d > 0 {
+		expires = float64(time.Now().Add(d).UnixMilli()) / 1000
+		time.AfterFunc(d, func() { _ = c.ws.Close(websocket.StatusGoingAway, "session expired") })
+	}
+	out := map[string]any{"extensions": granted, "expires_at": expires,
 		"audio": map[string]any{"format": map[string]any{"type": "audio/pcm", "rate": rate}}}
 	if textOnly {
 		out["output_modalities"] = []string{"text"}

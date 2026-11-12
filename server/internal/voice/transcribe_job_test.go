@@ -737,3 +737,26 @@ func TestTranscriptionVerbatimStartTriedAgain(t *testing.T) {
 		t.Errorf("log:\n%s", logs)
 	}
 }
+
+// Sessions are rolled over before the end session.started's expires_at says, when that comes before trSessionMost:
+// the service never closes one under the job (no session_dropped, no reconnect), and nothing is lost.
+func TestTranscriptionRolloverBeforeItExpires(t *testing.T) {
+	trFast(t)
+	setVar(t, &trExpiryMargin, time.Second)
+	setVar(t, &trRollOverlap, 200*time.Millisecond)
+	_, srv, logs, _ := trLive(t, voicetest.Script{Sentences: trScript, ExpiresIn: 2 * time.Second})
+	tc := startTr(t, srv, liveStart())
+	tc.next(extwire.TFReady)
+	tc.stream(voicetest.PCM(voicetest.Script{Sentences: trScript}, trScriptLength), 5)
+	tc.send(extwire.TranscriptionFrame{Type: extwire.TFEnd})
+	frames := tc.done()
+	sameTexts(t, frames, trScript)
+	for _, f := range trOfType(frames, extwire.TFWarning) {
+		if f.Code == extwire.TWSessionDropped {
+			t.Errorf("a session expired under the job, log:\n%s", logs)
+		}
+	}
+	if !strings.Contains(logs.String(), "(rollover)") || strings.Contains(logs.String(), "lost after") {
+		t.Errorf("log:\n%s", logs)
+	}
+}

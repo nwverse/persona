@@ -3,8 +3,10 @@ package voice
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"slices"
 	"strings"
+	"time"
 )
 
 // The transcription sessions' wire (docs/assistant/meeting-minutes.md "The built-in adapter"): the live dialect's
@@ -62,7 +64,8 @@ type tevent struct {
 	final       bool
 	seconds     float64
 	hasSeconds  bool
-	captions    bool // tevStarted
+	captions    bool      // tevStarted
+	expires     time.Time // tevStarted: when the service ends the session (session.started's expires_at; zero: not said)
 	modalities  []string
 }
 
@@ -83,6 +86,7 @@ func decodeTranscribe(raw []byte) []tevent {
 		Session struct {
 			Extensions       map[string]any `json:"extensions"`
 			OutputModalities []string       `json:"output_modalities"`
+			ExpiresAt        *float64       `json:"expires_at"` // Unix seconds (or milliseconds)
 		} `json:"session"`
 		Event struct {
 			Type string `json:"type"`
@@ -102,7 +106,16 @@ func decodeTranscribe(raw []byte) []tevent {
 	case f.Type == "session.started":
 		v, ok := f.Session.Extensions[trCaptionExtension]
 		granted := ok && v != nil && v != false && v != ""
-		return []tevent{{kind: tevStarted, captions: granted, modalities: f.Session.OutputModalities}}
+		e := tevent{kind: tevStarted, captions: granted, modalities: f.Session.OutputModalities}
+		if x := f.Session.ExpiresAt; x != nil && *x > 0 && *x < 1e15 {
+			at := *x
+			if at >= 1e11 { // milliseconds (seconds that large are thousands of years away)
+				at /= 1000
+			}
+			sec, frac := math.Modf(at)
+			e.expires = time.Unix(int64(sec), int64(frac*1e9))
+		}
+		return []tevent{e}
 	case strings.HasSuffix(f.Type, trCaptionSuffix):
 		return []tevent{{kind: tevCaption, item: f.ItemID, at: f.StartMS / 1000, text: f.Text, final: f.IsFinal}}
 	case f.Type == "session.usage.updated":

@@ -147,11 +147,12 @@ type trSession struct {
 	window int // live: the first window it writes for; replay: its window
 	why    string
 
-	up    upLink
-	rctx  context.Context
-	stopR context.CancelFunc
-	began time.Time
-	feed  int64
+	up      upLink
+	rctx    context.Context
+	stopR   context.CancelFunc
+	began   time.Time
+	expires time.Time // when the service ends it (session.started's expires_at; zero: not said)
+	feed    int64
 
 	pos     atomic.Int64 // the recording sample after the last one sent
 	stop    atomic.Int64 // replay: no audio past this (-1 none); the writer then adds the tail and is done
@@ -223,6 +224,22 @@ func newTrSession(j *trJob, kind string, slot *trSlot, window int, why string) *
 	return s
 }
 
+// rollDue: s is to be rolled over now: trSessionMost after it began, or trExpiryMargin before the service said it
+// ends (session.started's expires_at), whichever comes first, never before half of its life.
+func (s *trSession) rollDue(now time.Time) bool {
+	due := s.began.Add(trSessionMost)
+	if !s.expires.IsZero() && s.expires.After(s.began) {
+		by := s.expires.Add(-trExpiryMargin)
+		if half := s.began.Add(s.expires.Sub(s.began) / 2); by.Before(half) {
+			by = half
+		}
+		if by.Before(due) {
+			due = by
+		}
+	}
+	return !now.Before(due)
+}
+
 // trStartedHook, when set (tests), runs once a session started, before it is handed to the job loop.
 var trStartedHook func()
 
@@ -244,17 +261,18 @@ func (s *trSession) connect(ctx context.Context, instructions string) {
 		defer cancel()
 		caption := s.kind == trCaption
 		textOnly := !j.memo().noTextOnly.Load()
-		up, granted, err := j.startOne(sctx, caption, textOnly, instructions)
+		up, started, err := j.startOne(sctx, caption, textOnly, instructions)
 		var refused *sessionRefused
 		if err != nil && textOnly && errors.As(err, &refused) && upstreamCode(err) == "" && refusedField(refused, caption) == "text_only" {
 			if j.memo().noTextOnly.CompareAndSwap(false, true) {
 				j.logf("provider %s: the service refused text-only output (%s): its sessions get output audio, which is billed", j.p.ID,
 					firstNonEmpty(refused.code, "no code"))
 			}
-			up, granted, err = j.startOne(sctx, caption, false, instructions)
+			up, started, err = j.startOne(sctx, caption, false, instructions)
 		}
+		granted := started.captions
 		if err == nil {
-			s.began = began
+			s.began, s.expires = began, started.expires
 			if trStartedHook != nil {
 				trStartedHook()
 			}
@@ -275,22 +293,22 @@ func (s *trSession) connect(ctx context.Context, instructions string) {
 	}()
 }
 
-// startOne dials the upstream and starts one session on it: whether the caption extension was granted. A refusal of
-// the caption extension is errNoCaptions.
-func (j *trJob) startOne(ctx context.Context, caption, textOnly bool, instructions string) (upLink, bool, error) {
+// startOne dials the upstream and starts one session on it: its session.started (whether the caption extension was
+// granted, when the session ends). A refusal of the caption extension is errNoCaptions.
+func (j *trJob) startOne(ctx context.Context, caption, textOnly bool, instructions string) (upLink, tevent, error) {
 	up, err := dialUpstream(ctx, j.p, liveWire{}, j.model)
 	if err != nil {
-		return nil, false, err
+		return nil, tevent{}, err
 	}
 	if err := writeJSON(ctx, up, transcribeStart(j.model, instructions, caption, textOnly)); err != nil {
 		_ = up.CloseNow()
-		return nil, false, err
+		return nil, tevent{}, err
 	}
 	for {
 		typ, b, err := up.Read(ctx)
 		if err != nil {
 			_ = up.CloseNow()
-			return nil, false, fmt.Errorf("the session did not start: %w", err)
+			return nil, tevent{}, fmt.Errorf("the session did not start: %w", err)
 		}
 		if typ != websocket.MessageText {
 			continue
@@ -301,17 +319,17 @@ func (j *trJob) startOne(ctx context.Context, caption, textOnly bool, instructio
 				if textOnly && len(e.modalities) > 0 && !(len(e.modalities) == 1 && e.modalities[0] == "text") {
 					j.logf("provider %s: the service answers with %v output, not text only: output audio is billed", j.p.ID, e.modalities)
 				}
-				return up, e.captions, nil
+				return up, e, nil
 			case tevError:
 				_ = up.CloseNow()
 				r := &sessionRefused{code: e.code, param: e.param, text: e.text}
 				switch {
 				case e.code == codeUpstreamUnavailable:
-					return nil, false, &upstreamError{code: codeUpstreamUnavailable, err: r}
+					return nil, tevent{}, &upstreamError{code: codeUpstreamUnavailable, err: r}
 				case caption && refusedField(r, true) == "captions":
-					return nil, false, fmt.Errorf("%w (%s)", errNoCaptions, firstNonEmpty(e.code, "no code"))
+					return nil, tevent{}, fmt.Errorf("%w (%s)", errNoCaptions, firstNonEmpty(e.code, "no code"))
 				}
-				return nil, false, r
+				return nil, tevent{}, r
 			}
 		}
 	}

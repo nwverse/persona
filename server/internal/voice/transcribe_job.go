@@ -56,6 +56,7 @@ var (
 	trStall         = time.Second             // no audio this long while a window waits: silence ends the sessions' turns
 	trFlushSilence  = 1500 * time.Millisecond
 	trSessionMost   = 25 * time.Minute // rolled over before the upstream's session limit
+	trExpiryMargin  = 2 * time.Minute  // and at the latest this long before the session ends (its expires_at)
 	trRollOverlap   = 10 * time.Second // and the session rolled over runs beside the new one at least this long
 	trRollRetry     = 30 * time.Second
 	trAssignSlack   = 300 * time.Millisecond
@@ -589,7 +590,7 @@ func (j *trJob) tick() {
 			case sl.cur == nil && !sl.retryAt.IsZero() && !now.Before(sl.retryAt):
 				sl.retryAt = time.Time{}
 				j.open(sl, j.firstOpen(), fmt.Sprintf("reconnect %d", sl.tries))
-			case sl.cur != nil && now.Sub(sl.cur.began) >= trSessionMost && !now.Before(sl.rollAt):
+			case sl.cur != nil && sl.cur.rollDue(now) && !now.Before(sl.rollAt):
 				j.open(sl, j.nextWin-1, "rollover")
 			}
 		}

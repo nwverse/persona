@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
+	"time"
 )
 
 // A transcription session's start: the live dialect's at 16 kHz, text-only output, the caption extension asked for on
@@ -36,7 +37,9 @@ func TestTranscribeWireDecodesMeasuredFrames(t *testing.T) {
 	}{
 		{"started, captions granted", `{"type":"session.started","session":{"id":"s1","extensions":{"input_transcript_partial":"v1"},` +
 			`"output_modalities":["text"],"expires_at":99999999999}}`,
-			[]tevent{{kind: tevStarted, captions: true, modalities: []string{"text"}}}},
+			[]tevent{{kind: tevStarted, captions: true, expires: time.Unix(99999999999, 0), modalities: []string{"text"}}}},
+		{"started, ends in milliseconds", `{"type":"session.started","session":{"extensions":{},"expires_at":1794500000500}}`,
+			[]tevent{{kind: tevStarted, expires: time.Unix(1794500000, 5e8)}}},
 		{"started, not granted", `{"type":"session.started","session":{"extensions":{},"output_modalities":["text"]}}`,
 			[]tevent{{kind: tevStarted, modalities: []string{"text"}}}},
 		{"started, an old service", `{"type":"session.started","session":{"audio":{"format":{"rate":16000}}}}`,
