@@ -14,7 +14,7 @@ import { machineWithHub } from "../../lib/mesh";
 import { href, navigate, onLinkClick } from "../../lib/router";
 import { openedItemState } from "../../lib/inbox-nav";
 import { useInboxSources } from "../../lib/inbox-sources";
-import { subscriptionsHref, useSubscriptionsShown } from "../../lib/subscriptions";
+import { subscriptionsHref, useInboxSourcesShown, useSubscriptionsShown } from "../../lib/subscriptions";
 import { type Manager } from "../../lib/managers";
 import { scoped, useScope, useScoped } from "../../lib/current-assistant";
 import { useStore } from "../../lib/store";
@@ -117,6 +117,7 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
   const [mutesOpen, setMutesOpen] = useState(false);
   const [rulesOpen, setRulesOpen] = useState(false);
   const subscriptionsShown = useSubscriptionsShown();
+  const sourcesShown = useInboxSourcesShown();
   const [foldersOpen, setFoldersOpen] = useState(false);
   // Clean up all over many items asks first; the items are the ones shown when it was asked.
   const [confirm, setConfirm] = useState<{ items: InboxItem[]; scope: string } | null>(null);
@@ -345,7 +346,9 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
               { key: "rules", label: t("inbox-inboxlist.rules_list"), icon: "target", onSelect: () => setRulesOpen(true) },
               { key: "folders", label: t("inbox-folders.settings_menu"), icon: "folder", onSelect: () => setFoldersOpen(true) },
               // source subscriptions (#2041): every subscription, with the Inbox's other settings
-              ...(subscriptionsShown ? [{ key: "subscriptions", label: t("inbox-inboxlist.subscriptions"), icon: "loop" as const, onSelect: () => navigate(subscriptionsHref()) }] : []),
+              // with inbox_sources (#5278): every source of the Inbox, Settings' Inbox Sources (one home for them)
+              ...(subscriptionsShown ? [{ key: "subscriptions", label: sourcesShown ? t("inbox-inboxlist.sources") : t("inbox-inboxlist.subscriptions"), icon: "loop" as const,
+                onSelect: () => navigate(sourcesShown ? "/settings?tab=sources" : subscriptionsHref()) }] : []),
             ]} />
         )}
         {mutesOpen && <MutesDialog onClose={() => setMutesOpen(false)} />}

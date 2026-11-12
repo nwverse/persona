@@ -798,8 +798,8 @@ export async function undoDismissMessage(card: FeedItem, dismissalId: string): P
   }
 }
 
-export function later(itemId: string) {
-  set({ later: { ...st.later, [itemId]: true } });
+export function later(itemId: string, deferred = true) {
+  set({ later: { ...st.later, [itemId]: deferred } });
 }
 
 // ── the conversation's lines ──
