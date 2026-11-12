@@ -148,9 +148,13 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * 0554037152 (ja 592,604 B sent, 591,150 B counted; en 589,016 / 587,562 B; zh-Hans 589,854 / 588,400 B): the budget
  * moved down by the same 1,454 B and kept its 0 B of room. That is no new room; it only stops a change to a lazy chunk or
  * to strings off the first screen from moving the count (#5145 moved ja 34 B as sent with no first-screen code changed).
- * Raise it on purpose, in the change that needs it.
+ * And 2,624 B for child sessions folded into their parent (#5120 added 2,596 B to ja as counted, 591,150 B at dc5d1e3a3
+ * to 593,746 B: every list's folding and the parent row's folded state and running line, a child's request counted,
+ * opened and answerable under its parent (the store's lookup of its row), the paged list's roots, the parent chat's
+ * placement of its children's cards, the hook that reads and holds their rows and the old child links' redirect; the
+ * child card and what it reads when opened load with the card). Raise it on purpose, in the change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 591_150;
+export const FIRST_SCREEN_BUDGET = 593_774;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").

@@ -15,6 +15,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, unquote
 
 PORT = int(os.environ.get("PORT", "18760"))
+# MOCK_CHILD_SESSIONS=1 (#5120) builds on the Paseo computer: its agent's created agents are its children.
+if os.environ.get("MOCK_CHILD_SESSIONS"):
+    os.environ.setdefault("MOCK_PASEO", "1")
 NOW = datetime.now(timezone.utc)
 LOG = sys.stderr
 # MOCK_HUB_ID keeps the identity across restarts, so a paired App stays paired when the switches change.
@@ -38,7 +41,7 @@ def features():
                 ["assistant_compact", "assistant_main_new", "assistant_main_clear"] if os.environ.get("MOCK_MAIN_ACTIONS") == "1" else []) + (
                 ["messaging"] if os.environ.get("MOCK_MESSAGING") == "1" else []) + (
                 ["conversation_origin"] if os.environ.get("MOCK_AUTO_CONVERSATIONS") == "1" else []) + (
-                ["sessions_list", "sessions_lookup"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
+                ["sessions_list", "sessions_lookup", "sessions_hierarchy"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
                 ["preview"] if os.environ.get("MOCK_PREVIEW") else []) + (
                 ["task_cron"] if os.environ.get("MOCK_CRON") == "1" else []) + (
                 [] if os.environ.get("MOCK_LOOK_UPLOADS") == "off" else ["look_uploads"])
@@ -1079,16 +1082,38 @@ if os.environ.get("MOCK_PASEO"):
                background=[{"id": PASEO_ASKS, "kind": "agent", "description": "Add a remember-me option", "started_at": ago(minutes=5)},
                            {"id": PASEO_CODEX, "kind": "agent", "description": "Review the session handling", "started_at": ago(minutes=3)}]),
         _paseo(PASEO_ASKS, "Add a remember-me option", "Fix the login flow", "brave-fox", "fix/login", "blocked", "needs_you", 1,
-               "May I run the migration on the test database?", pending_interactions=1),
+               "May I run the migration on the test database?", pending_interactions=1, asking_parent_session_id=PASEO_LEAD,
+               started_at=ago(minutes=5)),
         _paseo(PASEO_CODEX, "Review the session handling", "Fix the login flow", "brave-fox", "fix/login", "working", "working", 0,
-               "Reading how the token is refreshed.", agent="codex", is_subagent=True, parent_session_id=PASEO_LEAD, root_session_id=PASEO_LEAD),
+               "Reading how the token is refreshed.", agent="codex", is_subagent=True, parent_session_id=PASEO_LEAD, root_session_id=PASEO_LEAD,
+               started_at=ago(minutes=3), effort="high"),
         _paseo("019a5e00-0000-7000-8000-000000000005", "Trace the refresh failure", "Fix the login flow", "brave-fox", "fix/login",
                "working", "working", 0, "Following the 401 through the retry.", agent="codex", agent_name="Codex CLI",
                source_kind="codex_history", source_thread_id="019a5e00-0000-7000-8000-000000000005", source_instance_id=None, host=None,
                slot_name=None, is_subagent=True, parent_session_id=PASEO_CODEX, root_session_id=PASEO_LEAD,
-               read_only_reason="View only: its parent Agent drives this sub-Agent", capabilities={"read": True}),
+               read_only_reason="View only: its parent Agent drives this sub-Agent", capabilities={"read": True},
+               started_at=ago(minutes=2), model="gpt-5.4-mini"),
         _paseo("9a5e0000-0000-4000-8000-000000000006", "Profile the CSV parser", "Speed up the importer", "calm-owl", "perf/importer",
                "done", "unread", 12, "The parser is three times faster on the sample files."),
+    ]
+# MOCK_CHILD_SESSIONS=1 (#5120): the Paseo agent that created two agents created two more, both finished (one of them
+# failed), and an agent whose creator is not listed stays a row of its own. With the hub's folding (fold_hierarchy) the
+# web lists none of the children: the lead's row needs you (its waiting child) and its chat draws a card for each.
+PASEO_DONE = "paseo-9a5e0000-0000-4000-8000-000000000007"
+PASEO_FAILED = "paseo-9a5e0000-0000-4000-8000-000000000008"
+PASEO_ORPHAN = "paseo-9a5e0000-0000-4000-8000-000000000009"
+PASEO_GRANDCHILD = "019a5e00-0000-7000-8000-000000000005"
+if os.environ.get("MOCK_CHILD_SESSIONS"):
+    SESSIONS += [
+        _paseo(PASEO_DONE, "Write the regression tests", "Fix the login flow", "brave-fox", "fix/login", "done", "idle", 6,
+               "Added three regression tests for the refresh path; all pass.", is_subagent=True, parent_session_id=PASEO_LEAD,
+               started_at=ago(minutes=8.8), model="claude-sonnet-4-5", effort="medium", seen_at=ago(minutes=5)),
+        _paseo(PASEO_FAILED, "Check the CI config", "Fix the login flow", "brave-fox", "fix/login", "idle", "idle", 7,
+               "The model service timed out.", agent="codex", is_subagent=True, parent_session_id=PASEO_LEAD,
+               started_at=ago(minutes=8.5), effort="low", turn_error="The model service timed out.", seen_at=ago(minutes=6)),
+        _paseo(PASEO_ORPHAN, "Update the changelog", "Fix the login flow", "brave-fox", "fix/login", "working", "working", 0,
+               "Adding the login change to the changelog.", is_subagent=True,
+               parent_session_id="9a5e0000-0000-4000-8000-0000000000ff", started_at=ago(minutes=1)),
     ]
 # MOCK_ORCA_CHILDREN=1: an Orca worktree with three child worktrees (#2073, parent_space_id), one of them with a child of
 # its own: the web folds them under the parent and sums their states on its row.
@@ -5201,6 +5226,35 @@ EDIT_NEW = """    func makeEntry(for date: Date) -> WeatherEntry {
     }"""
 
 ITEMS = {}
+if os.environ.get("MOCK_CHILD_SESSIONS"):  # #5120: the lead's two exchanges, and what each child was asked and did
+    ITEMS[PASEO_LEAD] = (
+        [it("user", "text", 14, text="Rework the login flow: move the token refresh into the middleware.")]
+        + tool("Read", {"file_path": "src/auth/session.ts"}, "export function refresh(token) { … }", 13)
+        + tool("Edit", {"file_path": "src/auth/middleware.ts", "old_string": "next()", "new_string": "await refresh(req); next()"}, "ok", 12)
+        + [it("assistant", "text", 11, text="The refresh now runs in the middleware, before every handler.")]
+        + [it("user", "text", 9, text="Have agents add the tests and a remember-me option, check CI, and review the session handling.")]
+        + [it("assistant", "thinking", 8.9, text="Four parts that can run side by side: I'll start one agent for each.")]
+        + [it("assistant", "text", 4, text="Two agents are checking the change.")])
+    ITEMS[PASEO_DONE] = (
+        [it("user", "text", 8.8, text="Write regression tests for the token refresh now that it runs in the middleware: an expired token, a revoked one, and two requests at once.")]
+        + tool("Write", {"file_path": "src/auth/middleware.test.ts", "content": "describe(\"refresh\", () => { … })"}, "ok", 8)
+        + tool("Bash", {"command": "npm test -- src/auth"}, "3 passed", 7)
+        + [it("assistant", "text", 6, text="Added three regression tests for the refresh path (expired, revoked, concurrent); all pass.")])
+    ITEMS[PASEO_FAILED] = (
+        [it("user", "text", 8.5, text="Check that the CI config runs the auth tests on every pull request.")]
+        + tool("Read", {"file_path": ".github/workflows/ci.yml"}, "jobs: …", 8)
+        + [it("system", "notice", 7, text="The model service timed out.")])
+    ITEMS[PASEO_ASKS] = (
+        [it("user", "text", 5, text="Add a remember-me option to the login form and keep it in the sessions table.")]
+        + tool("Edit", {"file_path": "src/auth/LoginForm.tsx", "old_string": "</form>", "new_string": "<RememberMe />\n</form>"}, "ok", 3)
+        + [it("assistant", "tool_use", 1, tool_use_id="toolu_migrate_test", tool_name="Bash", tool_input={"command": "npm run migrate -- --env test"})])
+    ITEMS[PASEO_CODEX] = (
+        [it("user", "text", 3, text="Review the session handling after the refresh moved into the middleware. Report anything that can leak a token.")]
+        + tool("Bash", {"command": "rg -n refresh src/auth"}, "src/auth/middleware.ts:12: await refresh(req)", 2)
+        + [it("assistant", "text", 0.5, text="Reading how the token is refreshed.")])
+    ITEMS[PASEO_GRANDCHILD] = (
+        [it("user", "text", 2, text="Trace why a refresh after a retry returns 401.")]
+        + [it("assistant", "text", 0.2, text="Following the 401 through the retry.")])
 if os.environ.get("MOCK_ORCA_CHILDREN"):
     ITEMS["c2073000-0000-4000-8000-000000000006"] = [
         it("user", "text", 61, text="Review the prior work in this workspace."),
@@ -7182,6 +7236,7 @@ if os.environ.get("MOCK_OPENCODE"):
 if os.environ.get("MOCK_PASEO"):
     INTERACTIONS.append(
         {"id": "paseo_migrate_test", "machine_id": "server", "session_id": PASEO_ASKS, "session_title": "Add a remember-me option",
+         "folded_under": PASEO_LEAD, "tool_use_id": "toolu_migrate_test",
          "cwd": "/home/me/.paseo/worktrees/1a2b3c4d/brave-fox", "kind": "permission", "agent": "claude",
          "created_at": ago(minutes=1), "expires_at": later(minutes=29), "tool_name": "Bash",
          "summary": "npm run migrate -- --env test", "tool_input": {"command": "npm run migrate -- --env test"}})
@@ -7251,7 +7306,9 @@ def mock_interactions():
         if MOCK_TASKS:  # a task's agent asking: the hub names the task (task_title)
             titles = {a["session_id"]: t["title"] for t in TODOS if t.get("origin") and not t.get("done_at") for a in t.get("agents", [])}
             out = [dict(x, task_title=titles[x["session_id"]]) if x.get("session_id") in titles else x for x in out]
-        return out
+    # the session a card's session folds under (Interaction.folded_under, #5120): its home is that session's page
+    folds = {(r["machine_id"], r["session_id"]): r["folded_under"] for r in all_sessions() if r.get("folded_under")}
+    return [dict(x, folded_under=folds[(x.get("machine_id"), x.get("session_id"))]) if (x.get("machine_id"), x.get("session_id")) in folds else x for x in out]
 
 
 # MOCK_FLEET: the hub's fleet summary (server/internal/hub/liveactivity.go buildFleet) for Android's ongoing notification,
@@ -12811,7 +12868,75 @@ MODES_LOG = []  # POST …/modes requests, GET /mock/modes (the model picker's a
 
 
 def all_sessions():
-    return [decorated_session(s) for s in (SESSIONS + ASSISTANT)]
+    return fold_hierarchy([decorated_session(s) for s in (SESSIONS + ASSISTANT)])
+
+
+def is_child_row(r):
+    root = r.get("root_session_id")
+    return bool(r.get("is_subagent") or r.get("parent_session_id") or r.get("asking_parent_session_id") or (root and root != r["session_id"]))
+
+
+def fold_hierarchy(rows):
+    """The manager's folding (#5120, docs/protocol/protocol.md "Session hierarchy"), on copies: a child (is_subagent, a
+    parent, or the parent a waiting runtime child names in asking_parent_session_id) whose topmost listed ancestor on its
+    machine is another listed row gets folded_under that ancestor, which gets children (its descendants by their own
+    state). Orphans and cycles fold nowhere."""
+    by = {(r["machine_id"], r["session_id"]): r for r in rows}
+
+    def parent(r):
+        for k in ("parent_session_id", "asking_parent_session_id", "root_session_id"):
+            v = r.get(k)
+            if v and v != r["session_id"] and (r["machine_id"], v) in by:
+                return by[(r["machine_id"], v)]
+        return None
+    top = {}
+    for r in rows:
+        cur, seen, found = r, {r["session_id"]}, None
+        while is_child_row(cur):
+            p = parent(cur)
+            if p is None:
+                break
+            if p["session_id"] in seen:
+                found = None
+                break
+            seen.add(p["session_id"])
+            found = cur = p
+        if found is not None:
+            top[(r["machine_id"], r["session_id"])] = found["session_id"]
+    if not top and not any("folded_under" in r or "children" in r for r in rows):
+        return rows
+    rollup = {}
+    for (mid, sid), root in top.items():
+        c = rollup.setdefault((mid, root), {"total": 0, "working": 0, "needs_you": 0})
+        c["total"] += 1
+        state = by[(mid, sid)].get("state")
+        if state in ("working", "needs_you"):
+            c[state] += 1
+    out = []
+    for r in rows:
+        k = (r["machine_id"], r["session_id"])
+        r = {x: v for x, v in r.items() if x not in ("folded_under", "children")}
+        if k in top:
+            r["folded_under"] = top[k]
+        if k in rollup:
+            r["children"] = {x: v for x, v in rollup[k].items() if v or x == "total"}
+        out.append(r)
+    return out
+
+
+def with_fold(row):
+    """One decorated row with what the list's folding gives it."""
+    return next((x for x in all_sessions() if x["machine_id"] == row.get("machine_id") and x["session_id"] == row.get("session_id")), row)
+
+
+def folded_state(s):
+    """Session.FoldedState: what a parent shows and is counted as with its folded children."""
+    own, c = s.get("state") or "unknown", s.get("children") or {}
+    if own == "needs_you" or c.get("needs_you"):
+        return "needs_you"
+    if c.get("working") and own != "unread" and not (own == "idle" and s.get("awaits_reply")):
+        return "working"
+    return own
 
 
 LIST_JOURNAL = {}  # revision -> {identity: row} of the unfiltered list as it was (a bounded delta journal, #3759)
@@ -12883,12 +13008,20 @@ def paged_sessions(query):
     if os.environ.get("MOCK_SESSIONS_LIST") != "1" or not (set(query) - {"manager"}):
         return {"sessions": rows}, 200
     revision = list_revision(rows)
-    fields = {"machine_id": "machine_id", "session_id": "session_id", "state": "state",
+    fields = {"machine_id": "machine_id", "session_id": "session_id",
               "group": "space_id", "source": "source_kind", "provider": "agent"}
     search = query.get("q", [""])[0].lower()
+    # sessions_hierarchy (#5120): roots=1 leaves the folded children out and counts each parent by its folded state;
+    # parent_session_id=<id> (with machine_id) lists the sessions folded under it.
+    roots, under = query.get("roots", [""])[0] == "1", query.get("parent_session_id", [""])[0]
+    if under and not query.get("machine_id", [""])[0]:
+        return {"error": "parent_session_id needs machine_id", "code": "invalid_query"}, 400
+    state_of = folded_state if roots else (lambda s: s.get("state", "unknown"))
 
     def matching(rows):
-        rows = [s for s in rows if all(not query.get(k, [""])[0] or query[k][0] == s.get(v, "")
+        rows = [s for s in rows if (not roots or not s.get("folded_under")) and (not under or s.get("folded_under") == under)
+                and (not query.get("state", [""])[0] or query["state"][0] == state_of(s))
+                and all(not query.get(k, [""])[0] or query[k][0] == s.get(v, "")
                                       for k, v in fields.items())
                 and (not query.get("project", [""])[0] or query["project"][0] == (s.get("repo_root") or s.get("workspace_cwd") or s.get("cwd", "")))
                 and (not search or search in "\n".join(str(s.get(k, "")) for k in ("title", "cwd", "space_name", "slot_name", "last_text")).lower())]
@@ -12900,7 +13033,7 @@ def paged_sessions(query):
         counts = {"total": len(rows), "revision": revision, "machine": {}, "project": {}, "group": {}, "state": {}}
         for s in rows:
             values = {"machine": s["machine_id"], "project": s.get("repo_root") or s.get("workspace_cwd") or s.get("cwd", ""),
-                      "group": s.get("space_id") or s.get("workspace_id", ""), "state": s.get("state", "unknown")}
+                      "group": s.get("space_id") or s.get("workspace_id", ""), "state": state_of(s)}
             for key, value in values.items():
                 counts[key][value] = counts[key].get(value, 0) + 1
         return counts, 200
@@ -15793,7 +15926,7 @@ def set_session_state(query):
     session.update(state=state, status=STATUS_OF_STATE[state], updated_at=now, state_since=now,
                    rev=(session.get("rev") or 0) + 1)
     push_machine(mid)
-    return {"session": stamp_row(decorated_session(session))}, 200
+    return {"session": stamp_row(with_fold(decorated_session(session)))}, 200
 
 
 def incoming_message(query):
@@ -15818,7 +15951,7 @@ def incoming_message(query):
         if sid in subscribed:
             try: send({"type": "items", "machine_id": mid, "session_id": sid, "items": [item], **span([item], before)})
             except OSError: pass
-    return {"session": stamp_row(decorated_session(session)), "item": item}, 200
+    return {"session": stamp_row(with_fold(decorated_session(session))), "item": item}, 200
 
 
 def quiet_capsule():
@@ -18231,6 +18364,7 @@ MOCK_HELP = [
     "MOCK_SESSIONS_MANY=<n>  n more idle sessions to page through; GET /mock/sessions/touch expires the old cursors (#4410)",
     "MOCK_MANUAL_HERDR=1  没挂待办的 herdr Agent 算手动开的（started_by_persona 为假），Agents「按待办」里出「手动开的」一段（#2917）",
     "MOCK_ORCA_CHILDREN=1  MacBook 上一个 Orca 工作区带三个子工作区（其中一个还有子项，parent_space_id，#2073）",
+    "MOCK_CHILD_SESSIONS=1  The Paseo computer (MOCK_PASEO) with its agent's four created agents (one waiting for you, one working with a Codex subagent of its own, one done, one failed) and an agent whose creator is not listed: the hub folds them (folded_under / children) and the lead's chat draws a card for each (#5120)",
     "MOCK_PASEO=1  A computer whose engine is Paseo: a project with its main checkout and two titled worktree workspaces, an agent with the two agents it created (one waiting for you), and a Codex agent whose thread has a subagent",
     "MOCK_LIVE_STEP=bash|command|reads|parallel|thinking|thinking-folded  The widget chat a minute into a turn whose newest step is still going: the running work line names it (#2987)",
     "MOCK_TOOL_OUTCOMES=1  A turn whose tool results carry outcomes: a failed test run (exit code, the cut output's end), a denied edit, a refused write, an interrupted and a timed-out command; only the failure is red (#4303)",
@@ -20899,7 +21033,7 @@ class H(BaseHTTPRequestHandler):
                 if os.environ.get("MOCK_RESUME_ERROR"): return self.send_json({"error": os.environ["MOCK_RESUME_ERROR"]}, 502)
                 resume.update(status="idle", state="idle")
                 push_machine(resume["machine_id"])
-                return self.send_json({"session": decorated_session(resume)})
+                return self.send_json({"session": with_fold(decorated_session(resume))})
             codex = body.get("launcher") == "codex"  # the node starts Codex with its first message and answers with its thread
             if codex and (body.get("async") or not (body.get("prompt") or "").strip()):
                 return self.send_json({"error": "新建 Codex 会话要连第一条消息一起发：Codex 收到第一条消息才建会话。", "code": "codex_needs_prompt"}, 400)
@@ -20939,7 +21073,7 @@ class H(BaseHTTPRequestHandler):
                     t["updated_at"] = now_str
                     push_machine(s["machine_id"])
                     push_todos()
-            return self.send_json({"session": decorated_session(s)})
+            return self.send_json({"session": with_fold(decorated_session(s))})
         if p.startswith("/api/v1/auth/tokens/") and self.command == "DELETE":
             for t in TOKENS:
                 if t["id"] == p.split("/")[-1]:
