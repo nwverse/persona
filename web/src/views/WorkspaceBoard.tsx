@@ -16,6 +16,8 @@ import { Icon } from "../ui/icons";
 import { t } from "../i18n";
 import { navigate } from "../lib/router";
 import { useWorkspaceBoardSetting } from "../lib/workspace-board-setting";
+import { CATALOG_POLL_MS } from "../lib/workspace-catalog";
+import { isResumed } from "../lib/reconnect";
 const field = "w-full rounded-control bg-field px-3 py-2 text-sm text-ink outline-none focus:ring-2 focus:ring-accent";
 const VIEW_KEY = "persona.workspace-board.view";
 // The lanes that are an agent state take the one canonical state name; only To review and Idle are board-only words.
@@ -66,10 +68,14 @@ function Board({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
       refreshing.current = true;
       void model.refresh().finally(() => { refreshing.current = false; });
     };
-    refresh(); void refreshTodos(); const timer = setInterval(refresh, 10_000);
+    // Every board write pushes workspace_board, so the timer is only for what no push covers (discovery, a manager
+    // that came back after a 503): once a minute, as the sidebar's catalog (#5168). A fresh connection may have
+    // missed pushes, so it reads again at once; a resumed one had them replayed.
+    refresh(); void refreshTodos(); const timer = setInterval(refresh, CATALOG_POLL_MS);
     document.addEventListener("visibilitychange", refresh);
     const off = onHubEvent("workspace_board", (e) => { if (typeof e.revision !== "number" || e.revision > (model.snapshot().board?.revision ?? -1)) refresh(); });
-    return () => { clearInterval(timer); document.removeEventListener("visibilitychange", refresh); off(); };
+    const offHello = onHubEvent("hello", (e) => { if (!isResumed(e)) refresh(); });
+    return () => { clearInterval(timer); document.removeEventListener("visibilitychange", refresh); off(); offHello(); };
   }, [model]);
   const board = state.board, disabled = state.busy || state.readonly;
   const activeColumn = board ? selectedColumn(board, columnSelection) : "";

@@ -64,6 +64,8 @@ object PersonaIcons {
     val darkMode: PhIcon get() = PhIcons.Moon
     /** SF Symbol `trash`. */
     val delete: PhIcon get() = PhIcons.Trash
+    /** SF Symbol `stethoscope`. */
+    val diagnostics: PhIcon get() = PhIcons.Gauge
     /** SF Symbol `mic`. */
     val dictate: PhIcon get() = PhIcons.Microphone
     /** SF Symbol `mic.fill`. */
@@ -236,6 +238,8 @@ object PersonaIcons {
     val privacy: PhIcon get() = PhIcons.ShieldCheck
     /** SF Symbol `shield`. */
     val protection: PhIcon get() = PhIcons.Shield
+    /** SF Symbol `arrow.triangle.pull`. */
+    val pullRequest: PhIcon get() = PhIcons.GitDiff
     /** SF Symbol `arrowshape.down`. */
     val queueDown: PhIcon get() = PhIcons.ArrowDown
     /** SF Symbol `arrowshape.up`. */
@@ -252,6 +256,8 @@ object PersonaIcons {
     val repair: PhIcon get() = PhIcons.Wrench
     /** SF Symbol `arrowshape.turn.up.left`. */
     val reply: PhIcon get() = PhIcons.ArrowBendUpLeft
+    /** SF Symbol `arrow.up.message`. */
+    val reported: PhIcon get() = PhIcons.ChatCircle
     /** SF Symbol `arrow.clockwise`. */
     val retry: PhIcon get() = PhIcons.ArrowClockwise
     /** SF Symbol `play.fill`. */
@@ -306,6 +312,8 @@ object PersonaIcons {
     val todo: PhIcon get() = PhIcons.ListChecks
     /** SF Symbol `translate`. */
     val translate: PhIcon get() = PhIcons.Translate
+    /** SF Symbol `tray.and.arrow.up`. */
+    val unarchive: PhIcon get() = PhIcons.ArrowUUpLeft
     /** SF Symbol `arrow.uturn.backward`. */
     val undo: PhIcon get() = PhIcons.ArrowUUpLeft
     /** SF Symbol `bell`. */
