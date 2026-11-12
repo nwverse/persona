@@ -18,10 +18,21 @@ import (
 // conversation as the user and opens it, as Ask Persona does. Only the pages drawn under PagesID may answer it.
 const AskURL = "persona://ask"
 
-// askRow is the press on a page about a source (connector c, source s) or a subscription (id).
-func (p *pages) askRow(subtitle string) wire.Component {
-	r := row("x.ask", p.t("ask.title"))
-	r.Subtitle, r.Icon, r.IconColor = subtitle, p.icon("person"), "purple"
+// assistant is the assistant's name as the app shows it, at most 40 characters on one line; "" without one.
+func (p *pages) assistant() string {
+	return clipRunes(oneLine(p.env.Assistant), 40)
+}
+
+// askRow is the press on a page about a source (connector c, source s) or a subscription (id), named after the
+// assistant as the app's "Ask {name}…" is ("the assistant" when the app gives no name). key is its subtitle's.
+func (p *pages) askRow(key string) wire.Component {
+	name := p.assistant()
+	title := p.t("ask.title", i18n.Args{"name": name})
+	if name == "" {
+		name, title = p.t("ask.assistant"), p.t("ask.title_assistant")
+	}
+	r := row("x.ask", title)
+	r.Subtitle, r.Icon, r.IconColor = p.t(key, i18n.Args{"name": name}), p.icon("person"), "purple"
 	r.Action = &wire.Action{ID: "ask"}
 	return r
 }

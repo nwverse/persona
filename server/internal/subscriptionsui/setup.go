@@ -289,7 +289,7 @@ func (p *pages) setup(values map[string]string, dry *subscriptions.DryRun, dryEr
 		itemsPath, mode = existing.ItemsPath, existing.Mode
 	}
 	if dry != nil {
-		v.Sections = append(v.Sections, p.dryItems(dry)...)
+		v.Sections = append(v.Sections, p.preview(dry, held("kind", kindOf(existing)), p.fallbackOf())...)
 		paths = dry.Paths
 		if dry.ItemsPath != "" {
 			itemsPath = dry.ItemsPath

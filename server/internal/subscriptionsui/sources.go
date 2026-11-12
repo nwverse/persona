@@ -144,7 +144,7 @@ func (p *pages) recommended(cats []subscriptions.Catalog) []wire.Component {
 			}
 			act := wire.Action{ID: "recommend", Values: map[string]string{"c": c.Connector, "s": src.ID},
 				Confirm: p.recommendConfirm(src.Name, rec.Kind, every)}
-			r.Control = &wire.RowControl{Kind: "switch", Name: "recommend", Action: act}
+			r.Control = &wire.RowControl{Kind: "switch", Name: recommendName(c.Connector, src.ID), Action: act}
 			r.Action = open(state{P: pageSource, C: c.Connector, S: src.ID}, src.Name)
 			out = append(out, r)
 		}
@@ -235,7 +235,7 @@ func (p *pages) recommend(values map[string]string) (wire.ActionResult, error) {
 	if c == "" || src == "" {
 		return wire.ActionResult{}, errBadValues
 	}
-	if values["recommend"] == "false" { // an app sends the switch's new value: off asks nothing and does nothing
+	if values[recommendName(c, src)] == "false" { // the switch's new value: off asks nothing and does nothing
 		v := p.draw()
 		return wire.ActionResult{View: &v}, nil
 	}
@@ -250,3 +250,6 @@ func (p *pages) recommend(values map[string]string) (wire.ActionResult, error) {
 	v := p.draw()
 	return wire.ActionResult{View: &v, Toast: p.t("toast.recommended", i18n.Args{"source": s.Label})}, nil
 }
+
+// recommendName is a recommended row's switch: one name a row, as a page's controls need.
+func recommendName(connector, source string) string { return "r." + connector + "/" + source }

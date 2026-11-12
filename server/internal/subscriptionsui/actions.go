@@ -46,6 +46,8 @@ func (p *pages) act(action string, values map[string]string) (wire.ActionResult,
 		return p.recommend(values)
 	case "ask":
 		return p.ask()
+	case "triage_preview":
+		return p.triagePreview()
 	case "run_now":
 		if _, err := p.svc.RunNow(p.ctx, p.st.ID, p.env.By); err != nil {
 			return p.errorResult(err)
@@ -122,6 +124,34 @@ func (p *pages) setDestination(values map[string]string) (wire.ActionResult, err
 
 // dryRun tries the recipe on the page: the recipe page's own, or what the setup form describes.
 func (p *pages) dryRun(values map[string]string) (wire.ActionResult, error) {
+	if p.st.P == pageSource { // the preview on a source's page: the subscription's recipe, or the extension's own
+		req := subscriptions.DryRunRequest{ID: p.st.ID}
+		if p.st.ID == "" {
+			cat, err := p.svc.Catalog(p.ctx, p.st.C)
+			if err != nil {
+				return p.errorResult(err)
+			}
+			for _, src := range cat.Sources {
+				if src.ID == p.st.S && len(src.Recipes) > 0 {
+					r := src.Recipes[0]
+					req = subscriptions.DryRunRequest{Connector: p.st.C, Source: p.st.S, Recipe: &r}
+				}
+			}
+			if req.Recipe == nil {
+				return wire.ActionResult{}, errBadValues
+			}
+		}
+		dry, err := p.svc.DryRun(p.ctx, req)
+		if err != nil && !isProblem(err) {
+			return wire.ActionResult{}, err
+		}
+		p.try = &tried{err: err}
+		if err == nil {
+			p.try.dry = &dry
+		}
+		v := p.draw()
+		return wire.ActionResult{View: &v}, nil
+	}
 	if p.st.P == pageRecipe {
 		dry, err := p.svc.DryRun(p.ctx, subscriptions.DryRunRequest{ID: p.st.ID})
 		if err != nil && !isProblem(err) {

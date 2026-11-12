@@ -31,6 +31,8 @@ type Service interface {
 	Delete(ctx context.Context, id string, withData bool, by subscriptions.Actor) error
 	// ModelOf is what a model purpose runs on now ("kb", "inbox.triage").
 	ModelOf(ctx context.Context, purpose string) subscriptions.ModelInfo
+	// PreviewThings are a dry run's items as sub would hand them to the Inbox, for trying triage on them (#5278).
+	PreviewThings(sub subscriptions.Subscription, items []subscriptions.Preview) subscriptions.TriagePreview
 	// Push makes or fills the device's push source (#3848); no items only makes it.
 	Push(ctx context.Context, by subscriptions.Actor, in subscriptions.PushRequest) (subscriptions.PushResult, error)
 }
@@ -50,6 +52,11 @@ type Env struct {
 	Native func(service string) string
 	// Builtin are the sources that bring things in themselves (#5278); nil: the pages list subscriptions only.
 	Builtin BuiltinSources
+	// Assistant is the name the app shows for the assistant ("Ask {name}…"), for Set Up with it; "" names it the
+	// assistant.
+	Assistant string
+	// Triage has the triage model try a preview's items (#5278): one verdict each, nothing kept; nil: not offered.
+	Triage func(ctx context.Context, tp subscriptions.TriagePreview) ([]Verdict, error)
 	// UIVersion is the UI version the app draws (6 when 0): an older app gets icons it knows.
 	UIVersion int
 	// Platform is the asking app's (the UI context's): only "ios" offers to add its own Shortcuts source (#3848).
@@ -148,6 +155,8 @@ type pages struct {
 	models map[string]subscriptions.ModelInfo
 	// listed are the built-in sources as read once for this request.
 	listed *[]Builtin
+	// try is the preview a source's page was asked for (its dry run), shown on it.
+	try *tried
 }
 
 // modelOf is what a purpose runs on, asked of the assistant at most once a request.

@@ -132,7 +132,10 @@ func (p *pages) source() wire.View {
 	fb := row("h.fallback", p.t("source.fallback"))
 	fb.Value = p.t("tier." + cmp.Or(s.FallbackTier, "default"))
 	fb.Action = open(state{P: pageFallback, ID: s.ID}, p.t("source.fallback"))
-	v.Sections = append(v.Sections, wire.Section{Key: "how", Title: p.t("source.how"), Items: []wire.Component{recipe, rules, fb}})
+	v.Sections = append(v.Sections, wire.Section{Key: "how", Title: p.t("source.how"), Items: []wire.Component{recipe, rules, fb,
+		p.askRow("ask.line_subscription")}})
+	v.Sections = append(v.Sections, wire.Section{Key: "try", Items: []wire.Component{p.previewPress()}})
+	v.Sections = append(v.Sections, p.previewOf(s.Recipe.Kind, s.FallbackTier)...)
 	del := button("b.delete", p.t("source.delete"), "delete")
 	del.Role = "destructive"
 	del.Action.Confirm = p.t("source.delete_confirm", i18n.Args{"source": s.Label})
@@ -219,9 +222,9 @@ func (p *pages) newSource() wire.View {
 		own.Icon, own.IconColor = "check", "green"
 		other := row("h.pick", p.t("new.other"))
 		other.Action = open(state{P: pageTools, C: p.st.C, S: p.st.S}, p.t("title.tools"))
-		how.Items = []wire.Component{own, p.askRow(p.t("ask.line_source")), other}
+		how.Items = []wire.Component{own, p.askRow("ask.line_source"), other}
 	} else {
-		how.Items = []wire.Component{p.askRow(p.t("ask.line_source"))}
+		how.Items = []wire.Component{p.askRow("ask.line_source")}
 		pick := row("h.pick", p.t("new.pick"))
 		pick.Subtitle = p.t("list.tools", i18n.Args{"count": subscribable(*src)})
 		pick.Icon, pick.IconColor = "search", "blue"
@@ -229,7 +232,12 @@ func (p *pages) newSource() wire.View {
 		how.Items = append(how.Items, pick)
 		how.Footer = p.t("new.pick_footer")
 	}
-	v.Sections = append(v.Sections, how, p.switches("", src.Name, kind, every, false, false, len(src.Recipes) > 0, false))
+	v.Sections = append(v.Sections, how)
+	if len(src.Recipes) > 0 {
+		v.Sections = append(v.Sections, wire.Section{Key: "try", Items: []wire.Component{p.previewPress()}})
+		v.Sections = append(v.Sections, p.previewOf(kind, "")...)
+	}
+	v.Sections = append(v.Sections, p.switches("", src.Name, kind, every, false, false, len(src.Recipes) > 0, false))
 	freq := row("f.interval", p.t("source.interval"))
 	freq.Value = every
 	v.Sections = append(v.Sections, wire.Section{Key: "freq", Title: p.t("source.freq"), Items: []wire.Component{freq},
@@ -286,7 +294,7 @@ func (p *pages) recipe(dry *subscriptions.DryRun, dryErr error) wire.View {
 		v.Sections = append(v.Sections, wire.Section{Key: "dry", Title: p.t("dry.title"), Items: []wire.Component{
 			text("dry.err", p.t("dry.failed"), "secondary")}})
 	case dry != nil:
-		v.Sections = append(v.Sections, p.dryItems(dry)...)
+		v.Sections = append(v.Sections, p.preview(dry, s.Recipe.Kind, s.FallbackTier)...)
 	}
 	try := button("b.dry", p.t("recipe.dry_run"), "dry_run")
 	edit := row("x.tool", p.t("recipe.edit"))
@@ -296,62 +304,8 @@ func (p *pages) recipe(dry *subscriptions.DryRun, dryErr error) wire.View {
 	raw := row("x.raw", p.t("recipe.raw"))
 	raw.Action = open(state{P: pageRaw, ID: s.ID}, p.t("recipe.raw"))
 	v.Sections = append(v.Sections, wire.Section{Key: "edit", Footer: p.origin(s) + " " + p.t("recipe.no_model"),
-		Items: []wire.Component{try, p.askRow(p.t("ask.line_recipe")), edit, other, raw}})
+		Items: []wire.Component{try, p.askRow("ask.line_recipe"), edit, other, raw}})
 	return v
-}
-
-// dryItems are a dry run's items and its checks.
-func (p *pages) dryItems(dry *subscriptions.DryRun) []wire.Section {
-	var out []wire.Section
-	items := wire.Section{Key: "dry", Title: p.t("dry.title")}
-	if dry.Error != nil {
-		items.Items = append(items.Items, text("dry.err", p.t("dry.error", i18n.Args{"problem": p.problemText(dry.Error)}), "secondary"))
-	}
-	for i, it := range dry.Items {
-		r := row("dry."+itoa(i), it.Title)
-		var bits []string
-		if it.Sender != "" {
-			bits = append(bits, it.Sender)
-		}
-		if it.Time != nil {
-			bits = append(bits, *it.Time)
-		}
-		r.Subtitle = join(bits)
-		if it.New {
-			r.Badge = badge(p.t("dry.new"), "positive")
-		} else {
-			r.Badge = badge(p.t("dry.seen"), "neutral")
-		}
-		items.Items = append(items.Items, r)
-	}
-	if dry.Shape != nil {
-		shape := p.t("dry.shape_text")
-		if dry.Shape.Type == "json" {
-			shape = p.t("dry.shape_json", i18n.Args{"count": dry.Count})
-		}
-		if dry.MaybeMore {
-			shape += " " + p.t("dry.maybe_more")
-		}
-		items.Items = append(items.Items, text("dry.shape", shape, "caption"))
-	}
-	if len(items.Items) > 0 {
-		out = append(out, items)
-	}
-	if len(dry.Checks) > 0 {
-		checks := wire.Section{Key: "checks", Title: p.t("checks.title")}
-		for _, c := range dry.Checks {
-			r := row("c."+c.Key, p.t("check."+c.Key))
-			if c.OK {
-				r.Icon, r.IconColor = "check", "green"
-			} else {
-				r.Icon, r.IconColor = "warning", "red"
-				r.Subtitle = p.problemText(c.Error)
-			}
-			checks.Items = append(checks.Items, r)
-		}
-		out = append(out, checks)
-	}
-	return out
 }
 
 // ④ Pick a tool: the ones that can be subscribed, then the ones that can't and why.

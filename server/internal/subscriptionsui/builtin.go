@@ -86,7 +86,7 @@ func (p *pages) builtins() []Builtin {
 		return nil
 	}
 	if p.listed == nil {
-		list := p.env.Builtin.List(p.ctx)
+		list := slices.Clone(p.env.Builtin.List(p.ctx)) // sorted here, not in the caller's slice
 		slices.SortStableFunc(list, func(a, b Builtin) int { return cmp.Compare(a.Name, b.Name) })
 		p.listed = &list
 	}
@@ -215,7 +215,7 @@ func (p *pages) builtinRow(b Builtin, subs []subscriptions.Subscription) wire.Co
 	r.Subtitle = p.builtinLine(b)
 	switch {
 	case p.builtinTrouble(b) != "":
-		r.Badge = badge(p.t("badge.needs_you"), "caution")
+		r.Badge = p.builtinBadge(b)
 	case len(p.duplicates(b.ID, subs)) > 0:
 		r.Badge = badge(p.t("badge.maybe_duplicate"), "caution")
 	}
@@ -477,4 +477,13 @@ func (p *pages) builtinRulesPage() wire.View {
 		{Key: "rules", Footer: p.t("builtin.rules_footer"), Items: []wire.Component{field}},
 		{Key: "save", Items: []wire.Component{save}},
 	}}
+}
+
+// builtinBadge names what keeps a built-in source from reading, for its row: its connection, else a failed read.
+func (p *pages) builtinBadge(b Builtin) *wire.Badge {
+	switch b.Status {
+	case "ok", "rate_limited", "disabled":
+		return badge(p.t("badge.read_failed"), "caution")
+	}
+	return badge(p.t("builtin.status."+statusKey(b.Status)), "caution")
 }
