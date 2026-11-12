@@ -185,6 +185,31 @@ func TestOutsideClaudeSendNotTaken(t *testing.T) {
 	}
 }
 
+// A session waiting on a question or permission prompt takes the message into its queue, but reads it only once that
+// is answered at the computer: the send succeeds and says so (waits_on_computer); one that is working or idle does not.
+func TestOutsideClaudeSendBehindDialog(t *testing.T) {
+	n, f, home := herdrNode(t)
+	noPaneEnv(t)
+	shortPeerWait(t, 3*time.Second)
+	p := bgTranscript(t, home, home, sidA, "plan")
+	inbox := newFakeInbox(t, p)
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	for i, c := range []struct {
+		status string
+		waits  bool
+	}{{"waiting", true}, {"busy", false}, {"idle", false}} {
+		writeOutsideClaude(t, home, sidA, "cli", c.status, inbox, nil)
+		res, err := request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "why nothing to tap? " + c.status,
+			"client_msg_id": "m-" + strconv.Itoa(i)})
+		if err != nil {
+			t.Fatalf("%s: %v", c.status, err)
+		}
+		if res["ok"] != true || (res["waits_on_computer"] == true) != c.waits {
+			t.Errorf("%s: answer %v", c.status, res)
+		}
+	}
+}
+
 // Refusals say why and send nothing, never falling back to a second claude: no key file (Windows needs its token), an
 // inbox that is not there, an unknown protocol, a slash command (the inbox runs none), a message too long for a line.
 func TestOutsideClaudeSendRefusals(t *testing.T) {
