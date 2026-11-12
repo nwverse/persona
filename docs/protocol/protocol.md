@@ -436,10 +436,10 @@ Both APIs require authentication; the feature flag is `android_update`:
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| GET | `/api/v1/app/android/latest` | Returns the published `latest.json` as-is; the release script writes `{version_code,version_name,min_sdk,notes,sha256,size}` |
+| GET | `/api/v1/app/android/latest` | Returns the published `latest.json` as-is, with `download_url` set to the pinned APK below; the release script writes `{package_name,version_code,version_name,min_sdk,certificate_sha256,notes,sha256,size,source_sha}`, and one taken from a release's `android.json` adds `version` and `name` |
 | GET | `/api/v1/app/android/apk` | Reads the APK by the manifest's `sha256`; MIME `application/vnd.android.package-archive`, attachment name `persona.apk`, ETag is the quoted digest, supports ServeContent range and conditional requests. A GET that takes gzip (no range) gets the published gzip copy with `Content-Encoding: gzip`, `Vary: Accept-Encoding` and the ETag `"<sha256>-gzip"`; the decoded bytes are the APK |
 
-Published files live in `apps/android/` under the hub's config directory, with APKs named `<sha256>.apk` and their gzip copies `<sha256>.apk.gz` (an APK stores its dex files uncompressed, so the copy is about half the size; without it the APK goes out as it is). Unpublished returns 404; an invalid manifest digest returns 500. Clients should verify size and digest, keep downloads same-origin, and leave installation to the system's confirmation. Upgrades with the same package name and signature still need on-device sign-off after artifacts are published.
+Published files live in `apps/android/` under the hub's config directory, with APKs named `<sha256>.apk` and their gzip copies `<sha256>.apk.gz` (an APK stores its dex files uncompressed, so the copy is about half the size; without it the APK goes out as it is). They come from a publisher over SSH (`scripts/release/publish_android_apk.py`) or, on a hub with an update source, from the newest release's `android.json` (`docs/operations/hub-update.md` ("The Android app")); either way `latest.json` is written last, under `.publish.lock`. Unpublished returns 404; an invalid manifest digest returns 500. Clients should verify size and digest, keep downloads same-origin, and leave installation to the system's confirmation. Upgrades with the same package name and signature still need on-device sign-off after artifacts are published.
 
 ## Codex sources and capabilities
 
