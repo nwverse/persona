@@ -3,6 +3,7 @@ package persona.feature.settings
 import android.Manifest
 import android.app.NotificationManager
 import android.content.Context
+import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.LocalActivityResultRegistryOwner
@@ -23,6 +24,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.core.app.ActivityOptionsCompat
+import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -58,6 +60,8 @@ class ReadinessNotificationPermissionTest {
     private class RecordingRegistry : ActivityResultRegistry(), ActivityResultRegistryOwner {
         override val activityResultRegistry get() = this
         val inputs = mutableListOf<Any?>()
+        private var lastRequestCode: Int? = null
+        val pendingCode get() = lastRequestCode
 
         override fun <I, O> onLaunch(
             requestCode: Int,
@@ -66,7 +70,15 @@ class ReadinessNotificationPermissionTest {
             options: ActivityOptionsCompat?,
         ) {
             inputs += input
+            lastRequestCode = requestCode
         }
+
+        fun complete(granted: Boolean, requestCode: Int = lastRequestCode ?: error("No pending permission request")) {
+            check(dispatchResult(requestCode, granted))
+            if (lastRequestCode == requestCode) lastRequestCode = null
+        }
+
+        fun savedState() = Bundle().also { onSaveInstanceState(it) }
     }
 
     @Before fun resetNotificationState() {
@@ -104,6 +116,33 @@ class ReadinessNotificationPermissionTest {
         assertEquals(rule.activity.packageName, intent.getStringExtra(Settings.EXTRA_APP_PACKAGE))
     }
 
+    private fun complete(registry: RecordingRegistry, granted: Boolean, requestCode: Int? = null) {
+        rule.runOnUiThread {
+            if (requestCode == null) registry.complete(granted) else registry.complete(granted, requestCode)
+        }
+        rule.waitForIdle()
+    }
+
+    private fun savedRegistry(registry: RecordingRegistry): Bundle {
+        val state = Bundle()
+        rule.runOnUiThread { state.putAll(registry.savedState()) }
+        return state
+    }
+
+    private fun pendingLaunches(registry: RecordingRegistry): Int =
+        savedRegistry(registry).getStringArrayList("KEY_COMPONENT_ACTIVITY_LAUNCHED_KEYS").orEmpty().size
+
+    private fun restoreRegistry(registry: RecordingRegistry, state: Bundle) {
+        rule.runOnUiThread { registry.onRestoreInstanceState(state) }
+    }
+
+    private fun returnFromSystemSettings(notificationsEnabled: Boolean) {
+        rule.activityRule.scenario.moveToState(Lifecycle.State.CREATED)
+        shadowOf(context.getSystemService(NotificationManager::class.java)).setNotificationsEnabled(notificationsEnabled)
+        rule.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
+        rule.waitForIdle()
+    }
+
     @Test fun onlyTheFirstExplicitTapRequestsPermissionThenDenialOpensSettings() {
         val registry = RecordingRegistry()
         show(registry)
@@ -112,19 +151,73 @@ class ReadinessNotificationPermissionTest {
         tap(R.string.settings_ready_allow_notifications)
         assertEquals(listOf(Manifest.permission.POST_NOTIFICATIONS), registry.inputs)
         assertTrue(preferences().getBoolean("notification-requested", false))
-        rule.onNodeWithText(text(R.string.settings_ready_allow_notifications)).assertDoesNotExist()
+        assertEquals(1, pendingLaunches(registry))
+        complete(registry, granted = false)
 
-        // The registry does not grant: asked is not granted, so a denial or permanent denial stays unsatisfied.
+        // A completed denial consumes the launched key and refreshes without turning asked into granted.
+        assertEquals(0, pendingLaunches(registry))
         val notification = PhoneReadiness.items(context, SystemKind("Android", "15", "")).first { it.id == "notifications" }
         assertEquals(false, notification.satisfied)
+        rule.onNodeWithText(text(R.string.settings_ready_allow_notifications)).assertDoesNotExist()
         tapFirst(R.string.settings_ready_open)
         assertNotificationSettingsOpened()
         assertEquals(1, registry.inputs.size)
+    }
 
-        // A later permanent denial has the same recovery path and never launches the runtime request again.
+    @Test fun grantingPermissionRunsTheCallbackAndRefreshesTheCard() {
+        val registry = RecordingRegistry()
+        show(registry)
+        tap(R.string.settings_ready_allow_notifications)
+        shadowOf(context.getSystemService(NotificationManager::class.java)).setNotificationsEnabled(true)
+
+        complete(registry, granted = true)
+        assertEquals(0, pendingLaunches(registry))
+        rule.onAllNodes(hasText(text(R.string.settings_ready_satisfied))).onFirst().assertExists()
+        rule.onNodeWithText(text(R.string.settings_ready_allow_notifications)).assertDoesNotExist()
+        assertEquals(1, registry.inputs.size)
+    }
+
+    @Test fun returningFromSystemSettingsRefreshesOnResume() {
+        val registry = RecordingRegistry()
+        show(registry)
+        tap(R.string.settings_ready_allow_notifications)
+        complete(registry, granted = false)
         tapFirst(R.string.settings_ready_open)
         assertNotificationSettingsOpened()
+
+        returnFromSystemSettings(notificationsEnabled = true)
+        rule.onAllNodes(hasText(text(R.string.settings_ready_satisfied))).onFirst().assertExists()
+        rule.onNodeWithText(text(R.string.settings_ready_allow_notifications)).assertDoesNotExist()
         assertEquals(1, registry.inputs.size)
+    }
+
+    @Test fun recreatedOwnerConsumesAPendingDenialOnceWithoutRequestingAgain() {
+        val registry = RecordingRegistry()
+        show(registry)
+        tap(R.string.settings_ready_allow_notifications)
+        val requestCode = requireNotNull(registry.pendingCode)
+        val saved = savedRegistry(registry)
+        assertEquals(1, pendingLaunches(registry))
+
+        rule.activityRule.scenario.recreate()
+        val restored = RecordingRegistry()
+        restoreRegistry(restored, saved)
+        show(restored)
+        assertEquals(1, pendingLaunches(restored))
+        complete(restored, granted = false, requestCode = requestCode)
+
+        assertEquals(0, pendingLaunches(restored))
+        assertTrue(preferences().getBoolean("notification-requested", false))
+        rule.onNodeWithText(text(R.string.settings_ready_allow_notifications)).assertDoesNotExist()
+        assertEquals(1, registry.inputs.size)
+        assertTrue(restored.inputs.isEmpty())
+
+        // The launched key is already gone, so a duplicate result cannot invoke the new owner's callback again.
+        complete(restored, granted = true, requestCode = requestCode)
+        assertEquals(0, pendingLaunches(restored))
+        tapFirst(R.string.settings_ready_open)
+        assertNotificationSettingsOpened()
+        assertTrue(restored.inputs.isEmpty())
     }
 
     @Test fun aRequestRecordedByAnotherReadinessDoesNotLaunchAgain() {
@@ -144,7 +237,7 @@ class ReadinessNotificationPermissionTest {
         val registry = RecordingRegistry()
         show(registry)
 
-        rule.onNodeWithText(text(R.string.settings_ready_satisfied)).assertExists()
+        rule.onAllNodes(hasText(text(R.string.settings_ready_satisfied))).onFirst().assertExists()
         rule.onNodeWithText(text(R.string.settings_ready_allow_notifications)).assertDoesNotExist()
         tapFirst(R.string.settings_ready_open)
         assertNotificationSettingsOpened()
@@ -174,15 +267,15 @@ class ReadinessNotificationPermissionTest {
     }
 
     @Config(sdk = [35], qualifiers = "en-w320dp-h1400dp-xhdpi", fontScale = 2f)
-    @Test fun englishAllowActionStaysOnOneLineAtLargeText() = assertAllowActionIsSingleLine()
+    @Test fun englishAllowActionStaysCompleteOnOneLineAtLargeText() = assertAllowActionIsCompleteOnOneLine()
 
     @Config(sdk = [35], qualifiers = "zh-w320dp-h1400dp-xhdpi", fontScale = 2f)
-    @Test fun chineseAllowActionStaysOnOneLineAtLargeText() = assertAllowActionIsSingleLine()
+    @Test fun chineseAllowActionStaysCompleteOnOneLineAtLargeText() = assertAllowActionIsCompleteOnOneLine()
 
     @Config(sdk = [35], qualifiers = "ja-w320dp-h1400dp-xhdpi", fontScale = 2f)
-    @Test fun japaneseAllowActionStaysOnOneLineAtLargeText() = assertAllowActionIsSingleLine()
+    @Test fun japaneseAllowActionStaysCompleteOnOneLineAtLargeText() = assertAllowActionIsCompleteOnOneLine()
 
-    private fun assertAllowActionIsSingleLine() {
+    private fun assertAllowActionIsCompleteOnOneLine() {
         var style by mutableStateOf(AppStyle.Glass)
         show(RecordingRegistry()) { style }
         val label = text(R.string.settings_ready_allow_notifications)
@@ -192,7 +285,17 @@ class ReadinessNotificationPermissionTest {
             val node = rule.onNodeWithText(label, useUnmergedTree = true).fetchSemanticsNode()
             val layouts = mutableListOf<TextLayoutResult>()
             node.config[SemanticsActions.GetTextLayoutResult].action!!(layouts)
-            assertEquals("$nextStyle must keep the permission action on one line", 1, layouts.single().lineCount)
+            val layout = layouts.single()
+            assertEquals("$nextStyle must keep the permission action on one line", 1, layout.lineCount)
+            assertFalse("$nextStyle must not ellipsize or clip the permission action", layout.hasVisualOverflow)
+
+            val textBounds = node.boundsInRoot
+            val buttonBounds = rule.onNode(hasText(label) and hasClickAction()).fetchSemanticsNode().boundsInRoot
+            assertTrue(
+                "$nextStyle must keep the complete label inside its button",
+                textBounds.left >= buttonBounds.left && textBounds.right <= buttonBounds.right &&
+                    textBounds.top >= buttonBounds.top && textBounds.bottom <= buttonBounds.bottom,
+            )
         }
     }
 }
