@@ -223,10 +223,13 @@ func (svc *Service) archivedSessions(ctx context.Context, machine string, list [
 	return overlayAgentArchives(machine, list, b.records, b.pending, mark), next != nil && saveErr == nil, saveErr
 }
 
-// archivedInventory is machine's whole list with the archive applied (archivedSessions).
+// archivedInventory is machine's whole list with the archive applied (archivedSessions), its children folded under
+// their parents among the rows left listed (foldInventory).
 func (svc *Service) archivedInventory(ctx context.Context, machine string) ([]proto.Session, bool, error) {
 	mark := svc.archiveMark()
-	return svc.archivedSessions(ctx, machine, svc.decoratedUnarchived(machine), mark)
+	list, changed, err := svc.archivedSessions(ctx, machine, svc.decoratedUnarchived(machine), mark)
+	svc.foldInventory(machine, list)
+	return list, changed, err
 }
 
 func overlayAgentArchives(machine string, list []proto.Session, records map[string]agentArchive, pending map[string]bool, mark uint64) []proto.Session {

@@ -1,6 +1,9 @@
 package proto
 
-import "time"
+import (
+	"math"
+	"time"
+)
 
 // Claude Code's effort levels and permission modes (node/modes.go sets them; the hub checks a scheduled task's).
 var (
@@ -148,8 +151,10 @@ type Session struct {
 	// Codex: the last token_count's input) and ContextWindow the model's window, both read off the transcript tail the
 	// node already reads (#2430). ContextTokens is omitted while unknown (no reply yet); ContextWindow too, when the
 	// node cannot tell the model's window. The apps show used / window as the context bar.
-	ContextTokens int `json:"context_tokens,omitempty"`
-	ContextWindow int `json:"context_window,omitempty"`
+	// Both are int32, next to each other, to leave Session the word Hierarchy takes (TestSessionFitsItsSizeClass): the
+	// largest windows are a few million tokens (Tokens32 saturates anything bigger).
+	ContextTokens int32 `json:"context_tokens,omitempty"`
+	ContextWindow int32 `json:"context_window,omitempty"`
 	// OutputTokens is cumulative generated output, not the latest context size or transcript revision.
 	OutputTokens int `json:"output_tokens,omitempty"`
 	// Efforts are the levels session.modes takes for Effort when they are not Claude Code's (which the apps know): a
@@ -355,6 +360,12 @@ type Session struct {
 	// paseo for the Paseo runtime's; empty for transcripts with no live host and for other runtimes. The apps label a
 	// row with it when the machine enables more than one host.
 	Host string `json:"host,omitempty"`
+	// Hierarchy is where the session stands among the sessions that started one another, and when it began
+	// (docs/protocol/protocol.md "Session hierarchy"); nil for most rows. Its members are written on the row itself
+	// (folded_under, children, started_at, asking_parent_session_id: sessionWire), so it has no key of its own. Read it
+	// with FoldedUnder, Children, StartedAt and AskingParentSessionID; it is shared by every copy of the row, so it is
+	// never written in place: SetFold, SetStartedAt and SetAskingParentSessionID put a new one.
+	Hierarchy *SessionHierarchy `json:"-"`
 }
 
 // Session.TurnErrorKind values.
@@ -501,4 +512,9 @@ type ServiceTier struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
+}
+
+// Tokens32 is n as Session.ContextTokens and ContextWindow hold it: saturated at the int32 bounds.
+func Tokens32(n int) int32 {
+	return int32(max(min(n, math.MaxInt32), math.MinInt32))
 }
