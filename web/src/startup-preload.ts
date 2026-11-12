@@ -197,10 +197,19 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * and their words; the earlier stretches' windows, reading and drawing, the handoff panel and their words, the "Switch
  * Agent?" dialog and the panel's engine code load lazily). And 453 B because #5303 and #5457 landed together (#5488):
  * #5303 counted the room main had at d7536a601c as its own, and #5457 (#5420, the provider import link) used that room
- * too, merged in between; ja 591,939 B on main at 48f1e053b5, plus 41 B of room. Raise it on purpose, in the change that
- * needs it.
+ * too, merged in between; ja 591,939 B on main at 48f1e053b5, plus 41 B of room. And 684 B for each turn's cost on the
+ * reply bar (#5426: ja 592,664 B against 591,753 B on main at cc83e770df, +911 B, of which 227 B fit the room main had:
+ * collecting an exchange's usage while the chat's lines are built, a subagent's once in the chat, in the exchange that
+ * launched it, and handing it to the reply; the prices, the sums by model, the card and their words load with the reply
+ * bar). And 279 B for the same usage bar after the command card's wording landed (#5512, #5539: ja 592,943 B against
+ * 592,664 B on main at 0856795596: the command-answer labels and the usage computation share the reply bar's helpers;
+ * the command card itself and its usage card stay lazy, outside the idle tier). And 82 B for Done paging the list's last
+ * days now that the list carries only the newest done items (#5549: ja 593,025 B against 592,867 B on main at 86c439b97,
+ * +158 B, of which 76 B fit the room main had: Undo reopening what the hub moved, listed or not, a route reading an item
+ * only the history has or, once, the hub's copy by id, and the state that says it is being read). Raise it on purpose, in
+ * the change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 591_980;
+export const FIRST_SCREEN_BUDGET = 593_025;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
@@ -307,9 +316,12 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
  * took the @ menu's rows off the first screen, beside #5325's / palette and #5327's queue panel, which together left
  * less room than it needs: 43,729 B merged with main at f18875688; 43,809 B with the review's fixes merged with main at
  * 0fef425ef, and 31 B over that so the next main does not tip it). It stays idle: a typed @ opens it at once.
+ * And 183 B for the single-category stacked bar's share predicate and horizontal segmented renderer (#5386,
+ * 2026-11-12: 43,782 B measured on main before the change, 43,965 B after; the chart chunk is idle by contract —
+ * code-views-lazy.test enforces `idle: true` — so the renderer has no intent tier to move into).
  * Every other lazy page loads on intent, not at idle; raise it on purpose, in the change that needs it.
  */
-export const IDLE_TIER_BUDGET = 43_840;
+export const IDLE_TIER_BUDGET = 43_965;
 
 const gzip = promisify(gzipCompress);
 

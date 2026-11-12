@@ -29,6 +29,17 @@ grew 9 B, but the ja count grew 255 B and `main` failed the build, with no first
 now counts imported names as one fixed string and export lists as empty ones. To check a surprising move, compare the
 number of entries in each first-screen chunk's `export{…}` between the two builds.
 
+## An idle-contracted chunk's growth raises the idle budget, it cannot move to on-intent (#5386)
+
+`code-views-lazy.test` asserts that `ExtensionChart` loads with `{ idle: true }`, so adding the single-category share
+bar to that chunk grew the idle tier 183 gzip bytes and failed `IDLE_TIER_BUDGET` (the headroom was 58 B). Moving the
+renderer to its own on-intent chunk was not an option: the test pins the loading mode on purpose, and splitting the
+module just moves the same bytes into another file the idle tier still pulls. Measure the real baseline before touching
+the constant — a clean main build measured 43,782 B against the 43,840 B limit — then raise `IDLE_TIER_BUDGET` to the
+new measured value and record both numbers and the reason in the comment above it, as the constant's own convention
+requires ("raise it on purpose, in the change that needs it"). A build whose only failure is the startup-preload budget
+still exits non-zero even when the last log lines look like warnings; always check the plugin error text.
+
 ## A new list of sessions folds child sessions too (#5120)
 
 Child sessions (`folded_under`) are left out of lists and counts in one place, `foldRows` (`lib/folded-rows.ts`), which
@@ -1038,3 +1049,12 @@ recovery that publishes fewer rows than are on screen moves the reader.
 - **CSP doesn't stop a `<meta http-equiv="refresh">` in a sandboxed `allow-scripts` frame**: the frame navigates itself (one request). Only never drawing a `meta` (or any HTML from the card) stops it. Chromium also opens a connection, without a request, for an `<iframe src>` its CSP refuses. A check of the frame by itself shows both (`web/e2e/html-runtime-security.mjs`, raw mode).
 - **A sync bridge needs its "asking" slot taken synchronously**: a card that calls `persona.reply` 200 times in one turn gets all 200 through a check on React state set in the same tick. Take the slot in the call, not in the render.
 
+## Connector context is not a conversation (#856)
+
+A collected context string loses message boundaries, individual timestamps and
+direction. Do not recover them by splitting on sender names or colons: descriptions
+can contain both. Use `Threads` for structured pages and retain a literal fallback
+for old items. Parse a textual card envelope only inside one source message, and
+keep incomplete or unknown card shapes readable. Capability errors need their own
+code; a 409 without `Threads` is different from a temporary failure or lost access.
+A failed page refresh must not erase a loaded page or its pending reply draft.

@@ -141,11 +141,19 @@ class OutboxMessageSender(
     /** Tells the outbox which sessions are at work (the pairing's session list). */
     fun connectActivity(busy: (SessionKey) -> Boolean) { this.busy = busy }
 
-    override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?) = lifecycle.withLock {
+    override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?) =
+        enqueue(session, text, clientMessageId, clearDraft, null, null)
+
+    override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?, launcher: String?, model: String?) =
+        enqueue(session, text, clientMessageId, clearDraft, launcher, model)
+
+    private suspend fun enqueue(
+        session: SessionKey, text: String, clientMessageId: String, clearDraft: String?, launcher: String?, model: String?,
+    ) = lifecycle.withLock {
         check(job.isActive) { "Pairing scope is closed" }
         require(text.isNotBlank() && clientMessageId.isNotBlank())
         require(session.machineId.isNotBlank() && session.sessionId.isNotBlank())
-        store.enqueue(OutboxEntry(clientMessageId, session, text, clearDraft, createdAt = now()))
+        store.enqueue(OutboxEntry(clientMessageId, session, text, clearDraft, createdAt = now(), launcher = launcher, model = model))
         wake.trySend(Unit)
         Unit
     }
@@ -168,8 +176,14 @@ class OutboxMessageSender(
     override suspend fun discard(clientMessageId: String): Boolean =
         change(clientMessageId, undecided, OutboxState.Cancelled)
 
-    override suspend fun retry(clientMessageId: String): Boolean = change(
-        clientMessageId, setOf(OutboxState.Refused, OutboxState.NeedsConfirmation), OutboxState.Queued)
+    override suspend fun retry(clientMessageId: String): Boolean {
+        // Still on its way: the queue looks again now rather than at its next wake (iOS's Retry Now on a waiting message).
+        if (store.entries.first().any { it.clientMessageId == clientMessageId && it.state in dispatchable }) {
+            wake.trySend(Unit)
+            return true
+        }
+        return change(clientMessageId, setOf(OutboxState.Refused, OutboxState.NeedsConfirmation), OutboxState.Queued)
+    }
 
     override suspend fun confirm(clientMessageId: String, delivered: Boolean): Boolean = change(
         clientMessageId, undecided,
@@ -451,8 +465,10 @@ class OutboxMessageSender(
 
     private class Stall(val giveUp: Job, var code: String?)
 
-    private fun request(entry: OutboxEntry) =
-        MessageRequest(hubScope, entry.session, entry.text, entry.clientMessageId, entry.clearDraft, opId = entry.operationId)
+    private fun request(entry: OutboxEntry) = MessageRequest(
+        hubScope, entry.session, entry.text, entry.clientMessageId, entry.clearDraft,
+        opId = entry.operationId, launcher = entry.launcher, model = entry.model,
+    )
 
     private sealed interface MainTarget {
         data class Found(val session: SessionKey) : MainTarget

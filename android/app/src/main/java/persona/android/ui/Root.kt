@@ -638,16 +638,23 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         fun chatTerminal(route: ChatRoute) = session.terminal?.let { shell.groupTerminal(SessionKey(route.machineId, route.sessionId)) ?: it }
         val provider = entryProvider<NavKey> {
             assistantEntries(navigator) {
-                AssistantScreen(assistantNavigator, session.assistant, session.sender, session.assistant::startConversation,
-                    connectionLabel = connection.title(),
-                    hubOnline = connection == ConnectionState.Online || connection == ConnectionState.Updating, demo = session.demo != null,
-                    requestedSession = assistantRequest, onKnowledge = { sidebarDestination(KnowledgeRoute) },
-                    needsYou = needsYou, shellNeedsYou = shellNeedsYou, onOpenNeed = { line -> openWithCard(needsYouRoute(line)) },
-                    onOpenInbox = { sidebarDestination(InboxRoute) },
-                    onVoice = voiceExtension?.let { extension -> { navigator.navigate(VoiceRoute(extension.id, extension.name)) } },
-                    onTodos = { sidebarDestination(persona.core.navigation.TodosRoute) },
-                    todoCount = uncompletedTodosCount,
-                    showTodos = todosSupported)
+                // Persona's conversation offers the next card an Agent waits on you with, as an Agent's chat does (#4339 C18).
+                val waiting = rememberWaitingRequests(session, sessions)
+                val elsewhere = remember(waiting) {
+                    persona.feature.chat.WaitingElsewhere(waiting) { chat, request -> openWithCard(persona.android.navigation.waitingRoute(chat, request)) }
+                }
+                CompositionLocalProvider(persona.feature.chat.LocalWaitingElsewhere provides elsewhere) {
+                    AssistantScreen(assistantNavigator, session.assistant, session.sender, session.assistant::startConversation,
+                        connectionLabel = connection.title(), connection = connection,
+                        hubOnline = connection == ConnectionState.Online || connection == ConnectionState.Updating, demo = session.demo != null,
+                        requestedSession = assistantRequest, onKnowledge = { sidebarDestination(KnowledgeRoute) },
+                        needsYou = needsYou, shellNeedsYou = shellNeedsYou, onOpenNeed = { line -> openWithCard(needsYouRoute(line)) },
+                        onOpenInbox = { sidebarDestination(InboxRoute) },
+                        onVoice = voiceExtension?.let { extension -> { navigator.navigate(VoiceRoute(extension.id, extension.name)) } },
+                        onTodos = { sidebarDestination(persona.core.navigation.TodosRoute) },
+                        todoCount = uncompletedTodosCount,
+                        showTodos = todosSupported)
+                }
             }
             agentsEntries(navigator, agents, machine, { machine = it },
                 terminalPanes = if (session.demo == null) shell.terminalPanes.available else kotlinx.coroutines.flow.flowOf(false))

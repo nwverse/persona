@@ -25,7 +25,8 @@ internal val DeliveryState.pendingStatus: PendingStatus?
         DeliveryState.Sent -> null
     }
 
-internal enum class DeliveryAction { Cancel, Edit, Retry, Delete, Discard, ConfirmDelivered, ConfirmNotDelivered }
+/** [RetryNow]: one still on its way (queued, waiting for the network) tries at once (iOS's Retry Now on a waiting message). */
+internal enum class DeliveryAction { Cancel, Edit, Retry, RetryNow, Delete, Discard, ConfirmDelivered, ConfirmNotDelivered }
 
 /**
  * Cancel and edit are for what has not gone out yet; a refused message (refused by the computer, or confirmed as never
@@ -34,7 +35,7 @@ internal enum class DeliveryAction { Cancel, Edit, Retry, Delete, Discard, Confi
  * One whose delivery is unknown can be discarded: the phone stops asking and retrying, whatever the computer got.
  */
 internal fun DeliveryState.allows(action: DeliveryAction): Boolean = when (action) {
-    DeliveryAction.Cancel -> this == DeliveryState.Queued || this == DeliveryState.WaitingForNetwork
+    DeliveryAction.Cancel, DeliveryAction.RetryNow -> this == DeliveryState.Queued || this == DeliveryState.WaitingForNetwork
     DeliveryAction.Edit -> this == DeliveryState.Queued || this == DeliveryState.WaitingForNetwork || this == DeliveryState.Refused
     DeliveryAction.Delete -> this == DeliveryState.Refused || this == DeliveryState.Rejected
     DeliveryAction.Retry -> this == DeliveryState.Refused || this == DeliveryState.Rejected || this == DeliveryState.NeedsConfirmation
@@ -55,7 +56,7 @@ internal class ChatDeliveryActions(private val sender: MessageSender) {
         try {
             val changed = when (action) {
                 DeliveryAction.Cancel, DeliveryAction.Edit, DeliveryAction.Delete -> sender.cancel(id)
-                DeliveryAction.Retry -> sender.retry(id)
+                DeliveryAction.Retry, DeliveryAction.RetryNow -> sender.retry(id)
                 DeliveryAction.Discard -> sender.discard(id)
                 DeliveryAction.ConfirmDelivered -> sender.confirm(id, delivered = true)
                 DeliveryAction.ConfirmNotDelivered -> sender.confirm(id, delivered = false)
