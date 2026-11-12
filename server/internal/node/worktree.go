@@ -136,10 +136,6 @@ var errNoHoldingSpace = errors.New("no workspace holds this directory")
 
 // spaceHolding is the host's space whose directory is dir or holds it, the deepest such space.
 func spaceHolding(ctx context.Context, h host.Host, dir string) (string, error) {
-	l, ok := h.(host.Launcher)
-	if !ok {
-		return "", unsupported(h)
-	}
 	var dirs []spaceDirectory
 	if source, ok := h.(interface {
 		directorySpaces(context.Context) ([]spaceDirectory, error)
@@ -150,9 +146,20 @@ func spaceHolding(ctx context.Context, h host.Host, dir string) (string, error) 
 			return "", err
 		}
 	} else {
-		spaces, err := l.Spaces(ctx)
-		if err != nil {
-			return "", err
+		// A full layout fills workspace directories from agreeing panes; herdr's workspace.list can omit them.
+		// Keep Spaces as the fallback when the snapshot is unavailable or has no spaces.
+		var spaces []host.Space
+		layout, snapshotErr := h.Snapshot(ctx)
+		if snapshotErr == nil && layout != nil && len(layout.Spaces) > 0 {
+			spaces = layout.Spaces
+		} else if l, ok := h.(host.Launcher); ok {
+			var err error
+			spaces, err = l.Spaces(ctx)
+			if err != nil {
+				return "", err
+			}
+		} else {
+			return "", unsupported(h)
 		}
 		for _, s := range spaces {
 			dirs = append(dirs, spaceDirectory{workspace: s.ID, cwd: s.Cwd})

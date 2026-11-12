@@ -382,9 +382,13 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
     var priority: String?
     /// Where its finished work stands (`delivery`, docs/assistant/todos.md "Delivery"); nil from a hub without it.
     var delivery: TodoDelivery?
+    /// The manager whose to-do it is, as the hub's merged list stamps it (docs/protocol/protocol.md "Per-manager
+    /// routing"): the pages list the current assistant's, and a request about it names this one. Nil with one manager,
+    /// and on an answer about one to-do, which keeps the stamp the list gave it.
+    var manager: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, title, notes, origin, agents, spaces, quiet, stage, supervision, priority, ask, delivery
+        case id, title, notes, origin, agents, spaces, quiet, stage, supervision, priority, ask, delivery, manager
         case doneAt = "done_at", createdAt = "created_at", updatedAt = "updated_at", reopenedAt = "reopened_at", planID = "plan_id", startError = "start_error",
              doneBy = "done_by", doneReason = "done_reason", prURL = "pr_url", dueAt = "due_at", dueDate = "due_date",
              remindAt = "remind_at", remindedAt = "reminded_at"
@@ -395,7 +399,7 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
          agents: [Agent] = [], spaces: [Space]? = nil, quiet: Bool = false, stage: String? = nil, prURL: String? = nil,
          supervision: TaskSupervision? = nil, dueAt: Date? = nil, dueDate: String? = nil, remindAt: Date? = nil,
          remindedAt: Date? = nil, priority: String? = nil, ask: TodoAsk? = nil, reopenedAt: Date? = nil,
-         delivery: TodoDelivery? = nil) {
+         delivery: TodoDelivery? = nil, manager: String? = nil) {
         self.id = id
         self.title = title
         self.notes = notes
@@ -421,6 +425,7 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
         self.ask = ask
         self.reopenedAt = reopenedAt
         self.delivery = delivery
+        self.manager = manager
     }
 
     init(from decoder: Decoder) throws {
@@ -454,6 +459,7 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
         // New (#3206): absent from older hubs; one that does not decode is as if there were none.
         reopenedAt = (try? c.decodeIfPresent(Date.self, forKey: .reopenedAt)) ?? nil
         delivery = (try? c.decodeIfPresent(TodoDelivery.self, forKey: .delivery)) ?? nil
+        manager = try c.decodeIfPresent(String.self, forKey: .manager)
     }
 
     /// An ended task cannot keep an old decision card alive.

@@ -294,13 +294,19 @@ The pre-effort-change check read only plain text, mistook suggestions for drafts
 
 A new herdr tab's tty is in canonical mode until zsh's line editor takes it, and macOS limits a canonical line to 1024 bytes (`getconf MAX_CANON /`). herdr 0.9.5 refuses a longer `pane run` up front with `pane_send_failed`. The node types its start about 300 ms after creating the tab, so the shell is rarely at its prompt yet. After #1055 added the `unset` of the assistant's environment (about 460 bytes), every managed-launcher start or resume was over the limit and failed every time. Before that, it only failed when the shell happened to be slow. A retry that seemed to work had a shorter line.
 
-In a herdr pane whose shell sources a file (sh family, fish), a start now writes its whole command to a 0600 `agent-start-*.sh` in the node's directory and types only `. '<file>'`. The shell sources the file, so aliases and functions used as launchers still work, and the file deletes itself first. When the pane refuses the line, the start closes the tab it made and returns `terminal_not_ready` (503, `retryable: true`, `delivered: none`). `TestHerdrStartTypesAShortLine` checks the worst case. Not covered: Orca panes and herdr's restore (`claudeResumeArgv`) still type the full command.
+In a herdr pane whose shell sources a file (sh family, fish), a start now writes its whole command to a 0600 `agent-start-*.sh` in the node's directory and types only `. '<file>'`. The shell sources the file, so aliases and functions used as launchers still work, and the file deletes itself first. When the pane refuses the line, the start closes the tab it made and returns `terminal_not_ready` (503, `retryable: true`, `delivered: none`). `TestHerdrStartTypesAShortLine` checks the worst case. Not covered: herdr's restore (`claudeResumeArgv`) still types the full command. Orca panes were left out until #5450 (below).
 
 ## A startup question eats a typed start's head (2026-11-10, #2570)
 
 oh-my-zsh asks "[oh-my-zsh] Would you like to update? [Y/n]" while `~/.zshrc` loads and reads a single key. A start typed into a new tab a fixed 300 ms after creating it lost its first character to that question: the shell printed `command not found: nset` (for `unset …`) or `permission denied` for the start file (for `. <file>`, with the `.` gone), and the start then waited the full 3 minutes for a claude that was never run. Typed input is not "buffered either way": anything that reads the terminal before the line editor (`read -k 1`, `read -q`, a `[Y/n]` prompt) consumes it.
 
 The node now waits for the new tab's shell to settle before typing (`node/shellsettle.go`): only shells in front of the pane (no `git` or `nvm` an rc file runs) and the screen unchanged for 600 ms, at most 15 s. A question on the last line is never answered for the user: after 20 s the start ends with `shell_waiting` and the tab is kept open for 10 minutes. A typed line the shell still answers for (`rejects` / `rejectedLine` in `node/shellmiss.go`) is typed once more right away instead of waiting out `claudeStartWait`. Avoid fixed sleeps before typing into a fresh shell; read its screen and foreground processes instead.
+
+## "The shell is at rest" needs a screen to read (2026-11-11, #5450)
+
+On a Mac running Orca, starts kept failing after 3 minutes with "the tab's shell had not run it yet", the start line sitting unrun after the prompt. Its echo was printed above the shell's banner too, so it had been typed before the shell started. For the first 40–100 ms after `terminal.create` returns, Orca's `terminal.read` answers `source: "screen-unavailable"` (`orcart.ErrNoScreen`). `settleShell` took any read error to mean "this host cannot read screens" and typed at once. The tty was still canonical, and Orca had been left out of the start file, so the 1400-byte command was cut at 1024 bytes (the echo above the banner is exactly that long) and its Enter was dropped. It looked like it depended on load or on whether the start made a worktree, but it was a race on every start: whether the first settle read came before Orca had a screen.
+
+`settleShell` now waits while the host has no screen yet, and Orca starts type the start file as herdr's do (`TestOrcaStartWaitsForTheScreenAndTypesAShortLine`). If a host can say "not drawn yet", treat that as "wait", not as "cannot read". To check by hand: `orca terminal create` followed at once by `orca terminal send` of a line over 1024 bytes plus `\r` leaves the line unrun.
 
 ## A pane's shell may be fish: quote for it too (2026-11-10, #2867)
 
@@ -899,3 +905,19 @@ prompt finishes, while that published text still exists. `streamEnd` uses the st
 watch to send its empty boundary, and cancels pending throttled text first. A native transcript may have a
 middle-truncated copy of the reply, so text reconciliation alone cannot retire the Hub's full cached copy.
 Cover unwatch before completion, a pending batch, and a later watcher in the SDK and AGY lifecycle tests.
+
+## Native preview exports can silently truncate assistant replies (#5644)
+
+AGY's compact export includes `<truncated N bytes>` inside long text while its complete export retains the body.
+Such previews can fit Persona's own page limit, hiding the full-text action. Read complete native records before
+applying SDK page limits, and use the same source for inventory revisions, watch cursors and live pushes. A compact
+cursor ahead of the complete export can skip content. Change the history scope when replacing previously cached
+previews, and cache parsed files with bounded storage and file-version invalidation to keep polling responsive.
+Test normal RPC pages, live pushes, delayed export writes and same-size or atomic file updates. Preserve literal
+placeholder examples in complete source text.
+
+## Filesystem timestamps can alias rapid native rewrites (#5659)
+
+Nanosecond stat fields can repeat across same-size writes within one filesystem timestamp tick. Bypass the parsed
+cache for recently modified exports, and cache settled histories after a quiet window. Run rewrite regressions on
+the deployment filesystem as well as the development machine, including a settled cache hit and atomic replacement.

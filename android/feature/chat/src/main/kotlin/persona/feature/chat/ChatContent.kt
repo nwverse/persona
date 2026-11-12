@@ -53,7 +53,9 @@ import persona.core.contracts.SessionKey
 import persona.core.contracts.api.ChatRepository
 import persona.core.designsystem.*
 import persona.core.designsystem.WorkStep as TimelineStep
+import persona.core.designsystem.dense
 import persona.core.designsystem.icons.PhIcons
+import persona.core.designsystem.row
 import persona.core.domain.lines.*
 import androidx.compose.runtime.key
 import kotlinx.coroutines.Dispatchers
@@ -157,10 +159,10 @@ private fun ChatMarkdownBody(text: String, id: String, bodyStyle: TextStyle, col
                 textLink = TextLinkStyles(SpanStyle(color = palette.accent, textDecoration = TextDecoration.Underline))),
             components = markdownComponents(
                 orderedList = { model -> MarkdownOrderedList(model.content, model.node, depth = model.listDepth,
-                    markerModifier = { Modifier.alignBy(FirstBaseline).padding(end = 8.dp) },
+                    markerModifier = { Modifier.alignBy(FirstBaseline).padding(end = 8.dp.dense) },
                     listModifier = { Modifier.weight(1f).alignBy(FirstBaseline) }) },
                 unorderedList = { model -> MarkdownBulletList(model.content, model.node, depth = model.listDepth,
-                    markerModifier = { Modifier.alignBy(FirstBaseline).padding(end = 8.dp) },
+                    markerModifier = { Modifier.alignBy(FirstBaseline).padding(end = 8.dp.dense) },
                     listModifier = { Modifier.weight(1f).alignBy(FirstBaseline) }) },
                 codeFence = { model ->
                     MarkdownFence(model.content.substring(model.node.startOffset, model.node.endOffset), color, bodyStyle) {
@@ -182,12 +184,14 @@ private fun ChatMarkdownBody(text: String, id: String, bodyStyle: TextStyle, col
  */
 @Composable
 internal fun CodeText(text: String, language: String = "", syntax: Boolean = false, bar: Boolean = false) {
+    // In a picture the whole code shows, with nothing to tap (iOS's card theme).
+    if (LocalInPicture.current) return CodeBody(text, language, syntax && language.isNotBlank())
     var expanded by remember(text) { mutableStateOf(false) }
     val preview = remember(text, expanded) { if (expanded) text else text.lineSequence().take(40).joinToString("\n") }
     val copy = rememberCopy()
     val palette = PersonaTheme.palette
     val colour = syntax && language.isNotBlank()
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp.dense)) {
         if (bar) CodeBody(preview, language, colour) { CodeBar(language) { copy(text, null) } }
         else {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -202,6 +206,9 @@ internal fun CodeText(text: String, language: String = "", syntax: Boolean = fal
         }
     }
 }
+
+/** True where messages are drawn into a picture (Share's card, [MessageShareCard]): code blocks lose their Copy bar and "Show all". */
+internal val LocalInPicture = staticCompositionLocalOf { false }
 
 /** A code block's code: links in it tappable, coloured by [language] when [colour]; [header] inside its box, on top. */
 @Composable
@@ -326,6 +333,7 @@ internal fun ChatLineContent(
                 ?: ChatSystemLine(line.row.item?.text.orEmpty(), line.row.item?.task?.failed == true)
         }
         is ChatLine.Recaps -> RecapLine(line.items.map { it.item })
+        is ChatLine.Viewed -> ViewedImagesRow(line.images, session, loader)
         is ChatLine.Extra -> {
             val round = line.payload as? persona.core.domain.tasks.BackgroundRound
             if (round != null) BackgroundRoundLine(round, onToggle) else AssistantExtraLine(line.payload, LocalAssistantTaskHost.current)
@@ -354,7 +362,7 @@ internal fun ChatLineContent(
             WorkStep(line.step, session, loader, onFold, folding, foldErrors, onFullText, style, textUpdates, workRunning, lastWorkStep, plan)
         }
         is ChatLine.End -> TimelineMark(pluralStringResource(R.plurals.chat_content_collapse_steps, line.count, line.count),
-            Modifier.heightIn(min = 44.dp).clickable(role = Role.Button) { onToggle(line.groupId) })
+            Modifier.heightIn(min = 44.dp.row).clickable(role = Role.Button) { onToggle(line.groupId) })
         is ChatLine.Wakes -> ChatSystemLine(pluralStringResource(R.plurals.chat_content_wakes, line.turn.wakes.size, line.turn.wakes.size))
     }
 }
@@ -444,13 +452,14 @@ private fun WorkStep(step: WorkItem, session: SessionKey, loader: ImageLoader, o
                     },
                     last = last, mono = presentation.mono, added = diff?.added ?: 0, removed = diff?.removed ?: 0,
                     onClick = { open = !open })
-                if (todos != null) TodoList(todos, call.failed)
+                if (todos != null) Box(Modifier.workDetail()) { TodoList(todos, call.failed) }
                 if (call.name == "Task" || call.name == "Agent") SubagentEntry(call.use.item.toolUseId)
                 if (call.failed && !open && call.result?.task?.kind != "agent") call.result?.text?.takeIf { it.isNotBlank() }?.let {
-                    Text(it, maxLines = 3, overflow = TextOverflow.Ellipsis, color = PersonaTheme.palette.danger.text,
+                    Text(it, Modifier.workDetail(), maxLines = 3, overflow = TextOverflow.Ellipsis, color = PersonaTheme.palette.danger.text,
                         style = PersonaTheme.type.caption)
                 }
-                if (open) Column(Modifier.fillMaxWidth().padding(start = Tokens.Space.m),
+                // Right of the rail on Glass, under the step's words (iOS's timeline, `detailLeading`).
+                if (open) Column(Modifier.fillMaxWidth().workDetail(Tokens.Space.m),
                     verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
                     if (diff != null) {
                         toolPath(call.use.item)?.let { DiffHeader(it, diff.added, diff.removed) }
@@ -519,13 +528,15 @@ private fun userPictures(images: List<Item>, session: SessionKey, loader: ImageL
  * press opens the menu for a message not sent ("Copy", "Select", "Share", "Delete"), without one none.
  */
 @Composable
-internal fun UserBubble(text: String, id: String = "pending", pending: persona.core.contracts.api.DeliveryState? = null) {
-    MergedUserBubble(listOf(Item(id, role = "user", kind = "text", text = text)), menu = pending != null, pending = pending)
+internal fun UserBubble(text: String, id: String = "pending", pending: persona.core.contracts.api.DeliveryState? = null,
+    faded: Boolean = false, leading: (@Composable () -> Unit)? = null) {
+    MergedUserBubble(listOf(Item(id, role = "user", kind = "text", text = text)), menu = pending != null, pending = pending,
+        faded = faded, leading = leading)
 }
 
 @Composable
 internal fun ChatSystemLine(text: String, failed: Boolean = false) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp),
+    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp.dense), horizontalArrangement = Arrangement.spacedBy(6.dp.dense),
         verticalAlignment = Alignment.Top) {
         JIcon(if (failed) PhIcons.WarningCircle else PhIcons.Info, null, size = 16.dp,
             tint = if (failed) PersonaTheme.palette.danger.text else PersonaTheme.palette.ink2)

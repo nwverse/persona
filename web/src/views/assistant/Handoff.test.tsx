@@ -14,7 +14,8 @@ vi.hoisted(() => {
 import { t } from "../../i18n";
 import { getFeedState, type FeedItem, type TaskPlan } from "../../lib/feed";
 import { handoffFrom } from "../../lib/handoff";
-import { getPanel } from "../../lib/panel";
+import { setAgentOpenMode } from "../../lib/agent-open";
+import { closePanel, getPanel } from "../../lib/panel";
 import { applyCompleteSessions, refreshTodos, reset } from "../../lib/store";
 import type { Todo } from "../../lib/todos";
 import type { Session } from "../../lib/types";
@@ -47,6 +48,8 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   host.remove();
+  setAgentOpenMode("panel");
+  closePanel();
   reset();
   history.replaceState(null, "", "/");
   for (const id of Object.keys(getFeedState().plans)) delete getFeedState().plans[id];
@@ -65,7 +68,7 @@ async function show(item: FeedItem, todos: Todo[], sessions: Session[]) {
 }
 
 describe("hand-off cards", () => {
-  it("one dispatched task: its Agent's card, New, opening the Agent's page with the way back, not the In progress tray", async () => {
+  it("one dispatched task: its Agent's card, New, opening the Agent in the side panel, or its page with the way back set to Full page, not the In progress tray", async () => {
     await show({ id: "task-event", conversation, at, kind: "task", ref: "example-task" }, [linked("example-task", "Example task", [agent])], [agent]);
     const [card] = cards();
     expect(cards()).toHaveLength(1);
@@ -76,6 +79,13 @@ describe("hand-off cards", () => {
     // the id is only in the tooltip, cindy's short form
     expect(card!.textContent).not.toContain("0f3c2a91");
     expect(card!.getAttribute("title")).toBe("Example Agent · 0f3c2a91…7ed0");
+    // the default (#5424): beside the chat, which stays where it is
+    act(() => card!.click());
+    expect(getPanel()).toEqual({ kind: "agent", mid: "example-computer", sid: agent.session_id });
+    expect(opened()).toBe("/persona");
+    act(() => closePanel());
+    // set to Full page (#5096): the Agent's page, which says where it came from
+    setAgentOpenMode("page");
     act(() => card!.click());
     expect(opened()).toBe(`/s/example-computer/${agent.session_id}`);
     expect(handoffFrom()).toEqual({ path: "/persona" });
@@ -107,6 +117,10 @@ describe("hand-off cards", () => {
     expect(card!.textContent).toContain("Example task");
     expect(card!.textContent).toContain(t("assistant-tasks.starting_agent"));
     act(() => card!.click());
+    expect(getPanel()).toEqual({ kind: "task", todo: "example-task" });
+    act(() => closePanel());
+    setAgentOpenMode("page");
+    act(() => card!.click());
     expect(opened()).toBe("/todos?id=example-task");
   });
 
@@ -131,6 +145,10 @@ describe("hand-off cards", () => {
     const [card] = cards();
     expect(cards()).toHaveLength(1);
     expect(card!.textContent).toContain("Next Agent");
+    act(() => card!.click());
+    expect(getPanel()).toEqual({ kind: "agent", mid: "example-computer", sid: "next-agent" });
+    act(() => closePanel());
+    setAgentOpenMode("page");
     act(() => card!.click());
     expect(opened()).toBe("/s/example-computer/next-agent");
   });
