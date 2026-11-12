@@ -226,8 +226,11 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * header still draws only when it changes). And 31 B because #5579 and #5860 landed together (#5879): #5579 was measured
  * on main at 9223f7f92 (+228 B) and #5860 merged before it, on whose main at bae989cf42 (ja 474,213 B) it costs +262 B;
  * ja 474,475 B on main at 624f81dde, with 0 B of room.
+ * And 82 B for Send anyway (#5904: ja 474,557 B against 474,475 B on main at 6a18c79e9): the voice bar's action for a
+ * request the user-speech gate held back, its string and the reworded line in every language, and the check that only
+ * a hub listing speech_gate gets it.
  */
-export const FIRST_SCREEN_BUDGET = 474_475;
+export const FIRST_SCREEN_BUDGET = 474_557;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
