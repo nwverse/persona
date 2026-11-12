@@ -2030,7 +2030,7 @@ struct BUIScreenForm: View {
                         .foregroundStyle(Theme.caution)
                 }
                 if let ask = d.commandAsk {
-                    ScreenCommandAskBody(ask: ask)
+                    ScreenCommandAskBody(ask: ask, compact: true)
                 } else if let detail = d.detail {
                     Text(detail)
                         .font(Theme.Font.code)

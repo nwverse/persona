@@ -10,6 +10,8 @@ struct BriefCard: View {
     var brief: BriefBody
     /// The hub group of the conversation it is in.
     var group: String = ""
+    /// The conversation whose feed has it: what its buttons ask goes to that conversation's manager.
+    var conversation: String = ""
     @Environment(\.horizontalSizeClass) private var widthClass
     /// Compact width: the done and failed rows show once this is on.
     @State private var pastOpen = false
@@ -118,7 +120,8 @@ struct BriefCard: View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
             BriefHead(symbol: Theme.Icon.question, tint: .secondary, title: String(localized: "Can wait (\(brief.laterTotal))"))
             ForEach(brief.later, id: \.id) { row in
-                BriefLaterRow(row: row, group: group, chat: BriefBody.chat(for: row, waiting: false, group: group, pending: []))
+                BriefLaterRow(row: row, group: group, conversation: conversation,
+                              chat: BriefBody.chat(for: row, waiting: false, group: group, pending: []))
             }
             BriefMore(n: brief.laterMore)
         }
@@ -354,6 +357,7 @@ struct BriefAcceptRow: View {
 private struct BriefLaterRow: View {
     var row: BriefBody.Row
     var group: String
+    var conversation: String = ""
     var chat: SessionKey?
     private var actions: BriefActions { .shared }
 
@@ -379,7 +383,7 @@ private struct BriefLaterRow: View {
         case .completed?, .taken?, .busy?, nil:
             let busy = actions.outcome(marking: row, group: group) == .busy
             Button {
-                Task { await actions.markHandled(row, group: group) }
+                Task { await actions.markHandled(row, group: group, conversation: conversation) }
             } label: {
                 Text("Handled").lineLimit(1).opacity(busy ? 0 : 1)
                     .overlay { if busy { ProgressView().controlSize(.small) } }

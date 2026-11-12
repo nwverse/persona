@@ -40,11 +40,12 @@ import persona.core.designsystem.stableAlpha
 /**
  * A message the long-press menu is open for: [text] is what it says ("Copy" / "Select" / "Quote" / "Share" / "Hand to Persona" / "Use as context"
  * take it), [editText] what "Edit" puts back in the composer (its photos as attachments again), [user] for your own. [pending]: a
- * message only in the outbox (its id the client message id), in that delivery state.
+ * message only in the outbox (its id the client message id), in that delivery state. [time]: when it was said (the item's
+ * `ts`), which its picture shows.
  */
 @Immutable
 internal data class MessageTarget(val id: String, val text: String, val user: Boolean, val editText: String = text,
-    val pending: DeliveryState? = null)
+    val pending: DeliveryState? = null, val time: String? = null)
 
 /** Which message the long-press menu is open for (iOS `MessageMenu`); the page shows the menu, rows open it. */
 @Stable
@@ -116,8 +117,12 @@ internal fun MessageMenuSheet(
     rewind: RewindMenu? = null,
     /** "Delete" / "Cancel send" on a message only on this phone ([MessageTarget.pending]). */
     onDelete: ((MessageTarget) -> Unit)? = null,
+    /** Who answers here and where: on Glass "Share" opens the message's picture (iOS `MessageShareSheet`); without, it shares the text. */
+    share: ShareCardSource? = null,
 ) {
     var selecting by remember { mutableStateOf<String?>(null) }
+    var sharing by remember { mutableStateOf<MessagePicture?>(null) }
+    val pictures = share?.takeIf { PersonaTheme.style == AppStyle.Glass }
     var rewinding by remember { mutableStateOf<MessageTarget?>(null) }
     var confirmCode by remember { mutableStateOf<MessageTarget?>(null) }
     val context = LocalContext.current
@@ -131,7 +136,10 @@ internal fun MessageMenuSheet(
             MessageAction.Copy -> { copy(target.text, null) }
             MessageAction.Select -> { selecting = target.text }
             MessageAction.Quote -> onQuote(target)
-            MessageAction.Share -> { if (!shareText(context, target.text)) onNotice(resources.getString(R.string.chat_menu_no_share)) }
+            MessageAction.Share -> {
+                if (pictures != null) { sharing = messagePicture(target, pictures) }
+                else if (!shareText(context, target.text)) { onNotice(resources.getString(R.string.chat_menu_no_share)) }
+            }
             MessageAction.HandToPersona -> onHandToPersona?.invoke(target.text)
             MessageAction.Context -> onContext(target.text)
             MessageAction.Edit -> onEdit(target.editText)
@@ -156,7 +164,12 @@ internal fun MessageMenuSheet(
             }, destructive = true)
     }
     selecting?.let { FullTextReader(it, onDismiss = { selecting = null }, title = stringResource(R.string.chat_menu_select_title), plain = true) }
+    sharing?.let { MessageSharePage(it, onDismiss = { sharing = null }) }
 }
+
+/** The message [target] as its picture says it, from [source]'s conversation. */
+internal fun messagePicture(target: MessageTarget, source: ShareCardSource): MessagePicture =
+    MessagePicture(target.text, target.user, source.source, persona.core.contracts.parseTime(target.time), source.agent, source.mark)
 
 /** What the menu offers, in order. */
 internal enum class MessageAction(@StringRes val label: Int) {

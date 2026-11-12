@@ -255,6 +255,7 @@ Only through the hub tunnel, no new externally exposed port:
 - **Once connected**:
   - View Only (`viewOnly`) by default. Switching View Only / Take Over in the top bar hands keyboard and mouse (touch) input to that Mac.
   - Scale to the window (`scaleViewport`), without changing the Mac's resolution.
+  - On a Mac with several displays, the top bar's Displays menu shows one of them ("Displays" below).
   - On disconnection, offer Reconnect.
 - **Without `crypto.subtle`**: ARD login AES-encrypts the account and password; noVNC's AES uses browser `crypto.subtle`. Pages opened over HTTP (hub LAN address, App WebView) aren't secure contexts and lack `crypto.subtle`.
   - `aes.ts` supplies an AES-CBC-encryption-only substitute when missing.
@@ -330,7 +331,8 @@ It signs in with the login keychain's generic password `persona-vnc-bench` (adde
 macOS Screen Sharing sends one framebuffer with every display, laid out as System Settings › Displays arranges them. On iOS, iPadOS
 and visionOS the VNC page's "…" › Displays offers All Displays (the default) or one display; one display is cropped out of the
 framebuffer, zooming and panning stay inside it, and touches still send whole-framebuffer pixels. The choice is kept per Mac on the
-device (`VNCDisplayChoice`, as Mouse / Trackpad Mode). The Mac app, the web page and Picture in Picture show every display.
+device (`VNCDisplayChoice`, as Mouse / Trackpad Mode). The web page offers the same choice ("On the web" below); the Mac app and
+Picture in Picture show every display.
 
 Where the layout comes from (`VNCDisplays`), most trusted first:
 
@@ -351,6 +353,30 @@ Known gaps: the aspect check cannot catch an arrangement whose bounding box happ
 sends something else (four equal displays in a 2 × 2 grid, of which the server sends one); such a crop would be wrong. The menu numbers
 displays left to right, then top to bottom, by their top-left corners.
 
+**On the web** (#5685, `web/src/screen/displays.ts`): the top bar's Displays menu (All Displays / Display N, shown only with two or more
+displays to offer; on a narrow screen the button keeps only its icon). The rules are the app's, with these differences:
+
+- **Layout from the node only**: noVNC reads ExtendedDesktopSize but keeps only the first screen's id, so the page uses the `displays`
+  of the computer / browser status it fetches before connecting, with the same scaling, 2% aspect check and ids (`display-<n>`). macOS's
+  server sends no ExtendedDesktopSize (see "Frames" above), so on a Mac this is the app's result too.
+- **Crop**: noVNC keeps scaling its whole framebuffer to its container. The page sizes that container to the framebuffer at the scale
+  that makes the chosen display fit the page, and puts it inside a box the display's size that clips the rest. noVNC maps the pointer
+  through its canvas, so input lands in whole-framebuffer pixels without touching noVNC. A mouse drag that leaves the box is sent again
+  at the nearest whole pixel inside it, and a touch gesture's position (noVNC's gesture events carry it in their detail) is moved there,
+  as the app keeps touches on the display.
+- **Kept**: per Mac in this browser (`localStorage` `persona.screen.display.<machine id>`). The page asks for the status again when the
+  framebuffer changes size (a display plugged in or out, another resolution), so a chosen display that comes back is shown again
+  without a reload, and as the menu opens, so its list is the Mac's as the choice is made. Two displays of one size swapped while the
+  menu stays closed keep the old crop until it opens.
+- **Loading**: the menu (`screen/DisplayMenu.tsx`) is a chunk of its own, so its words (`screen-displays`) stay out of the first
+  screen's catalog. It is fetched while a Mac whose status lists several displays connects, and the page crops to a kept display only
+  once it is in, so a cropped picture always has the menu to go back. One that would not load (offline, the hub redeployed) leaves
+  every display shown and is asked for again as the connection moves on.
+- Pages an app embeds (`embed=1`) have no top bar: they show every display and ignore a choice this browser kept.
+- **Tests**: `web/src/screen/displays.test.ts`, `ScreenView.displays.test.tsx`, and in a real browser against the mock hub
+  (`MOCK_COMPUTER=ready MOCK_SCREEN=fake MOCK_SCREEN_DISPLAYS=2:node`) `node web/e2e/screen-displays.mjs <web URL> <mock hub URL>`: the
+  chosen display fills its box, a click lands on it, drags out over a fractional edge and the top edge stay on it, a new page reopens it.
+
 ### App
 
 - **Control Computer on the machine page**:
@@ -360,6 +386,11 @@ displays left to right, then top to bottom, by their top-left corners.
 - **Chat page**: VNC (`ScreenEntry`) also appears below tool details for two types of tool, provided the extension and Screen Sharing are enabled for that Mac:
   - assistant `computer_state` / `computer_run`: the named machine;
   - Cua Driver MCP tools registered directly by a computer's Agent (`mcp__cua-driver__…`): that Agent's machine.
+- **The pill above the composer** (`ComputerActivityPill`): while the chat's newest computer tool call runs, and six seconds
+  after it ends, "Controlling MacBook · Click AC → 6" sits over an Agent chat's composer and after the entries in a Persona
+  conversation; a tap opens that Mac's VNC (disabled where its screen can't be shown). The app reads it from the transcript, as above:
+  no hub field says a session is operating a computer. Android (Glass, #4339) draws the same pill from the same items
+  (`ComputerActivity` in core/domain) and has no VNC, so its tap opens the work line that holds the call; the web shows none.
 - **Full page** (`VNCPage`, #1343): native client fills the screen in its own window (`ScreenWindow`, #1604: iOS `UIWindow` above the shell, below toasts; separate Mac window; follows `AppModel.screenOpen`). Previously a `fullScreenCover` on `RootView`, whose presentation was swallowed when the machine page was in a sheet. The old web drawer (WKWebView + noVNC + bridge) is removed; the web still uses noVNC.
   - Top bar: Close, Picture in Picture (iOS, right of Close, #3075), connection stage (connecting / login required / connected / disconnected) and machine name, Help, "…" (Mouse Mode / Trackpad Mode, Center Pointer, Picture in Picture Diagnostics; Picture in Picture itself on the Mac). Where the row is too narrow (the largest text sizes) the name and stage go on a line under the buttons, never cut to less than the name's first four letters, and where even the buttons don't fit, Picture in Picture goes into "…". When the assistant or an Agent operates this Mac, another line: "Now: tap AC → 6 → × → 7 → =".
   - Bottom bar: Clipboard, I'm Done (only when the Agent that opened it is waiting for you), Keyboard.

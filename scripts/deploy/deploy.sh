@@ -21,8 +21,10 @@ fi
 source "$PWD/scripts/deploy/default-branch.sh"
 # Normalize caller overrides before reading deployment options; never print their values.
 eval "$(python3 scripts/persona_identity.py --env)"
-# The question and its explanations live in install.sh (the public installer asks the same).
-eval "$(sed -n '/^# >>> admin access/,/^# <<< admin access/p' scripts/deploy/install.sh)"
+# The question, its explanations and their language catalog live in install.sh (the public installer asks the same).
+eval "$(sed -n -e '/^# >>> install language/,/^# <<< install language/p' \
+  -e '/^# >>> admin access/,/^# <<< admin access/p' scripts/deploy/install.sh)"
+INSTALL_LANG=$(install_language)
 ADMIN_ACCESS="${PERSONA_ADMIN_ACCESS:-}"
 ADMIN_CIDRS="${PERSONA_ADMIN_CIDRS:-}"
 ARGS=()

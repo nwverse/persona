@@ -55,7 +55,7 @@ Code: `server/internal/assistant/launcher_secrets.go`, `server/internal/extmgr/s
 - **Saving**: a Persona-managed model provider's key (`api_key_reference`) and a computer's own key for it (`machine_key_references: {"<machine id>": "<reference>" or ""}`) on `POST` / `PUT /api/v1/launchers` ([launchers.md](../integrations/launchers.md) "API"). A key and a reference for the same key at once: 400. Refused (400) like an extension secret's: text that is not a reference, and a scheme no enabled extension supplies; the reference must also resolve now, so a typo fails the save with the provider's words. A key given later replaces it.
 - **Stored** sealed in the same field a key would be (`key_sealed`), behind the same marker, so no setting changes shape. Saving it is the owner's standing approval to use the value for that provider; it ends when the key is replaced or the provider is deleted, switched off or removed.
 - **Resolved** in the manager wherever the key goes out, with purpose `{kind: "launcher", id: <provider name>, machine?}`: a computer's `launchers.pull` (for that computer, its own key when it has one) and the manager's own calls (main chat and other API purposes, quota, the connection test). A pull whose key does not resolve is refused with `launcher_key_unresolved` and the provider's words in the user's language, so the start says why. A node from before the catalog (`launchers.managed`) is not sent such a provider: it would be handed the value at every connection, used or not.
-- **Kept** for 10 minutes in the manager's memory (never on disk), per reference, provider and computer, so a busy provider does not ask the extension at each pull. Dropped when that provider is saved or deleted, when the provider extension is switched off, upgraded or removed, and when any resolution of the reference fails. A use answered from what was kept is not another audit row.
+- **Kept** for 10 minutes in the manager's memory (never on disk), per reference, model provider (its launcher name) and computer, so a busy model provider does not ask the secret provider extension at each pull. The extension that gave the value is noted beside it, only to drop it when that extension goes. Dropped when that model provider is saved or deleted, when the secret provider extension is switched off, upgraded or removed, and when any resolution of the reference fails. A use answered from what was kept is not another audit row.
 - **Details**: a provider's view answers `key_reference` and `machine_key_references: {"<machine id>": …}` (`{provider, provider_name, reference, title}`, as for an extension secret) and never the key; `has_key` and `key_machines` stay as they were. A provider extension's `secret_users` lists them as `{kind: "launcher", launcher, launcher_name, machine?, reference}` next to the extensions' secrets (`kind: "extension"`).
 
 ## The hand-off to one Agent run
@@ -152,9 +152,10 @@ in it is not the user's own words, whoever sent it (`fillWorkspaces`): a mail or
 an existing chat, a page's selection used as context or for an AI edit, another conversation's message, a document, a to-do's
 decisions. Only a workspace mention the manager resolves is theirs: at the start of the message, every `kind` it names is
 `workspace` and its computer and folder are known, so the manager writes the block anew and the app's words in it never reach
-the model. Text an app sends
-without such a block counts as typed: the iPhone's share sheet and Siri / Shortcuts ("Ask Persona") send what they carry that
-way today, and are to mark it (#3962 step 4b). A line counts only when it holds those words (the node ties an id to a line by its first words), and the
+the model. What Siri, Shortcuts
+or another App Intent ("Ask Persona", which runs on a locked phone too), the iPhone's share sheet or a card's button (the Today
+card's Prep, with a calendar event's title in it) sends is marked `via` and never counts either; a notification's reply, which
+needs the phone unlocked, does. Android does not mark its share sheet yet, so what it shares counts as typed. A line counts only when it holds those words (the node ties an id to a line by its first words), and the
 transcript's window must open with the turn's prompt. An id counts once: for the first line it is read on, never for another
 line that carries it; a send the hub did not vouch for that carries it, or a second vouched send of it with other words, voids
 it. A `client_msg_id` alone proves nothing (channels, the inbox, extensions and Persona's own sends carry one too, and the hub
