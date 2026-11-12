@@ -146,6 +146,15 @@ struct FileViewer: View {
     @State private var page: FileViewerModel?
     @State private var history: [FileRef] = []
     @State private var link: LinkTarget?
+    #if os(iOS)
+    /// The file open in the editor (#5829).
+    @State private var editing: EditTarget?
+
+    private struct EditTarget: Identifiable {
+        let id = UUID()
+        let model: FileEditModel
+    }
+    #endif
 
     var body: some View {
         NavigationStack {
@@ -165,6 +174,11 @@ struct FileViewer: View {
                     }
                     ToolbarItem(placement: .primaryAction) { menu }
                 }
+                #if os(iOS)
+                .fullScreenCover(item: $editing) { target in
+                    FileEditSheet(edit: target.model) { Task { await open() } }
+                }
+                #endif
                 .task(id: ref) { await open() }
                 .onAppear { FrameMeter.shared.start((ref.path as NSString).lastPathComponent) }
                 .onDisappear { FrameMeter.shared.stop() }
@@ -282,8 +296,37 @@ struct FileViewer: View {
         }
     }
 
+    #if os(iOS)
+    /// Edit (#5829): text files up to 1 MB, read whole; the reason in the menu otherwise. Only where the hub writes files.
+    @ViewBuilder private var editItem: some View {
+        let features = model.features(ref.group)
+        if let page, let file = page.file, page.kind != .directory, features.isEmpty || features.contains("file_write") {
+            let limit = FileEditLimit.check(text: page.text, size: file.size, truncated: file.truncated, next: page.next)
+            Section {
+                Button {
+                    let lang = SyntaxLanguage.detect(name: file.name, firstLine: page.text?.prefix(200).split(separator: "\n", maxSplits: 1).first.map(String.init))
+                    var whole = file
+                    whole.text = page.text // every page read (Edit is on only when that is the whole file)
+                    editing = EditTarget(model: FileEditModel(ref: ref, file: whole, language: lang, api: model.api(ref.group)))
+                } label: {
+                    if let reason = limit.reason {
+                        Label { Text("Edit [File Viewer]"); Text(reason) } icon: { ThemedIcon(Theme.Icon.edit) }
+                    } else {
+                        Label("Edit [File Viewer]", systemImage: Theme.Icon.edit)
+                    }
+                }
+                .disabled(limit != .editable)
+                .accessibilityIdentifier("file-edit")
+            }
+        }
+    }
+    #endif
+
     private var menu: some View {
         Menu {
+            #if os(iOS)
+            editItem
+            #endif
             if let page {
                 switch page.kind {
                 case .markdown:
