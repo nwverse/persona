@@ -14,6 +14,14 @@
   clear counters or call the model again just to repair display. Test every frame, a stopped label and a frame
   change during the request, alongside genuine title changes and manual/unknown sources.
 
+- Measure acknowledgement and execution separately (#5258). A resident `claude -p` process does not imply immediate
+  visible feedback: context preparation, control ACKs and cold-start confirmation all happen before a send returns.
+  Independent context and mode preparation may overlap, but both must finish before input is written; preserve the
+  original mode/effort for a retry when an unconfirmed control rolls back local state. A hub receipt is not durable
+  delivery or model execution, and must not change an already working turn. Test the HTTP/WS boundary, stale snapshots,
+  echo-before-response, failed sends and unknown delivery separately; label fake-CLI timings as such. Production request
+  totals without stage logs cannot establish which stage was slow, and absent logs are never a measured zero.
+
 - Automatic Agent names need title provenance, not a string heuristic alone (#4812). A user can deliberately choose
   a tool-looking name, and an old custom-title record can fall outside a quick tail window. Treat native custom titles
   as protected and unknown provenance as ineligible. Keep automatic names in the manager's own ledger, persist manual
@@ -53,6 +61,8 @@
 - Disabling the Inbox twin must stop admission without skipping reconciliation (#1847). Existing queued and running items otherwise stay `looking` / `agent` forever and disappear from Needs you counts. Release them through rollback-aware writes, clear pending notes and retry metadata, and cover direct `tellSoon` delivery as well as the periodic handling pass: suggestion actions can reach delivery before the pass. Return disabled suggestion actions to Needs you before answering, and prevent late sub-chat starts from restoring Working. Preserve completed suggestions and already confirmed replies waiting on the other side.
 
 - Inbox policy admission checks do not revoke queued work (#1848). Queuing already marks an item as handled, so neither tier reapplication nor the unhandled-item escalation check sees a later `never` rule. Recheck the effective policy at the start boundary, before backoff, capacity and conversation adoption, and persist releases through the shared rollback path. A policy release uses the item's tier; marking it failed would incorrectly promote FYI to Needs you. Keep already running or starting conversations outside this queue-only rule.
+
+- An Inbox item's `source` is not always a connector (#5537). Source subscriptions deliver under their own id (`sub_…`) with a generic `connector` block, so every client opened them like a connector's thread and showed the hub's 404 `no connector "sub_…"` with a Retry that could never work. An endpoint keyed by an item's source must answer for subscriptions too, and "there is nothing to open" must be an answer every client already takes quietly (a page whose `chat.kind` it does not draw), not an error: old apps keep showing every error they get.
 
 - Connector sign-out must invalidate the channel's pending state at the shared lifecycle boundary (#1837). Clearing it only in the Channels page's Unbind route leaves the Connectors page and automatic credential revocation able to reuse old questions after rebinding. Notify the assistant synchronously before accepting a later message; WeChat's credential save/delete hook covers its automatic unbind, while its localized, truncated account label is not a stable identity. A completed sign-in must retry cleanup before reporting success, because automatic revocation can only log a storage failure. Clear late-answer reminders too, and check the binding generation when recording an ask or turn after its send finishes, so an operation in flight during unbinding cannot add old state back afterward.
 
