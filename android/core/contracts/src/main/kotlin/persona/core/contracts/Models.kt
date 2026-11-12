@@ -871,6 +871,8 @@ data class Interaction(
     @SerialName("tool_title") val toolTitle: String? = null,
     /** The tool alone, without what this call does, for the scope of "Always allow". */
     @SerialName("tool_name_title") val toolNameTitle: String? = null,
+    /** The rule a question a supervisor passed up suggests (#4929); the card comes again without it once it was answered. */
+    val suggestion: RuleSuggestion? = null,
 ) {
     val sessionKey: SessionKey get() = SessionKey(machineId, sessionId)
 

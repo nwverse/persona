@@ -26,6 +26,8 @@ import persona.core.contracts.FeedItem
 import persona.core.contracts.FeedResponse
 import persona.core.contracts.Session
 import persona.core.contracts.PlanTask
+import persona.core.contracts.RuleSuggestion
+import persona.core.contracts.RuleSuggestionMade
 import persona.core.contracts.TaskPlan
 import persona.core.contracts.TaskPlanEvent
 import persona.core.contracts.Todo
@@ -51,6 +53,24 @@ import persona.core.domain.views.AssistantViewStore
 enum class BriefOutcome { Taken, Completed, MarkedHandled, AlreadyHandled, HubTooOld }
 fun briefAcceptOutcomeKey(todoId: String, askedAt: String) = "accept:$todoId:$askedAt"
 fun briefLaterOutcomeKey(questionId: String) = "later:$questionId"
+
+/**
+ * What became of a card's suggested rule answered from here (#4929, docs/assistant/unified-entry.md "A rule after the same
+ * answer three times"), by the suggestion's id: every card that carries the same suggestion shows the same.
+ */
+sealed interface RuleOutcome {
+    /** Always was taken: what it stored ([RuleSuggestionMade.creates]; "" with the setting to turn on instead). */
+    data class Made(val made: RuleSuggestionMade) : RuleOutcome
+
+    /** Not now: the line goes, and the hub leaves it out for 30 days. */
+    data object NotNow : RuleOutcome
+
+    /** The answers do not earn it any more, or it was answered elsewhere (404): the line goes, nothing was made. */
+    data object Gone : RuleOutcome
+}
+
+/** The [TasksStore.busy] key of a suggested rule's two actions: one of them at a time. */
+fun ruleSuggestionKey(suggestionId: String) = "rule:$suggestionId"
 
 interface TodoCache {
     suspend fun read(): List<Todo>?
@@ -109,6 +129,15 @@ class TasksStore(
     val busy = MutableStateFlow<Set<String>>(emptySet())
     private val _briefOutcomes = MutableStateFlow<Map<String, BriefOutcome>>(emptyMap())
     val briefOutcomes = _briefOutcomes.asStateFlow()
+    private val _ruleOutcomes = MutableStateFlow<Map<String, RuleOutcome>>(emptyMap())
+    /** Suggestion id → what became of it here; a suggestion not in it is still to answer. */
+    val ruleOutcomes: StateFlow<Map<String, RuleOutcome>> = _ruleOutcomes.asStateFlow()
+    private val _ruleCards = MutableStateFlow<Map<String, RuleSuggestion>>(emptyMap())
+    /**
+     * Card → the suggestion Always was tapped for on it. The hub sends the card again without its suggestion once it is
+     * answered, and the card still says what was made and where it is listed.
+     */
+    val ruleCards: StateFlow<Map<String, RuleSuggestion>> = _ruleCards.asStateFlow()
     /** Message card ids put off with "Later"; another draft for the same inbox item remains visible. */
     val later = MutableStateFlow<Set<String>>(emptySet())
     /** Conversation → when the Today card was last asked for, and the day of the card the hub gave (null while asking). */
@@ -592,6 +621,49 @@ class TasksStore(
                 if (!briefActionTerminal(key, error)) throw error
             }
         }
+    }
+
+    /**
+     * "Always" on the suggested rule [card] carries: the hub counts the answers again and makes the rule only if they
+     * still earn it. What it made is kept for the card ([ruleCards]); a suggestion that is gone (404) only loses its
+     * line. Any other refusal (403 without the full-access role, 409 when the standing authorizations changed meanwhile,
+     * 503) goes to [onError] and leaves the line to answer again.
+     */
+    fun ruleAlways(card: String, suggestion: RuleSuggestion, onError: (Throwable) -> Unit, manager: String? = null) {
+        val id = suggestion.id
+        if (id.isBlank() || id in _ruleOutcomes.value) return
+        act(ruleSuggestionKey(id), onError) {
+            try {
+                val made = withManager(manager) { api.ruleAlways(id) }
+                _ruleCards.update { it + (card to suggestion) }
+                _ruleOutcomes.update { it + (id to RuleOutcome.Made(made)) }
+            } catch (error: Throwable) {
+                if (!ruleSuggestionGone(id, error)) throw error
+            }
+            reloadTodos()
+        }
+    }
+
+    /** "Not now" on a suggested rule: its line goes at once on every card that carries it. */
+    fun ruleNotNow(suggestion: RuleSuggestion, onError: (Throwable) -> Unit, manager: String? = null) {
+        val id = suggestion.id
+        if (id.isBlank() || id in _ruleOutcomes.value) return
+        act(ruleSuggestionKey(id), onError) {
+            try {
+                withManager(manager) { api.ruleNotNow(id) }
+                _ruleOutcomes.update { it + (id to RuleOutcome.NotNow) }
+            } catch (error: Throwable) {
+                if (!ruleSuggestionGone(id, error)) throw error
+            }
+            reloadTodos()
+        }
+    }
+
+    /** A stale suggestion (404) is cleared, not an error to show; cancellation and every other failure are the caller's. */
+    private fun ruleSuggestionGone(id: String, error: Throwable): Boolean {
+        if (error is CancellationException || hubCodedFailure(error)?.status != 404) return false
+        _ruleOutcomes.update { it + (id to RuleOutcome.Gone) }
+        return true
     }
 
     /** 409 / 404 are terminal answers, not a retry that could repeat a completed action. */

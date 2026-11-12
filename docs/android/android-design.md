@@ -163,6 +163,7 @@ when chart labels and series count are unchanged, bars / lines move to the new v
 8. Do not join metadata strings with "·": pass machines, directories, Agent types, loops and background work as component parameters (`machine`, `folder`, `agent`, `facts`).
 9. No `if (PersonaTheme.style == …)` in pages. Style-dependent behavior belongs in components; if a component lacks a parameter, say so in the report and have the design system owner add it.
 10. Button text stays on one line; shorten it or use an icon when space is tight (project rule).
+11. Something a card only offers or notes (the rule it suggests after the same answer three times, a decision held for the next briefing, #5802) is quiet text, not another card: `caption` in `ink2` for the sentence, `ink3` for what qualifies it, at most one small mark by meaning (`PersonaIcons`), and for actions one `JButtonSize.Small` secondary button with a quiet one beside it. It sits under the card, `Tokens.Space.s` below it and inset `Tokens.Space.m`, so the card's own solid primary stays the only one of its group. Its result replaces it in place as one line (a check mark in `positive` and the words); it never opens a dialog.
 
 ### 2.3.1 Color hierarchy and visual noise (#6184)
 
