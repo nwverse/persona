@@ -103,7 +103,7 @@ internal fun InboxDraftSheet(
             }
             ReplyComposerField(state, composer::update, onSend = {
                 if (!state.checksResult && state.draft.ai) confirming = true else composer.send()
-            }, placeholder = stringResource(R.string.inbox_reply_placeholder))
+            }, placeholder = stringResource(R.string.inbox_reply_placeholder), probePage = record.item.title)
             InboxAiDraftRow(repository, record.item.id, composer)
         }
         }
