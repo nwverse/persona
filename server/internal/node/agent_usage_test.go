@@ -97,22 +97,25 @@ func TestAgentUsageOnFinishedSubagents(t *testing.T) {
 		usageAgentCall("l2", "toolu_b1"), usageAgentReceipt("r2", "toolu_b1", "b1", true),
 		usageAgentNotice("w1", "b1", "toolu_b1", "waiting"),
 		usageAgentNotice("d1", "b1", "toolu_b1", "completed"),
+		// n1 ran in the background too: Claude Code tells the session itself it finished, the same entries again
+		usageAgentNotice("d9", "n1", "toolu_n1", "completed"),
 	)
 	s1 := []proto.TokenUsage{
 		{ID: "agent:s1", Model: "claude-opus-5-5", Input: 5, Output: 50, CacheRead: 240, CacheWrite: 40, CacheWrite1h: 40},
 	}
-	b1 := []proto.TokenUsage{
-		{ID: "agent:b1", Model: "claude-opus-5-5", Input: 10, Output: 100},
-		{ID: "agent:b1", Model: "claude-opus-5-5", Input: 4, Output: 40, Fast: true},
-		{ID: "agent:b1", Model: "claude-sonnet-5-5", Input: 6, Output: 60},
+	// b1's report: its own and each nested agent's, under their own ids.
+	n1 := []proto.TokenUsage{
+		{ID: "agent:n1", Model: "claude-opus-5-5", Input: 4, Output: 40, Fast: true},
+		{ID: "agent:n2", Model: "claude-sonnet-5-5", Input: 6, Output: 60},
 	}
+	b1 := append([]proto.TokenUsage{{ID: "agent:b1", Model: "claude-opus-5-5", Input: 10, Output: 100}}, n1...)
 	got := map[string][]proto.TokenUsage{}
 	for _, it := range pageItems(t, n, id) {
 		if it.Kind == proto.KindToolResult || it.Task != nil {
 			got[it.ID] = it.Usage
 		}
 	}
-	want := map[string][]proto.TokenUsage{"r1#0": s1, "r2#0": nil, "w1#0": nil, "d1#0": b1}
+	want := map[string][]proto.TokenUsage{"r1#0": s1, "r2#0": nil, "w1#0": nil, "d1#0": b1, "d9#0": n1}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("page usage %+v,\nwant %+v", got, want)
 	}
@@ -197,7 +200,12 @@ func TestSubagentUsageNestedCycle(t *testing.T) {
 		writeUsageLines(t, filepath.Join(dir, "agent-"+a.id+".jsonl"), usagePrompt, usageReply(a.id+"r", "claude-opus-5-5", `{"input_tokens":1,"output_tokens":1}`))
 		writeUsageLines(t, filepath.Join(dir, "agent-"+a.id+".meta.json"), `{"agentType":"x","parentAgentId":"`+a.parent+`"}`)
 	}
-	if u := subagentUsage(dir, "c1"); len(u) != 1 || u[0].ID != "agent:c1" || u[0].Input != 3 || u[0].Output != 3 {
+	want := []proto.TokenUsage{
+		{ID: "agent:c1", Model: "claude-opus-5-5", Input: 1, Output: 1},
+		{ID: "agent:c2", Model: "claude-opus-5-5", Input: 1, Output: 1},
+		{ID: "agent:c3", Model: "claude-opus-5-5", Input: 1, Output: 1},
+	}
+	if u := subagentUsage(dir, "c1"); !reflect.DeepEqual(u, want) {
 		t.Fatalf("usage %+v", u)
 	}
 }
@@ -257,9 +265,65 @@ func TestAgentUsageLeavesTeammatesOut(t *testing.T) {
 	}
 	want := map[string][]proto.TokenUsage{
 		"r1#0": nil,
-		"r2#0": {{ID: "agent:b1", Model: "claude-opus-5-5", Input: 3, Output: 30}},
+		"r2#0": {{ID: "agent:b1", Model: "claude-opus-5-5", Input: 1, Output: 10}, {ID: "agent:k2", Model: "claude-opus-5-5", Input: 2, Output: 20}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("page usage %+v,\nwant %+v", got, want)
+	}
+}
+
+// A workflow's final report carries what each agent of its run used, under the agent's id: the run is the one whose
+// state file names the report's task; another run's agents and a run that has not ended are not it.
+func TestWorkflowUsageOnItsReport(t *testing.T) {
+	n, home := testNode(t)
+	const id = "aaaaaaaa-0000-0000-0000-000000005428"
+	proj := filepath.Join(home, ".claude", "projects", "-work")
+	sess := filepath.Join(proj, id)
+	for _, d := range []string{"subagents/workflows/wf_aaa-111", "subagents/workflows/wf_bbb-222", "subagents/workflows/wf_ccc-333", "workflows"} {
+		if err := os.MkdirAll(filepath.Join(sess, d), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	agent := func(run, name, usage string) {
+		writeUsageLines(t, filepath.Join(sess, "subagents", "workflows", run, "agent-"+name+".jsonl"), usagePrompt, usageReply(name+"r", "claude-opus-5-5", usage))
+		writeUsageLines(t, filepath.Join(sess, "subagents", "workflows", run, "agent-"+name+".meta.json"), `{"agentType":"workflow-subagent","workflowPhase":"Review"}`)
+	}
+	agent("wf_aaa-111", "w1", `{"input_tokens":1,"output_tokens":10}`)
+	agent("wf_aaa-111", "w2", `{"input_tokens":2,"output_tokens":20,"speed":"fast"}`)
+	agent("wf_bbb-222", "w3", `{"input_tokens":3,"output_tokens":30}`)
+	agent("wf_ccc-333", "w4", `{"input_tokens":4,"output_tokens":40}`)
+	// The state files: the run's script and result before its task, as long as they come; the third run has none yet.
+	writeUsageLines(t, filepath.Join(sess, "workflows", "wf_aaa-111.json"), `{"runId":"wf_aaa-111","script":"`+strings.Repeat("s", 70000)+`","taskId":"wtask1","status":"completed"}`)
+	writeUsageLines(t, filepath.Join(sess, "workflows", "wf_bbb-222.json"), `{"runId":"wf_bbb-222","taskId":"wtask2","status":"completed"}`)
+	note := func(uuid, task, call, status string) string {
+		text := `<task-notification><task-id>` + task + `</task-id><tool-use-id>` + call + `</tool-use-id><status>` + status +
+			`</status><summary>Dynamic workflow "Review the change" ` + status + `</summary></task-notification>`
+		b, _ := json.Marshal(map[string]any{"type": "user", "uuid": uuid, "timestamp": "2026-11-12T08:01:00Z",
+			"message": map[string]any{"role": "user", "content": text}})
+		return string(b)
+	}
+	writeUsageLines(t, filepath.Join(proj, id+".jsonl"),
+		`{"type":"user","uuid":"p1","timestamp":"2026-11-12T08:00:00Z","message":{"role":"user","content":"review it"}}`,
+		note("d1", "wtask1", "toolu_wf1", "completed"),
+		note("d3", "wtask3", "toolu_wf3", "completed"),
+	)
+	got := map[string][]proto.TokenUsage{}
+	for _, it := range pageItems(t, n, id) {
+		if it.Task != nil {
+			if it.Task.Kind != "workflow" {
+				t.Fatalf("not a workflow's report: %+v", it.Task)
+			}
+			got[it.ID] = it.Usage
+		}
+	}
+	want := map[string][]proto.TokenUsage{
+		"d1#0": {{ID: "agent:w1", Model: "claude-opus-5-5", Input: 1, Output: 10}, {ID: "agent:w2", Model: "claude-opus-5-5", Input: 2, Output: 20, Fast: true}},
+		"d3#0": nil,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("workflow reports %+v,\nwant %+v", got, want)
+	}
+	if task := workflowStateTask(filepath.Join(sess, "workflows", "wf_aaa-111.json")); task != "wtask1" {
+		t.Fatalf("state file task %q", task)
 	}
 }
