@@ -1,6 +1,6 @@
 # 任务卡：iOS 与 Web 的对比和统一设计稿
 
-状态：草案（#5569）。只含对比、设计和待拍板项，**没有改任何卡片实现**；实现另开 issue。
+状态：P1–P7 已定（2026-11-12，全部按推荐，见 §5），按本稿实现（#5569）。
 对比基线：`origin/main` @ `d6b446fcea`（2026-11-12）。截图在 [`task-cards/`](task-cards/)，数据来自 `scripts/mock/mock_hub.py`
 （`MOCK_TASKS=1 MOCK_TASKS_CUT=1 MOCK_USAGE_LIMIT=1 MOCK_TODO_ASKS=1 MOCK_TASK_DECISION=1`），iOS 是 iPhone 17 Pro 模拟器（iOS 26.0，英文），
 Web 是本地 vite 页面，视口 430 px 宽（手机宽度，和 iPhone 可比），深浅色各一张。
@@ -251,15 +251,24 @@ Web 的 `--orange` 浅色 `#a64c00` 比 iOS 的 `caution` 暗很多，更接近 
 
 沿用：iOS `Theme.Motion.state`（0.25 s）、`layout`（0.3 s）；Web 的 `duration-150/200` 和 `prefers-reduced-motion` 已经有 `motion-reduce`，不改。
 
-## 5. 需要产品拍板的点
+## 5. 拍板点（已定）
+
+2026-11-12 用户拍板：P1–P7 全部按下面的推荐执行。每条后面写了落地时的具体做法。
 
 - **P1 拍板行：窄屏堆叠还是收菜单（D8）。** 推荐：堆叠，主按钮满宽。依据：菜单让主操作多一次点击。
+  **已定：堆叠，主按钮满宽；两端都做，iOS 去掉「Actions」菜单收纳。**
 - **P2 Needs you 托盘形态（D4）：紧凑行、内联展开、折叠行 + 原地展开。** 推荐：折叠行 + 原地展开。依据：单手滚动成本和答一道题的点击数两头都不吃亏。代价：要在 iOS 托盘里做可展开的行，工作量最大的一项。
+  **已定：折叠行 + 原地展开，两端统一。**
 - **P3 Web 是否恢复聊天里的结论卡（D7）。** 推荐：恢复，结构取 iOS，加「Show all」。依据：结论是交付物，状态字不替代它。若当时去掉是有意的（避免和交接卡重复），则改成「交接卡在做完后展开成结论」，同样要把摘要带出来。
+  **已定：Web 恢复聊天里的结论卡（done / stopped / failed / interrupted 四态），结构取 iOS，加「Show all」和 Copy / Quote；iOS 也补「Show all」和 Copy / Quote。**
 - **P4 Dismiss / Later 的语义（D9）。** 推荐：Dismiss 落库可撤销，Later 只推迟当前会话；iOS 补。需要确认 iOS 的「Do not handle」（回复草稿用）和这里是不是同一个概念，要不要统一成一个词。
+  **已定：Dismiss 落库可撤销，Later 只推迟当前会话；iOS 补上。「稍后 / 忽略」两端和 iOS 回复草稿的「Do not handle」统一成一个词。**
 - **P5 失败底色（D10）。** 推荐：Web 的 `--red-tint` 重新取值。这是改已有界面的样子，按仓库约定属于「按用户明确要求改」，需要你确认才算。
+  **已定：Web 的 `--red-tint` 改成 `danger` 12% 混色，和 iOS 一致。**
 - **P6 token 表是否进仓库作为双端约束。** 推荐：先放在文档里，Web 侧加 `scripts` 检查写死的 px 字号只能减少（仿 iOS 的 `TokenRatchetTests`），不立刻改页面。
+  **已定：token 表先放文档；Web 加写死 px 字号只减不增的检查（baseline / ratchet）。**
 - **P7 清理死代码。** Web 的 `TaskCard` / `OutcomeReceipt` / `TaskLine` 和 iOS 的 `TaskCard` / `TaskLine` 要不要删，还是 P3 恢复时复用。推荐：P3 定了再决定；定之前不删。
+  **已定：P3 落地后，删掉两端确实不再使用的旧卡片组件（如 iOS 未实例化的 `TaskCard`）。**
 
 ## 6. 局限
 

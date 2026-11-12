@@ -56,6 +56,19 @@ fun JStatusDot(status: Status, modifier: Modifier = Modifier, size: Dp = 8.dp, w
 }
 
 /**
+ * An agent's state dot where iOS draws `StatusDot(state:size:waiting:)` small (the chat header's second line, its slim bar):
+ * [JStatusDot], or, on Glass, the clock of one that only waits in the background ([waiting]), as wide as the ring around a
+ * working dot (1.7 times) in that state's lighter tone ([PersonaPalette.backgroundWaiting]). Brief and Board keep the dot.
+ */
+@Composable
+fun JStateDot(status: Status, size: Dp, waiting: Boolean = false, modifier: Modifier = Modifier) {
+    if (waiting && PersonaTheme.style == AppStyle.Glass) {
+        JIcon(persona.core.designsystem.icons.PersonaIcons.backgroundWaiting, null, modifier, size = size * WaitClockScale,
+            tint = PersonaTheme.palette.backgroundWaiting.dot, decorative = true)
+    } else JStatusDot(status, modifier, size)
+}
+
+/**
  * The Needs You breath, as iOS draws it (`StatusDot`, `Theme.Motion.needsYouBreath*`): every breath a ring leaves the dot
  * and grows to `1 + scale` times it as it fades, eased as a whole by iOS's curve. Null when the dot doesn't breathe; read
  * the returned progress only while drawing, so a breath redraws the canvas and nothing else.

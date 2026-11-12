@@ -166,3 +166,58 @@ func TestInteractionHistoryHidesPrivateAndHealthFromExtensions(t *testing.T) {
 		}
 	}
 }
+
+// The decision fields (deadline, reversible, recommend) and who answered (late, answered_by default) reach an
+// extension's token on the cards it may see, and change nothing of what it may not: a private card, a health card
+// with the same fields, and the values filled into a card's fields stay out.
+func TestInteractionHistoryDecisionFieldsForExtensions(t *testing.T) {
+	ft := newFleetTest(t)
+	ft.sessions("mac", proto.Session{MachineID: "mac", SessionID: "s1", Cwd: "/work/project"},
+		proto.Session{MachineID: "mac", SessionID: "h1", Cwd: "/home/me/.persona/health", Assistant: true, Space: SpaceHealth})
+	at := func(m int) time.Time { return historyDay.Add(time.Duration(m) * time.Minute) }
+	deadline, yes, no := at(60), true, false
+	decided := func(id, session, cwd string, m int, reversible *bool) proto.Interaction {
+		ix := historyCard(id, session, cwd, at(m))
+		ix.ToolName, ix.Deadline, ix.Reversible = "ask_user", &deadline, reversible
+		ix.Questions[0].Recommend = "A"
+		return ix
+	}
+	keepCard(ft, decided("taken", "s1", "/work/project", 1, &yes), "expired",
+		&proto.Resolution{Answers: map[string]string{"Which one?": "A"}, AnsweredBy: proto.AnsweredByDefault, Late: true, Reason: "deadline"})
+	keepCard(ft, decided("later", "s1", "/work/project", 2, &no), "expired",
+		&proto.Resolution{Answers: map[string]string{"Which one?": "B"}, Late: true})
+	keepCard(ft, historyCard("plain", "s1", "/work/project", at(3)), "resolved", &proto.Resolution{Answers: map[string]string{"Which one?": "B"}})
+	private := decided("private", "s1", "/work/project", 4, &yes)
+	private.Private = true
+	keepCard(ft, private, "expired", &proto.Resolution{Answers: map[string]string{"Which one?": "A"}, AnsweredBy: proto.AnsweredByDefault, Late: true})
+	keepCard(ft, decided("health", "h1", "", 5, &yes), "expired",
+		&proto.Resolution{Answers: map[string]string{"Which one?": "A"}, AnsweredBy: proto.AnsweredByDefault, Late: true})
+	form := permission("form")
+	form.Cwd, form.CreatedAt = "/work/project", at(6)
+	keepCard(ft, form, "resolved", &proto.Resolution{Allow: new(true), Values: map[string]string{"password": "example-secret"}})
+
+	code, a := getHistory(t, ft, url.Values{"since": {historyDay.Format(time.RFC3339)}}, roleExtension)
+	if code != http.StatusOK || a.ids() != "form,plain,later,taken" {
+		t.Fatalf("extension: %d %s", code, a.ids())
+	}
+	byID := map[string]historyRow{}
+	for _, r := range a.Interactions {
+		byID[r.Interaction.ID] = r
+	}
+	taken, later, plain := byID["taken"], byID["later"], byID["plain"]
+	if ix := taken.Interaction; ix.Deadline == nil || !ix.Deadline.Equal(deadline) || ix.Reversible == nil || !*ix.Reversible || ix.Questions[0].Recommend != "A" {
+		t.Fatalf("taken: %+v", ix)
+	}
+	if r := taken.Resolution; taken.Status != "expired" || !r.Late || r.AnsweredBy != proto.AnsweredByDefault || r.Answers["Which one?"] != "A" {
+		t.Fatalf("taken by default: %s %+v", taken.Status, r)
+	}
+	if r := later.Resolution; !r.Late || r.AnsweredBy != "" || later.Interaction.Reversible == nil || *later.Interaction.Reversible {
+		t.Fatalf("answered later by the user: %+v %+v", r, later.Interaction.Reversible)
+	}
+	if ix := plain.Interaction; ix.Deadline != nil || ix.Reversible != nil || ix.Questions[0].Recommend != "" || plain.Resolution.Late {
+		t.Fatalf("a card without the fields: %+v", ix)
+	}
+	if r := byID["form"].Resolution; r == nil || r.Values != nil {
+		t.Fatalf("the form's values reached the extension: %+v", r)
+	}
+}

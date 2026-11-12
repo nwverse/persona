@@ -54,6 +54,9 @@ func (n *Node) findTranscriptPath(id string, pass *codexListPass) string {
 		return ""
 	}
 	if src, ok := n.codexSource(id); ok && !n.ownedAssistantSource(id) {
+		if _, paginated := codexPaginatedThreadOf(src); paginated {
+			return n.codexAppHistoryPath(src, pass)
+		}
 		if src.path != "" {
 			if _, err := pass.stat(src.path); err == nil {
 				return src.path
