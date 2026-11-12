@@ -91,8 +91,15 @@ internal fun InboxHandOffBar(
 
     fun openSent() { model.openSent()?.let(currentOpen) }
     val notice = handOffNotice(phase, enabled, model, haptics, ::openSent)
-    LaunchedEffect(phase) {
+    val noticePhase = when (phase) {
+        is HandOffBarPhase.Sending -> phase.copy(openRequested = false)
+        is HandOffBarPhase.Sent -> phase.copy(openRequested = false)
+        else -> phase
+    }
+    LaunchedEffect(noticePhase) {
         if (notice != null) toast.show(notice) else toast.current?.let(toast::dismiss)
+    }
+    LaunchedEffect(phase) {
         val sent = phase as? HandOffBarPhase.Sent
         if (sent?.openRequested == true) {
             openSent()
@@ -293,8 +300,8 @@ private fun handOffNotice(
             )
             FeedbackNotice(
                 message,
-                action = FeedbackAction(view) { haptics(Haptic.Tap); model.viewQueued() },
-                secondary = FeedbackAction(stringResource(R.string.inbox_undo)) { haptics(Haptic.Tap); model.undo() },
+                action = if (enabled) FeedbackAction(view) { haptics(Haptic.Tap); model.viewQueued() } else null,
+                secondary = if (enabled) FeedbackAction(stringResource(R.string.inbox_undo)) { haptics(Haptic.Tap); model.undo() } else null,
             )
         }
         is HandOffBarPhase.Sending -> FeedbackNotice(resources.getString(R.string.inbox_handoff_sending_to, name(phase.operation.target)))

@@ -131,7 +131,14 @@ class InboxHandOffBarShotsTest {
         rule.onNodeWithText("Agent 4").performClick()
         rule.onNodeWithTag("inbox-handoff-chip-draft").performClick()
         rule.onNodeWithText("Existing AI reply").assertExists()
-        save("inbox-handoff-draft-reply-glass-light", rule.onNode(isDialog()).captureToImage().asAndroidBitmap())
+        lateinit var draftBitmap: Bitmap
+        rule.runOnIdle {
+            // Compose's dialog-root capture can crop the Activity bitmap; draw the actual sheet window instead.
+            val decor = checkNotNull(org.robolectric.shadows.ShadowDialog.getLatestDialog().window).decorView
+            draftBitmap = Bitmap.createBitmap(decor.width, decor.height, Bitmap.Config.ARGB_8888)
+            decor.draw(android.graphics.Canvas(draftBitmap))
+        }
+        save("inbox-handoff-draft-reply-glass-light", draftBitmap)
     }
 
     @Config(qualifiers = "en-w320dp-h800dp-xhdpi")
