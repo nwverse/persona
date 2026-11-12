@@ -514,6 +514,22 @@ permission picker (`web/src/views/chat/Composer.tsx`, `ComposerPanel.tsx`, `Perm
 layout, states and wording, with the permission mode names and the placeholders' tone taken from cindy's English
 strings. No code is copied for those.
 
+The web chat's run status bar (`web/src/views/chat/RunningStatusBar.tsx` and its speed card
+`web/src/views/chat/RunningSpeedCard.tsx`, #5312) is ported from cindy's `RunningStatusBar` (in `CCAgentSessionView.tsx`)
+and `RunningTokenRatePopover.tsx` with changes: their layout, state words, the Done pop and the card's sparkline. The
+speed history (`web/src/lib/token-rate.ts`) is ported from `packages/maker-shared/src/runningTokenRateHistory.ts` and
+`formatRecentOutputTokenRate`, with tests from cindy's, changed to measure generation from the status line's token count
+over time; the state words follow `localizeAgentStatus.ts` and `workingStatus.ts`, and are worked out from Persona's own
+transcript items (`web/src/lib/run-step.ts`).
+
+The web chat's top bar and its background work follow cindy's design at the owner's request (2026-11-12, #5421): the
+top bar (`Header` in `web/src/views/chat/ChatView.tsx`, after cindy's `SessionContentHeader`, `AgentDeviceIndicator`,
+`SessionRenameInput` and `GitContextBadge`), the goal bar over the composer (`web/src/views/chat/GoalBar.tsx`, after
+`GoalIndicator`) and the Background tasks side panel (`web/src/views/chat/BackgroundPanel.tsx`, after the right sidebar's
+`background-tasks` plugin, `BackgroundTasksBody` and `openBackgroundTasksTab`): layout, states, wording and how they
+open. No code is copied for those. The "on another computer" arc on an Agent's mark (`RemoteSignal` in
+`web/src/ui/AgentMark.tsx`) takes its path and placement from cindy's `components/icons/RemoteSourceMark.tsx`.
+
 Switching an Agent between Claude Code and Codex in the web chat follows cindy's design at the owner's request
 (2026-11-12): the "Switch Agent?" confirmation (`web/src/views/chat/EngineSwitchDialog.tsx`, after cindy's
 `ConfirmDialog` and `agentSwitchConfirmation.ts`: layout, order, wording and when it asks) and the switch divider with

@@ -374,6 +374,26 @@ describe("Composer suggestion", () => {
     expect(pill()).not.toBeNull();
   });
 
+  it("is spent by any message sent, until the agent has worked", async () => {
+    show();
+    act(() => pill()!.querySelector("button")!.click());
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="发送"]')!.click());
+    show();
+    expect(pill()).toBeNull();
+    show({ working: true });
+    show();
+    expect(pill()).not.toBeNull();
+  });
+
+  it("has no one-tap send when it is risky, and still fills in", () => {
+    const onSend = vi.fn(async () => true);
+    act(() => root.render(<Composer draftKey="s" placeholder="" suggestion="push to main" suggestionRisky onSend={onSend} />));
+    expect(pill()!.querySelectorAll("button").length).toBe(1);
+    act(() => pill()!.querySelector("button")!.click());
+    expect(host.querySelector("textarea")!.value).toBe("push to main");
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
   it("is not there while the agent works or something is in the box", () => {
     show({ working: true });
     expect(pill()).toBeNull();
@@ -714,7 +734,7 @@ describe("the / palette", () => {
     typeInto("/co");
     await until(() => expect(rows()).toEqual(["compact", "context"]));
     typeInto("/");
-    expect(rows()).toHaveLength(8);
+    expect(rows()).toHaveLength(9); // with /workflows (#5421)
     expect(palette()!.textContent).not.toContain("Esc");
   });
 

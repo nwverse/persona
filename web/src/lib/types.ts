@@ -393,6 +393,9 @@ export interface Session {
   background_waiting?: boolean;
   rev?: number;
   suggestion?: string;
+  /** The suggestion names a command, a path, a link, a secret-looking string or a risky action (#4644): it is filled
+   *  in, never sent with one tap. An older hub never sends it. */
+  suggestion_risky?: boolean;
   /** An assistant conversation moved out of the list (docs/assistant/assistant.md "Managing its own conversations"), or
    *  an archived agent (docs/protocol/protocol.md "Agent session archives": only the Archived list has those). */
   archived?: boolean;
