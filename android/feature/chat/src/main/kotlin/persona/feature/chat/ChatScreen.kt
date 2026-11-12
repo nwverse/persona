@@ -285,19 +285,26 @@ private fun ChatPage(
     var hostRetried by rememberSaveable(key.path) { mutableStateOf<String?>(null) }
     val deliveryActions = remember(sender) { ChatDeliveryActions(sender) }
     var statusSheet by remember { mutableStateOf(false) }
+    // The shell presents transient notices once; persistent sync errors stay inline.
+    val feedback = persona.core.designsystem.LocalAppFeedback.current
+    // A message only on this phone taken off (Cancel send / Delete): nothing was sent; Undo puts it back (#4645,
+    // docs/design/DESIGN_SYSTEM.md 4.4 principle 3).
+    fun removed(message: OutboxMessage) {
+        val deleted = res.getString(R.string.chat_delivery_deleted)
+        val undo = persona.core.designsystem.FeedbackAction(res.getString(R.string.chat_delivery_undo)) { sender.restore(message) }
+        if (feedback?.notice(deleted, undo) != true) notice = deleted
+    }
     fun deliveryAction(message: OutboxMessage, action: DeliveryAction) {
         if (readOnly) return
         scope.launch {
             try {
-                if (!deliveryActions.perform(message.clientMessageId, action, composer::restoreMessage))
+                if (!deliveryActions.perform(message.clientMessageId, action, composer::restoreMessage, ::removed))
                     notice = res.getString(R.string.chat_screen_delivery_changed)
                 else if (action == DeliveryAction.Discard) statusSheet = false
             } catch (e: CancellationException) { throw e }
             catch (_: Exception) { notice = res.getString(R.string.chat_screen_delivery_failed) }
         }
     }
-    // The shell presents transient notices once; persistent sync errors stay inline.
-    val feedback = persona.core.designsystem.LocalAppFeedback.current
     LaunchedEffect(notice) { notice?.let { if (feedback?.notice(it) == true) notice = null } }
     val currentDraftCallback by rememberUpdatedState(onDraftChanged)
     LaunchedEffect(composer) { snapshotFlow { composer.draft }.collect { currentDraftCallback?.invoke(it) } }
@@ -381,21 +388,23 @@ private fun ChatPage(
     // The message a hub link named (`?at=`, #2194) while it is being landed on: like a search hit, its drawer opens.
     var jumpItem by remember { mutableStateOf<String?>(null) }
     val backgroundFolding = if (foldsBackground) persona.core.domain.tasks.BackgroundFolding(openWork, search.selected?.itemId ?: jumpItem) else null
-    val assistantPresentation = remember(projection, snapshot.items, feed, renderStyle, backgroundFolding) {
+    // Glass draws the hub's task records among the lines, as iOS does (#4339 C13); Brief and Board keep them behind the trays.
+    val inlineRecords = PersonaTheme.style == AppStyle.Glass
+    val assistantPresentation = remember(projection, snapshot.items, feed, renderStyle, backgroundFolding, inlineRecords) {
         if (renderStyle.compactToolSummary) {
             val presentation = persona.core.domain.tasks.AssistantConversation.project(projection.lines, snapshot.items, backgroundFolding)
             presentation.copy(background = persona.core.domain.tasks.AssistantLines.lines(presentation.background,
-                persona.core.domain.tasks.AssistantTaskCards.backgroundFeed(feed)))
+                persona.core.domain.tasks.AssistantTaskCards.backgroundFeed(feed, inlineRecords)))
         } else persona.core.domain.tasks.AssistantConversation(projection.lines, emptyList())
     }
     LaunchedEffect(key, tasks) { tasks?.load(key.sessionId); tasks?.loadTodayIfMain(key.sessionId) }
-    val lines = remember(assistantPresentation, search.selected, jumpItem, feed, tasks, taskPlans, taskTodos, taskCardProjection, renderStyle) {
+    val lines = remember(assistantPresentation, search.selected, jumpItem, feed, tasks, taskPlans, taskTodos, taskCardProjection, renderStyle, inlineRecords) {
         searchVisibleLines(assistantPresentation.foreground, search.selected?.itemId ?: jumpItem)
             .let {
                 when {
                     tasks == null -> it
                     renderStyle.compactToolSummary -> persona.core.domain.tasks.AssistantTaskCards.lines(it, feed, taskPlans,
-                        taskTodos, taskCardProjection[key.sessionId].orEmpty())
+                        taskTodos, taskCardProjection[key.sessionId].orEmpty(), inline = inlineRecords)
                     else -> persona.core.domain.tasks.AssistantLines.lines(it,
                         persona.core.domain.tasks.SentToAgents.shown(feed))
                 }
@@ -1046,7 +1055,7 @@ private fun ChatPage(
                                     val deliveryState = if (message.state in setOf(DeliveryState.Refused, DeliveryState.Rejected))
                                         delivery?.state ?: message.state else message.state
                                     Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-                                        UserBubble(composerMessagePreview(message.text))
+                                        UserBubble(composerMessagePreview(message.text), message.clientMessageId, deliveryState)
                                         OutboxStatus(message.copy(state = deliveryState,
                                             error = delivery?.refusal?.code ?: message.error),
                                             busy = message.clientMessageId in deliveryActions.busyIds,
@@ -1143,7 +1152,10 @@ private fun ChatPage(
                 onContext = { text -> linkContexts = linkContexts + messageContext(menuTitle, text, context.resources); notice = res.getString(R.string.chat_screen_added_context) },
                 onHandToPersona = chrome.onHandToPersona?.takeIf { renderStyle != ChatRenderStyle.Assistant }
                     ?.let { hand -> { text: String -> hand(handoffMessage(menuTitle, text, context.resources)) } },
-                onNotice = { notice = it }, onFork = onFork, rewind = rewindMenu)
+                onNotice = { notice = it }, onFork = onFork, rewind = rewindMenu,
+                onDelete = { target -> messages.firstOrNull { it.clientMessageId == target.id }?.let { message ->
+                    deliveryAction(message, if (message.state.allows(DeliveryAction.Cancel)) DeliveryAction.Cancel else DeliveryAction.Delete)
+                } })
             viewer?.let { request ->
                 ChatImageViewer(request.images, request.index, onDismiss = { viewer = null },
                     onEdited = if (readOnly) null else ({ attachment -> composer.beginEdit(); composer.attachments += attachment }),
