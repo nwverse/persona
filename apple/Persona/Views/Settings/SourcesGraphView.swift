@@ -308,6 +308,7 @@ private struct SourcesGraphGroup: View {
                 .accessibilityIdentifier("graph.source.\(s.id)")
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)  // every card the page's width, stacked rows or not
         .padding(Theme.Space.m)
         .surface(in: .rect(cornerRadius: Theme.Radius.card))
     }
