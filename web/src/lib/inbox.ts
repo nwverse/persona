@@ -1297,7 +1297,7 @@ export async function loadDoneGroup(manager: string | undefined, key: string, ra
   if (state.groupLoading.includes(id) || state.groupComplete.includes(id)) return;
   set({ groupLoading: [...state.groupLoading, id] });
   const q = new URLSearchParams({ sources: "all", limit: "100" });
-  const cur = groupNext.get(id);
+  const cur = groupNext.get(id) ?? pastListed(manager, range);
   if (cur) {
     q.set("before", cur.before);
     q.set("before_id", cur.before_id);
@@ -1323,6 +1323,24 @@ export async function loadDoneGroup(manager: string | undefined, key: string, ra
     const quiet = e instanceof ApiError && (e.status === 503 || e.status === 404);
     set({ groupLoading: state.groupLoading.filter((x) => x !== id), historyError: quiet ? state.historyError : { ...state.historyError, [m]: errorText(e) } });
   }
+}
+
+/**
+ * Where a group's first page starts when the list already holds its newest done items: just past the oldest one the
+ * list holds of that manager, if it falls in the group. The list's done items are the newest of the history (every
+ * open item and the newest 200 done within three days, #5549), so a page from the group's end would bring only rows
+ * the list has, and its Show older would seem to do nothing.
+ */
+function pastListed(manager: string | undefined, range: { start: number; end: number }): DoneCursor | undefined {
+  // the history's order is done_at, then id, both descending; a mark of this app's is not the hub's done_at
+  let oldest: InboxItem | undefined;
+  let at = Infinity;
+  for (const it of state.items) {
+    if (!it.done_at || !sameManager(it.manager, manager) || pendingDone.has(itemKey(it))) continue;
+    const t = Date.parse(it.done_at);
+    if (t < at || (t === at && oldest && it.id < oldest.id)) [oldest, at] = [it, t];
+  }
+  return oldest && at >= range.start && at < range.end ? { before: oldest.done_at!, before_id: oldest.id } : undefined;
 }
 
 /** Done as the list shows it: the list's done items, then the history's it doesn't have (the list's copy is newer). */

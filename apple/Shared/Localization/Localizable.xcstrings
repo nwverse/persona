@@ -1059,6 +1059,29 @@
         }
       }
     },
+    "settings.search.inbox_sources": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "inbox sources subscriptions recommended mail muted"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "收件箱 来源 订阅 推荐订阅 邮件 静音"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "受信箱 ソース 購読 おすすめ メール ミュート"
+          }
+        }
+      }
+    },
     "settings.search.devices": {
       "extractionState": "manual",
       "localizations": {
@@ -3744,6 +3767,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "%@ Is Offline": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ Is Offline"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ はオフラインです"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ 离线"
+          }
+        }
+      }
     },
     "%@ Is Waiting for Your Approval" : {
       "localizations" : {
@@ -11984,6 +12029,40 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "%lld things waiting for you": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%1$lld thing waiting for you"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%1$lld things waiting for you"
+                }
+              }
+            }
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "対応待ち %1$lld 件"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld 件等你处理"
+          }
+        }
+      }
     },
     "%lld thoughts" : {
       "localizations" : {
@@ -21545,6 +21624,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Another assistant has something waiting for you": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Another assistant has something waiting for you"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ほかのアシスタントに対応待ちがあります"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "别的助手有事等你处理"
+          }
+        }
+      }
     },
     "An iPhone is operated only after it allows it: in Persona on that iPhone, open Settings › Connectors › This iPhone." : {
       "localizations" : {
@@ -65220,6 +65321,28 @@
       },
       "extractionState" : "manual"
     },
+    "Inbox Sources" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Inbox Sources"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "受信箱のソース"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收件箱来源"
+          }
+        }
+      }
+    },
     "Include Old Chat Summary" : {
       "localizations" : {
         "en" : {
@@ -70588,6 +70711,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "姓"
+          }
+        }
+      }
+    },
+    "Last synced %@. This updates when it's back online.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Last synced %1$@. This updates when it's back online."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最終同期 %1$@。オンラインに戻ると更新されます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最后同步于 %1$@。它上线后这里会更新。"
           }
         }
       }
@@ -144669,6 +144814,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "This updates when it's back online.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This updates when it's back online."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "オンラインに戻ると更新されます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "它上线后这里会更新。"
+          }
+        }
+      }
     },
     "This use no longer exists, or the hub doesn't support unified model configuration yet. Refresh the list of uses or update the server." : {
       "localizations" : {
