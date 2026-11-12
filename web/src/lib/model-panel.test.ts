@@ -13,6 +13,8 @@ import {
   matchesQuery,
   overrideKey,
   panelSections,
+  priceAmount,
+  priceTier,
   pushRecent,
   RECENT_MAX,
   removeFavorite,
@@ -140,12 +142,15 @@ describe("the search", () => {
     expect(shape({ view: { kind: "favorites" }, query: "gpt" })).toEqual(["provider:claude [typed:gpt]", "provider:codex [gpt-5.5]"]);
   });
 
-  it("offers a typed model ID as “Use …” in each recommended provider that takes typed IDs", () => {
+  it("offers a typed model ID as “Use …” in each provider that takes typed IDs and a pick here", () => {
     expect(shape({ query: "vendor/new-model" })).toEqual(["provider:claude [typed:vendor/new-model]"]);
-    // not a valid ID, already listed, or a provider that isn't recommended: nothing to offer
+    // not a valid ID, already listed, or a provider that can't take a pick here: nothing to offer
     expect(shape({ query: "two words" })).toEqual([]);
     expect(shape({ query: "vendor/model-x" })).toEqual(["recommended [vendor/model-x]"]);
-    expect(shape({ query: "vendor/new-model", state: state({ recommended: [] }) })).toEqual([]);
+    expect(shape({ query: "vendor/new-model", providers: [claude({ unavailable: "another engine" })] })).toEqual([]);
+    expect(shape({ query: "vendor/new-model", providers: [claude({ locked: "--model" })] })).toEqual([]);
+    // a provider that isn't recommended (an Agent's other launcher, switched to with the next message) offers it too
+    expect(shape({ query: "vendor/new-model", state: state({ recommended: [] }) })).toEqual(["provider:claude [typed:vendor/new-model]"]);
     const [s] = panelSections(input({ query: "vendor/new-model" }));
     expect(s.rows[0].setup).toEqual({ provider: "claude", model: "vendor/new-model" });
     // a word that names a listed model is a search: no "Use" row beside its match
@@ -282,6 +287,19 @@ describe("geometry and colors", () => {
     expect(effortColor("someday")).toBe("var(--effort-medium)");
     expect(effortColorAt(["low", "medium", "high"], 1)).toBe("var(--effort-medium)");
     expect(effortColorAt(["low", "medium", "high"], 1.25)).toBe("color-mix(in srgb, var(--effort-high) 25%, var(--effort-medium))");
+  });
+
+  it("maps known output prices to tiers and writes small prices without losing them", () => {
+    expect(priceTier({ input: 1, output: 3 })).toBe(1);
+    expect(priceTier({ input: 2, output: 10 })).toBe(2);
+    expect(priceTier({ input: 4, output: 20 })).toBe(3);
+    expect(priceTier({ input: 4, output: Number.NaN })).toBeUndefined();
+    expect(priceTier({ input: -1, output: 20 })).toBeUndefined();
+    expect(priceTier({ input: 4, output: 20, cache_read: -0.1 })).toBeUndefined();
+    expect(priceAmount(20)).toBe("20");
+    expect(priceAmount(0.2)).toBe("0.2");
+    expect(priceAmount(0.0036)).toBe("0.0036");
+    expect(priceAmount(1.23456)).toBe("1.23");
   });
 
   it("writes context windows short", () => {
