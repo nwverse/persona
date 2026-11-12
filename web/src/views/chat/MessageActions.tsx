@@ -12,6 +12,7 @@
 // checkbox instead: a click anywhere on it picks it or unpicks it, the tick before it; its menus and bars are off.
 import { lazy, Suspense, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { t } from "../../i18n";
+import { clock } from "../../lib/format";
 import { sendDraft, type QuotedTask } from "../../lib/drafts";
 import { forwardSummary, type ForwardPick } from "../../lib/forward";
 import { addContext, newContext } from "../../lib/links";
@@ -22,6 +23,7 @@ import { Icon, type IconName } from "../../ui/icons";
 import type { RewindRestore } from "../../lib/rewind";
 import { isNoHover, NO_HOVER, useMedia } from "../../ui/media-query";
 import { useChatActions, type ChatActions } from "./chat-actions";
+import { useIsLatestMessage } from "./latest-message-time";
 
 // Hidden until the pointer comes, so it is not part of the first screen (startup-preload.ts): its row is kept while it
 // loads, so nothing moves when it comes.
@@ -125,9 +127,10 @@ function useWhileOpen(live: Rewind["block"] | undefined, open: boolean, closed: 
 }
 
 /** Wraps a message: right-click / long press opens its menu. A hover bar goes beside it (`side`, your own bubbles: they had
- *  no row under them, so the layout does not move; the time stays the tooltip), over its top right corner (`corner`, a
+ *  no row under them, so the layout does not move; the time leads that bar, #5285), over its top right corner (`corner`, a
  *  task's card: no row under it either), or under it (`bar`, a finished turn's last reply: ReplyBar). Without any of those
- *  it has the menus only. `task`: "Quote" quotes it as that task. */
+ *  it has the menus only. `task`: "Quote" quotes it as that task. The chat's last message keeps its time on screen
+ *  (#5285): a last reply's in its bar (ReplyBar `pinned`) and the touch row, your own bubble's under it (UserBubble). */
 export function MessageActions({
   text,
   isUser,
@@ -165,6 +168,7 @@ export function MessageActions({
 }) {
   const [selecting, setSelecting] = useState(false);
   const touch = useMedia(NO_HOVER);
+  const latest = useIsLatestMessage(ts);
   const forwarded = itemId ?? messageId;
   const pick: ForwardPick | undefined = forwarded ? { itemId: forwarded, text, isUser: Boolean(isUser), ts, images, photos } : undefined;
   const actions = useActions(text, Boolean(isUser), ts, task, () => setSelecting(true), pick);
@@ -287,7 +291,7 @@ export function MessageActions({
       </div>
       {picking ? null : bar ? (
         <Suspense fallback={<div data-reply-bar="loading" className="mt-1.5 hidden h-6 [@media(hover:hover)]:block" />}>
-          <ReplyBar text={text} ts={ts} fork={extras.find((a) => a.key === "fork")} more={actions.filter((a) => a.key !== "copy" && a.key !== "select")} />
+          <ReplyBar text={text} ts={ts} pinned={latest} fork={extras.find((a) => a.key === "fork")} more={actions.filter((a) => a.key !== "copy" && a.key !== "select")} />
         </Suspense>
       ) : (side || corner) && (
       <div
@@ -297,6 +301,7 @@ export function MessageActions({
           side ? "absolute right-full bottom-0.5 mr-1.5" : "absolute top-2 right-2 rounded-[8px] bg-surface px-0.5 shadow-hairline",
         )}
       >
+        {side && ts && !latest && <span className="mr-1 text-[12px] whitespace-nowrap text-ink-3 tabular-nums">{clock(ts)}</span>}
         {actions
           .filter((a) => a.key !== "select" && !contextActions.includes(a))
           .map((a) => (
@@ -342,6 +347,7 @@ export function MessageActions({
           >
             <Icon name="more" size={14} />
           </button>
+          {latest && ts && <span data-latest-time className="-ml-3 text-[12px] whitespace-nowrap text-ink-3 tabular-nums">{clock(ts)}</span>}
         </div>
       )}
       {anchor && !picking && <Menu anchor={anchor} onClose={close} items={items} width={items.some((i) => i.hint) ? 200 : 168} />}

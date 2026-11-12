@@ -5,10 +5,11 @@ import OSLog
 import UIKit
 import UserNotifications
 
-/// "We're meeting now, record it" in one step (docs/apple/recording.md「Meeting recordings」): the drawer's Meeting Recording,
-/// the Recordings page, the home screen's menu, the Control, Siri / Shortcuts / the Action button. Names the recording after
-/// the calendar event happening now, keeps the Live Activity in step, picks a recording a call paused up again when the app
-/// comes back, and holds the app open after a stop in the background until the last text is transcribed and sent.
+/// "We're meeting now, record it" in one step (docs/apple/recording.md「Meeting recordings」): Record, the one name for it
+/// in the drawer, on the Recordings page, in the home screen's menu, the Control and Siri / Shortcuts / the Action button
+/// (#5243). Names the recording after the calendar event happening now, turns a running recording into a note or back
+/// into a meeting, keeps the Live Activity in step, picks a recording a call paused up again when the app comes back, and
+/// holds the app open after a stop in the background until the last text is transcribed and sent.
 @MainActor final class MeetingRecorder {
     static let shared = MeetingRecorder()
 
@@ -147,6 +148,53 @@ import UserNotifications
         if !role.speaks { MeetingSpeaker.shared.stop() }
         RecordingSync.shared.attendanceChanged(id)
         return true
+    }
+
+    /// The live sheet's Meeting / Note (#5243): the recording being made becomes a note (`kind: note`, no minutes; Persona
+    /// goes off and stops speaking) or a meeting again (named after the calendar event on now when it has no name yet, and
+    /// Persona's part as a fresh start would get it, from now on). What was said before stays the recording's transcript
+    /// either way; live lines go only from a stretch Persona attends, as ever. The hub hears of it at once.
+    func setMeeting(_ on: Bool, recordingID: UUID) async {
+        let library = RecordingLibrary.shared
+        guard capture.recordingID == recordingID, let entry = library.entry(recordingID), entry.source == .phone,
+              entry.isMeeting != on else { return }
+        let named = on ? await MeetingCalendar.meetingOffMain() : nil
+        // The calendar is read off the main actor: meanwhile the recording may have stopped, or been switched already.
+        guard capture.recordingID == recordingID, library.entry(recordingID)?.isMeeting == !on else { return }
+        let start = on ? MeetingAttendees.startAttendance(AppModel.shared) : RecordingAttendance(role: .off)
+        let at = capture.timeline
+        library.change(recordingID) { $0 = Self.switched($0, meeting: on, at: at, named: named, start: start) }
+        let speaks = library.entry(recordingID).map { $0.isMeeting && $0.attendance?.sentRole.speaks == true } ?? false
+        capture.setPlaysAloud(speaks)
+        if !speaks { MeetingSpeaker.shared.stop() }
+        // Live lines and questions wait for the hub to have it as it is now (`attendanceSettled`): a mark stored while it
+        // was this meeting before counts for nothing.
+        RecordingSync.shared.reupload(recordingID)
+        RecordingActivity.shared.refresh()
+    }
+
+    /// `entry` turned into a meeting (`on`) or a note at `at` on its clock (`setMeeting`; pure, for the tests). `named`:
+    /// the calendar's event on now; `start`: the attendance a start would get now (`MeetingAttendees.startAttendance`).
+    static func switched(_ entry: RecordingEntry, meeting on: Bool, at: Double, named: RecordingMeeting?,
+                         start: RecordingAttendance) -> RecordingEntry {
+        var e = entry
+        guard e.isMeeting != on else { return e }
+        if on {
+            let meeting = named ?? RecordingMeeting()
+            if e.title.isEmpty { e.title = meeting.title ?? "" }
+            e.meeting = meeting
+            let attendance = MeetingAttendees.resumed(e.attendance, start: start, at: at)
+            // As at a start: a meeting Persona stays out of (off, no room) carries no attendance, so its uploads are as
+            // they were before attending existed.
+            if e.attendance != nil || attendance.room || attendance.sentRole.attends { e.attendance = attendance }
+        } else {
+            // `kind: note` and no attendance on the upload (`RecordingUpload.attendance`): the hub turns Persona off and
+            // writes no minutes. The attendance stays, off: the live log the hub already has, the stretches Persona spoke
+            // in (kept out of the transcript), and a room meeting's room, which it never leaves.
+            e.meeting = nil
+            e.attendance?.set(.off, at: at)
+        }
+        return e
     }
 
     /// The meeting page's Private Meeting switch (#3862): `PUT …/private`; the mark the hub stored. Throws `APIError`.

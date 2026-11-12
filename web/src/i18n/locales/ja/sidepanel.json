@@ -7,5 +7,7 @@
   "preview": "プレビュー",
   "review": "レビュー",
   "team": "コラボ",
-  "background": "バックグラウンドタスク"
+  "background": "バックグラウンドタスク",
+  "task": "タスク",
+  "agent": "エージェント"
 }
