@@ -16,7 +16,7 @@ var inboxTaskURL = lazyre.New(`https?://[^\s<>"\x60]+`)
 func inboxTaskRefs(text string) []string {
 	var refs []string
 	for _, raw := range inboxTaskURL.FindAllString(text, -1) {
-		u, err := url.Parse(strings.TrimRight(raw, ".,;:!?)]}，。；：！）》」』"))
+		u, err := url.Parse(strings.TrimRight(raw, ".,;:!?)]}，。；：！）》」』")) // i18n-ignore: URL punctuation, not displayed text
 		if err != nil || u.Host == "" || u.User != nil {
 			continue
 		}
