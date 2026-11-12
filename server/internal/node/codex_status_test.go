@@ -43,39 +43,52 @@ func TestCodexStatusOverTheHost(t *testing.T) {
 // from the phone as soon as turn/start answers, a turn started on the computer from turn/started. Its row goes back to
 // the host's word when the turn completes, and agent says what the row says.
 func TestCodexDaemonPaneIsWorkingWhileItsTurnRuns(t *testing.T) {
-	n, f, c, _ := daemonPane(t) // its host says idle all along, as herdr did with a reporter holding the pane
-	joinPane(t, n)
-	status := func() string { return paneRow(t, n, remoteRaw).Status }
-	active := func(on bool) { // what the app-server's own read says from now on
-		f.mu.Lock()
-		f.active = on
-		f.mu.Unlock()
-	}
-	if got := status(); got != proto.StatusIdle {
-		t.Fatalf("no turn yet: %s", got)
-	}
+	for _, hostStatus := range []string{proto.StatusIdle, proto.StatusDone} {
+		t.Run(hostStatus, func(t *testing.T) {
+			n, f, c, _ := daemonPane(t)
+			n.mu.Lock()
+			a := n.agents[remoteRaw]
+			a.AgentStatus = hostStatus
+			a.RawTitle = ""
+			n.agents[remoteRaw] = a
+			n.mu.Unlock()
+			joinPane(t, n)
+			status := func() string { return paneRow(t, n, remoteRaw).Status }
+			active := func(on bool) { // what the app-server's own read says from now on
+				f.mu.Lock()
+				f.active = on
+				f.mu.Unlock()
+			}
+			if got := status(); got != hostStatus {
+				t.Fatalf("no turn yet: %s, want host status %s", got, hostStatus)
+			}
 
-	active(true)
-	if err := n.send(context.Background(), remoteRaw, "run the tests", nil, sendOpts{}); err != nil {
-		t.Fatal(err)
-	}
-	if got := status(); got != proto.StatusWorking {
-		t.Fatalf("a message from the phone: %s", got)
-	}
-	if a, _ := n.agent(remoteRaw); a.AgentStatus != proto.StatusWorking {
-		t.Fatalf("agent says %s", a.AgentStatus)
-	}
-	active(false)
-	endTurn(t, f, c)
-	waitFor(t, "the host's word once the turn completed", func() bool { return status() == proto.StatusIdle })
+			active(true)
+			if err := n.send(context.Background(), remoteRaw, "run the tests", nil, sendOpts{}); err != nil {
+				t.Fatal(err)
+			}
+			if got := status(); got != proto.StatusWorking {
+				t.Fatalf("a message from the phone: %s", got)
+			}
+			if a, _ := n.agent(remoteRaw); a.AgentStatus != proto.StatusWorking {
+				t.Fatalf("agent says %s", a.AgentStatus)
+			}
+			active(false)
+			endTurn(t, f, c)
+			waitFor(t, "the host's word once the turn completed", func() bool { return status() == hostStatus })
+			if a, _ := n.agent(remoteRaw); a.AgentStatus != hostStatus {
+				t.Fatalf("agent after the completed turn: %s, want %s", a.AgentStatus, hostStatus)
+			}
 
-	active(true)
-	f.push(map[string]any{"method": "turn/started", "params": map[string]any{"threadId": remoteRaw, "turn": map[string]any{"id": "turn-2"}}})
-	waitFor(t, "working from turn/started", func() bool { return status() == proto.StatusWorking })
-	active(false)
-	endTurn(t, f, c)
-	waitFor(t, "idle again", func() bool { return status() == proto.StatusIdle })
-	if a, _ := n.agent(remoteRaw); a.AgentStatus != proto.StatusIdle {
-		t.Fatalf("agent after the turn: %s", a.AgentStatus)
+			active(true)
+			f.push(map[string]any{"method": "turn/started", "params": map[string]any{"threadId": remoteRaw, "turn": map[string]any{"id": "turn-2"}}})
+			waitFor(t, "working from turn/started", func() bool { return status() == proto.StatusWorking })
+			active(false)
+			endTurn(t, f, c)
+			waitFor(t, "host status again", func() bool { return status() == hostStatus })
+			if a, _ := n.agent(remoteRaw); a.AgentStatus != hostStatus {
+				t.Fatalf("agent after the terminal turn: %s, want %s", a.AgentStatus, hostStatus)
+			}
+		})
 	}
 }
