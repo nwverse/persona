@@ -157,6 +157,7 @@ export function Button({
   busy,
   title,
   href,
+  expanded,
 }: {
   children: React.ReactNode;
   tone?: BtnTone;
@@ -169,6 +170,8 @@ export function Button({
   title?: string;
   /** Opens this in a new tab, as a link (noopener, noreferrer: the page gets no handle on this one, nor its address). */
   href?: string;
+  /** A button that shows or hides something: whether it is shown (aria-expanded). */
+  expanded?: boolean;
 }) {
   const base = "inline-flex h-8 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-control px-3 text-[12.5px] font-medium transition-[background-color,color,transform,opacity,filter] duration-150";
   if (href && !disabled && !busy) {
@@ -202,6 +205,7 @@ export function Button({
       disabled={disabled || busy}
       // the spinner is aria-hidden, so without this a busy button just reads as disabled
       aria-busy={busy || undefined}
+      aria-expanded={expanded}
       onClick={onClick}
       className={cx(
         base,

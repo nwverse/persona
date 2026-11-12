@@ -113,8 +113,7 @@ class ComposerPartsTest {
         var enabled by mutableStateOf(true)
         rule.setContent {
             PersonaTheme(style = AppStyle.Brief, reduceMotion = true) {
-                QueueStrip("排队中 2 条 · Claude 忙完会依次处理", listOf("一", "二"), onItem = { picked += it }, busy = busy, enabled = enabled,
-                    initiallyExpanded = true)
+                QueueStrip("排队中 2 条 · Claude 忙完会依次处理", listOf("一", "二"), onItem = { picked += it }, busy = busy, enabled = enabled)
             }
         }
         rule.onNodeWithContentDescription("第 2 条：二").assertIsEnabled().performClick()
@@ -126,36 +125,46 @@ class ComposerPartsTest {
         rule.onNodeWithContentDescription("第 1 条：一").assertIsNotEnabled()
     }
 
-    // iOS QueueStrip: folded to its line by default, the line opens and folds it, and Send Now stays on the line either way.
-    @Test fun queueFoldsToItsLineUntilTappedInEveryStyle() {
-        var style by mutableStateOf(AppStyle.Glass)
+    // Glass is iOS QueueStrip: folded to its line by default, the line opens and folds it, and Send Now stays on the line.
+    @Test fun glassFoldsTheQueueToItsLineUntilTapped() {
         var busy by mutableStateOf(false)
         var sent = 0
         rule.setContent {
-            PersonaTheme(style = style, reduceMotion = true) {
-                androidx.compose.runtime.key(style) {
-                    QueueStrip("排队中 2 条 · Claude 忙完会依次处理", listOf("一", "二"), onItem = {}, busy = busy,
-                        sendNow = "立即发送", onSendNow = { sent++ })
-                }
+            PersonaTheme(style = AppStyle.Glass, reduceMotion = true) {
+                QueueStrip("排队中 2 条 · Claude 忙完会依次处理", listOf("一", "二"), onItem = {}, busy = busy,
+                    sendNow = "立即发送", onSendNow = { sent++ })
             }
         }
-        for (s in AppStyle.entries) {
+        rule.onNodeWithContentDescription("第 1 条：一").assertDoesNotExist()
+        rule.onNodeWithText("立即发送").performClick()
+        assertEquals(1, sent)
+        rule.onNodeWithContentDescription("第 1 条：一").assertDoesNotExist()
+        rule.onNodeWithContentDescription("排队中 2 条 · Claude 忙完会依次处理，已收起").performClick()
+        rule.onNodeWithContentDescription("第 2 条：二").assertIsEnabled()
+        rule.onNodeWithText("立即发送").assertHasClickAction()
+        // Busy: the spinner takes Send Now's place.
+        busy = true
+        rule.onNodeWithText("立即发送").assertDoesNotExist()
+        busy = false
+        rule.onNodeWithContentDescription("排队中 2 条 · Claude 忙完会依次处理，已展开").performClick()
+        rule.onNodeWithContentDescription("第 2 条：二").assertDoesNotExist()
+    }
+
+    // Brief and Board stay as they were (the alignment plan aligns Glass only): always open, no fold, no Send Now.
+    @Test fun briefAndBoardKeepTheQueueOpenWithoutSendNow() {
+        var style by mutableStateOf(AppStyle.Brief)
+        rule.setContent {
+            PersonaTheme(style = style, reduceMotion = true) {
+                QueueStrip("排队中 2 条 · Claude 忙完会依次处理", listOf("一", "二"), onItem = {}, sendNow = "立即发送", onSendNow = {})
+            }
+        }
+        for (s in listOf(AppStyle.Brief, AppStyle.Board)) {
             style = s
             rule.waitForIdle()
-            rule.onNodeWithContentDescription("第 1 条：一").assertDoesNotExist()
-            rule.onNodeWithText("立即发送").performClick()
-            rule.onNodeWithContentDescription("第 1 条：一").assertDoesNotExist()
-            rule.onNodeWithContentDescription("排队中 2 条 · Claude 忙完会依次处理，已收起").performClick()
             rule.onNodeWithContentDescription("第 2 条：二").assertIsEnabled()
-            rule.onNodeWithText("立即发送").assertHasClickAction()
-            // Busy: the spinner takes Send Now's place.
-            busy = true
             rule.onNodeWithText("立即发送").assertDoesNotExist()
-            busy = false
-            rule.onNodeWithContentDescription("排队中 2 条 · Claude 忙完会依次处理，已展开").performClick()
-            rule.onNodeWithContentDescription("第 2 条：二").assertDoesNotExist()
+            rule.onNodeWithContentDescription("已收起", substring = true).assertDoesNotExist()
         }
-        assertEquals(AppStyle.entries.size, sent)
     }
 
     @Test fun anOpenedQueueShowsAboutThreeRowsBeforeItScrolls() {

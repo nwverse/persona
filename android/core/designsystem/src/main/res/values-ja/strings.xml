@@ -136,6 +136,13 @@
     <string name="designsystem_machine_monitor">マシンモニター</string>
     <string name="designsystem_details">詳細</string>
     <string name="designsystem_space">スペース</string>
+    <string name="designsystem_repository">リポジトリ</string>
+    <string name="designsystem_main_worktree">メインのワークツリー</string>
+    <string name="designsystem_worktree">ワークツリー</string>
+    <string name="designsystem_worktree_primary">メイン</string>
+    <string name="designsystem_worktree_detached">Detached HEAD</string>
+    <string name="designsystem_worktree_offline">このコンピューターは現在オフラインです</string>
+    <string name="designsystem_worktree_idle">アイドル</string>
     <string name="designsystem_expand_named">%1$sを展開</string>
     <string name="designsystem_collapse_named">%1$sを折りたたむ</string>
     <plurals name="designsystem_idle_more">

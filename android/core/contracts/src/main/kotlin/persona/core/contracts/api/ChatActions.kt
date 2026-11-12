@@ -40,7 +40,7 @@ interface ChatActions {
         throw UnsupportedOperationException("Queued message management unavailable")
 
     /**
-     * "Send now" (#6088, POST …/queue/send-now): the agent takes everything queued at once instead of at its next step,
+     * "Send now" (`docs/protocol/protocol.md`, POST …/queue/send-now): the agent takes everything queued at once instead of at its next step,
      * through Claude Code's own send-now, which the node presses (a command it runs goes on in the background, a reply it
      * writes starts again with the messages). Only for `Session.steersQueue`. Refusals are 409 with a `code`
      * (nothing_queued, send_now_unsupported, send_now_unrecognized, send_now_in_doubt, node_outdated) and the hub's words

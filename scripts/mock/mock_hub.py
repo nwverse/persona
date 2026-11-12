@@ -8,7 +8,7 @@ It serves machines, agents, conversations, interactions and the inbox, enough fo
 does not know are logged to stderr as MISSING. Timestamps are relative to when it starts. See docs/operations/testing.md.
 """
 import base64, unicodedata
-import argparse, copy, hashlib, json, math, os, re, shutil, signal, socket, ssl, struct, subprocess, sys, tempfile, threading, time, uuid, zlib
+import argparse, copy, hashlib, json, math, os, posixpath, re, shutil, signal, socket, ssl, struct, subprocess, sys, tempfile, threading, time, uuid, zlib
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -12229,6 +12229,70 @@ if os.environ.get("MOCK_EDIT_DIFF") == "1":
     mock_edit_diff()
 
 
+# MOCK_TURN_CHANGES=1 (#5157): the changed-files card at the end of a finished Agent turn. One chat edits five files of
+# this checkout (one of them twice; an edit that failed does not count), a line of narration between the edits so the
+# page does not fold them (fold_work leaves runs under 3 items, docs/protocol/protocol.md "Folded work") and the card
+# counts the calls themselves; a Codex chat changes two files by their diffs. MOCK_EDIT_DIFF's chat comes folded, and
+# its card comes from the fold's `changes`. The main conversation's last exchange writes a file too and shows no card
+# (super rules 0 and 4). With MOCK_REVIEW=1, Review opens the review of the same checkout. Made-up code.
+TURN_CHANGES = "a1f3c2d4-0000-4000-8000-000000005157"
+TURN_CHANGES_CODEX = "a1f3c2d4-0000-4000-8000-000000005158"
+
+
+def mock_turn_changes():
+    w = "/Users/me/code/weather"
+    say = lambda t, text: it("assistant", "text", t, text=text)
+    _c = [it("user", "text", 26, text="Show 12 hours of rain, in the units the user picked, and document it")]
+    _c += tool("Edit", {"file_path": w + "/WeatherWidget/Provider.swift", "old_string": "let hours = hourly.prefix(6)",
+                        "new_string": "let hours = hourly.prefix(12)\nlet rain = hours.map(\\.chance)"}, "ok", 25.9)
+    _c.append(say(25.85, "The widget takes 12 hours now; the forecast model needs the same."))
+    _c += tool("MultiEdit", {"file_path": w + "/Sources/App/Forecast.swift", "edits": [
+        {"old_string": "var hourly: [Double]", "new_string": "var hourly: [Double]\nvar unit: UnitTemperature"},
+        {"old_string": "func high() -> Double {\n    hourly.max() ?? 0\n}",
+         "new_string": "func high() -> Measurement<UnitTemperature> {\n    Measurement(value: hourly.max() ?? 0, unit: unit)\n}"}]}, "ok", 25.8)
+    _c.append(say(25.75, "Next the units."))
+    _c += tool("Edit", {"file_path": w + "/README.md", "old_string": "## Units", "new_string": "## Units and hours"},
+               "String to replace not found in file.", 25.7, err=True)
+    _c.append(say(25.65, "The README has no Units section; the units go in their own file."))
+    _c += tool("Write", {"file_path": w + "/Sources/App/Units.swift",
+                         "content": "import Foundation\n\nlet celsius = UnitTemperature.celsius\nlet fahrenheit = UnitTemperature.fahrenheit\n"}, "ok", 25.6)
+    _c.append(say(25.55, "And the doc."))
+    _c += tool("Write", {"file_path": w + "/docs/hourly.md", "content": "# Hourly rain\n\nThe widget shows the next 12 hours.\n"
+                                                                      "Each bar is the chance of rain in that hour.\n"}, "ok", 25.5)
+    _c.append(say(25.45, "One more case in the provider, then the tests."))
+    _c += tool("Edit", {"file_path": w + "/WeatherWidget/Provider.swift", "old_string": "let temp = current.temperature",
+                        "new_string": "let temp = current.feelsLike"}, "ok", 25.4)
+    _c.append(say(25.35, "Tests for the new hours."))
+    _c += tool("Write", {"file_path": w + "/Tests/AppTests/ForecastTests.swift", "content": "\n".join([
+        "import XCTest", "@testable import App", "", "final class ForecastTests: XCTestCase {",
+        "    func testTwelveHours() {", "        XCTAssertEqual(Forecast.sample.hourly.prefix(12).count, 12)", "    }", "}"]) + "\n"},
+        "ok", 25.3)
+    _c.append(say(25, "Done: the widget shows 12 hours of rain and the feels-like temperature, the forecast keeps its unit, "
+                      "the units have their own file, and docs/hourly.md says what the bars mean."))
+    ITEMS[TURN_CHANGES] = _c
+    SESSIONS.append(sess("macbook", TURN_CHANGES, "Twelve hours of rain", w, "done", "read", "weather", 1, "changes", 20, 25,
+                         "Done: the widget shows 12 hours of rain."))
+    _x = [it("user", "text", 24, text="Use the feels-like temperature in the forecast and the widget")]
+    _x += tool("Edit", {"file_path": w + "/Sources/App/Forecast.swift", "change": "update",
+                        "diff": "@@ -3,3 +3,4 @@\n struct Forecast {\n-    var temperature: Double\n+    var feelsLike: Double\n+    var hourly: [Double]\n }\n"},
+               "update " + w + "/Sources/App/Forecast.swift", 23.9)
+    _x.append(say(23.85, "Now the widget."))
+    _x += tool("Edit", {"file_path": w + "/WeatherWidget/WidgetView.swift", "change": "update",
+                        "diff": "@@ -8,2 +8,2 @@\n-        Text(entry.temperature, format: .number)\n+        Text(entry.feelsLike, format: .number)\n     }\n"},
+               "update " + w + "/WeatherWidget/WidgetView.swift", 23.8)
+    _x.append(say(23.5, "The forecast and the widget both use the feels-like temperature now."))
+    ITEMS[TURN_CHANGES_CODEX] = _x
+    SESSIONS.append(sess("macbook", TURN_CHANGES_CODEX, "Feels-like temperature", w, "done", "read", "weather", 1, "changes-codex", 21,
+                         23.5, "The forecast and the widget both use the feels-like temperature now.", agent="codex"))
+    ITEMS[ASK1] = ITEMS[ASK1] + [it("user", "text", 1.5, text="把周末的行程整理成一个文件")] + tool(
+        "Write", {"file_path": "/Users/me/Documents/weekend.md", "content": "# 周末\n\n- 周六：爬山\n- 周日：看展\n"}, "ok", 1.4) + [
+        it("assistant", "text", 1.3, text="整理好了：周六爬山，周日看展，放在“文稿”里的 weekend.md。")]
+
+
+if os.environ.get("MOCK_TURN_CHANGES") == "1":
+    mock_turn_changes()
+
+
 # MOCK_TOOL_NAMES=1 (#2986): one finished turn that calls Claude Code's newer tools (ToolSearch, TaskCreate, TaskUpdate,
 # NotebookEdit, Monitor, SendMessage, ScheduleWakeup), another server's MCP tool (mcp__github__create_issue) and a tool
 # no table knows, with nested arguments (RenderChart), so each reads in words, the MCP one as "GitHub · Create issue",
@@ -13086,6 +13150,106 @@ def fold_task_snapshots(items):
     return snapshots
 
 
+CLIPPED_NOTE = re.compile("\n…（已截断，共 \\d+ 字节）$")
+
+
+def _edit_lines(old, new):
+    """transcript.editLines: a final newline ends the last line on a side whose other side is empty or ends in one."""
+    def split(s, strip):
+        return (s[:-1] if strip else s).split("\n") if s else []
+    old_ends, new_ends = old.endswith("\n"), new.endswith("\n")
+    return split(old, old_ends and (not new or new_ends)), split(new, new_ends and (not old or old_ends))
+
+
+def _clean_path(p):
+    """path.Clean, as transcript.editPath cleans an edit's file (no "./", "../" or doubled slashes)."""
+    return posixpath.normpath(re.sub("/+", "/", p))
+
+
+def _line_changes(old, new):
+    """transcript.lineChanges: lines added and removed by Myers' line diff; everything past its limits."""
+    a, b = _edit_lines(old, new)
+    n, m = len(a), len(b)
+    if n + m <= 60000:
+        most = min(n + m, 6000)
+        off, v = most + 1, [0] * (2 * most + 3)
+        for d in range(most + 1):
+            for k in range(-d, d + 1, 2):
+                x = v[off + k + 1] if k == -d or (k != d and v[off + k - 1] < v[off + k + 1]) else v[off + k - 1] + 1
+                y = x - k
+                while x < n and y < m and a[x] == b[y]:
+                    x, y = x + 1, y + 1
+                v[off + k] = x
+                if x >= n and y >= m:
+                    return (m - n + d) // 2, (n - m + d) // 2
+    return m, n
+
+
+def _patch_changes(patch, change):
+    """transcript.patchLines: a Codex file change's unified diff, or the whole file without hunks."""
+    lines = patch.split("\n")
+    if not any(l.startswith("@@") for l in lines):
+        if not patch:
+            return 0, 0
+        count = len((patch[:-1] if patch.endswith("\n") else patch).split("\n"))
+        return (0, count) if change == "delete" else (count, 0)
+    add = rm = 0
+    inside = False
+    for l in lines:
+        if l.startswith("diff --git"):
+            inside = False
+        elif not inside and l.startswith(("index ", "--- ", "+++ ")):
+            continue
+        elif l.startswith("@@"):
+            inside = True
+        elif inside and l.startswith("+"):
+            add += 1
+        elif inside and l.startswith("-"):
+            rm += 1
+    return add, rm
+
+
+def fold_changes(run):
+    """transcript.foldChanges (#5157): the files the run's successful Edit / Write / MultiEdit calls changed, in the
+    order first edited, each with the lines added and removed and whether the input was whole."""
+    ok = {x.get("tool_use_id"): not x.get("is_error") for x in run if x["kind"] == "tool_result"}
+    out, at = [], {}
+
+    def clipped(v):
+        if isinstance(v, str):
+            return bool(CLIPPED_NOTE.search(v))
+        if isinstance(v, list):
+            return any(clipped(e) for e in v)
+        return isinstance(v, dict) and any(clipped(e) for e in v.values())
+    for x in run:
+        name = x.get("tool_name")
+        if x["kind"] != "tool_use" or name not in ("Edit", "Write", "MultiEdit") or not ok.get(x.get("tool_use_id")):
+            continue
+        inp = x.get("tool_input") or {}
+        path = next((_clean_path(inp[k].strip()) for k in ("file_path", "notebook_path", "path") if isinstance(inp.get(k), str) and inp[k].strip()), "")
+        if not path:
+            continue
+        add = rm = 0
+        if name == "Edit" and isinstance(inp.get("diff"), str):
+            add, rm = _patch_changes(inp["diff"], inp.get("change") or "")
+        elif name == "Edit" and (isinstance(inp.get("old_string"), str) or isinstance(inp.get("new_string"), str)):
+            add, rm = _line_changes(inp.get("old_string") or "", inp.get("new_string") or "")
+        elif name == "Write" and isinstance(inp.get("content"), str):
+            add, rm = _line_changes("", inp["content"])
+        elif name == "MultiEdit":
+            for e in inp.get("edits") or []:
+                a, r = _line_changes(e.get("old_string") or "", e.get("new_string") or "")
+                add, rm = add + a, rm + r
+        exact = not clipped(inp)
+        if path in at:
+            c = out[at[path]]
+            c["add"], c["del"], c["exact"] = c["add"] + add, c["del"] + rm, c["exact"] and exact
+        else:
+            at[path] = len(out)
+            out.append({"path": path, "add": add, "del": rm, "exact": exact})
+    return out
+
+
 def fold_work(items):
     """transcript.FoldWork: each run of tool calls (with their results) and thoughts becomes one fold item."""
     uses = {x.get("tool_use_id") for x in items if x["kind"] == "tool_use"}
@@ -13122,7 +13286,8 @@ def fold_work(items):
                         "fold": {"items": len(run), "tools": sum(x["kind"] == "tool_use" for x in run),
                                  "thoughts": sum(x["kind"] == "thinking" and bool((x.get("text") or "").strip()) for x in run),
                                  "until": run[-1]["ts"], "through_seq": run[-1]["seq"], "through_id": run[-1]["id"],
-                                 **({"tasks": tasks} if tasks else {}), **({"images": images} if images else {}), **narration}})
+                                 **({"tasks": tasks} if tasks else {}), **({"images": images} if images else {}), **narration,
+                                 "changes": fold_changes(run)}})
         i = j
     return out
 
