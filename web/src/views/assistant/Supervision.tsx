@@ -110,8 +110,9 @@ function ReportBody({ item, title, onOpenTask }: { item: FeedItem; title: string
 }
 
 /** A review in the conversation (feed kind "review"): the verdict and the supervisor's note. A note cut at the line's
- *  end opens in full on a click (what to decide, what is missing, #4861), as an answered card's line does. */
-export function ReviewLine({ item, title, onOpenTask }: { item: FeedItem; title: string; onOpenTask?: () => void }) {
+ *  end opens in full on a click (what to decide, what is missing, #4861), as an answered card's line does. `by`: who
+ *  reviewed when it was not this conversation (the background supervisor, #5082), said before the task. */
+export function ReviewLine({ item, title, by, onOpenTask }: { item: FeedItem; title: string; by?: string; onOpenTask?: () => void }) {
   const body = (item.body ?? {}) as { verdict?: string; round?: number; note?: string };
   const [open, setOpen] = useState(false);
   const { ref, cut } = useClamped<HTMLSpanElement>(open, "x");
@@ -120,6 +121,7 @@ export function ReviewLine({ item, title, onOpenTask }: { item: FeedItem; title:
     <div data-testid="review-line" className={cx("flex max-w-full min-w-0 flex-col self-start bg-field text-[12px] text-ink-2", open ? "w-full rounded-card" : "rounded-full")}>
       <div className="flex min-w-0 items-center gap-1.5 px-3 py-1.5">
         <Icon name="target" size={12} className="shrink-0" />
+        {by && <span data-testid="review-by" className="shrink-0 whitespace-nowrap">{by} ·</span>}
         {onOpenTask ? (
           <button type="button" onClick={onOpenTask} className="max-w-[45%] shrink-0 truncate text-left hover:text-ink hover:underline">
             {title}

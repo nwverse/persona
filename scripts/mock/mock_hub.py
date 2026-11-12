@@ -1679,6 +1679,20 @@ if os.environ.get("MOCK_LEADERS") == "1":
         MOCK_DIRECTION_NAMES[c["session_id"]] = name
 
 
+# MOCK_BACKGROUND_SUPERVISOR=1 (#4927, #5082, docs/assistant/unified-entry.md "Background supervisor"): the built-in
+# conversation that follows up the tasks no leader supervises has been made. GET /api/v1/assistant names it in
+# `background_supervisor`; it is listed with the scheduled tasks' conversations (origin task, no origin_ref), titled in
+# the hub's language (MOCK_LANG). With MOCK_TASKS=1 the reviews in the main chat's feed are its own (`by`).
+BACKGROUND_SUPERVISOR = ""
+if os.environ.get("MOCK_BACKGROUND_SUPERVISOR") == "1":
+    _bg = assistant_sess("bgsv0001-0000-4000-8000-000000000001",
+                         {"en": "Background supervisor", "ja": "バックグラウンド監督"}.get(os.environ.get("MOCK_LANG", ""), "后台督办"),
+                         18, "「整理发布说明」验收通过：7 个 PR 都在里面。")  # i18n-ignore: the hub's own title and words
+    _bg["origin"] = "task"
+    ASSISTANT.append(_bg)
+    BACKGROUND_SUPERVISOR = _bg["session_id"]
+
+
 def mock_leaders_list():
     """GET /api/v1/assistant/leaders as the hub lists it (assistant/directions.go): each leader with its direction's name."""
     titles = {c["session_id"]: c.get("title", "") for c in ASSISTANT}
@@ -2043,6 +2057,8 @@ ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "A
                     # supervised task reach its supervisor (#4293), off by default; closed sessions archive themselves
                     # after this many idle days (#3618), 0 is never. Left out with MOCK_LEGACY_HUB.
                     "agent_tasks": False, "inbox_signals": False, "archive_closed_days": 3,
+                    # The main chat supervises its own tasks (#4927), off by default: the background supervisor does.
+                    "main_supervises_own_tasks": False,
                     # idle Agents stop after this many hours, their terminal kept (#4754); 0 is never
                     "idle_close_hours": 12,
                     # The role a meeting recording pre-selects (#2981; MOCK_MEETING_ATTENDANCE_DEFAULT=listener starts there)
@@ -2071,7 +2087,10 @@ def assistant_state(space="", archived=False):
                              and (archived or not s.get("archived"))]}
     if not os.environ.get("MOCK_LEGACY_HUB"):
         out.update(agent_tasks=cfg["agent_tasks"], inbox_signals=cfg["inbox_signals"], archive_closed_days=cfg["archive_closed_days"],
-                   idle_close_hours=cfg["idle_close_hours"], kb_topics=cfg["kb_topics"])
+                   idle_close_hours=cfg["idle_close_hours"], kb_topics=cfg["kb_topics"],
+                   main_supervises_own_tasks=cfg["main_supervises_own_tasks"])
+        if BACKGROUND_SUPERVISOR and not space:  # once it was made; read-only
+            out["background_supervisor"] = BACKGROUND_SUPERVISOR
     if cfg["notes"] is not None:
         out["notes"] = cfg["notes"]
     if isinstance(cfg.get("timezone_picked"), bool):  # once a client said so, as the hub (#1855)
@@ -5868,6 +5887,15 @@ if MOCK_TASKS:
             _feed("feed_r3", 3.5, "report", "todo_task_tests", {"kind": "question", "text": "统一用 snake_case 还是 camelCase 命名新接口？", "later": True}),
             _feed("feed_r2", 3, "routed", "todo_task_tests", {"text": "用协议注入，先改网络层那 6 个文件", "interrupted": True, "from": "assistant"}),
         ]
+    # MOCK_BACKGROUND_SUPERVISOR=1 (#5082): the reviews in the main chat's feed are the background supervisor's (`by`),
+    # so the chat shows each as its line; without MOCK_TASKS_REPORTS there is one, the release notes accepted.
+    if BACKGROUND_SUPERVISOR:
+        if not any(_i["kind"] == "review" for _i in TASK_FEED[ASK1]):
+            TASK_FEED[ASK1].append(_feed("feed_bg1", 18, "review", "todo_task_release", {
+                "title": "整理发布说明", "verdict": "accepted", "note": "写在 docs/release-notes.md，7 个 PR 都在里面"}))
+        for _i in TASK_FEED[ASK1]:
+            if _i["kind"] == "review":
+                _i["body"]["by"] = "background_supervisor"
     # MOCK_BRIEFS=1 (#3822, docs/assistant/unified-entry.md "Briefs"): tasks carry the brief they are held to. The open
     # plan's task has a real one (the owner's own words, long enough to be cut, the goal, criteria, time and what is out
     # of bounds). The widget fix has a real one too, taken over twice (a lineage of three), with one scope change and an
@@ -10490,6 +10518,9 @@ MODEL_SCOPES = {
     "kb": ["文本与邮件翻译", "草拟回复", "知识整理与会话压缩", "项目整理与事项提取", "对话标题与 Agent 标签名"],
     "inbox.triage": ["收件箱分拣与摘要", "重要性判断", "判断是否需要回复或交给 Agent"],
 }
+# The background supervisor's purpose (#4927): answered by its own id only, never in the catalog; it follows Main chat
+# until it is given a record of its own. Not on MOCK_LEGACY_HUB.
+SUPERVISE_PURPOSE = "assistant.supervise"
 MODEL_CATEGORY_FOR = {pid: {"主对话": "assistant", "Agents": "agent.new", "信息处理": "kb", "信息筛选": "inbox.triage"}.get(group, pid)
                       for pid, _, group, _ in MODEL_DEFINITIONS}
 
@@ -10524,6 +10555,22 @@ def model_configuration(include_uses=False):
             if os.environ.get("MOCK_MODEL_LIMIT") and effective["provider"] == "legacy.ai":
                 purpose["limit"] = {"reason": "quota", "until": later(minutes=23)}
                 purpose["status"] = "额度用完，23 分钟后重试"
+            purposes.append(purpose)
+        if include_uses and not os.environ.get("MOCK_LEGACY_HUB"):
+            main = next(p for p in purposes if p["id"] == "assistant")
+            stored = MODEL_BINDINGS.get(SUPERVISE_PURPOSE, {"revision": 0, "override": {}})
+            binding = dict(stored["override"])
+            effective = dict(main["effective"])
+            if binding.get("provider"):
+                provider = next((p for p in providers if p["id"] == binding["provider"]), {})
+                effective = {"provider": binding["provider"], "model": provider.get("model", "")}
+            effective.update(binding)
+            purpose = dict(id=SUPERVISE_PURPOSE, category_id="assistant", parent="assistant", name="后台督办", group="主对话",
+                           kind="launcher", launch="headless", override=binding, effective=effective, revision=stored["revision"],
+                           fields=["provider", "model", "effort"],
+                           provider_ids=[p["id"] for p in providers if p["kind"] == "launcher"], status="未验证")
+            if not binding.get("provider"):
+                purpose["inherited_from"] = "主对话"
             purposes.append(purpose)
     return {"purposes": purposes, "providers": providers}
 
@@ -20034,7 +20081,7 @@ class H(BaseHTTPRequestHandler):
                 catalog = model_configuration(include_uses=True)
                 purpose = next((x for x in catalog["purposes"] if x["id"] == pid), None)
                 if purpose is None: return self.send_json({"error": "模型用途不存在"}, 404)
-                if purpose["category_id"] != pid:
+                if purpose["category_id"] != pid and pid != SUPERVISE_PURPOSE:
                     return self.send_json({"error": "用途模型只读，请修改所属分类的模型配置"}, 400)
                 if os.environ.get("MOCK_MODEL_CONFLICT") or body.get("revision") != purpose["revision"]:
                     return self.send_json({"error": "配置已在别处修改"}, 409)
@@ -20047,7 +20094,7 @@ class H(BaseHTTPRequestHandler):
                     if body[field] is None: binding.pop(field, None)
                     else: binding[field] = body[field]
                 MODEL_BINDINGS[pid] = {"revision": purpose["revision"] + 1, "override": binding}
-                catalog = model_configuration()
+                catalog = model_configuration(include_uses=pid == SUPERVISE_PURPOSE)
                 purpose = next(x for x in catalog["purposes"] if x["id"] == pid)
                 return self.send_json({"purpose": purpose, "providers": catalog["providers"]})
         if p.startswith("/api/v1/machines/") and p.endswith("/open") and "/ports/" in p:
@@ -20810,6 +20857,8 @@ class H(BaseHTTPRequestHandler):
                 ASSISTANT_CONFIG["agent_tasks"] = body["agent_tasks"]
             if isinstance(body.get("inbox_signals"), bool):
                 ASSISTANT_CONFIG["inbox_signals"] = body["inbox_signals"]
+            if isinstance(body.get("main_supervises_own_tasks"), bool):
+                ASSISTANT_CONFIG["main_supervises_own_tasks"] = body["main_supervises_own_tasks"]
             if isinstance(body.get("kb_topics"), bool):
                 ASSISTANT_CONFIG["kb_topics"] = body["kb_topics"]
             if body.get("machine_id"):

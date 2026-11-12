@@ -760,6 +760,9 @@ export interface AssistantInfo {
   leaders?: string[];
   /** "Fold background rounds" in effect (#4314, docs/assistant/assistant.md "Background rounds"); absent from an older hub, which means on. */
   main_background_folded?: boolean;
+  /** The background supervisor's conversation (#4927, lib/background-supervisor.ts): its session id once the hub made
+   *  it; absent before that and from an older hub. Read-only. */
+  background_supervisor?: string;
   conversations: Session[];
 }
 

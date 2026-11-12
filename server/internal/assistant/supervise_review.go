@@ -239,6 +239,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		result = s.recordBriefResult(ctx, t, checks, a.AlsoDone, "", verdict)
 	}
 	body := reviewFeedBody{Title: t.Title, Verdict: verdict, Round: v.Round, Note: note, Checks: checks, Result: result}
+	if background { // the main conversation took no turn for it: the apps draw the entry as its line there (#5082)
+		body.By = reviewByBackground
+	}
 	if verdict == reviewParked { // what it waits for is what the line says; an older app shows it as the note
 		body.Note, body.Until, body.WaitingOn = cmp.Or(note, park.Reason), park.Until, park.WaitingOn
 	}
@@ -442,7 +445,13 @@ type reviewFeedBody struct {
 	// Result: an accepted or cancelled review against the task's brief (task_brief_result.go): each criterion met,
 	// not_met, unchecked or dropped, then what was done beyond it.
 	Result *BriefResult `json:"result,omitempty"`
+	// By: who reviewed, when it was not the conversation the entry is in: reviewByBackground for the background
+	// supervisor's review of a task whose ledger names the main conversation (supervise_background.go). Left out otherwise.
+	By string `json:"by,omitempty"`
 }
+
+// reviewByBackground is reviewFeedBody.By for a review the background supervisor made.
+const reviewByBackground = "background_supervisor"
 
 // reviewDoneTodo closes todo id after its review (done_by review or cancelled, with reason); false when it was done already. An
 // accepted task's outcome is recorded, as when it closes by itself or the user closes it (todo_outcome.go, #2820); a

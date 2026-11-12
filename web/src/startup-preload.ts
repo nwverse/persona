@@ -137,9 +137,13 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * fitRect now live in lib/image-zoom.ts. And 64 B for the sidebar's Recent count and its Show more (#5146 added 222 B
  * to ja, 592,153 B at 9534ce535 to 592,375 B, 213 B of it in the room left: lib/sidebar-recent.ts, which the sidebar
  * reads for how many to list and how far Show more opened it, and the Show more / Show less row; the setting's row and
- * its words are in the lazy Settings page and the ui-look catalog). Raise it on purpose, in the change that needs it.
+ * its words are in the lazy Settings page and the ui-look catalog). And 579 B for the background supervisor (#5082 added
+ * 634 B to ja, 592,375 B as #5146 left it to 593,009 B, 55 B of it in the room left: lib/background-supervisor.ts, which
+ * the sidebar, the conversation menu and the chat's review line read, the line's reviewer, and its name and "Built in";
+ * the switch, the model row and their words are in the lazy Settings page). Raise it on purpose, in the change that
+ * needs it.
  */
-export const FIRST_SCREEN_BUDGET = 592_430;
+export const FIRST_SCREEN_BUDGET = 593_009;
 
 /** What the built-in hub sends for `files` (paths below `dir`) to a browser that takes br: each one's brotli copy, or
  *  the file itself when it has none. Build time only. */
