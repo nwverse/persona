@@ -64,7 +64,7 @@ func classifyLarkDepth(cmd string, gates []proto.CommandGate, cwd string, risk l
 	v.unknown = shellCommandUnknown(cmd, false, depth)
 	segs, ok := shellcmd.Split(cmd)
 	if !ok {
-		v.other, v.unparsed, v.unknown = true, true, v.unknown || larkCLIRe.MatchString(cmd) || shellCommandUnknown(cmd, true, depth)
+		v.other, v.unparsed, v.unknown = true, true, v.unknown || gateNamed(gates, cmd) || larkCLIRe.MatchString(cmd) || shellCommandUnknown(cmd, true, depth)
 		return v
 	}
 	vars := map[string]string{}
@@ -340,6 +340,17 @@ func gateAimed(gates []proto.CommandGate, text string) (proto.CommandGate, bool)
 	return proto.CommandGate{}, false
 }
 
+// gateNamed reports literal gate command words in a command the shell
+// splitter could not read. It is deliberately conservative about quoted text.
+func gateNamed(gates []proto.CommandGate, cmd string) bool {
+	for _, word := range strings.Fields(cmd) {
+		if gateOf(gates, strings.Trim(word, "'\"`;&|()")) >= 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // larkVariableScopeStable reports whether straight-line assignments can be
 // used to expand a later route. Only known read-only commands can appear
 // between those assignments and the gated call.
@@ -354,7 +365,7 @@ func larkVariableScopeStable(cmd string, gates []proto.CommandGate) bool {
 			return false
 		}
 		switch n := node.(type) {
-		case *syntax.IfClause, *syntax.ForClause, *syntax.WhileClause, *syntax.CaseClause, *syntax.FuncDecl:
+		case *syntax.IfClause, *syntax.ForClause, *syntax.WhileClause, *syntax.CaseClause, *syntax.FuncDecl, *syntax.DeclClause:
 			stable = false
 			return false
 		case *syntax.Stmt:
