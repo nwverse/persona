@@ -29,6 +29,10 @@ const onSend = vi.fn(async (_m: Outgoing) => true);
 const render = (mention = source) => act(() => root.render(<Composer draftKey="skill-test" placeholder="" mention={mention} machineId="computer" onSend={onSend} />));
 const box = () => host.querySelector("textarea")!;
 const options = () => [...host.querySelectorAll<HTMLButtonElement>('[role="option"]')];
+const waitForOptions = (count: number) => vi.waitFor(async () => {
+  await act(async () => {});
+  expect(options()).toHaveLength(count);
+});
 async function type(text: string) {
   await act(async () => {
     box().focus();
@@ -54,6 +58,7 @@ afterEach(() => { act(() => root.unmount()); host.remove(); });
 it("searches name/description locally, disambiguates equal names, selects with keys and retains explicit identity on send", async () => {
   render();
   await type("@");
+  await waitForOptions(2);
   expect(options().map((o) => o.textContent)).toEqual(expect.arrayContaining([expect.stringContaining("project · ."), expect.stringContaining("user")]));
   await type("@security");
   expect(options()).toHaveLength(1);
@@ -77,6 +82,7 @@ it("searches name/description locally, disambiguates equal names, selects with k
 it("supports touch/click removal, restores edit/queue references and persists the selected identity in the draft", async () => {
   render();
   await type("@wording");
+  await waitForOptions(1);
   await act(async () => options()[0].click());
   await type("Use this");
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 280)); });
@@ -94,9 +100,9 @@ it("never offers stale rows across environment switches, ignores late responses,
   api.mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
   render();
   await type("@review");
+  await vi.waitFor(() => expect(resolve).toBeTypeOf("function"));
   render({ ...source, skills: { ...source.skills!, manager: "helper-b", environment: "profile-b" } });
-  await act(async () => {});
-  expect(options()).toHaveLength(2);
+  await waitForOptions(2);
   await act(async () => resolve({ catalog_version: 1, complete: true, skills: [{ ...skills[0], name: "stale" }] }));
   expect(host.textContent).not.toContain("stale");
   api.mockImplementationOnce(async () => { throw new Error("unavailable"); });
@@ -128,6 +134,7 @@ it("keeps existing file rows reachable beside a large skill catalog and searches
   }));
   render({ ...source, files: () => ["/example/report.ts"] });
   await type("@");
+  await waitForOptions(4);
   expect(options().some((o) => o.textContent?.includes("report.ts"))).toBe(true);
   expect(options().filter((o) => o.textContent?.includes("review-"))).toHaveLength(3);
   await type("@review-49");

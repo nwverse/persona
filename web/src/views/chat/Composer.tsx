@@ -33,7 +33,6 @@ import { ForwardBars } from "./ForwardCard";
 import { QuoteBars } from "./Quote";
 import type { ComposerPanelHandle, MentionRow, MentionSource, PanelPick } from "./ComposerPanel";
 import type { PlanMode } from "./PermissionPicker";
-import { HistorySearch } from "./HistorySearch";
 import { useSendHistory } from "./useSendHistory";
 import { isModelCommand, requestModelPicker } from "../../lib/model-switch";
 import { MAX_IMAGES, rankCommands } from "../../lib/composer-commands";
@@ -45,6 +44,8 @@ import type { VoiceOffer } from "./voice/VoiceParts";
 const ImageEditor = lazyPage(() => import("./ImageEditor").then((m) => m.ImageEditor), { idle: true });
 // The + / @ panel, drawn only while it is open: its own chunk and words, fetched by the idle preload or the first opening.
 const ComposerPanel = lazyPage(() => import("./ComposerPanel").then((m) => m.ComposerPanel), { idle: true });
+// Skill-aware history labels are needed only when recall search opens, not on the first screen.
+const HistorySearch = lazyPage(() => import("./HistorySearch").then((m) => m.HistorySearch));
 // The "/" palette (cindy's, #5325), drawn once "/" is typed: its own chunk too, fetched by the idle preload.
 const SlashPalette = lazyPage(() => import("./SlashPalette").then((m) => m.SlashPalette), { idle: true });
 /** How long "Not sent yet" stays under the box after Enter was pressed while blocked. */
@@ -239,7 +240,7 @@ export const Composer = memo(function Composer({
   const previousSkillEnvironment = useRef(skillEnvironment);
   useEffect(() => {
     if (previousSkillEnvironment.current !== skillEnvironment && getContexts(draftKey).some((r) => r.kind === "skill")) {
-      toast(t("chat-composerpanel.skills_changed"), "error");
+      toast(t("chat-composer.skills_changed"), "error");
     }
     previousSkillEnvironment.current = skillEnvironment;
   }, [skillEnvironment, draftKey]);
@@ -789,7 +790,7 @@ export const Composer = memo(function Composer({
         </Suspense>
       )}
 
-      {history.searching && <HistorySearch onPick={history.pick} onClose={history.closeSearch} />}
+      {history.searching && <Suspense fallback={null}><HistorySearch onPick={history.pick} onClose={history.closeSearch} /></Suspense>}
 
       {token && (
         <Suspense fallback={null}>

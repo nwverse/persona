@@ -148,8 +148,7 @@ describe("message context interaction paths", () => {
       ));
       const open = () => act(() => void host.querySelector<HTMLButtonElement>('button[aria-label="更多"]')!.click());
       const item = (label: string) => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((el) => el.textContent?.trim() === label)!;
-      open();
-      await act(async () => item("改后重发").click());
+      await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="改后重发"]')!.click());
       expect(received).toHaveBeenCalledWith({ type: "replace", text: selected });
       open();
       await act(async () => item("转发").click());

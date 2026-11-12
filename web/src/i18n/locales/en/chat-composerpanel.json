@@ -13,7 +13,5 @@
   "no_match_in_folder": "Nothing matches in this folder",
   "skills_loading": "Loading skills for this assistant and execution environment…",
   "skills_error": "Skills unavailable here. Ordinary chat and other references still work.",
-  "skills_partial": "Verified local skills only. This runtime may have additional skills.",
-  "skills_route": "Selected skills belong to this assistant. Cancel task routing before sending.",
-  "skills_changed": "Execution environment changed. Your draft is kept; remove selected skills and select them again."
+  "skills_partial": "Verified local skills only. This runtime may have additional skills."
 }

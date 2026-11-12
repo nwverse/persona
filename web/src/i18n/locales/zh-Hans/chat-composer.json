@@ -1,4 +1,5 @@
 {
+  "skills_changed": "执行环境已变化，草稿已保留。请移除所选技能并重新选择。",
   "cmd_continue_word": "/继续",
   "cmd_continue_desc": "让它接着做",
   "cmd_continue_text": "继续",

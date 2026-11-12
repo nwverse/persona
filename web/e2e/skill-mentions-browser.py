@@ -43,6 +43,9 @@ cdp("Emulation.setDeviceMetricsOverride", width=390, height=844, deviceScaleFact
 cdp("Emulation.setTouchEmulationEnabled", enabled=True)
 js("document.documentElement.setAttribute('data-text-size','large')")
 shot("narrow-dark-menu")
+js("document.documentElement.classList.remove('dark')")
+shot("narrow-light-menu")
+js("document.documentElement.classList.add('dark')")
 assert js("document.documentElement.scrollWidth <= innerWidth")
 # Keyboard select first, then verify a real emulated touch can remove it.
 press_key("Enter")
@@ -50,6 +53,9 @@ fill_input("textarea", "Check the example")
 time.sleep(.4)
 assert js("localStorage.getItem('draft:persona-new').includes('fixture-user')")
 shot("narrow-selected")
+js("document.documentElement.classList.remove('dark')")
+shot("narrow-light-selected")
+js("document.documentElement.classList.add('dark')")
 node = next(n for n in cdp("Accessibility.getFullAXTree")["nodes"]
             if n.get("role", {}).get("value") == "button" and n.get("name", {}).get("value") == "Remove this context")
 q = cdp("DOM.getBoxModel", backendNodeId=node["backendDOMNodeId"])["model"]["content"]

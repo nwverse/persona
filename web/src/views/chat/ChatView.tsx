@@ -1008,7 +1008,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     }
     if (assistant && !out.images.length && out.text.trim() && getFeedState().routes[sid]) {
       if (splitSkillDraft(out.text).skills.length) {
-        toast(t("chat-composerpanel.skills_route"), "error");
+        toast(t("chat-chatview.skills_route"), "error");
         return false;
       }
       try {

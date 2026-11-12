@@ -7,7 +7,6 @@
 // folder keeps browsing, a file types `@path `, a workspace or a session becomes a context chip (Composer.tsx).
 import { useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Ref } from "react";
 import { api, enc, credentialOwner, subscribeCredentialOwner } from "../../lib/api";
-import { MANAGER_HEADER } from "../../lib/manager-choice";
 import { BUSY_MOTION } from "../../lib/busy-motion";
 import type { FsListing } from "../../lib/files";
 import { browseTarget, byPrefix, displayTitle, nameMatches, otherSessions, relPath, sessionDetail, workspaceDetail, workspaceMatches, workspaceTitle } from "../../lib/mentions";
@@ -158,12 +157,9 @@ function useSkills(source: MentionSource["skills"], machine?: string) {
     if (!source || !machine) return;
     const ac = new AbortController();
     setState({ key, status: "loading" });
-    const query = new URLSearchParams({ machine_id: machine });
-    if (source.session) query.set("session_id", source.session);
-    if (source.launcher) query.set("launcher", source.launcher);
-    api<SkillCatalog>(`/assistant/skills?${query}`, { signal: ac.signal, headers: { [MANAGER_HEADER]: source.manager } })
+    import("../../lib/skill-catalog").then(({ fetchSkillCatalog }) => fetchSkillCatalog(machine, source, ac.signal))
       .then((catalog) => {
-        if (!ac.signal.aborted) setState(catalog.catalog_version === 1 ? { key, catalog, status: catalog.complete ? undefined : "partial" } : { key, status: "error" });
+        if (!ac.signal.aborted) setState({ key, catalog, status: catalog.complete ? undefined : "partial" });
       })
       .catch(() => { if (!ac.signal.aborted) setState({ key, status: "error" }); });
     return () => ac.abort();
