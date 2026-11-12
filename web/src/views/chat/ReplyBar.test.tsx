@@ -60,9 +60,9 @@ const bar = () => host.querySelector<HTMLElement>("[data-reply-bar]")!;
 const shown = () => bar().classList.contains("opacity-100");
 const button = (label: string) => host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
 const labels = () => [...host.querySelectorAll("[data-reply-bar] button")].map((b) => b.getAttribute("aria-label"));
-// React takes enter / leave from mouseover / mouseout
-const enter = () => act(() => void host.querySelector("[data-message]")!.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, relatedTarget: document.body })));
-const leave = () => act(() => void host.querySelector("[data-message]")!.dispatchEvent(new MouseEvent("mouseout", { bubbles: true, relatedTarget: document.body })));
+// the bar watches the reply it is in (MessageActions' element)
+const enter = () => act(() => void bar().parentElement!.dispatchEvent(new MouseEvent("mouseenter")));
+const leave = () => act(() => void bar().parentElement!.dispatchEvent(new MouseEvent("mouseleave")));
 const wait = (ms: number) => act(() => void vi.advanceTimersByTime(ms));
 
 describe("the reply bar", () => {
@@ -119,18 +119,33 @@ describe("the reply bar", () => {
     expect(shown()).toBe(false);
   });
 
-  it("copies quietly and shows ✓ until the pointer comes back", async () => {
+  it("copies without a toast and shows ✓ until the pointer comes back", async () => {
+    const writeText = vi.fn(async () => {});
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    try {
+      await draw();
+      enter();
+      await act(async () => button("复制消息").click());
+      expect(writeText).toHaveBeenCalledExactlyOnceWith("All done.");
+      expect(copied).not.toHaveBeenCalled(); // copyText, which says "Copied"
+      const check = () => button("复制消息").innerHTML.includes("M20 6L9 17l-5-5");
+      expect(check()).toBe(true);
+      leave();
+      wait(REPLY_BAR_LINGER_MS * 2);
+      expect(check()).toBe(true); // it fades out as it was
+      enter();
+      expect(check()).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("copies the old way, which says so, without the async clipboard (plain http)", async () => {
     await draw();
     enter();
     await act(async () => button("复制消息").click());
-    expect(copied).toHaveBeenCalledExactlyOnceWith("All done.", { quiet: true });
-    const check = () => button("复制消息").innerHTML.includes("M20 6L9 17l-5-5");
-    expect(check()).toBe(true);
-    leave();
-    wait(REPLY_BAR_LINGER_MS * 2);
-    expect(check()).toBe(true); // it fades out as it was
-    enter();
-    expect(check()).toBe(false);
+    expect(copied).toHaveBeenCalledExactlyOnceWith("All done.");
+    expect(button("复制消息").innerHTML).toContain("M20 6L9 17l-5-5");
   });
 
   it("says when, the exact time as its tooltip, and keeps no timer while the pointer is elsewhere", async () => {

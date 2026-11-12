@@ -854,13 +854,6 @@ function isInterruptNotice(it: Item): boolean {
   return it.kind === "notice" && !it.task && (it.text ?? "").includes("中断"); // i18n-ignore: the transcript's interrupt notice
 }
 
-/** The latest transcript position in an exchange: its answer, its steps and their results. */
-function lastSeq(seg: Segment): number {
-  let seq = seg.answer?.seq ?? -Infinity;
-  for (const st of seg.steps) seq = Math.max(seq, st.kind === "tool" ? Math.max(st.use.seq, st.result?.seq ?? -Infinity) : st.item.seq);
-  return seq;
-}
-
 export type ChatLine =
   /** A quiet supervision round, including all its segments and notices, never the next real input. `source`: a
    *  background round's (another conversation, a scheduled task, a follow-up); absent for supervision. */
@@ -896,9 +889,9 @@ function turnLines(t: Turn, live: boolean, results?: ReadonlyMap<string, Item>):
     ordered = ordered.slice(1);
   }
   const segs = segments(ordered, results);
-  // stopped after all of its last exchange: its last words are not a finished reply (Segment.cut)
-  const end = segs.at(-1);
-  if (end && !live && t.trailing.some((n) => isInterruptNotice(n) && n.seq > lastSeq(end))) end.cut = true;
+  // stopped after everything it did (not an exchange that went on after it): its last words are not a finished reply
+  const end = segs.at(-1), at = t.ordered.at(-1)?.seq ?? 0;
+  if (end && !live && t.trailing.some((n) => isInterruptNotice(n) && n.seq > at)) end.cut = true;
   segs.forEach((seg, k) => {
     if (k === 0 && !seg.user && wokeAt) seg.start = wokeAt;
     const last = k === segs.length - 1;
@@ -993,7 +986,7 @@ function lineError(l: ChatLine): { item: Item; info: APIErrorInfo; rest: ChatLin
   if (!info) return null;
   const seg: Segment = { ...l.seg, answer: undefined };
   // the error came after everything else the exchange did: the words before it are cut short (Segment.cut)
-  if (!l.live && l.seg.answer.seq > lastSeq(seg)) seg.cut = true;
+  if (!l.live && exchangeSteps(l.seg).at(-1)?.id === l.seg.answer.id) seg.cut = true;
   const empty = !seg.user && !seg.steps.length && !l.live;
   return { item: l.seg.answer, info, rest: empty ? null : { ...l, seg } };
 }

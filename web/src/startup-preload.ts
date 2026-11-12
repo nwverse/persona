@@ -183,9 +183,13 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * first-screen code changed: #5310 +255 B, which failed main's build, #5193 +138 B, the two merged -321 B, #5320 +29 B.
  * Counted so, ja is 589,323 B on main at c7164e477e (595,073 B the old way; en 585,737 B, zh-Hans 586,565 B), and the
  * same within 1 B at 1c78a837d6, 482f3b93df and 4b72a763c8. The budget is that, with 0 B of room: the 175 B main had,
- * #5193's 98 B among them, are taken back. Raise it on purpose, in the change that needs it.
+ * #5193's 98 B among them, are taken back. And 247 B for the bar under a turn's last reply (#5314: ja 589,570 B against
+ * 589,261 B on main at 42e1513fd, +309 B, 62 B of it in the room main had): which reply has it and the row kept for it
+ * while it loads, "Start a new chat" in a Persona conversation, and an exchange cut short by a model error or an
+ * interruption (Segment.cut) with cindy's line above its words; the bar itself, its pointer, copy and time code and their
+ * words load after the first screen (views/chat/ReplyBar.tsx). Raise it on purpose, in the change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 589_323;
+export const FIRST_SCREEN_BUDGET = 589_570;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").

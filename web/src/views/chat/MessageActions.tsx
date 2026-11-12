@@ -163,9 +163,6 @@ export function MessageActions({
   const chat = useChatActions();
   const [moreAnchor, setMoreAnchor] = useState<HTMLElement | null>(null);
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
-  // the pointer over a reply with the bar: it shows and fades by this (ReplyBar). Only its own state: the reply's words are
-  // `children`, the same elements, and do not draw again.
-  const [hovered, setHovered] = useState(false);
   const rewind = isUser ? chat?.rewind : undefined;
   const rewindBlock = useWhileOpen(rewind?.block, Boolean(anchor || moreAnchor), "");
   const extras = [
@@ -202,11 +199,7 @@ export function MessageActions({
   const items: MenuItem[] = [...actions, ...extras].map((a, i) => ({ ...a, divider: i === actions.length && i > 0 }));
 
   return (
-    <div
-      className={cx("group/msg", (side || corner) && "relative", className)}
-      onMouseEnter={bar ? () => setHovered(true) : undefined}
-      onMouseLeave={bar ? () => setHovered(false) : undefined}
-    >
+    <div className={cx("group/msg", (side || corner) && "relative", className)}>
       <div
         className="[@media(hover:none)]:select-none [@media(hover:none)]:[-webkit-touch-callout:none]"
         onContextMenu={(e) => {
@@ -252,7 +245,7 @@ export function MessageActions({
       </div>
       {bar ? (
         <Suspense fallback={<div data-reply-bar="loading" className="mt-1.5 hidden h-6 [@media(hover:hover)]:block" />}>
-          <ReplyBar text={text} ts={ts} hovered={hovered} fork={extras.find((a) => a.key === "fork")} more={actions.filter((a) => a.key !== "copy" && a.key !== "select")} />
+          <ReplyBar text={text} ts={ts} fork={extras.find((a) => a.key === "fork")} more={actions.filter((a) => a.key !== "copy" && a.key !== "select")} />
         </Suspense>
       ) : (side || corner) && (
       <div
