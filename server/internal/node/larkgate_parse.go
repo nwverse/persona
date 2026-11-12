@@ -68,7 +68,7 @@ func classifyLarkDepth(cmd string, gates []proto.CommandGate, cwd string, risk l
 		return v
 	}
 	vars := map[string]string{}
-	varsStable := larkVariableScopeStable(cmd)
+	varsStable := larkVariableScopeStable(cmd, gates)
 	executableEnv := false
 	for _, s := range segs {
 		nestedUnsure := false
@@ -341,9 +341,9 @@ func gateAimed(gates []proto.CommandGate, text string) (proto.CommandGate, bool)
 }
 
 // larkVariableScopeStable reports whether straight-line assignments can be
-// used to expand a later route. Control flow and commands that can alter the
-// parent shell make every earlier value unsuitable for that inference.
-func larkVariableScopeStable(cmd string) bool {
+// used to expand a later route. Only known read-only commands can appear
+// between those assignments and the gated call.
+func larkVariableScopeStable(cmd string, gates []proto.CommandGate) bool {
 	tree, err := syntax.NewParser().Parse(strings.NewReader(cmd), "")
 	if err != nil {
 		return false
@@ -354,7 +354,7 @@ func larkVariableScopeStable(cmd string) bool {
 			return false
 		}
 		switch n := node.(type) {
-		case *syntax.IfClause, *syntax.ForClause, *syntax.WhileClause, *syntax.CaseClause:
+		case *syntax.IfClause, *syntax.ForClause, *syntax.WhileClause, *syntax.CaseClause, *syntax.FuncDecl:
 			stable = false
 			return false
 		case *syntax.Stmt:
@@ -371,17 +371,30 @@ func larkVariableScopeStable(cmd string) bool {
 				return false
 			}
 		case *syntax.CallExpr:
-			if len(n.Args) > 0 {
-				name, _ := executionWord(n.Args[0])
-				if map[string]bool{
-					"set": true, "unset": true, "export": true, "declare": true, "typeset": true, "local": true,
-					"readonly": true, "builtin": true, "command": true, "eval": true, "source": true, ".": true,
-					"cd": true, "pushd": true, "popd": true, "shopt": true, "let": true, "read": true,
-					"mapfile": true, "readarray": true, "printf": true, "trap": true, "exec": true,
-				}[name] {
-					stable = false
-					return false
-				}
+			if len(n.Args) == 0 {
+				return true
+			}
+			words := make([]string, len(n.Args))
+			for i, word := range n.Args {
+				words[i], _ = executionWord(word)
+			}
+			suffix, ok := unwrapCommand(words)
+			if !ok || len(suffix) == 0 {
+				stable = false
+				return false
+			}
+			name := suffix[0]
+			allowed := gateOf(gates, name) >= 0 || isLarkCLI(name)
+			if !allowed && (name == "bash" || name == "sh") && len(suffix) > 1 {
+				allowed = gateOf(gates, suffix[1]) >= 0
+			}
+			if !allowed {
+				allowed = map[string]bool{"cat": true, "tee": true, "ls": true, "git": true, "go": true, "pwd": true, "sleep": true, "false": true, ":": true}[name] ||
+					larkFilters[name] && name != "printf" && name != "cd"
+			}
+			if !allowed {
+				stable = false
+				return false
 			}
 		}
 		return true
