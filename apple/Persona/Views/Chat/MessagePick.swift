@@ -51,6 +51,14 @@ extension ChatRow {
     }
 }
 
+extension MessageBarInfo {
+    /// What VoiceOver reads for the message's row while selecting: its words on one line, the first 200 characters.
+    var pickLabel: String {
+        let words = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return words.count > 200 ? String(words.prefix(200)) + "…" : words
+    }
+}
+
 /// A message's mark while selecting: filled and in the accent when picked, an empty ring when not (the Inbox's Select).
 struct PickMark: View {
     let pick: MessagePick
@@ -74,7 +82,7 @@ extension View {
         if !selecting {
             self
         } else if let bar {
-            PickRow(pick: pick, id: bar.id, mark: mark, refused: refused) { self }
+            PickRow(pick: pick, id: bar.id, label: bar.pickLabel, mark: mark, refused: refused) { self }
         } else {
             allowsHitTesting(false)
         }
@@ -84,6 +92,9 @@ extension View {
 private struct PickRow<Content: View>: View {
     let pick: MessagePick
     let id: String
+    /// What VoiceOver reads (`MessageBarInfo.pickLabel`). Set here, since a bubble's text can be a UIKit view that
+    /// `.combine` leaves as a separate element, which would leave the row unnamed.
+    let label: String
     let mark: Bool
     var refused: () -> Void
     @ViewBuilder var content: Content
@@ -98,7 +109,8 @@ private struct PickRow<Content: View>: View {
         .onTapGesture {
             if pick.toggle(id) { Haptics.tap() } else { refused() }
         }
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
         .accessibilityAddTraits(pick.ids.contains(id) ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("chat.pick." + id)
         .accessibilityHidden(!mark)
