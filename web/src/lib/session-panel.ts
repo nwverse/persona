@@ -3,15 +3,18 @@
 // runs now; and what a pick sends. The session's own launcher switches its model at once. On a hub that switches a
 // running Agent to another launcher (`launcher_switch`, #5035), a Claude Code Agent in a terminal may also pick another
 // launcher of its engine: the pick is recorded and the next message carries it out (the agent restarts on that launcher
-// and keeps the conversation). Another engine needs a new conversation, and an agent that can't change its model while
-// it runs (a Codex thread) keeps its effort and speed only. Loaded with the panel, not with the composer.
+// and keeps the conversation). On a hub that also moves it to the other engine (`engine_switch`, #5054), a Claude Code or
+// Codex Agent in a terminal may pick the other engine's launchers the same way: the next message starts that engine in
+// the same terminal with a handoff of the conversation (the panel asks first, EngineSwitchDialog.tsx). Without it another
+// engine needs a new conversation, and an agent that can't change its model while it runs (a Codex thread) keeps its
+// effort and speed only. Loaded with the panel, not with the composer.
 import { t } from "../i18n";
 import { agentId, agentName } from "./agent-kind";
 import { ALL_EFFORTS, defaultModel, launcherAgent, modelName, typedModelOffered, type AgentModel, type LauncherModels } from "./launcher-models";
 import { validModelId } from "./model-id";
 import { cleanSetup, type PanelConfig, type PanelModel, type PanelProvider, type PanelState } from "./model-panel";
 import { canSwitchModel, isCurrentModel, modelBusy, sessionLauncher } from "./model-switch";
-import { currentModelRow, modelLabel, sessionEngine, type ModelList } from "./session-models";
+import { currentModelRow, engineSwitchable, modelLabel, pendingEngine, sessionEngine, type ModelList } from "./session-models";
 import type { Launcher, Session } from "./types";
 
 const hasFast = (s: Session) => Boolean(s.service_tiers?.some((x) => x.id === "priority"));
@@ -50,11 +53,22 @@ export const LAUNCHER_SWITCH_FEATURE = "launcher_switch";
 export interface PanelOptions {
   /** The hub has LAUNCHER_SWITCH_FEATURE. */
   switching?: boolean;
+  /** The hub has ENGINE_SWITCH_FEATURE (lib/session-models.ts). */
+  engineSwitch?: boolean;
+  /** The engine each launcher runs, as the panel's providers say (a pick from a list not read yet still knows it). */
+  engineOf?: (launcher: string) => string | undefined;
 }
 
 /** Whether `s` may move to another launcher of its engine: on a hub that does it, a Claude Code Agent whose model the
  *  app switches (one in a terminal; the node refuses the rest, `switch_unsupported`). */
 export const switchesLauncher = (s: Session, o: PanelOptions): boolean => Boolean(o.switching) && sessionEngine(s) === "claude" && canSwitchModel(s);
+
+/** The engine a conversation moves to from `engine` ("" for an engine that doesn't switch). */
+export const otherEngine = (engine: string): string => (engine === "claude" ? "codex" : engine === "codex" ? "claude" : "");
+
+/** Whether `s` may move to a launcher of `engine`, the other engine, with its next message (#5054). */
+export const switchesEngine = (s: Session, engine: string, o: PanelOptions): boolean =>
+  Boolean(o.engineSwitch) && engine !== "" && engine === otherEngine(sessionEngine(s)) && engineSwitchable(s);
 
 /** The panel's providers and state for `s`: `launchers` the computer's (undefined before they are read), `listOf` what
  *  was read for each. The session's own launcher is always there, at its place in the list or first. */
@@ -72,8 +86,9 @@ export function sessionPanel(s: Session, launchers: Launcher[] | undefined, list
     const e = listOf(name);
     const mine = name === own;
     const kind = mine ? engine : agentId(launcherAgent(name, all, e.list));
-    // another launcher of the engine, on a hub that switches to it with the next message
-    const other = !mine && switching && kind === engine;
+    // another launcher of the engine, on a hub that switches to it with the next message; or one of the other engine, on
+    // a hub that moves the conversation there (#5054)
+    const other = !mine && ((switching && kind === engine) || switchesEngine(s, kind, o));
     const p: PanelProvider = { id: name, name, engine: kind, models: null };
     if (e.list === undefined) {
       if (e.error) p.error = e.error;
@@ -111,7 +126,8 @@ export function sessionPanel(s: Session, launchers: Launcher[] | undefined, list
   const ps = s.pending_switch;
   if (ps?.launcher && ps.launcher !== own) {
     state.pending = cleanSetup({ provider: ps.launcher, model: ps.model || defaultModel(listOf(ps.launcher).list?.models ?? [])?.id || "", effort: ps.effort });
-    state.note = t("chat-modelpanel.pending_note", { provider: ps.launcher });
+    // to the other engine: Cindy's warning, only while such a switch waits (model-selector-unified.md 1.6)
+    state.note = pendingEngine(s) ? t("chat-modelpanel.engine_note") : t("chat-modelpanel.pending_note", { provider: ps.launcher });
   }
   const busy = modelSwitch ? modelBusy(s) : "";
   if (busy) state.busy = busy;
@@ -124,10 +140,11 @@ export type ModeStep = { model: string } | { effort: string } | { service_tier: 
 
 /** What applying `config` sends, in order. On the session's own launcher: a switch that waits is dropped first, then the
  *  model (the efforts a model takes depend on it), then the effort, then the speed; each only when it differs from the
- *  session's. On another launcher of the engine (a hub with the switch): one request recording the switch, with the model
- *  unless it is that launcher's default entry, and the effort when the setup has one. null: it can't be applied here
- *  (another launcher without the switch or of another engine, a model this agent can't switch to while it runs, an ID
- *  the hub would refuse). An Antigravity variant brings its own thinking level. `listOf`: each launcher's list as read. */
+ *  session's. On another launcher of the engine (a hub with the switch), or of the other engine (a hub that moves the
+ *  conversation there, #5054): one request recording the switch, with the model unless it is that launcher's default
+ *  entry, and the effort when the setup has one. null: it can't be applied here (another launcher without the switch,
+ *  another engine without its switch, a model this agent can't switch to while it runs, an ID the hub would refuse). An
+ *  Antigravity variant brings its own thinking level. `listOf`: each launcher's list as read. */
 export function pickPlan(s: Session, config: PanelConfig, listOf: (launcher: string) => LauncherModels | null | undefined, o: PanelOptions = {}): ModeStep[] | null {
   const own = sessionLauncher(s);
   if (config.provider !== own) return switchPlan(s, config, listOf(config.provider), o);
@@ -147,9 +164,15 @@ export function pickPlan(s: Session, config: PanelConfig, listOf: (launcher: str
   return steps;
 }
 
+/** The engine launcher `name` runs: what the panel's providers say, else its list's agent; undefined when neither knows. */
+export function launcherEngine(name: string, list: LauncherModels | null | undefined, o: PanelOptions): string | undefined {
+  return o.engineOf?.(name) || (list?.agent ? agentId(list.agent) : undefined);
+}
+
 /** A pick on another launcher: the switch the next message carries out; nothing when that very switch waits already. */
 function switchPlan(s: Session, config: PanelConfig, list: LauncherModels | null | undefined, o: PanelOptions): ModeStep[] | null {
-  if (!switchesLauncher(s, o) || (list?.agent && agentId(list.agent) !== sessionEngine(s))) return null;
+  const kind = launcherEngine(config.provider, list, o) ?? sessionEngine(s);
+  if (kind === sessionEngine(s) ? !switchesLauncher(s, o) : !switchesEngine(s, kind, o)) return null;
   const row = list?.models.find((m) => m.id === config.model);
   if (!row && !validModelId(config.model)) return null;
   const model = row?.default ? undefined : config.model;

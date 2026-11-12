@@ -8,7 +8,7 @@ It serves machines, agents, conversations, interactions and the inbox, enough fo
 does not know are logged to stderr as MISSING. Timestamps are relative to when it starts. See docs/operations/testing.md.
 """
 import base64, unicodedata
-import argparse, copy, hashlib, json, math, os, re, shutil, signal, socket, ssl, struct, subprocess, sys, tempfile, threading, time, uuid, zlib
+import argparse, copy, hashlib, itertools, json, math, os, posixpath, re, shlex, shutil, signal, socket, ssl, struct, subprocess, sys, tempfile, threading, time, uuid, zlib
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -18,6 +18,10 @@ PORT = int(os.environ.get("PORT", "18760"))
 # MOCK_CHILD_SESSIONS=1 (#5120) builds on the Paseo computer: its agent's created agents are its children.
 if os.environ.get("MOCK_CHILD_SESSIONS"):
     os.environ.setdefault("MOCK_PASEO", "1")
+# MOCK_TEAM=1 (#5180) builds on MOCK_TAB_PANES's tab of three: it adds a worker's request, a third worker and a stopped pane.
+MOCK_TEAM = bool(os.environ.get("MOCK_TEAM"))
+if MOCK_TEAM:
+    os.environ.setdefault("MOCK_TAB_PANES", "1")
 NOW = datetime.now(timezone.utc)
 LOG = sys.stderr
 # MOCK_HUB_ID keeps the identity across restarts, so a paired App stays paired when the switches change.
@@ -678,6 +682,8 @@ SESSIONS = [
                     + ([{"id": "wdemo1", "kind": "workflow", "description": "widget-audit", "run_id": "wf_demo1", "started_at": ago(minutes=14)}]
                        if os.environ.get("MOCK_WORKFLOWS") in ("1", "legacy") else []),
          **({"workflows": MOCK_WORKFLOW_RUNS} if os.environ.get("MOCK_WORKFLOWS") == "1" else {}),
+         # MOCK_BRANCH=1: the git branch its folder is on (#5421: the chat's top bar shows it on a wide screen)
+         **({"branch": "feat/hourly-widget"} if os.environ.get("MOCK_BRANCH") else {}),
          # MOCK_QUEUE=1: input typed while it works and not taken yet (POST …/queue edits it)
          **({"queued": ["顺便把 README 里的截图也换成新的小组件", "改完以后跑一遍 UI 测试，把失败的截图发给我"]}
             if os.environ.get("MOCK_QUEUE") else {})),
@@ -704,6 +710,13 @@ SESSIONS = [
     sess("macbook", RECIPE, "菜谱网站加搜索", "/Users/me/code/recipes", "offline", "offline", "", 0, "", 0, 60 * 26,
          "搜索做好了，支持按食材和用时筛选。", space_kind=None, space_id=None, space_name=None, slot_id=None, slot_name=None),
 ]
+
+if os.environ.get("MOCK_NEXT_SUGGESTIONS") == "1":  # see NEXT_SUGGESTIONS
+    for _s in SESSIONS:
+        if _s["session_id"] == ORDERS:
+            _s.update(status="idle", state="idle", activity=None, suggestion="好，改完跑一遍压测对比一下")
+        elif _s["session_id"] == REVIEW:
+            _s["suggestion"] = "按这两条建议改一下命名"
 
 # #2430 agent-details: what the node reads off a transcript for the "Show details on agent rows" line and the usage row
 # below the composer (#5056) — the model id as Claude Code records it, the latest reply's input tokens, the model's window.
@@ -1507,7 +1520,10 @@ if os.environ.get("MOCK_SPLIT_TABS"):
 # MOCK_TAB_PANES=1: one herdr tab holding three agents (#2320): the "Initiator" in the tab's first pane (pane_index 0) and two
 # panes it split off (a Codex that stopped on a dialog on the computer, a Claude that is done), with herdr's real-looking
 # pane ids; beside it ordinary one-agent tabs and a tab whose top left pane is a shell (two peers, no "Initiator"). No cards,
-# so the overview files the three-agent tab under "On the computer".
+# so the overview files the three-agent tab under "On the computer". The three are a tab team (#5180, fold_hierarchy): the
+# two panes fold under the lead as its workers; the shell-first tab's two stay peers.
+# MOCK_TEAM=1 adds to that team a permission card of the Codex worker's, a third worker (working, pane 3) and a stopped pane
+# (offline, pane 4) that is no worker, and gives the lead and each worker a short transcript with a tool call.
 PANES_LEAD = "7ab5e000-0000-4000-8000-000000000001"
 PANES_REVIEW = "7ab5e000-0000-4000-8000-000000000002"
 PANES_TESTS = "7ab5e000-0000-4000-8000-000000000003"
@@ -1515,6 +1531,8 @@ PANES_DEPS = "7ab5e000-0000-4000-8000-000000000004"
 PANES_PEER_A = "7ab5e000-0000-4000-8000-000000000005"
 PANES_PEER_B = "7ab5e000-0000-4000-8000-000000000006"
 PANES_DOCS = "7ab5e000-0000-4000-8000-000000000007"
+PANES_API_DOCS = "7ab5e000-0000-4000-8000-000000000008"
+PANES_STOPPED = "7ab5e000-0000-4000-8000-000000000009"
 
 
 def tab_panes_sessions():
@@ -1535,14 +1553,47 @@ def tab_panes_sessions():
              "文档目录理好了。", seen_at=ago(minutes=20), pane_id="w2:pW", pane_index=0),
         sess("nas", SPLIT_NAS, "备份脚本", "/home/me/code/backup", "idle", "idle", "backup", 1, "1", 1, 200,
              "备份改成增量了。", seen_at=ago(minutes=190)),
+    ] + (team_sessions() if MOCK_TEAM else [])
+
+
+def team_sessions():
+    """MOCK_TEAM's rows of the lead's tab: a third worker, working, and a stopped pane, which is no worker (#5180)."""
+    return [
+        sess("server", PANES_API_DOCS, "更新新中间件的接口文档", "/home/me/code/app", "working", "working", "app", 1, "1", 1, 1,
+             "在补刷新接口的说明。", pane_id="w1:p52", pane_index=3, state_since=ago(minutes=6)),
+        sess("server", PANES_STOPPED, "查刷新接口的慢日志", "/home/me/code/app", "offline", "offline", "app", 1, "1", 1, 40,
+             "慢日志里没找到刷新接口。", pane_id="w1:p53", pane_index=4),
     ]
 
 
 def tab_panes_items():
+    if MOCK_TEAM:
+        return team_items()
     return {PANES_LEAD: [it("user", "text", 15, text="把 token 刷新挪到中间件里，开两个窗格分别审改动和补测试"),
                          it("assistant", "text", 0, text="开了两个窗格分头审改动、补测试，我在合中间件。")],
             PANES_REVIEW: [it("user", "text", 10, text="审一下登录重构的改动"), it("assistant", "text", 1, text="有两处会吞掉错误，要我直接改吗？")],
             PANES_TESTS: [it("user", "text", 10, text="补刷新失败的测试"), it("assistant", "text", 3, text="补了 6 个用例，都过了。")],
+            PANES_PEER_B: bench_items()}
+
+
+def team_items():
+    """MOCK_TEAM's transcripts: the lead's and each worker's (#5180). The Codex worker's ends on the command its permission
+    card asks for (toolu_panes_review_test)."""
+    return {PANES_LEAD: [it("user", "text", 15, text="把 token 刷新挪到中间件里，开几个窗格分别审改动、补测试、更新文档")]
+                        + tool("Edit", {"file_path": "src/auth/middleware.ts", "old_string": "next()", "new_string": "await refresh(req); next()"}, "ok", 14)
+                        + [it("assistant", "text", 0, text="开了三个窗格分头审改动、补测试、更新文档，我在合中间件。")],
+            PANES_REVIEW: [it("user", "text", 10, text="审一下登录重构的改动")]
+                          + tool("Bash", {"command": "git diff main -- src/auth"}, "src/auth/middleware.ts | 24 ++++++++----", 9)
+                          + [it("assistant", "text", 2, text="有两处会吞掉错误，先跑一遍现有的测试确认。"),
+                             it("assistant", "tool_use", 1, tool_use_id="toolu_panes_review_test", tool_name="Bash",
+                                tool_input={"command": "go test ./auth/..."})],
+            PANES_TESTS: [it("user", "text", 10, text="补刷新失败的测试")]
+                         + tool("Bash", {"command": "npm test -- src/auth"}, "6 passed", 4)
+                         + [it("assistant", "text", 3, text="补了 6 个用例，都过了。")],
+            PANES_API_DOCS: [it("user", "text", 8, text="给新中间件更新接口文档")]
+                            + tool("Read", {"file_path": "docs/api/auth.md"}, "## Refresh\n…", 6)
+                            + [it("assistant", "text", 1, text="在补刷新接口的说明。")],
+            PANES_STOPPED: [it("user", "text", 45, text="查一下刷新接口的慢日志"), it("assistant", "text", 40, text="慢日志里没找到刷新接口。")],
             PANES_PEER_B: bench_items()}
 
 
@@ -1582,6 +1633,12 @@ def bench_items():
 if os.environ.get("MOCK_TAB_PANES"):
     MACHINES[:] = [m for m in MACHINES if m["id"] in ("server", "nas")]
     SESSIONS[:] = tab_panes_sessions()
+    if MOCK_TEAM:  # the lead says it split off three panes; the Codex worker waits on a permission card, not a dialog
+        for _s in SESSIONS:
+            if _s["session_id"] == PANES_LEAD:
+                _s["last_text"] = "开了三个窗格分头审改动、补测试、更新文档，我在合中间件。"
+            elif _s["session_id"] == PANES_REVIEW:
+                _s.update(last_text="有两处会吞掉错误，先跑一遍现有的测试确认。", pending_interactions=1)
 ORIG_STATE = {s["session_id"]: (s["state"], s["status"]) for s in SESSIONS}
 SEEN = []  # session ids marked seen (GET /mock/seen)
 SESSION_CLOSE = {"fail": False, "attempts": [], "closed": [], "interactions": []}
@@ -1668,9 +1725,18 @@ if os.environ.get("MOCK_PERSONA_QUEUE") == "1":
     ASSISTANT[0].update({"state": "working", "status": "working", "queued_relayed": 1,
                          "queued": list(PERSONA_QUEUE_MESSAGES)})
 
+# MOCK_NEXT_SUGGESTIONS=1 (#4644, docs/assistant/assistant.md "Next-message suggestions"): the switch is on and sessions carry
+# the suggestion as the manager lists them: the main Persona chat and the Codex session (stopped) the suggest.next model's,
+# the PR review agent (Claude Code in a terminal) Claude Code's own, and the morning briefing chat a risky one
+# (suggestion_risky: filled in, no one-tap send).
+NEXT_SUGGESTIONS = os.environ.get("MOCK_NEXT_SUGGESTIONS") == "1"
+if NEXT_SUGGESTIONS:
+    ASSISTANT[0]["suggestion"] = "先处理第一件，其余两件下午再说"
+    ASSISTANT[1].update(suggestion="把会议纪要发给参会的人", suggestion_risky=True)
+
 # MOCK_ORIGINS=1 (#3264, docs/protocol/protocol.md "Origin of assistant chats"): conversations the hub opened by itself — the inbox's AI twin,
 # scheduled tasks, a Feishu /agent, one another conversation started — next to the user's own; one of them runs, one
-# waits for the user. The sidebar keeps them out of "Recent" under "Automatic conversations".
+# waits for the user. The sidebar's Recent lists them with the user's own, each with its origin's mark (#5195).
 if os.environ.get("MOCK_ORIGINS") == "1":
     ASSISTANT[1]["origin"], ASSISTANT[1]["origin_ref"] = "task", "morning"
     ASSISTANT[1]["title"] = "1106 | 定时 | 早报"
@@ -1794,7 +1860,7 @@ if os.environ.get("MOCK_ASSISTANT_SIDEBAR") == "1":
 # MOCK_AUTO_CONVERSATIONS=1 (#3264, docs/protocol/protocol.md "Origin of assistant chats"): the hub says who opened each assistant
 # conversation (`origin`, feature conversation_origin): the user's own say "user", and ten more were opened by Persona
 # itself: Inbox's AI twin (one waits for the user, one works), scheduled tasks, Lark /agent and one conversation another
-# started. The sidebar keeps those in "Automatic conversations"; the list of conversations filters them by source.
+# started. The sidebar's Recent lists them with the user's own, each with its source's mark (#5195); All Chats filters them by source.
 if os.environ.get("MOCK_AUTO_CONVERSATIONS") == "1":
     for _s in ASSISTANT:
         _s.setdefault("origin", "user")
@@ -2095,6 +2161,8 @@ ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "A
                     # supervised task reach its supervisor (#4293), off by default; closed sessions archive themselves
                     # after this many idle days (#3618), 0 is never. Left out with MOCK_LEGACY_HUB.
                     "agent_tasks": False, "inbox_signals": False, "archive_closed_days": 3,
+                    # The manager's next-message suggestions (#4644), off by default; MOCK_NEXT_SUGGESTIONS=1 starts on.
+                    "next_suggestions": os.environ.get("MOCK_NEXT_SUGGESTIONS") == "1",
                     # The main chat follows up its own tasks instead of the background supervisor (#4927), off by
                     # default. Left out with MOCK_LEGACY_HUB.
                     "main_supervises_own_tasks": False,
@@ -2127,7 +2195,7 @@ def assistant_state(space="", archived=False):
     if not os.environ.get("MOCK_LEGACY_HUB"):
         out.update(agent_tasks=cfg["agent_tasks"], inbox_signals=cfg["inbox_signals"], archive_closed_days=cfg["archive_closed_days"],
                    idle_close_hours=cfg["idle_close_hours"], kb_topics=cfg["kb_topics"],
-                   main_supervises_own_tasks=cfg["main_supervises_own_tasks"])
+                   main_supervises_own_tasks=cfg["main_supervises_own_tasks"], next_suggestions=cfg["next_suggestions"])
         if BACKGROUND_SUPERVISOR and not space:  # once the hub has made it (#4927)
             out.update(background_supervisor=BACKGROUND_SUPERVISOR, background_supervisor_machine_id=cfg["machine_id"])
     if cfg["notes"] is not None:
@@ -5519,6 +5587,14 @@ if os.environ.get("MOCK_REWIND"):
     if os.environ.get("MOCK_REWIND") == "safeguards":
         ITEMS[REVIEW][-2]["text"] = "> Example quote\n\nRevise this paragraph"
         ITEMS[REVIEW][-1]["text"] = "API Error: Opus 5.5's safeguards flagged this message. Details: [frontier_llm]"
+# MOCK_REPLY_CUT=1|error (#5314): the review chat's last turn stopped right after its first words (a read, the words, then
+# the interrupt notice; =error: a model API error instead), so the web's reply bar says the reply did not complete.
+if os.environ.get("MOCK_REPLY_CUT"):
+    ITEMS[REVIEW] = ITEMS[REVIEW] + [it("user", "text", 12, text="再看一下新加的重试测试")] + tool(
+        "Read", {"file_path": "/Users/me/code/weather/Tests/RetryTests.swift"}, "func testRetriesThreeTimes() {}", 11) + [
+        it("assistant", "text", 10, text="重试测试一共三个用例：前两个覆盖了超时和 503，第三个"),
+        it("assistant", "text", 9, text="API Error: 529 Overloaded") if os.environ.get("MOCK_REPLY_CUT") == "error"
+        else it("system", "notice", 9, text="已中断")]
 # MOCK_WORKFLOW=1 (#3436): the Workflow calls that launched the review agent's runs, each drawn as its run's card (the
 # parity-audit one in a turn the hub folds: the app fetches that fold for the card), and each agent's own conversation.
 if os.environ.get("MOCK_WORKFLOW") == "1":
@@ -5639,6 +5715,18 @@ if os.environ.get("MOCK_COMMENTS") == "1":
             "> 改成整行宽的主按钮", "",
             "整体可以，改完这三处再提交。"])),
         it("assistant", "text", 0.4, text="好，三处都改：城市名改成可选，解析失败回退到上次的缓存，保存按钮改成整行宽的主按钮。"),
+    ]
+    # And Persona's main conversation has a quote of words picked in its answer and a comment on others (#5204): the
+    # blocks sit in the new layout's box, whatever the style's bubble.
+    _answer = next(i["id"] for i in ITEMS[ASK1] if i["role"] == "assistant" and i["kind"] == "text")
+    ITEMS[ASK1] = ITEMS[ASK1] + [
+        it("user", "text", 2.1, text=f'<persona-context kind="quote" title="Persona" url="" msg="{_answer}" part="selection">\n'
+           "照片同步脚本（Mac Studio）的计划写好了，等你批准。\n</persona-context>\n这个下周再看。"),
+        it("assistant", "text", 2.0, text="好，下周一提醒你看照片同步脚本的计划。"),
+        it("user", "text", 1.9, text="\n".join([
+            "> Comment 1", "> Selected text:", "> > 韩梅梅在飞书问你周五的发布能不能赶上", "> ", "> 她说的是哪个版本？", "",
+            "先帮我问清楚再答复她。"])),
+        it("assistant", "text", 1.7, text="好，我先在飞书问她是哪个版本，问清楚了再告诉你。"),
     ]
 # MOCK_LIVE_STEP=bash|command|reads|parallel|thinking|thinking-folded (#2987): the widget chat is a minute into a new turn whose newest
 # step is still going, for the running work line that names it: `bash` a command Claude described (its description alone),
@@ -6713,6 +6801,30 @@ if os.environ.get("MOCK_ASK_LONG") == "1":
                 for n in range(1, 9)]},
             {"question": "整理完发给谁？", "header": "发送", "multi_select": True, "options": [
                 {"label": "组里"}, {"label": "老板"}, {"label": "只给我"}]}]})
+# MOCK_ASK_LONG=actions: one long multi-select question, so Submit is enabled by a deliberate pick without advancing
+# to another, shorter question (#4839). =swipe is a short single-select card for the auto-send gesture path; =review
+# has six single-select questions whose review is taller than a small phone's pending-card area. Reset restores them.
+ASK_LONG_INTERACTIONS = []
+if os.environ.get("MOCK_ASK_LONG") in ("actions", "swipe", "review"):
+    mode = os.environ["MOCK_ASK_LONG"]
+    if mode == "review":
+        questions = [{"question": "第 %d 题的回答要保留完整，复核时这一行会占用足够的高度" % n,
+                      "header": "第 %d 题" % n, "multi_select": False,
+                      "options": [{"label": "第 %d 个答案" % n,
+                                   "description": "这是第 %d 个答案的完整说明，用来让复核内容超过首屏" % n}]}
+                     for n in range(1, 7)]
+    elif mode == "swipe":
+        questions = [{"question": "短拖动也不要替我选", "header": "手势", "multi_select": False,
+                      "options": [{"label": "选项 1"}, {"label": "选项 2"}]}]
+    else:
+        questions = [{"question": "这周先处理哪件事？", "header": "下一步", "multi_select": True, "options": [
+            {"label": "选项 %d" % n, "description": "第 %d 件事的说明：要多长时间、会碰到谁、做完之后接着做什么" % n}
+            for n in range(1, 9)]}]
+    ASK_LONG_INTERACTIONS.append({
+        "id": "ix_ask_long", "machine_id": "server", "session_id": ASK1, "session_title": "Persona",
+        "kind": "question", "created_at": ago(minutes=1), "expires_at": later(minutes=29), "tool_name": "ask_user",
+        "questions": questions})
+    INTERACTIONS.extend(copy.deepcopy(ASK_LONG_INTERACTIONS))
 # A very long `python3 -c …` script for a Feishu permission card (MOCK_ASK_LONG=perm|agent): taller than the dock on
 # every width, so its buttons have to stay reachable.
 def _long_lark_cmd(verb):
@@ -7348,9 +7460,11 @@ def mock_interactions():
         if MOCK_TASKS:  # a task's agent asking: the hub names the task (task_title)
             titles = {a["session_id"]: t["title"] for t in TODOS if t.get("origin") and not t.get("done_at") for a in t.get("agents", [])}
             out = [dict(x, task_title=titles[x["session_id"]]) if x.get("session_id") in titles else x for x in out]
-    # the session a card's session folds under (Interaction.folded_under, #5120): its home is that session's page
-    folds = {(r["machine_id"], r["session_id"]): r["folded_under"] for r in all_sessions() if r.get("folded_under")}
-    return [dict(x, folded_under=folds[(x.get("machine_id"), x.get("session_id"))]) if (x.get("machine_id"), x.get("session_id")) in folds else x for x in out]
+    # the session a card's session folds under (Interaction.folded_under, #5120): its home is that session's page; a tab
+    # worker's card says so too (folded_as, #5180)
+    folds = {(r["machine_id"], r["session_id"]): {k: r[k] for k in ("folded_under", "folded_as") if r.get(k)}
+             for r in all_sessions() if r.get("folded_under")}
+    return [dict(x, **folds[(x.get("machine_id"), x.get("session_id"))]) if (x.get("machine_id"), x.get("session_id")) in folds else x for x in out]
 
 
 # MOCK_FLEET: the hub's fleet summary (server/internal/hub/liveactivity.go buildFleet) for Android's ongoing notification,
@@ -8743,7 +8857,10 @@ if os.environ.get("MOCK_GITHUB") == "guide":  # a status with the steps to fix i
                         "capabilities": ["status", "hosts"], "hosts": ["github.com"]}
 # Feishu and mail as connectors (GET /api/v1/connectors?all=1, migration M6): the app draws them as their own rows.
 LEGACY_CONNECTORS = [{"id": "lark", "name": "飞书", "status": "ok", "capabilities": ["tools", "inbox", "archive"], "enabled": True},
-                     {"id": "mail", "name": "邮件", "status": "ok", "capabilities": ["tools", "actions", "inbox", "archive"], "enabled": True}]
+                     {"id": "mail", "name": "邮件", "status": "ok", "capabilities": ["tools", "actions", "archive"], "enabled": True,
+                      "archive": True, "inbox": True}]  # mail's Add to Inbox (#5307): MOCK_MAIL_INBOX=off starts it off
+if os.environ.get("MOCK_MAIL_INBOX") == "off":
+    LEGACY_CONNECTORS[1]["inbox"] = False
 
 # Telegram (the Telegram extension, #1704; docs/archive/extensions/plan-telegram.md): the user's own account, signed in from Settings › Connectors › Telegram a step at a time.
 # All made up: api_id 1234567 (a hash of 32 zeros is refused), any phone starting with +, the code 12345, the 2FA
@@ -10814,8 +10931,15 @@ LAUNCHER_PRESETS = [
 # node is too old (409 node_outdated), nas is offline (503). Keys and headers are kept only as has_key / has_headers.
 # With the feature launcher_auto_name (#5029): a provider added with no name gets one (launcher_name_for), and "New Agent"'s
 # launchers list the managed providers with their display names (gw_full has one, anthropic_main shows its ID).
+# With the feature launcher_import_parse (#5193): the import takes `alias` (one alias of the machine: its group, or its own
+# provider out of a group of several), and POST /api/v1/launchers/import/parse (also in every mode) reads pasted text into
+# provider drafts with the hub's rules (parse_paste): shell aliases / exports / K=V lines, settings.json, a curl command,
+# cindy's custom providers. A draft on gw_full's address matches it, with the same key when it carries sk-example-gw.
+# With the feature launcher_auth_auto (#5329): a typed-in gateway's test and model list take `auth` "auto" (Bearer, then
+# x-api-key) and the test says which one worked; the methods the fake gateway takes come from its address (_gateway_takes).
+# With the feature launcher_import_link (#5420): the parse route also reads provider import links (_paste_link).
 MOCK_PROVIDERS = os.environ.get("MOCK_PROVIDERS") == "1"
-PROVIDER_LOG = {"post": None, "put": None, "test": [], "discover": [], "catalog": [], "import": None}
+PROVIDER_LOG = {"post": None, "put": None, "test": [], "discover": [], "catalog": [], "import": None, "parse": []}
 PROVIDER_FIELDS = ("kind", "api", "base_url", "model", "small_model", "subagent_model", "custom_model", "custom_model_name",
                    "custom_model_description", "args", "auth", "models", "opus_model", "sonnet_model", "haiku_model", "fable_model",
                    "subagent_force", "proxy", "no_proxy", "timeout_ms", "compact_window", "max_context", "effort")
@@ -10828,7 +10952,15 @@ PROVIDER_IMPORT = [
      "models": [{"id": "example-opus", "context_window": 1000000}, {"id": "example-haiku", "context_window": 200000}],
      "aliases": ["cc_full", "cc_full_haiku"],
      "sources": [{"alias": "cc_full", "file": "~/.zshrc", "hide": "ok"},
-                 {"alias": "cc_full_haiku", "file": "~/.zshrc", "hide": "in_use", "uses": ["模型档位「性能」的 Agent 预设「strong」"]}]},
+                 {"alias": "cc_full_haiku", "file": "~/.zshrc", "hide": "in_use", "uses": ["模型档位「性能」的 Agent 预设「strong」"]}],
+     "variants": [
+         {"name": "cc_full", "base_url": "https://gw.example.com", "auth": "bearer", "has_key": True, "own_service": "use", "model": "example-opus",
+          "models": [{"id": "example-opus", "context_window": 1000000}], "aliases": ["cc_full"],
+          "sources": [{"alias": "cc_full", "file": "~/.zshrc", "hide": "ok"}]},
+         {"name": "cc_full_haiku", "base_url": "https://gw.example.com", "auth": "bearer", "has_key": True, "own_service": "use",
+          "model": "example-haiku", "models": [{"id": "example-haiku", "context_window": 200000}], "aliases": ["cc_full_haiku"],
+          "sources": [{"alias": "cc_full_haiku", "file": "~/.zshrc", "hide": "in_use", "uses": ["模型档位「性能」的 Agent 预设「strong」"]}]},
+     ]},
     {"name": "cc_glm", "base_url": "https://open.bigmodel.example.com/api/anthropic", "auth": "bearer", "has_key": True, "own_service": "use",
      "model": "glm-5.3", "models": [{"id": "glm-5.3", "context_window": 200000}], "aliases": ["cc_glm"],
      "sources": [{"alias": "cc_glm", "file": "~/.zshrc", "hide": "ok"}]},
@@ -10879,10 +11011,10 @@ if MOCK_PROVIDERS:
         {"name": "cc_kimi_fast", "source": "zshrc", "base_url": "https://api.moonshot.example.com/anthropic", "model": "kimi-k3-turbo", "machines": ["macbook"], "rc_files": ["~/.zshrc"]},
         {"name": "cc_relay", "source": "zshrc", "base_url": "https://relay.example.org", "model": "relay-pro", "machines": ["macbook", "server"], "rc_files": ["~/.bashrc"]},
     ]
-    _features_without_auto_name = features
+    _features_without_providers = features
 
     def features():
-        return _features_without_auto_name() + ["launcher_auto_name"]
+        return _features_without_providers() + ["launcher_auto_name", "launcher_import_parse", "launcher_auth_auto", "launcher_import_link"]
 
 
 # The hub's names for providers it names itself (server/internal/assistant/models_presets.go): the slug rule, the
@@ -10958,12 +11090,17 @@ def _import_name(name, taken):
     return out
 
 
-def import_preview():
+def import_preview(alias=""):
     """The preview: each group and variant with its `existing`, its sources' hide checks and, for one that will be
     created under another name, `create_as`. A group and its variants are alternatives, so they are named against the
-    same launchers; the names a group may take are taken for the groups after it."""
+    same launchers; the names a group may take are taken for the groups after it. With alias (#5193) the hub reads only
+    that alias: its group, or its variant as a group of its own; none when the machine has no such alias."""
+    groups = copy.deepcopy(PROVIDER_IMPORT)
+    if alias:
+        groups = [g if len(g["aliases"]) == 1 else next(v for v in g["variants"] if v["aliases"] == [alias])
+                  for g in groups if alias in g["aliases"]]
     out, taken = [], {l["name"] for l in LAUNCHERS}
-    for g in copy.deepcopy(PROVIDER_IMPORT):
+    for g in groups:
         names = set()
         for x in [g] + g.get("variants", []):
             x["sources"] = [_import_hide(src) for src in x.get("sources", [])]
@@ -10992,7 +11129,7 @@ def _provider_apply(l, b):
         if k in b:
             if b[k] in ("", 0, False, [], None): l.pop(k, None)
             else: l[k] = b[k]
-    if b.get("api_key"): l["has_key"] = True
+    if b.get("api_key"): l["has_key"], PROVIDER_KEYS[l["name"]] = True, b["api_key"]
     if "headers" in b:
         if b["headers"]: l["has_headers"] = True
         else: l.pop("has_headers", None)
@@ -11011,20 +11148,21 @@ def _display_name_refused(h, b):
 
 
 def import_route(h, method, q, body):
-    """GET / POST /api/v1/launchers/import (#2455, #5024), in every mode. POST takes {machine, providers, split?, hide_aliases?}:
-    a split group comes in as its variants, a provider that is there takes the new models, a new one is saved under its
-    previewed `create_as` (a name taken gets -2); with hide_aliases the aliases whose check is still ok once saved are
-    hidden, the others kept with why."""
+    """GET / POST /api/v1/launchers/import (#2455, #5024), in every mode. POST takes {machine, providers, split?, hide_aliases?,
+    alias?}: a split group comes in as its variants, a provider that is there takes the new models, a new one is saved
+    under its previewed `create_as` (a name taken gets -2); with hide_aliases the aliases whose check is still ok once
+    saved are hidden, the others kept with why. `alias` (?alias= on GET) previews and imports only that alias."""
     b = json.loads(body or b"{}") if method == "POST" else {}
     machine = (q.get("machine") or [""])[0] if method == "GET" else b.get("machine", "")
+    alias = (q.get("alias") or [""])[0] if method == "GET" else b.get("alias", "")
     if machine == "studio":
         h.send_json({"code": "node_outdated", "error": "这台机器上的 personad 太旧，不能读取 alias，需要更新 node"}, 409); return
     if not machine_online(machine):
         h.send_json({"code": "offline", "error": "这台机器离线，连上后再导入"}, 503); return
     if method == "GET":
-        h.send_json({"machine": machine, "providers": import_preview()}); return
+        h.send_json({"machine": machine, "providers": import_preview(alias)}); return
     PROVIDER_LOG["import"] = b
-    groups = {g["name"]: g for g in import_preview()}
+    groups = {g["name"]: g for g in import_preview(alias)}
     names, split = b.get("providers") or [], b.get("split") or []
     unknown = [n for n in names if n not in groups] + [n for n in split if n not in names]
     if unknown:
@@ -11057,6 +11195,624 @@ def import_route(h, method, q, body):
             elif src["hide"] != "none":
                 kept.append({k: v for k, v in src.items() if k != "file"})
     h.send_json({"created": created, "updated": updated, "hidden": hidden, "kept": kept})
+
+
+# POST /api/v1/launchers/import/parse (#5193): the wizard's "Paste a configuration", in every mode like the import. A small
+# reader with the hub's rules (newImportGroup's env mapping, mergeZshrcAliases' grouping): drafts carry the pasted key as the
+# hub's do; notes name aliases, variables, headers and options, never a value. Only the text's length is logged.
+PROVIDER_KEYS = {"gw_full": "sk-example-gw"}  # the managed providers' keys, for matches' same_key only
+PASTE_FIELDS = {"opus_model": "ANTHROPIC_DEFAULT_OPUS_MODEL", "sonnet_model": "ANTHROPIC_DEFAULT_SONNET_MODEL",
+                "haiku_model": "ANTHROPIC_DEFAULT_HAIKU_MODEL", "fable_model": "ANTHROPIC_DEFAULT_FABLE_MODEL",
+                "small_model": "ANTHROPIC_SMALL_FAST_MODEL", "subagent_model": "CLAUDE_CODE_SUBAGENT_MODEL",
+                "custom_model": "ANTHROPIC_CUSTOM_MODEL_OPTION", "custom_model_name": "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME",
+                "custom_model_description": "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION", "effort": "CLAUDE_CODE_EFFORT_LEVEL",
+                "compact_window": "CLAUDE_CODE_AUTO_COMPACT_WINDOW", "max_context": "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
+                "timeout_ms": "API_TIMEOUT_MS"}
+PASTE_MAPPED = {*PASTE_FIELDS.values(), "ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL",
+                "ANTHROPIC_CUSTOM_HEADERS", "CLAUDE_CODE_SUBAGENT_MODEL_FORCE"}
+PASTE_PROXY, PASTE_NO_PROXY = ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"), ("NO_PROXY", "no_proxy")
+PASTE_COMPUTER = ("PATH", "HOME", "PWD", "OLDPWD", "SHELL", "USER", "LOGNAME", "TMPDIR", "CLAUDE_CONFIG_DIR")
+PASTE_SECRETS = {"KEY", "KEYS", "APIKEY", "TOKEN", "SECRET", "SECRETS", "PASSWORD", "PASSWD", "CREDENTIAL", "CREDENTIALS",
+                 "COOKIE", "COOKIES"}
+PASTE_PROTOCOL = ("anthropic-version", "anthropic-beta", "content-type", "accept", "accept-encoding", "user-agent")
+CURL_ARGS = {"-H": "header", "--header": "header", "-d": "data", "--data": "data", "--data-raw": "data", "--data-binary": "data",
+             "--json": "data", "-x": "proxy", "--proxy": "proxy", "--noproxy": "no_proxy", "--url": "url", "-X": "", "--request": ""}
+CURL_UNUSED_ARGS = ("-u", "--user", "-o", "--output", "-A", "--user-agent", "-b", "--cookie", "-e", "--referer", "-m", "--max-time",
+                    "--connect-timeout", "-F", "--form", "-w", "--write-out", "-E", "--cert", "--key", "--cacert")
+CURL_QUIET = re.compile(r"-[sSivNL]+|--(silent|show-error|no-buffer|compressed|location)")
+# (the path's end, the API): the base is what comes before it, a direct API's with its /v1
+CURL_ENDPOINTS = (("/messages", "messages"), ("/v1/chat/completions", "chat"), ("/v1/responses", "responses"), ("/v1/models", "messages"))
+CINDY_APIS = {"anthropic-messages": "messages", "openai-responses": "responses", "openai-chat": "chat"}
+
+
+def _note(code, **where):
+    return {"code": code, **{k: v for k, v in where.items() if v}}
+
+
+def _shell_value(v): return "$" in v or "`" in v or v.startswith("~")
+
+
+def _secret_name(name, extra=()):
+    return any(w.upper() in PASTE_SECRETS or w.upper() in extra for w in re.split(r"[-_]", name))
+
+
+def _url_user(v):
+    """urlWithUser: the address's authority has an @ (an e-mail address counts too)."""
+    v = v.strip()
+    rest = re.sub(r"^[A-Za-z][A-Za-z0-9+.-]*://", "", v)
+    return "@" in re.split(r"[/?#]", rest if rest != v else v.removeprefix("//"))[0]
+
+
+def _messages_base(url):
+    """proto.MessagesBaseURL: the address without the /v1 ending its path, which Claude Code adds itself."""
+    url = url.strip().rstrip("/")
+    u = urlparse(url)
+    if not u.netloc or u.query or u.fragment: return url
+    while url.endswith("/v1") and urlparse(url).path: url = url[:-3].rstrip("/")
+    return url
+
+
+def _strip1m(model):
+    model = model.strip()
+    return (model[:-4], 1000000) if model.endswith("[1m]") else (model, 0)
+
+
+def _shell_words(s):
+    """s split as the shell does (quotes; ; & | as words of their own), up to a comment."""
+    lex = shlex.shlex(s, posix=True, punctuation_chars=";&|")
+    lex.whitespace_split, lex.commenters = True, ""
+    return list(itertools.takewhile(lambda w: not w.startswith("#"), lex))
+
+
+def _commands(words):
+    """A line's commands: its words split at ; && || |."""
+    cmd = []
+    for w in words:
+        if w and set(w) <= set(";&|"): yield cmd; cmd = []
+        else: cmd.append(w)
+    yield cmd
+
+
+def _command(words):
+    """commandIndex: the variables a command sets in front of itself (env, exec… passed over) and its words from the
+    command on."""
+    env = {}
+    for i, w in enumerate(words):
+        if re.match(r"[A-Za-z_][A-Za-z0-9_]*=", w): env.update([w.split("=", 1)])
+        elif w not in ("env", "command", "exec", "noglob", "nocorrect"): return env, words[i:]
+    return env, []
+
+
+def _is_claude(cmd): return bool(cmd) and os.path.basename(cmd[0]) == "claude"
+
+
+def _alias_claude(value):
+    """claudeAlias: (env, args) of the first claude command in an alias's value, the exports before it included; None
+    when it runs no claude."""
+    exported = {}
+    for cmd in _commands(_shell_words(value)):
+        if cmd[:1] == ["export"]:
+            exported.update(_command(cmd[1:])[0])
+            continue
+        env, cmd = _command(cmd)
+        if _is_claude(cmd): return {**exported, **env}, cmd[1:]
+    return None
+
+
+def _paste_headers(pairs, protocol=False, direct=False):
+    """A draft's headers ("Name: value" lines) and the ones left out: the protocol's own (curl, cindy), credential-looking
+    names, and all of a direct API's, which takes none."""
+    kept, skipped = [], []
+    for name, value in pairs:
+        name = name.strip()
+        why = ("protocol" if protocol and name.lower() in PASTE_PROTOCOL else
+               "credential" if _secret_name(name, ("AUTHORIZATION", "AUTH")) else "unsupported" if direct else "")
+        if why: skipped.append({"name": name, "reason": why})
+        else: kept.append("%s: %s" % (name, str(value).strip()))
+    return "\n".join(kept), skipped
+
+
+def _paste_env(env):
+    """importEnv: the variables without a field as env lines (by name), their names, and the ones left out with why."""
+    lines, names, skipped = [], [], []
+    for k in sorted(env):
+        v = env[k]
+        if k in PASTE_PROXY + PASTE_NO_PROXY:
+            if _url_user(v): skipped.append({"name": k, "reason": "credential"})
+            continue
+        if k in PASTE_MAPPED: continue
+        why = ("computer" if k in PASTE_COMPUTER else "credential" if _secret_name(k) or _url_user(v) else
+               "shell" if _shell_value(v) or re.search(r"[\n\r\x00]", v) or ('"' in v and "'" in v) or
+               not re.match(r"[A-Za-z_][A-Za-z0-9_]*$", k) else "limit" if len(names) == 50 else "")
+        if why:
+            skipped.append({"name": k, "reason": why})
+            continue
+        quote = "" if not re.search(r"[\s#\"']", v) else "'" if '"' in v else '"'
+        lines.append("%s=%s%s%s" % (k, quote, v, quote))
+        names.append(k)
+    return "\n".join(lines), names, skipped
+
+
+def _draft(p, key, notes=(), **extra):
+    """A draft of provider p (empty fields left out) with its key, or a note why it has none; extra's empty ones left out."""
+    notes = list(notes)
+    if _shell_value(key): notes.append(_note("key_shell"))
+    elif key: p["api_key"] = key
+    elif not any(n["code"] in ("key_helper", "cindy_auth") for n in notes): notes.append(_note("no_key"))
+    return {**{k: v for k, v in extra.items() if v}, "provider": {k: v for k, v in p.items() if v}, "notes": notes}
+
+
+def _env_draft(env, base, args, notes):
+    """newImportGroup with importKey / importProxy / importEnv: a claude command's variables as a draft."""
+    token = env.get("ANTHROPIC_AUTH_TOKEN", "").strip()
+    key = token.removeprefix("Bearer ").strip() if token else env.get("ANTHROPIC_API_KEY", "").strip()
+    model, window = _strip1m(env.get("ANTHROPIC_MODEL", ""))
+    p = {"kind": "launcher", "agent": "claude", "api": "messages", "base_url": base, "auth": "bearer" if token else "api_key",
+         "model": model, "models": [{"id": model, **({"context_window": window} if window else {})}] if model else [], "args": args}
+    for f, k in PASTE_FIELDS.items():
+        v = env.get(k, "").strip()
+        p[f] = (int(v) if v.isdigit() else 0) if f in ("compact_window", "max_context", "timeout_ms") else \
+            _strip1m(v)[0] if f.endswith("_model") and f != "custom_model" else v
+    p["subagent_force"] = env.get("CLAUDE_CODE_SUBAGENT_MODEL_FORCE", "").strip().lower() in ("1", "true")
+    proxy = next((env[k].strip() for k in PASTE_PROXY if env.get(k, "").strip()), "")
+    p["proxy"] = "" if _url_user(proxy) else proxy
+    p["no_proxy"] = next((env[k].strip() for k in PASTE_NO_PROXY if env.get(k, "").strip()), "")
+    p["headers"], skipped_headers = _paste_headers(h.split(":", 1) for h in env.get("ANTHROPIC_CUSTOM_HEADERS", "").splitlines() if ":" in h)
+    p["env"], env_names, skipped_env = _paste_env(env)
+    return _draft(p, key, notes, env_names=env_names, skipped_env=skipped_env, skipped_headers=skipped_headers)
+
+
+def _past_model(d):
+    """A draft but for its model: what aliases merged into one draft share."""
+    return {**d, "provider": {**d["provider"], "model": None, "models": None}}
+
+
+def _env_drafts(exported, cmds, notes=()):
+    """The drafts of claude commands [(alias or None, line, own env, args)], each from the exported variables with its own
+    over them: aliases on one address and key merged unless they differ in more than the model (mergeZshrcAliases), with
+    a suggested name. ([draft], [(line, note)] for the commands that make none)."""
+    groups, marks = [], []
+    for alias, line, env, args in cmds:
+        env, where = {**exported, **env}, {"name": alias, "line": None if alias else line}
+        base = _messages_base(env.get("ANTHROPIC_BASE_URL", ""))
+        bad = "no_gateway" if not base else "url_shell" if _shell_value(base) else "url_user" if _url_user(base) else ""
+        if bad:
+            marks.append((line or math.inf, _note(bad, **where)))
+            continue
+        d = _env_draft(env, base, args, notes)
+        gateway = (base, d["provider"].get("api_key"))
+        g = next((g for g in groups if g[0] == gateway), None)
+        if g: g[1].append((alias, d))
+        else: groups.append((gateway, [(alias, d)]))
+    drafts, taken = [], {l["name"] for l in LAUNCHERS}
+    for _, g in groups:
+        for part in [g] if all(_past_model(d) == _past_model(g[0][1]) for _, d in g) else [[x] for x in g]:
+            d = part[0][1]
+            for _, x in part[1:]:
+                for m in x["provider"].get("models", []):
+                    old = next((o for o in d["provider"].setdefault("models", []) if o["id"] == m["id"]), None)
+                    if old is None: d["provider"]["models"].append(m)
+                    elif m.get("context_window", 0) > old.get("context_window", 0): old["context_window"] = m["context_window"]
+            aliases = [a for a, _ in part if a]
+            if aliases:
+                d["provider"]["name"] = _import_name("zshrc_" + aliases[0] if aliases[0] in RESERVED_LAUNCHER_NAMES else aliases[0], taken)
+                taken.add(d["provider"]["name"])
+                d = {"label": ", ".join(aliases), "aliases": aliases, **d}
+            drafts.append(d)
+    return drafts, marks
+
+
+def _paste_shell(lines):
+    """Shell lines: exports and K=V lines collect the variables, aliases and K=V … claude lines are the claude commands
+    (with none, the variables alone make the draft); another command is not Claude Code, a line it can't read unused.
+    None, as the hub, when there is no alias, no claude command and no variable of Claude Code's."""
+    exported, cmds, marks, aliased = {}, [], [], False
+    for n, line in lines:
+        try: words = next(_commands(_shell_words(line)))
+        except ValueError: words = []
+        if words[:1] == ["alias"]:
+            aliased = True
+            for name, eq, value in (w.partition("=") for w in words[1:]):
+                if not eq or not re.match(r"[A-Za-z_][A-Za-z0-9_-]*$", name): continue
+                try: found = _alias_claude(value)
+                except ValueError: found = None
+                if found: cmds.append((name, n) + found)
+                else: marks.append((n, _note("not_claude", name=name)))
+            continue
+        export = words[:1] == ["export"]
+        env, cmd = _command(words[1:] if export else words)
+        if export or (env and not cmd): exported.update(env)
+        elif _is_claude(cmd): cmds.append((None, n, env, cmd[1:]))
+        else: marks.append((n, _note("not_claude" if cmd else "line_unused", line=n)))
+    if not cmds and not aliased and not any(k.startswith(("ANTHROPIC_", "CLAUDE_")) for k in exported): return None
+    drafts, more = _env_drafts(exported, cmds or ([(None, None, {}, [])] if exported else []))
+    return drafts, [x for _, x in sorted(marks + more, key=lambda m: m[0])]
+
+
+def _paste_settings(data):
+    """settings.json: its env (string values) with `model` as ANTHROPIC_MODEL when env has none, read as shell's variables
+    alone; apiKeyHelper runs a command for the key, which a paste can't."""
+    env = {k: v for k, v in data["env"].items() if isinstance(v, str)} if isinstance(data.get("env"), dict) else {}
+    if isinstance(data.get("model"), str) and not env.get("ANTHROPIC_MODEL"): env["ANTHROPIC_MODEL"] = data["model"]
+    drafts, marks = _env_drafts(env, [(None, None, {}, [])], [_note("key_helper")] if data.get("apiKeyHelper") else [])
+    return drafts, [x for _, x in marks]
+
+
+def _paste_curl(words, line):
+    """A curl command: the endpoint its URL names (Messages as a Claude Code gateway, Chat / Responses as a direct API),
+    its key header and other headers, the body's model, its proxy."""
+    url, headers, model, proxy, notes, rest = "", [], "", {}, [], iter(words[1:])
+    for w in rest:
+        if w in CURL_ARGS:
+            what, v = CURL_ARGS[w], next(rest, "")
+            if what == "header" and ":" in v: headers.append(v.split(":", 1))
+            elif what in ("proxy", "no_proxy"): proxy[what] = (w, v)
+            elif what == "url": url = url or v
+            elif what == "data":
+                try: body = json.loads(v)
+                except ValueError: body = None
+                if isinstance(body, dict) and isinstance(body.get("model"), str): model = body["model"]
+        elif w.startswith("-"):
+            if not CURL_QUIET.fullmatch(w): notes.append(_note("curl_option", name=w))
+            if w in CURL_UNUSED_ARGS: next(rest, "")
+        else: url = url or w
+    if not url: return [], [_note("unrecognized")]
+    if _shell_value(url) or _url_user(url): return [], [_note("url_shell" if _shell_value(url) else "url_user", line=line)]
+    bare = re.split(r"[?#]", url)[0].rstrip("/")
+    path = urlparse(bare).path
+    end, api = next(((e, a) for e, a in CURL_ENDPOINTS if path.endswith(e)), ("", "messages"))
+    if end: bare = bare[:len(bare) - len(end.removeprefix("/v1"))]
+    else: notes.append(_note("curl_path", name=path))
+    key, auth, kept = "", "", []
+    for name, value in headers:
+        name, value = name.strip(), value.strip()
+        if name.lower() == "x-api-key": key, auth = value, "api_key"
+        elif name.lower() == "authorization" and value[:7].lower() == "bearer ": key, auth = value[7:].strip(), "bearer"
+        else: kept.append((name, value))
+    launcher = api == "messages"
+    p = {"kind": "launcher" if launcher else "api", "agent": "claude" if launcher else "", "api": api,
+         "base_url": _messages_base(bare) if launcher else bare, "auth": auth, "model": model, "models": [{"id": model}] if model else []}
+    p["headers"], skipped = _paste_headers(kept, protocol=True, direct=not launcher)
+    for what, (option, v) in proxy.items():
+        if not launcher: notes.append(_note("curl_option", name=option))
+        elif what == "no_proxy" or not _url_user(v): p[what] = v
+    return [_draft(p, key, notes, skipped_headers=skipped)], []
+
+
+def _cindy_model(m):
+    """A cindy model ("id" or {id, name, contextWindow, reasoningEfforts, reasoningDefaultEffort}) as a provider's."""
+    if isinstance(m, str): return {"id": m}
+    if not isinstance(m, dict) or not isinstance(m.get("id"), str): return None
+    efforts = [e for e in m.get("reasoningEfforts") or [] if e in _CLAUDE_EFFORTS]
+    out = {"id": m["id"], "name": m.get("name"), "context_window": m.get("contextWindow"), "efforts": efforts,
+           "default_effort": m.get("reasoningDefaultEffort") if m.get("reasoningDefaultEffort") in efforts else None}
+    return {k: v for k, v in out.items() if v}
+
+
+def _paste_cindy(data):
+    """cindy v1 (one provider or {providers: […]}): a custom provider's first Messages endpoint as a Claude Code gateway,
+    else its first Responses / Chat endpoint as a direct API; its other endpoints, presets, built-ins and OAuth as notes."""
+    drafts, notes = [], []
+    for c in data["providers"] if isinstance(data.get("providers"), list) else [data]:
+        if not isinstance(c, dict): continue
+        auth = c["auth"] if isinstance(c.get("auth"), dict) else {}
+        if c.get("kind", "custom") != "custom":
+            notes.append(_note("cindy_kind", name=str(c["kind"])))
+            continue
+        if auth.get("method") == "oauth":
+            notes.append(_note("cindy_auth", name="oauth"))
+            continue
+        eps = [e for e in c.get("endpoints") or [] if isinstance(e, dict)]
+        ep = next((e for e in eps if e.get("protocol") == "anthropic-messages"), None) or \
+            next((e for e in eps if e.get("protocol") in ("openai-responses", "openai-chat")), None)
+        others = [_note("cindy_endpoint", name=str(e.get("protocol") or "")) for e in eps if e is not ep]
+        if ep is None:
+            notes += others
+            continue
+        base = str(ep.get("baseUrl") or "").strip().rstrip("/")
+        if _url_user(base): notes.append(_note("url_user"))
+        if not base or _url_user(base): continue
+        api, none = CINDY_APIS[ep["protocol"]], auth.get("method") == "none"
+        models = [m for m in map(_cindy_model, ep.get("models") or c.get("models") or []) if m]
+        p = {"kind": "launcher" if api == "messages" else "api", "agent": "claude" if api == "messages" else "", "api": api,
+             "display_name": c.get("name"), "base_url": _messages_base(base) if api == "messages" else base,
+             # a gateway's header is the wizard's check to find (#5329): v1 does not say it; no sign-in, none
+             "auth": "" if api == "messages" or none else "bearer", "model": models[0]["id"] if models else "", "models": models}
+        p["headers"], skipped = _paste_headers(ep["headers"].items() if isinstance(ep.get("headers"), dict) else [], True, api != "messages")
+        key = "" if none else str(ep.get("apiKey") or auth.get("apiKey") or "")
+        # the endpoint's own request path, never named: the draft calls the API's usual one
+        path = [_note("cindy_request_path")] if isinstance(ep.get("requestPath"), str) and ep["requestPath"].strip() else []
+        drafts.append(_draft(p, key, path + ([_note("cindy_auth", name="none")] if none else []) + others, label=c.get("name"),
+                             skipped_headers=skipped))
+    return drafts, notes
+
+
+# Provider import links (#5420, the hub's models_import_link.go): cindy's cindy://provider/import?v=1&data=… and the web's
+# …#import=…[&v=1] carry one provider in cindy's v1 JSON, base64url-encoded. A link is checked as the hub checks it (the
+# parameters, the version, canonical base64url, UTF-8, the sizes, v1's fields and values) and read as a cindy paste;
+# a refused one answers one note naming at most a field's path, never a value.
+LINK_MOST, LINK_JSON_MOST = 32 << 10, 24 << 10
+LINK_FIELDS = {"builtin": ("kind", "provider", "apiKey"), "preset": ("kind", "preset", "apiKey"),
+               "custom": ("kind", "id", "name", "auth", "endpoints")}
+LINK_ANY_FIELDS = ("kind", "provider", "preset", "apiKey", "id", "name", "auth", "endpoints")
+LINK_AUTH_FIELDS = {"apiKey": ("method", "apiKey"), "none": ("method",),
+                    "authorization-code": ("method", "flow", "authorizeUrl", "tokenUrl", "clientId", "scopes", "modelsDiscoveryUrl",
+                                           "redirectPort", "extraAuthParams"),
+                    "device-code": ("method", "flow", "deviceAuthorizationUrl", "tokenUrl", "clientId", "scopes", "modelsDiscoveryUrl",
+                                    "extraDeviceParams")}
+LINK_ENDPOINT_FIELDS = ("protocol", "baseUrl", "targets", "models", "modelsUrl", "requestPath", "headers", "apiKey")
+LINK_MODEL_FIELDS = ("id", "name", "nativeApi", "mode", "modalities", "officialDocs", "description", "group", "contextWindow",
+                     "contextWindowMax", "maxOutputTokens", "efforts", "defaultEffort", "supportsFastMode", "supportsImageInput",
+                     "supportsToolCalls", "reasoningRequired", "defaultEnabled", "reasoning", "reasoningEfforts",
+                     "reasoningDefaultEffort", "discoveredMetadata")
+LINK_PROTOCOLS = ("anthropic-messages", "openai-responses", "openai-chat", "google-generative-ai")
+LINK_AGENTS, LINK_EFFORTS = ("claude-code", "codex", "pi"), ("minimal", "low", "medium", "high", "xhigh", "max")
+# how well a protocol serves an agent (any other: 10); two endpoints equally good for one agent leave it unsaid
+LINK_PRIORITY = {"claude-code": {"anthropic-messages": 100, "google-generative-ai": 30, "openai-chat": 20, "openai-responses": 10},
+                 "codex": {"openai-responses": 30, "openai-chat": 20}, "pi": {"openai-chat": 30, "openai-responses": 20}}
+LINK_KEY_PREFIXES = ("sk-", "ghp_", "gho_", "ghs_", "github_pat_", "xox", "AKIA", "AIza", "glpat-")  # never named
+LINK_CONTROL = re.compile(r"[\x00-\x08\x0a-\x1f\x7f]")  # what a header line can't hold (a tab it can)
+
+
+class LinkRefused(Exception):
+    """A link failing a check; args[0] is its one note."""
+
+
+def _link_bad(path=None, code="link_invalid"):
+    raise LinkRefused(_note(code, name=path))
+
+
+def _link_query(q):
+    """q read as URLSearchParams reads it ({name: [values]}), and whether a %-escape in it is broken (that breaks a link)."""
+    return parse_qs(q, keep_blank_values=True), bool(re.search(r"%(?![0-9A-Fa-f]{2})", q))
+
+
+def _link_data(q, key, need_v):
+    """A link's data: key once, v once (or, unless need_v, never) and nothing else, v being 1."""
+    params, broken = _link_query(q)
+    v = params.get("v", [])
+    if broken or len(params.get(key, [])) != 1 or len(v) > 1 or (need_v and not v) or set(params) - {key, "v"}: _link_bad()
+    if v and v[0] != "1": _link_bad(v[0] if re.fullmatch(r"[0-9]{1,4}", v[0]) else None, "link_version")
+    return params[key][0]
+
+
+def _js_len(s): return len(s.encode("utf-16-le")) // 2
+
+
+def _link_text(v, most):
+    """cindy's boundedString: a string, not blank, at most `most` long as JavaScript counts; trimmed (None when not)."""
+    return v.strip() if isinstance(v, str) and v.strip() and _js_len(v) <= most else None
+
+
+def _link_key(v, most):
+    s = _link_text(v, most)
+    return s is not None and not LINK_CONTROL.search(s)
+
+
+def _link_fields(obj, path, allowed):
+    """link_field on obj's first field (in key order) not allowed: named only when its key is a plain word, not a key."""
+    for k in sorted(obj):
+        if k not in allowed:
+            plain = re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]{0,63}", k) and not k.startswith(LINK_KEY_PREFIXES)
+            _link_bad((path + "." + k if path else k) if plain else None, "link_field")
+
+
+def _link_url(v):
+    """An endpoint's address as (scheme, host, port): absolute http(s), no user, query or fragment; None when not."""
+    raw = _link_text(v, 2048)
+    if raw is None or re.search(r"[?#]", raw) or _url_user(raw): return None
+    u = urlparse(raw)
+    try: port = u.port
+    except ValueError: return None
+    if u.scheme not in ("http", "https") or not u.hostname: return None
+    return u.scheme, u.hostname, port or {"http": 80, "https": 443}[u.scheme]
+
+
+def _link_loopback(origin):
+    return origin[1] in ("localhost", "::1") or bool(re.fullmatch(r"127(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}", origin[1]))
+
+
+def _link_model(m, path):
+    """One model's checks; its id."""
+    if isinstance(m, str):
+        if _link_text(m, 256) is None: _link_bad(path)
+        return m.strip()
+    if not isinstance(m, dict): _link_bad(path)
+    _link_fields(m, path, LINK_MODEL_FIELDS)
+    if _link_text(m.get("id"), 256) is None: _link_bad(path + ".id")
+    if "name" in m and _link_text(m["name"], 256) is None: _link_bad(path + ".name")
+    w = m.get("contextWindow")
+    if "contextWindow" in m and (isinstance(w, bool) or not isinstance(w, (int, float)) or not math.isfinite(w) or w <= 0 or w != int(w)):
+        _link_bad(path + ".contextWindow")
+    for f in ("defaultEnabled", "supportsImageInput", "reasoning"):
+        if f in m and not isinstance(m[f], bool): _link_bad(path + "." + f)
+    if m.get("reasoning") is not True:  # thinking levels belong to a model that thinks
+        for f in ("reasoningEfforts", "reasoningDefaultEffort"):
+            if f in m: _link_bad(path + "." + f)
+        return m["id"].strip()
+    efforts = m.get("reasoningEfforts", [])
+    if not isinstance(efforts, list) or any(e not in LINK_EFFORTS for e in efforts) or len(set(efforts)) != len(efforts):
+        _link_bad(path + ".reasoningEfforts")
+    if "reasoningDefaultEffort" in m and m["reasoningDefaultEffort"] not in efforts: _link_bad(path + ".reasoningDefaultEffort")
+    return m["id"].strip()
+
+
+def _link_endpoint(e, path):
+    """One endpoint's checks, in cindy's order; what the provider's checks need of it."""
+    if not isinstance(e, dict): _link_bad(path)
+    _link_fields(e, path, LINK_ENDPOINT_FIELDS)
+    if e.get("protocol") not in LINK_PROTOCOLS: _link_bad(path + ".protocol")
+    t = e.get("targets")
+    if "targets" in e and (not isinstance(t, list) or not t or any(x not in LINK_AGENTS for x in t) or len(set(t)) != len(t)):
+        _link_bad(path + ".targets")
+    models = e.get("models")
+    if models is not None:
+        if not isinstance(models, list) or len(models) > 256: _link_bad(path + ".models")
+        ids = [_link_model(m, "%s.models[%d]" % (path, i)) for i, m in enumerate(models)]
+        if len(set(ids)) != len(ids): _link_bad(path + ".models")
+    p = _link_text(e.get("requestPath"), 256)
+    if "requestPath" in e and (p is None or not p.startswith("/") or p.startswith("//") or re.search(r"[?#\s]", p)):
+        _link_bad(path + ".requestPath")
+    if "apiKey" in e and not _link_key(e["apiKey"], 4096): _link_bad(path + ".apiKey")
+    base = _link_url(e.get("baseUrl"))
+    if base is None: _link_bad(path + ".baseUrl")
+    if "modelsUrl" in e and _link_url(e["modelsUrl"]) != base: _link_bad(path + ".modelsUrl")  # the same origin
+    h = e.get("headers")
+    if "headers" in e and (not isinstance(h, dict) or not 0 < len(h) <= 24 or any(
+            not re.fullmatch(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]{1,128}", k) or not isinstance(v, str) or _js_len(v) > 2048 or LINK_CONTROL.search(v)
+            for k, v in h.items())):
+        _link_bad(path + ".headers")
+    return {"protocol": e["protocol"], "targets": t, "base": base, "apiKey": "apiKey" in e, "headers": "headers" in e}
+
+
+def _link_serves(e, method):
+    """The agents an endpoint serves: its targets, else its protocol's (with OAuth, pi none)."""
+    if e["targets"]: return e["targets"]
+    agents = LINK_AGENTS if e["protocol"] in ("anthropic-messages", "google-generative-ai") else ("codex", "pi")
+    return [a for a in agents if method != "oauth" or a != "pi"]
+
+
+def _link_custom(c):
+    if _link_text(c.get("name"), 60) is None: _link_bad("name")
+    if "id" in c and not re.fullmatch(r"[a-z0-9_-]{1,40}", _link_text(c["id"], 40) or ""): _link_bad("id")
+    method = "apiKey"
+    if "auth" in c:
+        auth = c["auth"]
+        if not isinstance(auth, dict): _link_bad("auth")
+        method = auth.get("method")
+        if method not in ("apiKey", "none", "oauth"): _link_bad("auth.method")
+        fields = method
+        if method == "oauth":
+            fields = "authorization-code" if auth.get("flow") is None else auth["flow"]
+            if fields not in ("authorization-code", "device-code"): _link_bad("auth.flow")
+        _link_fields(auth, "auth", LINK_AUTH_FIELDS[fields])
+        if "apiKey" in auth and not _link_key(auth["apiKey"], 4096): _link_bad("auth.apiKey")
+    eps = c.get("endpoints")
+    if not isinstance(eps, list) or not 0 < len(eps) <= 8: _link_bad("endpoints")
+    eps = [_link_endpoint(e, "endpoints[%d]" % i) for i, e in enumerate(eps)]
+    # with no key, a link could send the prompts anywhere (a modelsUrl is on its baseUrl's host)
+    if method == "none" and any(not _link_loopback(e["base"]) for e in eps): _link_bad("auth")
+    for i, e in enumerate(eps):
+        for f in ("apiKey", "headers"):
+            if method != "apiKey" and e[f]: _link_bad("endpoints[%d].%s" % (i, f))
+    for i, e in enumerate(eps):
+        if method == "oauth" and "pi" in (e["targets"] or ()): _link_bad("endpoints[%d].targets" % i)
+    for agent in LINK_AGENTS:
+        ranks = sorted((LINK_PRIORITY[agent].get(e["protocol"], 10) for e in eps if agent in _link_serves(e, method)), reverse=True)
+        if len(ranks) > 1 and ranks[0] == ranks[1]: _link_bad("endpoints")
+
+
+def _link_check(obj):
+    """v1's rules for a link's JSON object (the first failure raises LinkRefused)."""
+    kind = obj.get("kind") if isinstance(obj.get("kind"), str) else None
+    _link_fields(obj, "", LINK_FIELDS.get(kind, LINK_ANY_FIELDS))
+    if kind == "builtin":
+        if obj.get("provider") not in ("gemini", "openai-images"): _link_bad("provider")
+        if not _link_key(obj.get("apiKey"), 1024): _link_bad("apiKey")
+    elif kind == "preset":
+        if _link_text(obj.get("preset"), 128) is None: _link_bad("preset")
+        if not _link_key(obj.get("apiKey"), 4096): _link_bad("apiKey")
+    elif kind == "custom": _link_custom(obj)
+    else: _link_bad("kind")
+
+
+def _link_payload(data):
+    """A link's data decoded (canonical base64url of UTF-8 JSON) and checked: the JSON object."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", data) or len(data) % 4 == 1: _link_bad()
+    b = base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))
+    if base64.urlsafe_b64encode(b).decode().rstrip("=") != data: _link_bad()  # stray bits
+    if len(b) > LINK_JSON_MOST: _link_bad(code="link_too_long")
+    try: obj = json.loads(b.decode("utf-8"))
+    except ValueError: _link_bad()  # UnicodeDecodeError is a ValueError
+    if not isinstance(obj, dict): _link_bad()
+    _link_check(obj)
+    return obj
+
+
+def _paste_link(t):
+    """(drafts, notes) of an import link (t trimmed), None when t is no link: one word, cindy:// or an http(s) address
+    whose fragment has import. A link going on after a blank is one a chat app broke: refused whole."""
+    word = re.split(r"\s", t, maxsplit=1)[0]
+    head = word[:8].lower()
+    if not head.startswith(("cindy://", "http://", "https://")): return None
+    cindy = head.startswith("cindy://")
+    part = word[len("cindy://"):] if cindy else word.partition("#")[2]  # what follows cindy://, a web link's fragment
+    if not cindy and "import" not in _link_query(part)[0]: return None
+    try:
+        if word != t: _link_bad()  # which part of a broken link is its data is unknown
+        if len(part.encode()) > LINK_MOST: _link_bad(code="link_too_long")
+        if cindy:
+            path, sep, q = part.partition("?")
+            if not sep or path != "provider/import" or "#" in part: _link_bad()
+            data = _link_data(q, "data", True)
+        else:
+            data = _link_data(part, "import", False)
+        obj = _link_payload(data)
+    except LinkRefused as refused:
+        return [], [refused.args[0]]
+    drafts, notes = _paste_cindy(obj)
+    eps = obj.get("endpoints") if isinstance(obj.get("endpoints"), list) else []
+    if "apiKey" not in (obj.get("auth") or {}) and not any("apiKey" in e for e in eps):  # the usual link: whoever opens it types a key
+        for d in drafts: d["notes"] = [n for n in d["notes"] if n["code"] != "no_key"]
+    return drafts, notes
+
+
+def _paste_lines(text):
+    """(line number, line) of each line that is not blank or a comment, a line ending in \\ joined with the next."""
+    out, start, buf = [], 0, ""
+    for n, line in enumerate(text.split("\n") + [""], 1):
+        start, buf = (start, buf + line) if buf else (n, line)
+        if buf.endswith("\\"):
+            buf = buf[:-1]
+            continue
+        if buf.strip() and not buf.strip().startswith("#"): out.append((start, buf.strip()))
+        buf = ""
+    return out
+
+
+def _paste_read(text):
+    """(format, drafts, notes): an import link, JSON as cindy's or settings.json, a curl command, else shell lines."""
+    link = _paste_link(text.strip())
+    if link is not None: return ("link", *link)
+    if text.strip().startswith(("{", "[")):
+        try: data = json.loads(text)
+        except ValueError: return "", [], [_note("invalid_json")]
+        keys = set(data) if isinstance(data, dict) else set()
+        if keys & {"providers", "kind", "endpoints"}: return ("cindy", *_paste_cindy(data))
+        if keys & {"env", "apiKeyHelper", "model"}: return ("settings", *_paste_settings(data))
+        return "", [], [_note("unrecognized")]
+    lines = _paste_lines(text)
+    try: cmd = _command(next(_commands(_shell_words(lines[0][1]))))[1] if lines else []
+    except ValueError: cmd = []
+    if cmd and os.path.basename(cmd[0]) == "curl": return ("curl", *_paste_curl(cmd, lines[0][0]))
+    shell = _paste_shell(lines)
+    return ("shell", *shell) if shell else ("", [], [_note("unrecognized")])
+
+
+def parse_paste(text):
+    """The parse route's answer: what text was read as, its drafts (at most 50) with the managed providers on their
+    address (the ones with the draft's key first), and its notes."""
+    fmt, drafts, notes = _paste_read(text.replace("\r\n", "\n"))
+    for d in drafts:
+        key = d["provider"].get("api_key")
+        d["matches"] = sorted(({"name": l["name"], **({"display_name": l["display_name"]} if l.get("display_name") else {}),
+                                "same_key": bool(key) and PROVIDER_KEYS.get(l["name"]) == key}
+                               for l in LAUNCHERS if l["source"] == "persona" and l.get("base_url") == d["provider"]["base_url"]),
+                              key=lambda m: not m["same_key"])
+    if len(drafts) > 50: drafts, notes = drafts[:50], notes + [_note("too_many")]
+    return {"format": fmt, "drafts": drafts, "notes": notes or ([] if drafts else [_note("unrecognized")])}
+
+
+def parse_route(h, body):
+    """POST /api/v1/launchers/import/parse: 413 over 256 KiB, 400 without text."""
+    if len(body or b"") > 256 << 10:
+        h.send_json({"code": "too_large", "error": "粘贴的内容太长"}, 413); return
+    try: text = json.loads(body or b"{}").get("text")
+    except (ValueError, AttributeError): text = None
+    if not isinstance(text, str) or not text.strip():
+        h.send_json({"error": "先粘贴一段配置"}, 400); return
+    PROVIDER_LOG["parse"].append({"length": len(text)})
+    h.send_json(parse_paste(text))
 
 
 # POST /api/v1/launchers/catalog (#4975): the hub's built-in model catalog for ids typed by hand, read from the file the
@@ -11101,13 +11857,59 @@ def _catalog_route(h, body):
     h.send_json({"models": out})
 
 
+# A probe's `auth` (#5329): "" (what is stored for `name`, else both headers as older clients get), a method, or "auto".
+PROBE_AUTHS = ("", "api_key", "bearer", "auto")
+
+
+def _gateway_takes(base_url):
+    """The sign-in methods the fake gateway at this address takes: only x-api-key with "xapikey" in it, only Bearer with
+    "bearer-only", else both."""
+    u = base_url or ""
+    if "xapikey" in u: return ("api_key",)
+    if "bearer-only" in u: return ("bearer",)
+    return ("bearer", "api_key")
+
+
+def _probe_signed_in(b):
+    """Whether the fake gateway takes a typed-in gateway's probe, and the method "auto" found: the hub's probeTarget picks
+    the headers (Responses and Chat Completions Bearer only; a method as asked; "" what `name` stores, else both), and
+    "auto" sends Bearer, then x-api-key once that is refused. (ok, method or None)."""
+    auth = b.get("auth") or ""
+    takes = _gateway_takes(b.get("base_url"))
+    stored = next((x for x in LAUNCHERS if b.get("name") and x["name"] == b.get("name")), None)
+    # the stored key goes only to the stored address (the hub's probeTarget)
+    keyed = b.get("api_key") or (stored and stored.get("has_key") and
+                                 (b.get("base_url") or "").rstrip("/") in ("", (stored.get("base_url") or "").rstrip("/")))
+    if b.get("api") in ("responses", "chat"):
+        sent = ("bearer",)
+    elif auth == "auto" and keyed:  # no key, no header: nothing to find
+        found = next((m for m in ("bearer", "api_key") if m in takes), None)
+        return bool(found), found
+    elif auth and auth != "auto":
+        sent = (auth,)
+    elif stored and not auth:
+        sent = ("bearer",) if stored.get("auth") == "bearer" else ("api_key",)
+    else:
+        sent = ("bearer", "api_key")
+    return any(m in takes for m in sent), None
+
+
+def _hub_text(h, key):
+    """The hub's text for key in the request's language (its own catalogs, server/internal/i18n)."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import readiness_mock
+    return readiness_mock.t(readiness_mock.lang_of(h.headers.get("Accept-Language", "")), key)
+
+
 def providers_route(h, method, p, q, body):
-    """The provider endpoints under MOCK_PROVIDERS; True when it answered. The import (import_route) and the catalog lookup
-    (_catalog_route) answer with or without MOCK_PROVIDERS, and so do a typed-in gateway's "Test connection" and "Fetch
-    models" (#4881): the catch-all {"ok": true} has no `ms`, which the wizard shows. A built-in preset's test keeps its own
-    answers then (_builtin_preset_route)."""
+    """The provider endpoints under MOCK_PROVIDERS; True when it answered. The import (import_route, parse_route) and the
+    catalog lookup (_catalog_route) answer with or without MOCK_PROVIDERS, and so do a typed-in gateway's "Test connection"
+    and "Fetch models" (#4881): the catch-all {"ok": true} has no `ms`, which the wizard shows. A built-in preset's test
+    keeps its own answers then (_builtin_preset_route)."""
     if p == "/api/v1/launchers/import":
         import_route(h, method, q, body); return True
+    if p == "/api/v1/launchers/import/parse" and method == "POST":
+        parse_route(h, body); return True
     if p == "/api/v1/launchers/catalog" and method == "POST":
         _catalog_route(h, body); return True
     probe = method == "POST" and p in ("/api/v1/launchers/test", "/api/v1/launchers/discover")
@@ -11124,6 +11926,8 @@ def providers_route(h, method, p, q, body):
         if not isinstance(b, dict) or b.get("preset"): return False
     if p == "/api/v1/launchers/test" and method == "POST":
         PROVIDER_LOG["test"].append(_provider_redacted(b))
+        if (b.get("auth") or "") not in PROBE_AUTHS:
+            h.send_json({"ok": False, "ms": 0, "model": b.get("model", ""), "error": _hub_text(h, "assistant-models_launchers.err_auth")}); return True
         stored = next((x for x in LAUNCHERS if x["name"] == b.get("name")), None)
         if not b.get("api_key") and not (stored and stored.get("has_key")):
             h.send_json({"ok": False, "ms": 0, "model": b.get("model", ""), "error": "要填 API Key"}); return True
@@ -11132,11 +11936,20 @@ def providers_route(h, method, p, q, body):
         if BUILTIN_PRESETS and "region" in (b.get("api_key") or ""):  # Anthropic refusing the network's region (#4482), in the hub's words
             msg, code = readiness_mock.region_blocked(readiness_mock.lang_of(h.headers.get("Accept-Language", "")))
             h.send_json({"ok": False, "ms": 180, "model": b.get("model", ""), "error": msg, "code": code}); return True
-        h.send_json({"ok": True, "ms": 412, "model": b.get("model", "")}); return True
+        signed_in, found = _probe_signed_in(b)
+        if not signed_in:
+            h.send_json({"ok": False, "ms": 233, "model": b.get("model", ""), "error": _hub_text(h, "assistant-models_probe.status_401"), "code": "auth"}); return True
+        out = {"ok": True, "ms": 412, "model": b.get("model", "")}
+        if found: out["auth"] = found
+        h.send_json(out); return True
     if p == "/api/v1/launchers/discover" and method == "POST":
         PROVIDER_LOG["discover"].append(_provider_redacted(b))
+        if (b.get("auth") or "") not in PROBE_AUTHS:
+            h.send_json({"models": [], "error": _hub_text(h, "assistant-models_launchers.err_auth")}); return True
         if "bad" in (b.get("base_url") or ""):
             h.send_json({"models": [], "error": "网关没有 /v1/models", "code": "not_found"}); return True
+        if not _probe_signed_in(b)[0]:  # no method named back: only the test says what a launch needs
+            h.send_json({"models": [], "error": _hub_text(h, "assistant-models_probe.status_401"), "code": "auth"}); return True
         h.send_json({"models": PROVIDER_DISCOVERED}); return True
     if p == "/api/v1/launchers" and method == "POST" and not b.get("preset"):
         PROVIDER_LOG["post"] = _provider_redacted(b)
@@ -12181,6 +12994,70 @@ if os.environ.get("MOCK_EDIT_DIFF") == "1":
     mock_edit_diff()
 
 
+# MOCK_TURN_CHANGES=1 (#5157): the changed-files card at the end of a finished Agent turn. One chat edits five files of
+# this checkout (one of them twice; an edit that failed does not count), a line of narration between the edits so the
+# page does not fold them (fold_work leaves runs under 3 items, docs/protocol/protocol.md "Folded work") and the card
+# counts the calls themselves; a Codex chat changes two files by their diffs. MOCK_EDIT_DIFF's chat comes folded, and
+# its card comes from the fold's `changes`. The main conversation's last exchange writes a file too and shows no card
+# (super rules 0 and 4). With MOCK_REVIEW=1, Review opens the review of the same checkout. Made-up code.
+TURN_CHANGES = "a1f3c2d4-0000-4000-8000-000000005157"
+TURN_CHANGES_CODEX = "a1f3c2d4-0000-4000-8000-000000005158"
+
+
+def mock_turn_changes():
+    w = "/Users/me/code/weather"
+    say = lambda t, text: it("assistant", "text", t, text=text)
+    _c = [it("user", "text", 26, text="Show 12 hours of rain, in the units the user picked, and document it")]
+    _c += tool("Edit", {"file_path": w + "/WeatherWidget/Provider.swift", "old_string": "let hours = hourly.prefix(6)",
+                        "new_string": "let hours = hourly.prefix(12)\nlet rain = hours.map(\\.chance)"}, "ok", 25.9)
+    _c.append(say(25.85, "The widget takes 12 hours now; the forecast model needs the same."))
+    _c += tool("MultiEdit", {"file_path": w + "/Sources/App/Forecast.swift", "edits": [
+        {"old_string": "var hourly: [Double]", "new_string": "var hourly: [Double]\nvar unit: UnitTemperature"},
+        {"old_string": "func high() -> Double {\n    hourly.max() ?? 0\n}",
+         "new_string": "func high() -> Measurement<UnitTemperature> {\n    Measurement(value: hourly.max() ?? 0, unit: unit)\n}"}]}, "ok", 25.8)
+    _c.append(say(25.75, "Next the units."))
+    _c += tool("Edit", {"file_path": w + "/README.md", "old_string": "## Units", "new_string": "## Units and hours"},
+               "String to replace not found in file.", 25.7, err=True)
+    _c.append(say(25.65, "The README has no Units section; the units go in their own file."))
+    _c += tool("Write", {"file_path": w + "/Sources/App/Units.swift",
+                         "content": "import Foundation\n\nlet celsius = UnitTemperature.celsius\nlet fahrenheit = UnitTemperature.fahrenheit\n"}, "ok", 25.6)
+    _c.append(say(25.55, "And the doc."))
+    _c += tool("Write", {"file_path": w + "/docs/hourly.md", "content": "# Hourly rain\n\nThe widget shows the next 12 hours.\n"
+                                                                      "Each bar is the chance of rain in that hour.\n"}, "ok", 25.5)
+    _c.append(say(25.45, "One more case in the provider, then the tests."))
+    _c += tool("Edit", {"file_path": w + "/WeatherWidget/Provider.swift", "old_string": "let temp = current.temperature",
+                        "new_string": "let temp = current.feelsLike"}, "ok", 25.4)
+    _c.append(say(25.35, "Tests for the new hours."))
+    _c += tool("Write", {"file_path": w + "/Tests/AppTests/ForecastTests.swift", "content": "\n".join([
+        "import XCTest", "@testable import App", "", "final class ForecastTests: XCTestCase {",
+        "    func testTwelveHours() {", "        XCTAssertEqual(Forecast.sample.hourly.prefix(12).count, 12)", "    }", "}"]) + "\n"},
+        "ok", 25.3)
+    _c.append(say(25, "Done: the widget shows 12 hours of rain and the feels-like temperature, the forecast keeps its unit, "
+                      "the units have their own file, and docs/hourly.md says what the bars mean."))
+    ITEMS[TURN_CHANGES] = _c
+    SESSIONS.append(sess("macbook", TURN_CHANGES, "Twelve hours of rain", w, "done", "read", "weather", 1, "changes", 20, 25,
+                         "Done: the widget shows 12 hours of rain."))
+    _x = [it("user", "text", 24, text="Use the feels-like temperature in the forecast and the widget")]
+    _x += tool("Edit", {"file_path": w + "/Sources/App/Forecast.swift", "change": "update",
+                        "diff": "@@ -3,3 +3,4 @@\n struct Forecast {\n-    var temperature: Double\n+    var feelsLike: Double\n+    var hourly: [Double]\n }\n"},
+               "update " + w + "/Sources/App/Forecast.swift", 23.9)
+    _x.append(say(23.85, "Now the widget."))
+    _x += tool("Edit", {"file_path": w + "/WeatherWidget/WidgetView.swift", "change": "update",
+                        "diff": "@@ -8,2 +8,2 @@\n-        Text(entry.temperature, format: .number)\n+        Text(entry.feelsLike, format: .number)\n     }\n"},
+               "update " + w + "/WeatherWidget/WidgetView.swift", 23.8)
+    _x.append(say(23.5, "The forecast and the widget both use the feels-like temperature now."))
+    ITEMS[TURN_CHANGES_CODEX] = _x
+    SESSIONS.append(sess("macbook", TURN_CHANGES_CODEX, "Feels-like temperature", w, "done", "read", "weather", 1, "changes-codex", 21,
+                         23.5, "The forecast and the widget both use the feels-like temperature now.", agent="codex"))
+    ITEMS[ASK1] = ITEMS[ASK1] + [it("user", "text", 1.5, text="把周末的行程整理成一个文件")] + tool(
+        "Write", {"file_path": "/Users/me/Documents/weekend.md", "content": "# 周末\n\n- 周六：爬山\n- 周日：看展\n"}, "ok", 1.4) + [
+        it("assistant", "text", 1.3, text="整理好了：周六爬山，周日看展，放在“文稿”里的 weekend.md。")]
+
+
+if os.environ.get("MOCK_TURN_CHANGES") == "1":
+    mock_turn_changes()
+
+
 # MOCK_TOOL_NAMES=1 (#2986): one finished turn that calls Claude Code's newer tools (ToolSearch, TaskCreate, TaskUpdate,
 # NotebookEdit, Monitor, SendMessage, ScheduleWakeup), another server's MCP tool (mcp__github__create_issue) and a tool
 # no table knows, with nested arguments (RenderChart), so each reads in words, the MCP one as "GitHub · Create issue",
@@ -12479,6 +13356,12 @@ if os.environ.get("MOCK_TAB_PANES"):
     ITEMS.update(tab_panes_items())
     INTERACTIONS[:] = []
     MOCK_INTERACTIONS[:] = []
+    if MOCK_TEAM:  # a worker's request (#5180): the hub sends it with folded_under (the lead) and folded_as "worker"
+        INTERACTIONS.append(
+            {"id": "team_review_test", "machine_id": "server", "session_id": PANES_REVIEW, "session_title": "审一下登录重构的改动",
+             "cwd": "/home/me/code/app", "kind": "permission", "agent": "codex", "tool_use_id": "toolu_panes_review_test",
+             "created_at": ago(minutes=1), "expires_at": later(minutes=29), "tool_name": "Bash",
+             "summary": "go test ./auth/...", "tool_input": {"command": "go test ./auth/..."}})
 if os.environ.get("MOCK_BOTMUX"):
     ITEMS[BOTMUX_BLOCKED] = [it("user", "text", 5, text="把周报导出改成按部门分 sheet")] + [
         it("assistant", "text", 3, text="导出脚本改好了，正在跑全量。")]
@@ -12719,6 +13602,10 @@ for attempt in 0..<3 {{
     for _x in ITEMS[ASK1]:  # seq goes up through the conversation
         _seq[0] += 1
         _x.update(seq=_seq[0], id=f"{uuid.UUID(int=_seq[0])}#0")
+
+# MOCK_FOLD_DELAY=<seconds>: opening a fold (its steps fetched by from_seq / through_seq) answers that late, as the hub
+# does over a phone's network: what the steps push in comes a moment after the tap, not in the same frame (#3757).
+FOLD_DELAY = float(os.environ.get("MOCK_FOLD_DELAY", "0"))
 
 # MOCK_RICH=1: a reply with a link in Chinese prose (full-width brackets right after it), a three-column table whose
 # last column is long Chinese text, and a seven-column table that cannot fit (RichReplyTests).
@@ -13032,6 +13919,106 @@ def fold_task_snapshots(items):
     return snapshots
 
 
+CLIPPED_NOTE = re.compile("\n…（已截断，共 \\d+ 字节）$")
+
+
+def _edit_lines(old, new):
+    """transcript.editLines: a final newline ends the last line on a side whose other side is empty or ends in one."""
+    def split(s, strip):
+        return (s[:-1] if strip else s).split("\n") if s else []
+    old_ends, new_ends = old.endswith("\n"), new.endswith("\n")
+    return split(old, old_ends and (not new or new_ends)), split(new, new_ends and (not old or old_ends))
+
+
+def _clean_path(p):
+    """path.Clean, as transcript.editPath cleans an edit's file (no "./", "../" or doubled slashes)."""
+    return posixpath.normpath(re.sub("/+", "/", p))
+
+
+def _line_changes(old, new):
+    """transcript.lineChanges: lines added and removed by Myers' line diff; everything past its limits."""
+    a, b = _edit_lines(old, new)
+    n, m = len(a), len(b)
+    if n + m <= 60000:
+        most = min(n + m, 6000)
+        off, v = most + 1, [0] * (2 * most + 3)
+        for d in range(most + 1):
+            for k in range(-d, d + 1, 2):
+                x = v[off + k + 1] if k == -d or (k != d and v[off + k - 1] < v[off + k + 1]) else v[off + k - 1] + 1
+                y = x - k
+                while x < n and y < m and a[x] == b[y]:
+                    x, y = x + 1, y + 1
+                v[off + k] = x
+                if x >= n and y >= m:
+                    return (m - n + d) // 2, (n - m + d) // 2
+    return m, n
+
+
+def _patch_changes(patch, change):
+    """transcript.patchLines: a Codex file change's unified diff, or the whole file without hunks."""
+    lines = patch.split("\n")
+    if not any(l.startswith("@@") for l in lines):
+        if not patch:
+            return 0, 0
+        count = len((patch[:-1] if patch.endswith("\n") else patch).split("\n"))
+        return (0, count) if change == "delete" else (count, 0)
+    add = rm = 0
+    inside = False
+    for l in lines:
+        if l.startswith("diff --git"):
+            inside = False
+        elif not inside and l.startswith(("index ", "--- ", "+++ ")):
+            continue
+        elif l.startswith("@@"):
+            inside = True
+        elif inside and l.startswith("+"):
+            add += 1
+        elif inside and l.startswith("-"):
+            rm += 1
+    return add, rm
+
+
+def fold_changes(run):
+    """transcript.foldChanges (#5157): the files the run's successful Edit / Write / MultiEdit calls changed, in the
+    order first edited, each with the lines added and removed and whether the input was whole."""
+    ok = {x.get("tool_use_id"): not x.get("is_error") for x in run if x["kind"] == "tool_result"}
+    out, at = [], {}
+
+    def clipped(v):
+        if isinstance(v, str):
+            return bool(CLIPPED_NOTE.search(v))
+        if isinstance(v, list):
+            return any(clipped(e) for e in v)
+        return isinstance(v, dict) and any(clipped(e) for e in v.values())
+    for x in run:
+        name = x.get("tool_name")
+        if x["kind"] != "tool_use" or name not in ("Edit", "Write", "MultiEdit") or not ok.get(x.get("tool_use_id")):
+            continue
+        inp = x.get("tool_input") or {}
+        path = next((_clean_path(inp[k].strip()) for k in ("file_path", "notebook_path", "path") if isinstance(inp.get(k), str) and inp[k].strip()), "")
+        if not path:
+            continue
+        add = rm = 0
+        if name == "Edit" and isinstance(inp.get("diff"), str):
+            add, rm = _patch_changes(inp["diff"], inp.get("change") or "")
+        elif name == "Edit" and (isinstance(inp.get("old_string"), str) or isinstance(inp.get("new_string"), str)):
+            add, rm = _line_changes(inp.get("old_string") or "", inp.get("new_string") or "")
+        elif name == "Write" and isinstance(inp.get("content"), str):
+            add, rm = _line_changes("", inp["content"])
+        elif name == "MultiEdit":
+            for e in inp.get("edits") or []:
+                a, r = _line_changes(e.get("old_string") or "", e.get("new_string") or "")
+                add, rm = add + a, rm + r
+        exact = not clipped(inp)
+        if path in at:
+            c = out[at[path]]
+            c["add"], c["del"], c["exact"] = c["add"] + add, c["del"] + rm, c["exact"] and exact
+        else:
+            at[path] = len(out)
+            out.append({"path": path, "add": add, "del": rm, "exact": exact})
+    return out
+
+
 def fold_work(items):
     """transcript.FoldWork: each run of tool calls (with their results) and thoughts becomes one fold item."""
     uses = {x.get("tool_use_id") for x in items if x["kind"] == "tool_use"}
@@ -13068,7 +14055,8 @@ def fold_work(items):
                         "fold": {"items": len(run), "tools": sum(x["kind"] == "tool_use" for x in run),
                                  "thoughts": sum(x["kind"] == "thinking" and bool((x.get("text") or "").strip()) for x in run),
                                  "until": run[-1]["ts"], "through_seq": run[-1]["seq"], "through_id": run[-1]["id"],
-                                 **({"tasks": tasks} if tasks else {}), **({"images": images} if images else {}), **narration}})
+                                 **({"tasks": tasks} if tasks else {}), **({"images": images} if images else {}), **narration,
+                                 "changes": fold_changes(run)}})
         i = j
     return out
 
@@ -13090,14 +14078,42 @@ def is_child_row(r):
     return bool(r.get("is_subagent") or r.get("parent_session_id") or r.get("asking_parent_session_id") or (root and root != r["session_id"]))
 
 
+def tab_leads(rows):
+    """The manager's tab teams (#5180, fold_hierarchy): for each worker's (machine, session id), its lead's row. A tab is the
+    rows of one machine, space kind, space and slot, both named; an assistant row or an archived one is in none. Its lead is
+    the one row in its first pane (pane_index 0) that is no child and not offline: none or two such rows, and its Agents
+    are peers. Every other row of a tab with a lead that is no child and not offline is its worker."""
+    def tab(r):
+        if (r.get("assistant") or r.get("archived") or not r.get("space_id") or not r.get("slot_id") or is_child_row(r)
+                or r.get("state") == "offline"):
+            return None
+        return (r["machine_id"], r.get("space_kind") or "", r["space_id"], r["slot_id"])
+    first = {}
+    for r in rows:
+        k = tab(r)
+        if k is not None and type(r.get("pane_index")) is int and r["pane_index"] == 0:
+            first[k] = None if k in first else r
+    lead = {}
+    for r in rows:
+        k = tab(r)
+        l = first.get(k) if k is not None else None
+        if l is not None and l["session_id"] != r["session_id"]:
+            lead[(r["machine_id"], r["session_id"])] = l
+    return lead
+
+
 def fold_hierarchy(rows):
-    """The manager's folding (#5120, docs/protocol/protocol.md "Session hierarchy"), on copies: a child (is_subagent, a
-    parent, or the parent a waiting runtime child names in asking_parent_session_id) whose topmost listed ancestor on its
-    machine is another listed row gets folded_under that ancestor, which gets children (its descendants by their own
-    state). Orphans and cycles fold nowhere."""
+    """The manager's folding (#5120, #5180, docs/protocol/protocol.md "Session hierarchy"), on copies: a child
+    (is_subagent, a parent, or the parent a waiting runtime child names in asking_parent_session_id) whose topmost listed
+    ancestor on its machine is another listed row gets folded_under that ancestor, which gets children (its descendants by
+    their own state). A tab's worker (tab_leads) has its lead as its parent and gets folded_as "worker" too; the lead's
+    children count its workers. Orphans and cycles fold nowhere."""
     by = {(r["machine_id"], r["session_id"]): r for r in rows}
+    lead = tab_leads(rows)
 
     def parent(r):
+        if not is_child_row(r):
+            return lead.get((r["machine_id"], r["session_id"]))
         for k in ("parent_session_id", "asking_parent_session_id", "root_session_id"):
             v = r.get(k)
             if v and v != r["session_id"] and (r["machine_id"], v) in by:
@@ -13106,7 +14122,7 @@ def fold_hierarchy(rows):
     top = {}
     for r in rows:
         cur, seen, found = r, {r["session_id"]}, None
-        while is_child_row(cur):
+        while True:
             p = parent(cur)
             if p is None:
                 break
@@ -13117,21 +14133,25 @@ def fold_hierarchy(rows):
             found = cur = p
         if found is not None:
             top[(r["machine_id"], r["session_id"])] = found["session_id"]
-    if not top and not any("folded_under" in r or "children" in r for r in rows):
+    if not top and not any("folded_under" in r or "folded_as" in r or "children" in r for r in rows):
         return rows
     rollup = {}
     for (mid, sid), root in top.items():
-        c = rollup.setdefault((mid, root), {"total": 0, "working": 0, "needs_you": 0})
+        c = rollup.setdefault((mid, root), {"total": 0, "working": 0, "needs_you": 0, "workers": 0})
         c["total"] += 1
         state = by[(mid, sid)].get("state")
         if state in ("working", "needs_you"):
             c[state] += 1
+        if (mid, sid) in lead:
+            c["workers"] += 1
     out = []
     for r in rows:
         k = (r["machine_id"], r["session_id"])
-        r = {x: v for x, v in r.items() if x not in ("folded_under", "children")}
+        r = {x: v for x, v in r.items() if x not in ("folded_under", "folded_as", "children")}
         if k in top:
             r["folded_under"] = top[k]
+            if k in lead:
+                r["folded_as"] = "worker"
         if k in rollup:
             r["children"] = {x: v for x, v in rollup[k].items() if v or x == "total"}
         out.append(r)
@@ -16422,7 +17442,8 @@ def agent_live(step, n):
 
 
 # MOCK_TOOL_TURN=1 (#3005): an agent in the middle of a turn of shell calls with long outputs, a message of the user's
-# queued behind it, history above it. GET /mock/tool_turn?step=… moves it on one push at a time, as the hub pushes them:
+# queued behind it, twelve finished exchanges above it (each with a work line). GET /mock/tool_turn?step=… moves it on one
+# push at a time, as the hub pushes them:
 #   call     a new call starts (its tool_use alone: running)
 #   result   the running call's result lands
 #   answer   the agent's answer lands and the turn is over (the agent idle)
@@ -16468,11 +17489,16 @@ if TOOL_TURN:
                          "subs", 1, 0, "Find the PR that closed it", state_since=ago(minutes=7),
                          queued=["顺便看一下静音开关那条还缺什么"]))
     _earlier = []
-    for _q, _a in (("把收件箱的折叠改一下", "收件箱的折叠改好了：已处理的分组默认收起，网页和 iOS 都在里面。"),
-                   ("网页那边部署了吗", "部署了，网页已经是新版本，iOS 跟下次 TestFlight 走。")):
-        _earlier += [it("user", "text", 30, text=_q)] + tool("Bash", {"command": "git log --oneline -3", "description": "Recent commits"},
-                                                              "abc1234 fix(web): fold handled groups\nbcd2345 docs: inbox folds", 30) \
-            + [it("assistant", "text", 29, text=_a + "\n\n" + "\n".join("- 第 %d 项：已经核对过，没有遗留问题。" % _k for _k in range(1, 9)))]
+    # Ten older exchanges first, each with a work line of its own: work lines all the way back, to open one in the middle
+    # of the chat and at its oldest end (KeepTappedRowTests).
+    _asks = [("第 %d 处改动：顺便看一下这一块的写法有没有问题？" % _k, "看过了，第 %d 处没有问题，两处重复的判断已经合并。" % _k, 240 - _k * 20)
+             for _k in range(1, 11)]
+    _asks += [("把收件箱的折叠改一下", "收件箱的折叠改好了：已处理的分组默认收起，网页和 iOS 都在里面。", 30),
+              ("网页那边部署了吗", "部署了，网页已经是新版本，iOS 跟下次 TestFlight 走。", 30)]
+    for _q, _a, _m in _asks:
+        _earlier += [it("user", "text", _m, text=_q)] + tool("Bash", {"command": "git log --oneline -3", "description": "Recent commits"},
+                                                              "abc1234 fix(web): fold handled groups\nbcd2345 docs: inbox folds", _m) \
+            + [it("assistant", "text", _m - 1, text=_a + "\n\n" + "\n".join("- 第 %d 项：已经核对过，没有遗留问题。" % _k for _k in range(1, 9)))]
     ITEMS[TOOL_TURN_SID] = _earlier + [it("user", "text", 7, text="来源订阅的需求推进情况如何")]
     for _n in range(3):
         ITEMS[TOOL_TURN_SID] += list(tool_turn_call(_n))
@@ -18640,6 +19666,7 @@ MOCK_HELP = [
     "MOCK_NEEDS=none|two  Persona 首页「现在要你处理的事」：什么都没有 / 一个请求加一件收件箱（默认超过三件）",
     "MOCK_HISTORY=1  很长的 Persona 对话历史（最近 30 个 + 查看全部）、一段交接对话、一个置顶，置顶写入会保存",
     "MOCK_MODELS_SECONDS=<秒>  新建 Agent 里列一个启动器的模型要多久（默认 0.8，CLI 起来回答的时间）",
+    "MOCK_REPLY_CUT=1|error  The review chat's last turn stopped right after its first words (interrupted; =error: a model API error): its reply says it did not complete (#5314)",
 ]
 
 _features_without_voice = features
@@ -19373,7 +20400,7 @@ class H(BaseHTTPRequestHandler):
             BUMPED.pop("blocked", None)
             TODOS[:] = copy.deepcopy(TODOS_INIT)
             TODO_DECISIONS[:] = copy.deepcopy(TODO_DECISIONS_INIT)
-            again = CODEX_INTERACTIONS + SCREEN_MULTI_INTERACTIONS  # the cards back, unanswered
+            again = CODEX_INTERACTIONS + SCREEN_MULTI_INTERACTIONS + ASK_LONG_INTERACTIONS  # the cards back, unanswered
             ids = {x["id"] for x in again}
             INTERACTIONS[:] = [x for x in INTERACTIONS if x["id"] not in ids] + copy.deepcopy(again)
             RESOLVED[:] = [r for r in RESOLVED if r["id"] not in ids]
@@ -19825,6 +20852,7 @@ class H(BaseHTTPRequestHandler):
                 LOG.write("  items after_seq=%d\n" % a); LOG.flush()
                 return self.send_json({"items": lazy_images([x for x in items if x["seq"] > a]), "more_after": False, **span(items, a, max(a, last))})
             if "through_seq" in q:  # opening a fold
+                if FOLD_DELAY: time.sleep(FOLD_DELAY)
                 frm, thru = int(q.get("from_seq", ["0"])[0]), int(q["through_seq"][0])
                 inside = [x for x in items if frm <= x["seq"] <= thru]
                 out = {"items": lazy_images(inside[:1000]), "more": len(inside) > 1000}
@@ -20469,6 +21497,15 @@ class H(BaseHTTPRequestHandler):
             port = int(p.split("/")[6])
             if not port_listening(port): return self.send_json({"error": "nothing is listening on port %d" % port}, 404)
             return self.send_json({"port": port, "listening": True, "http": True})
+        if self.command == "PUT" and p == "/api/v1/connectors/mail/settings":  # mail's Add to Inbox (#5307)
+            body = json.loads(self.last_body or b"{}")
+            mail_c = LEGACY_CONNECTORS[1]
+            for feed in ("inbox", "archive"):
+                if feed in body:
+                    if not isinstance(body[feed], bool):
+                        return self.send_json({"error": feed + ": true or false"}, 400)
+                    mail_c[feed] = body[feed]
+            return self.send_json(mail_c)
         if self.command == "PUT" and p == "/api/v1/connectors/github/settings":  # GitHub's inbox options
             body = json.loads(self.last_body or b"{}")
             if "inbox" in body:  # "Send to inbox" (MOCK_GITHUB_EXTENSION), from the connector's page or the extension's
@@ -21240,6 +22277,8 @@ class H(BaseHTTPRequestHandler):
                 ASSISTANT_CONFIG["main_supervises_own_tasks"] = body["main_supervises_own_tasks"]
             if isinstance(body.get("kb_topics"), bool):
                 ASSISTANT_CONFIG["kb_topics"] = body["kb_topics"]
+            if isinstance(body.get("next_suggestions"), bool):
+                ASSISTANT_CONFIG["next_suggestions"] = body["next_suggestions"]
             if body.get("machine_id"):
                 if not any(m["id"] == body["machine_id"] for m in MACHINES):
                     return self.send_json({"error": "unknown machine"}, 400)
@@ -22163,7 +23202,7 @@ MOCK_HELP.append("MOCK_EXTENSION_OPS=1|fail  （配合 MOCK_EXTENSIONS）扩展�
 MOCK_HELP.append("MOCK_MANAGER_NAS=1  （默认的三个管理者）NAS 归离线的「家里」：像 hub 一样显示成离线，error 是 hub 的「助手暂时连不上，稍后再试」；它的一个 agent（备份脚本）状态 unknown")
 MOCK_HELP.append("MOCK_ASSISTANT_BASH=1  主对话自己的第一条 Bash 在等批准（#4883），是它唯一的卡片：对话里输入区上方显示「在等你批准」，不只在收起的「需要你」里")
 MOCK_HELP.append("MOCK_LONG_REPORT=1|<items.json>  An Agent chat (macbook/a1f3c2d4-0000-4000-8000-000000000090) ending in one ~33,000-character report with nine tables and a dozen code blocks after 120 folded tool calls (#4970); a path serves that file's transcript items instead")
-MOCK_HELP.append("MOCK_ASK_LONG=1|perm|agent  卡片比输入区上方的盒子还高（#3112）：1 主对话的 ask_user 提问卡（八个带说明的选项）；perm 主对话的飞书授权卡（超长命令）；agent MacBook 上补测试的 Agent 对话里两张这样的授权卡、没有别的卡（手机和侧边面板把第二张折在「还有 1 件」后面）")
+MOCK_HELP.append("MOCK_ASK_LONG=1|actions|swipe|review|perm|agent  卡片比输入区上方的盒子还高（#3112）：1 主对话的 ask_user 提问卡（八个带说明的选项）；actions 单道八个带说明选项的多选题，swipe 短单选拖动不误发，review 六道单选题的长复核页，Submit 首屏可达（#4839）；perm 主对话的飞书授权卡（超长命令）；agent MacBook 上补测试的 Agent 对话里两张这样的授权卡、没有别的卡（手机和侧边面板把第二张折在「还有 1 件」后面）")
 MOCK_HELP.append("MOCK_MANAGER_NEEDS_YOU=0  名册不带 inbox_needs_you（旧 hub，或还不上报这个数的旧管理者）；默认每个在线的管理者带它收件箱里「需要你处理」的未完成条目数，数变了推 managers")
 MOCK_HELP.append("MOCK_MANAGER_OUTDATED=1  设置 › 管理者：「工作」带 needs_update（它还不读自己的 manager.json，hub 在它在线时这样标）")
 MOCK_HELP.append("MOCK_MANAGERS=1  只有 hub 自己的管理者（没有切换、不分组，电脑、会话、卡片和合并的列表照样带 manager）；默认三个装好的（一个离线）：电脑、收件箱、扩展带 manager，会话和卡片跟它的电脑走；默认管理者换成别的时，模拟助手发的实时消息带它的 manager；助手页按 X-Persona-Manager 切换（工作：还没有主对话、有自己的说明，PUT 改它的；家里：503 assistant_offline；不认识的 404 no_manager）；POST /api/v1/managers/{id}/machines、…/sources 移电脑 / 邮箱，删掉的管理者的电脑回到 hub 自己的")
@@ -22178,7 +23217,7 @@ MOCK_HELP.append("MOCK_CHANNELS=1  设置 › 插件 › 渠道：App、飞书�
 MOCK_HELP.append("MOCK_EXCHANGES=1  主对话新布局的素材（#1666）：Persona 发给任务的长消息、任务带链接和证据的长汇报、督办消息")
 MOCK_HELP.append("MOCK_MARKDOWN=1  任务往来和回执里带 **粗体**、`代码`、标题的原话（#2363）：应渲染成 Markdown，不露标记")
 MOCK_HELP.append("MOCK_TASK_RENAMED=1  整理发布说明这个任务在回执写好后改了名：回执应显示新名字「写本周发布说明」（#3036）")
-MOCK_HELP.append("MOCK_AUTO_CONVERSATIONS=1  助手对话带来源 origin（feature conversation_origin）：另有 10 段自动对话（收件箱 6、定时任务 2、飞书 /agent、对话派生），侧边栏收进「自动对话」（#3264）")
+MOCK_HELP.append("MOCK_AUTO_CONVERSATIONS=1  助手对话带来源 origin（feature conversation_origin）：另有 10 段自动对话（收件箱 6、定时任务 2、飞书 /agent、对话派生），侧边栏「最近」和用户自己的一起列、带来源标记，「全部对话」按来源筛（#3264、#5195）")
 MOCK_HELP.append("MOCK_EXTERNAL=1  和 MOCK_AUTO_CONVERSATIONS=1 一起用：飞书 /agent 那段带上请求和上下文，另加一段别的扩展开的（origin extension），两段都是外部的（#3758）")
 MOCK_HELP.append("MOCK_BACKGROUND_SUPERVISOR=1  The hub's built-in background supervisor conversation exists (#4927): origin task with no origin_ref, "
                  "named by GET /api/v1/assistant as background_supervisor, and archiving it is refused. Without it the setting "
@@ -22518,7 +23557,12 @@ MOCK_HELP.append("MOCK_INBOX_ITEM_UI=1  （和 MOCK_EXTENSIONS=1 一起）收件
 # run of `live` pushes for it, one per MOCK_LIVE_STATUS_TICK seconds (default 1): thinking, "thought for 3s", tokens
 # growing, the verb changing, the count holding still for a tick; then `live: null` and the session goes idle (the
 # turn is over). Subscribing again once it is over starts another run (the session working again).
-LIVE_STATUS = os.environ.get("MOCK_LIVE_STATUS") == "1"
+# MOCK_LIVE_STATUS=steady (#5312): a long run instead (MOCK_LIVE_STATUS_TICKS, default 150) writing 40 to 60 tokens a
+# tick, counted to the hundred from 1k as Claude's line does, the count holding for six ticks in every thirty (a tool
+# running): the running bar's speed, its history card and the tokens while it pauses. Its time counts from the turn's
+# start (every run is the same turn) and its `at` is in whole seconds, as the node writes them.
+LIVE_STATUS_MODE = os.environ.get("MOCK_LIVE_STATUS", "")
+LIVE_STATUS = LIVE_STATUS_MODE in ("1", "steady")
 LIVE_STATUS_STATE = {"running": set(), "senders": set()}
 LIVE_STATUS_STEPS = [
     {"verb": "Frosting", "elapsed_s": 1, "thinking": True},
@@ -22531,6 +23575,17 @@ LIVE_STATUS_STEPS = [
     {"verb": "Moonwalking", "elapsed_s": 8, "tokens_down": 4800},
     {"verb": "Moonwalking", "elapsed_s": 9, "tokens_down": 22800},
 ]
+
+
+def live_status_steady(ticks):
+    """MOCK_LIVE_STATUS=steady: thinking for two ticks, then a steady count with a pause every thirty ticks."""
+    steps, tokens = [], 0
+    for i in range(1, ticks + 1):
+        if i > 2 and i % 30 not in range(20, 26):
+            tokens += 40 + (i * 37) % 21
+        shown = tokens if tokens < 1000 else int(round(tokens, -2))
+        steps.append({"verb": "Frosting", "elapsed_s": i, **({"tokens_down": shown} if shown else {}), **({"thinking": True} if i <= 2 else {})})
+    return steps
 
 
 def live_status_subscribe(send, mid, sid):
@@ -22552,11 +23607,22 @@ def live_status_subscribe(send, mid, sid):
     def run():
         import time
         tick = float(os.environ.get("MOCK_LIVE_STATUS_TICK", "1"))
-        s.update(status="working", state="working", state_since=utc_now(), updated_at=utc_now())
+        steady = LIVE_STATUS_MODE == "steady"
+        # steady: every run is the turn the session was in when the mock started, and the line counts from its start as
+        # Claude's does; its `at` is in whole seconds, as the node writes it
+        starts = LIVE_STATUS_STATE.setdefault("start", {})
+        if steady and sid not in starts:
+            since = s.get("state_since") if s.get("state") == "working" else None
+            starts[sid] = datetime.fromisoformat(since.replace("Z", "+00:00")).timestamp() if since else time.time()
+        since = datetime.fromtimestamp(starts[sid], timezone.utc).isoformat().replace("+00:00", "Z") if steady else utc_now()
+        s.update(status="working", state="working", state_since=since, updated_at=utc_now())
         push_machine(mid)
-        for step in LIVE_STATUS_STEPS:
+        steps = live_status_steady(int(os.environ.get("MOCK_LIVE_STATUS_TICKS", "150"))) if steady else LIVE_STATUS_STEPS
+        for step in steps:
             time.sleep(tick)
-            push({**step, "at": utc_now()})
+            if steady:
+                step = {**step, "elapsed_s": int(time.time() - starts[sid]), "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+            push({"at": utc_now(), **step})
         time.sleep(tick)
         push(None)
         s.update(status="idle", state="idle", state_since=utc_now(), updated_at=utc_now())
@@ -22565,12 +23631,13 @@ def live_status_subscribe(send, mid, sid):
     threading.Thread(target=run, daemon=True).start()
 
 
-MOCK_HELP.append("MOCK_LIVE_STATUS=1  Claude 会话的实时状态行（session_live，#1963）：声明了 session_live 的连接订阅后按 MOCK_LIVE_STATUS_TICK 秒（默认 1）一条推 live（思考中、thought for、token 增长、动词变化），最后推 null、会话变空闲；结束后再订阅会重来一轮")
+MOCK_HELP.append("MOCK_LIVE_STATUS=1|steady  Claude 会话的实时状态行（session_live，#1963）：声明了 session_live 的连接订阅后按 MOCK_LIVE_STATUS_TICK 秒（默认 1）一条推 live（思考中、thought for、token 增长、动词变化），最后推 null、会话变空闲；结束后再订阅会重来一轮。steady（#5312）：一轮更长（MOCK_LIVE_STATUS_TICKS 条，默认 150），每条多 40–60 个 token（过 1k 按百计，同 Claude 的显示），每 30 条停 6 条（像在跑工具），给运行状态栏的速度和速度历史截图；同时开着 MOCK_WORK_TIMELINE 时它的「思考中」推送不再发")
 
 
 def work_timeline_live(send, mid, sid):
-    """MOCK_WORK_TIMELINE: the two live sessions say they are thinking, every 5 s for 10 minutes or until the page goes."""
-    if sid not in (WORKTL, ASK1):
+    """MOCK_WORK_TIMELINE: the two live sessions say they are thinking, every 5 s for 10 minutes or until the page goes
+    (not with MOCK_LIVE_STATUS=steady, whose own run tells the weather Agent's state, #5312)."""
+    if sid not in (WORKTL, ASK1) or LIVE_STATUS_MODE == "steady":
         return
 
     def run():
@@ -22628,7 +23695,8 @@ def chat_cards_mock():
 
 if os.environ.get("MOCK_CHAT_CARDS") == "1":
     chat_cards_mock()
-MOCK_HELP.append("MOCK_TAB_PANES=1  一个 herdr 标签页里三个 Agent（#2320）：发起者（pane_index 0，工作中）和它分出的两个窗格（Codex 停在电脑上的对话框、Claude 做完未看），旁边是一个 Agent 的普通标签页和左上是 shell 的两个平级 Agent；没有卡片")
+MOCK_HELP.append("MOCK_TAB_PANES=1  一个 herdr 标签页里三个 Agent（#2320）：发起者（pane_index 0，工作中）和它分出的两个窗格（Codex 停在电脑上的对话框、Claude 做完未看），旁边是一个 Agent 的普通标签页和左上是 shell 的两个平级 Agent；没有卡片。两个窗格作为 worker 折叠在发起者下面（folded_under / folded_as，#5180）")
+MOCK_HELP.append("MOCK_TEAM=1  A tab team (#5180, implies MOCK_TAB_PANES): the lead's tab adds a permission card of the Codex worker's (folded_under the lead, folded_as worker), a third worker that is working and a stopped pane that stays a row of its own; the lead and every worker have a short transcript")
 MOCK_HELP.append("MOCK_CHAT_CARDS=1  （配合 MOCK_SPLIT_TABS=1）server 上 w1:t1 那个工作中的 Claude 同时有计划、提问、授权三张卡，两条排队消息，/loop 和一个后台任务：手机上输入区最挤的样子（#1996）")
 
 # ---------- MOCK_GOAL: an agent working toward a goal (docs/integrations/agent-goal.md, #2420) ----------
@@ -22661,6 +23729,7 @@ if os.environ.get("MOCK_AGENT_PLANS") == "1":
         if _s["session_id"] == TESTS:
             _s["plan"] = {"done": 1, "total": 4, "at": ago(minutes=10)}
     MOCK_HELP.append("MOCK_AGENT_PLANS=1  小组件的 Agent 计划 3/5（在复现崩溃），网络层测试的 Agent 1/4（#5302）")
+MOCK_HELP.append("MOCK_BRANCH=1  macbook 上「给天气 App 加主屏幕小组件」的文件夹在 git 分支 feat/hourly-widget 上，聊天顶栏宽屏时显示它（#5421）")
 MOCK_HELP.append("MOCK_GOAL=1|stopped  macbook 上「给天气 App 加主屏幕小组件」有一个进行中的 goal（带最近一次检查的理由），「检查 PR #42 的改动」的 goal 已达成；stopped 时小组件那个 goal 用完了 token 预算（#2420）")
 
 # ---------- MOCK_EXTENSIONS: a hub from #1844 on (docs/extensions/extensions.md "Naming and compatibility") ----------
@@ -23823,6 +24892,238 @@ MOCK_HELP.append("MOCK_LAUNCHER_SWITCH=1|pending|refuse|pending,refuse  运行�
                  "自己的模型列表）；POST …/modes {launcher} 换到另一个 Claude 启动器就记下 pending_switch（codex 回 409 switch_other_agent，"
                  "sonnetcc 带模型回 409 switch_model_locked），换回自己的就清掉；下一条消息执行切换。pending：检查 PR 那个一开始就有待切换；"
                  "refuse：带切换的消息回 409 switch_busy。GET /mock/launcher_switch 看请求，?reset=1 复原")
+
+# Moving a running Agent between Claude Code and Codex (#5054, docs/protocol/protocol.md "Switching a running Agent to
+# another engine"): MOCK_ENGINE_SWITCH=1 advertises `engine_switch` and takes POST …/modes {launcher, from, model?,
+# effort?} with a launcher of the other engine (codex for the PR review, a Claude Code Agent; claude or sonnetcc for the
+# /orders one, a Codex Agent in a terminal, its launcher codex here): `pending_switch` with `agent` on the row, nothing
+# typed; the session's own launcher drops it; any other pick goes on to MOCK_LAUNCHER_SWITCH (combine both for a hub
+# that does both). The next message carrying it (`apply_switch`) moves the conversation: a new session of the target
+# engine (switching back: the earlier one, resumed) replaces the row, `engine_history` naming the stretches before it,
+# and its items get the handoff block (docs/protocol/protocol.md, the node's format) with the message, then a short
+# reply; the old session's items stay served (the chat stitches them). =pending: the PR review waits with a switch to
+# Codex; =done: "Add sign in with OAuth" went Claude Code -> Codex -> Claude Code (its live row the Claude session
+# resumed, the Codex stretch's items under ENGINE_DONE_CODEX); =refuse: a message carrying a switch is refused (409
+# switch_failed, delivered none) and the switch dropped. GET /mock/engine_switch: the picks and switches; ?reset=1
+# puts every row and its items back.
+ENGINE_SWITCH_MODE = os.environ.get("MOCK_ENGINE_SWITCH", "")
+ENGINE_SWITCH_LOG = []
+ENGINE_DONE_CLAUDE = "e5054000-0000-4000-8000-000000000001"
+ENGINE_DONE_CODEX = "019a5054-0000-7000-8000-000000000002"
+ENGINE_NAMES = {"claude": "Claude Code", "codex": "Codex"}
+ENGINE_ORIGINALS = []  # (index, row) as they were, for ?reset=1
+ENGINE_ITEMS = {}  # session -> its items as they were (None: it had none)
+
+
+def engine_now(ms=0):
+    """The time now (ago() counts from the mock's start): a switch's `until` and the items after it."""
+    return (datetime.now(timezone.utc) + timedelta(milliseconds=ms)).isoformat().replace("+00:00", "Z")
+
+
+def engine_esc(v):
+    return str(v).replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def engine_handoff_block(text, frm, to, model, resumed):
+    """The node's handoff block in front of the user's message (proto handoffBlock)."""
+    attrs = 'kind="engine-switch" title="Handoff" from="%s" to="%s"' % (engine_esc(frm), engine_esc(to))
+    if model: attrs += ' model="%s"' % engine_esc(model)
+    if resumed: attrs += ' resumed="1"'
+    return '<persona-context %s>\n%s\n</persona-context>\n\n' % (attrs, text)
+
+
+def engine_handoff_text(items, frm, to, delta):
+    """A handoff note shaped like the node's (prompts/agents/engine_handoff.md), from the stretch's items: the files it
+    changed and commands it ran, then its last words."""
+    a, b = ENGINE_NAMES.get(frm, frm), ENGINE_NAMES.get(to, to)
+    out = ["[Session handoff · internal context]",
+           ("You (%s) worked on this conversation before; it was handed over to the %s engine for a while, and now it is "
+            "switching back to you. Below is a record of what happened while you were away." % (b, a)) if delta else
+           ("This conversation was previously driven by the %s engine; from here on you (%s) continue it. Below is the "
+            "prior record of this conversation; continue naturally in the first person." % (a, b))]
+    files = [x["tool_input"]["file_path"] for x in items if x.get("kind") == "tool_use" and x.get("tool_name") in ("Edit", "Write") and (x.get("tool_input") or {}).get("file_path")]
+    commands = [x["tool_input"]["command"] for x in items if x.get("kind") == "tool_use" and x.get("tool_name") == "Bash" and (x.get("tool_input") or {}).get("command")]
+    if files or commands:
+        out += ["", "== Work ledger (auto-extracted) =="]
+        if files: out += ["Files changed:"] + ["- " + f for f in dict.fromkeys(files)]
+        if commands: out += ["Commands (most recent):"] + ["- " + c for c in commands[-3:]]
+    said = [x for x in items if x.get("kind") == "text" and x.get("role") in ("user", "assistant") and x.get("text")]
+    if said:
+        out += ["", "== Conversation while you were away ==" if delta else "== Recent conversation =="]
+        for x in said[-3:]:
+            text = re.sub(r"(?s)<persona-context .*?</persona-context>\s*", "", x["text"]).strip()
+            out += ["[User]" if x["role"] == "user" else "[Assistant]", text[:400]]
+    out += ["", "== End of handoff note; the user's new message follows =="]
+    return "\n".join(out)
+
+
+def engine_of_launcher(mid, name):
+    """The engine a launcher of the computer runs ("" when it has no such launcher)."""
+    listed = LAUNCHER_SWITCH_ALL if LAUNCHER_SWITCH_MODE else machine_launchers(mid)
+    l = next((x for x in listed if x["name"] == name), None)
+    if l is None: return ""
+    return l.get("agent") or LAUNCHER_MODELS.get(name, {}).get("agent") or "claude"
+
+
+def engine_default_model(launcher):
+    models = LAUNCHER_MODELS.get(launcher, {}).get("models") or [{}]
+    first = next((m for m in models if m.get("default")), models[0])
+    return first.get("resolved") or first.get("id") or ""
+
+
+def engine_row_for(s, sid, to, launcher, model, effort, history):
+    """`s` moved to engine `to`: the same conversation (title, place, terminal), the other engine's session."""
+    row = {k: v for k, v in s.items() if k not in ("pending_switch", "permission_mode", "can_fork", "effort", "context_tokens", "context_window",
+                                                   "codex_route", "codex_route_note", "activity", "activity_at", "efforts", "service_tiers")}
+    row.update(session_id=sid, agent=to, launcher=launcher, model=model, engine_history=history, status="idle", state="idle",
+               updated_at=engine_now(2), rev=(s.get("rev") or 0) + 1)
+    if effort: row["effort"] = effort
+    if to == "claude":
+        row.update(permission_mode="default", can_fork=True)
+        row.setdefault("effort", "high")
+    return row
+
+
+def engine_switch_carry(s, ps, text):
+    """The message carrying `ps` moves the conversation to ps.agent: the row replaced, the handoff in the new items."""
+    old, frm, to = s["session_id"], s.get("agent") or "claude", ps["agent"]
+    now = engine_now()
+    before = list(s.get("engine_history") or [])
+    history = before + [{"session_id": old, "agent": frm, "until": now}]
+    # the conversation ran on that engine before: its latest session of it is resumed with what happened meanwhile
+    earlier = next((l["session_id"] for l in reversed(before) if l["agent"] == to and l["session_id"] != old), None)
+    sid = earlier or str(uuid.uuid4())
+    since = next((l["until"] for l in reversed(before) if l["session_id"] == earlier), None) if earlier else None
+    stretch = [x for x in ITEMS.get(old, []) if not since or x["ts"] > since]
+    model = ps.get("model") or engine_default_model(ps["launcher"])
+    handoff = engine_handoff_text(stretch, frm, to, bool(earlier))
+    ENGINE_ITEMS.setdefault(sid, copy.deepcopy(ITEMS.get(sid)))
+    reply = ("Picking this up where we left off. I checked the workspace first and it matches, so I'll go on from there."
+             if not earlier else "Back on it. I read what changed while I was away and the workspace agrees, so I'll continue from there.")
+    # after `until`: the new stretch's window starts there
+    ITEMS[sid] = (ITEMS.get(sid, []) if earlier else []) + [
+        it("user", "text", 0, text=engine_handoff_block(handoff, frm, to, model, bool(earlier)) + (text or ""), ts=engine_now(1)),
+        it("assistant", "text", 0, text=reply, ts=engine_now(2))]
+    row = engine_row_for(s, sid, to, ps["launcher"], model, ps.get("effort"), history)
+    SESSIONS[SESSIONS.index(s)] = row
+    ENGINE_SWITCH_LOG.append({"switched": old, "to": sid, "agent": to, "resumed": bool(earlier)})
+    push_machine(s["machine_id"])
+
+
+def engine_switch_reset():
+    """Every row and its items as they were (the rows a switch made go)."""
+    ids = {row["session_id"] for _, row in ENGINE_ORIGINALS} | {e["to"] for e in ENGINE_SWITCH_LOG if "to" in e}
+    SESSIONS[:] = [x for x in SESSIONS if x["session_id"] not in ids]
+    for i, row in ENGINE_ORIGINALS:
+        SESSIONS.insert(min(i, len(SESSIONS)), copy.deepcopy(row))
+    for sid, items in ENGINE_ITEMS.items():
+        if items is None: ITEMS.pop(sid, None)
+        else: ITEMS[sid] = copy.deepcopy(items)
+    ENGINE_ITEMS.clear()
+    ENGINE_SWITCH_LOG.clear()
+
+
+def engine_switch_setup():
+    for i, x in enumerate(SESSIONS):
+        if x["session_id"] == ORDERS:
+            x["launcher"] = "codex"  # a Codex Agent started from the codex launcher
+        if x["session_id"] == REVIEW and "pending" in ENGINE_SWITCH_MODE:
+            x["pending_switch"] = {"launcher": "codex", "agent": "codex", "at": ago(minutes=2)}
+    if "done" in ENGINE_SWITCH_MODE:
+        t1, t2 = ago(minutes=50), ago(minutes=20)
+        first = ([it("user", "text", 70, text="Add sign in with OAuth to the weather app: GitHub first, keep the token in the keychain.")]
+                 + tool("Read", {"file_path": "/Users/me/code/weather/Sources/Weather/Auth/Session.swift"}, "struct Session { var token: String? }", 68)
+                 + tool("Edit", {"file_path": "/Users/me/code/weather/Sources/Weather/Auth/OAuth.swift", "old_string": "", "new_string": "enum OAuth { … }"}, "ok", 62)
+                 + [it("assistant", "text", 56, text="Sign in with GitHub works: the app opens the browser, takes the code back and keeps the token in the keychain.")])
+        handoff1 = engine_handoff_text(first, "claude", "codex", False)
+        middle = ([it("user", "text", 49, text=engine_handoff_block(handoff1, "claude", "codex", "gpt-5.5", False)
+                      + "Let's have Codex do the token refresh: an expired token should refresh without asking the user again.")]
+                  + tool("Bash", {"command": "rg -n refresh Sources/Weather/Auth"}, "Sources/Weather/Auth/OAuth.swift:41: // TODO refresh", 46)
+                  + tool("Edit", {"file_path": "/Users/me/code/weather/Sources/Weather/Auth/OAuth.swift", "old_string": "// TODO refresh", "new_string": "try await refresh()"}, "ok", 40)
+                  + tool("Bash", {"command": "swift test --filter OAuthTests"}, "Executed 6 tests, with 0 failures", 30)
+                  + [it("assistant", "text", 25, text="Expired tokens now refresh on their own before a request goes out; a refresh that fails signs the user out. The six OAuth tests pass.")])
+        handoff2 = engine_handoff_text(middle, "codex", "claude", True)
+        last = ([it("user", "text", 19, text=engine_handoff_block(handoff2, "codex", "claude", "opus", True)
+                    + "Looks good. Now add a Sign out button to Settings.")]
+                + tool("Edit", {"file_path": "/Users/me/code/weather/Sources/Weather/Settings/SettingsView.swift", "old_string": "Section {", "new_string": "Section {\n  Button(\"Sign Out\", role: .destructive) { session.signOut() }"}, "ok", 16)
+                + [it("assistant", "text", 14, text="Settings has a Sign Out button now; it clears the keychain token and goes back to the sign-in screen.")])
+        ITEMS[ENGINE_DONE_CLAUDE] = first + last
+        ITEMS[ENGINE_DONE_CODEX] = middle
+        SESSIONS.append(sess("macbook", ENGINE_DONE_CLAUDE, "Add sign in with OAuth", "/Users/me/code/weather", "idle", "idle", "weather", 1,
+                             "oauth", 5, 14, "Settings has a Sign Out button now; it clears the keychain token and goes back to the sign-in screen.",
+                             model="claude-opus-5-5", engine_history=[{"session_id": ENGINE_DONE_CLAUDE, "agent": "claude", "until": t1},
+                                                                     {"session_id": ENGINE_DONE_CODEX, "agent": "codex", "until": t2}]))
+    ENGINE_ORIGINALS[:] = [(i, copy.deepcopy(x)) for i, x in enumerate(SESSIONS) if x["session_id"] in (REVIEW, ORDERS, ENGINE_DONE_CLAUDE)]
+
+
+def engine_switch_route(handler, p, body):
+    """MOCK_ENGINE_SWITCH: a pick of the other engine's launcher, a message carrying it. False otherwise."""
+    if not ENGINE_SWITCH_MODE: return False
+    if p == "/mock/engine_switch":
+        if "reset=1" in (handler.path.split("?", 1) + [""])[1]:
+            engine_switch_reset()
+            for m in MACHINES: push_machine(m["id"])
+        return handler.send_json({"requests": ENGINE_SWITCH_LOG}) or True
+    m = re.fullmatch(r"/api/v1/sessions/([^/]+)/([^/]+)/(modes|messages)", p)
+    if not m or handler.command != "POST": return False
+    s = next((x for x in SESSIONS if x["machine_id"] == m.group(1) and x["session_id"] == m.group(2)), None)
+    if s is None: return False
+    req = json.loads(body or b"{}")
+    frm = s.get("agent") or "claude"
+    if m.group(3) == "messages":
+        ps = s.get("pending_switch")
+        if not ps or not ps.get("agent") or ps["agent"] == frm: return False
+        if "refuse" in ENGINE_SWITCH_MODE:
+            s.pop("pending_switch", None)
+            push_machine(s["machine_id"])
+            return handler.send_json({"error": "%s didn't come up in the Agent's terminal, so %s is back and your message wasn't sent"
+                                               % (ENGINE_NAMES.get(ps["agent"], ps["agent"]), ENGINE_NAMES.get(frm, frm)),
+                                      "code": "switch_failed", "delivered": "none"}, 409) or True
+        engine_switch_carry(s, ps, req.get("text") or "")
+        return False  # the message goes on as any other
+    launcher = req.get("launcher") or ""
+    if not launcher: return False
+    own = s.get("launcher") or "claude"
+    if req.get("from") and req["from"] != own:
+        return handler.send_json({"error": "The Agent runs on %s now, not %s: pick again" % (own, req["from"]), "code": "switch_stale"}, 409) or True
+    if launcher == own:
+        if (s.get("pending_switch") or {}).get("agent"):
+            ENGINE_SWITCH_LOG.append({"session_id": s["session_id"], "launcher": launcher})
+            s.pop("pending_switch", None)
+            push_machine(s["machine_id"])
+            return handler.send_json({}) or True
+        return False
+    to = engine_of_launcher(s["machine_id"], launcher)
+    if not to or to == frm: return False  # another launcher of its engine: MOCK_LAUNCHER_SWITCH's
+    ENGINE_SWITCH_LOG.append({"session_id": s["session_id"], **{k: req[k] for k in ("launcher", "from", "model", "effort") if k in req}})
+    s["pending_switch"] = {"launcher": launcher, **{k: req[k] for k in ("model", "effort") if req.get(k)}, "agent": to, "at": engine_now()}
+    push_machine(s["machine_id"])
+    return handler.send_json({}) or True
+
+
+if ENGINE_SWITCH_MODE:
+    engine_switch_setup()
+
+_plugins_route_without_engine_switch = plugins_route
+
+
+def plugins_route(handler, p, body):
+    return engine_switch_route(handler, p, body) or _plugins_route_without_engine_switch(handler, p, body)
+
+
+_features_without_engine_switch = features
+
+
+def features():
+    return _features_without_engine_switch() + (["engine_switch"] if ENGINE_SWITCH_MODE else [])
+
+
+MOCK_HELP.append("MOCK_ENGINE_SWITCH=1|pending|done|refuse  A running Agent moves between Claude Code and Codex (#5054): features list engine_switch; "
+                 "POST …/modes {launcher} with the other engine's launcher (codex for the PR review, claude for the /orders Codex Agent) records "
+                 "pending_switch with agent, the session's own launcher drops it; the next message replaces the row with the other engine's session "
+                 "(engine_history, a handoff block in its first item). pending: the PR review waits with a switch to Codex; done: \"Add sign in with "
+                 "OAuth\" went Claude Code -> Codex -> Claude Code; refuse: the message is refused (409 switch_failed). Combine with "
+                 "MOCK_LAUNCHER_SWITCH=1 for a hub that also switches launchers. GET /mock/engine_switch shows the requests, ?reset=1 restores")
 
 # Agent session archives (docs/protocol/protocol.md "Agent session archives"; web "Archived agents"): MOCK_AGENT_ARCHIVES=1
 # advertises archives and "Archive and close" (=archive: archives only, as behind an older manager), with two agents

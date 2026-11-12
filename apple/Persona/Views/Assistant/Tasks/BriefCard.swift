@@ -13,6 +13,9 @@ struct BriefCard: View {
     @Environment(\.horizontalSizeClass) private var widthClass
     /// Compact width: the done and failed rows show once this is on.
     @State private var pastOpen = false
+    @Environment(\.chatPin) private var pin
+    /// What the chat's pin knows the "Last N hours" line by (this view's, kept while it is drawn).
+    @State private var pastKey = "brief-past-" + UUID().uuidString
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
@@ -65,7 +68,8 @@ struct BriefCard: View {
         return VStack(alignment: .leading, spacing: Theme.Space.xs) {
             if folds {
                 Button {
-                    withAnimation(Theme.Motion.state) { pastOpen.toggle() }
+                    // In the chat the line stays where it is and the rows open under it (#3757).
+                    toggleInPlace(pin, pastKey, animation: Theme.Motion.state, closing: pastOpen) { pastOpen.toggle() }
                 } label: {
                     HStack(spacing: Theme.Space.s) {
                         BriefHead(symbol: Theme.Icon.time, tint: Theme.accent, title: title)
@@ -79,6 +83,7 @@ struct BriefCard: View {
                 .buttonStyle(.plain)
                 .accessibilityValue(pastOpen ? String(localized: "Expanded") : String(localized: "Collapsed"))
                 .accessibilityIdentifier("brief.past")
+                .chatPinned(pastKey)
             } else {
                 BriefHead(symbol: Theme.Icon.time, tint: Theme.accent, title: title)
             }

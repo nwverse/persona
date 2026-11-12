@@ -1,6 +1,7 @@
 package proto
 
 import (
+	"slices"
 	"strings"
 	"time"
 )
@@ -44,20 +45,53 @@ type SessionHierarchy struct {
 	// the manager (foldSessions, assistant/fleet_fold.go); empty for a session that is not a child, an orphan and a
 	// member of a cycle.
 	FoldedUnder string `json:"folded_under,omitempty"`
+	// FoldedAs says why a row that is no child folds under FoldedUnder: FoldedAsWorker for a worker of a tab's lead
+	// (#5180). Set by the manager beside FoldedUnder; empty for a child, whose own fields say why.
+	FoldedAs string `json:"folded_as,omitempty"`
 	// Children counts the sessions folded under this one, all depths, by their own states. Set by the manager on the
 	// topmost listed ancestor only.
 	Children *SessionChildren `json:"children,omitempty"`
+	// EngineHistory is the conversation's earlier stretches, oldest first, when it moved between Claude Code and Codex
+	// (#5054, docs/protocol/protocol.md "Switching a running Agent to another engine"): the session that ran each and
+	// when it was switched away from. Only the session running the conversation now carries it; the sessions it names
+	// are left out of the machine's list (one conversation, one row), and their transcripts stay readable and resumable.
+	// A session may be named more than once (switched back to and away again), each time for another stretch. Set by
+	// the node.
+	EngineHistory []EngineLeg `json:"engine_history,omitempty"`
 }
+
+// EngineLeg is one earlier stretch of a conversation (SessionHierarchy.EngineHistory): the session that ran it, its
+// engine ("claude" or "codex"), and when the conversation was switched away from it. The stretch began when the one
+// before it ended (the first: when its session began).
+type EngineLeg struct {
+	SessionID string    `json:"session_id"`
+	Agent     string    `json:"agent"`
+	Until     time.Time `json:"until"`
+}
+
+// SameEngineHistory: a and b name the same stretches.
+func SameEngineHistory(a, b []EngineLeg) bool {
+	return slices.EqualFunc(a, b, func(x, y EngineLeg) bool {
+		return x.SessionID == y.SessionID && x.Agent == y.Agent && x.Until.Equal(y.Until)
+	})
+}
+
+// FoldedAsWorker is SessionHierarchy.FoldedAs for a worker of a tab team: another running Agent in the tab whose first
+// pane runs the lead it folds under (docs/protocol/protocol.md "Session hierarchy", #5180).
+const FoldedAsWorker = "worker"
 
 // SessionChildren is the rollup a parent row carries of the children folded under it (SessionHierarchy.Children).
 type SessionChildren struct {
 	Total    int `json:"total"`
 	Working  int `json:"working,omitempty"`
 	NeedsYou int `json:"needs_you,omitempty"`
+	// Workers is how many of them are the row's tab workers (folded_as "worker"), counted in Total too.
+	Workers int `json:"workers,omitempty"`
 }
 
 func (h *SessionHierarchy) empty() bool {
-	return h.StartedAt.IsZero() && h.AskingParentSessionID == "" && h.FoldedUnder == "" && h.Children == nil
+	return h.StartedAt.IsZero() && h.AskingParentSessionID == "" && h.FoldedUnder == "" && h.FoldedAs == "" &&
+		h.Children == nil && len(h.EngineHistory) == 0
 }
 
 // hierarchy is a copy of s's hierarchy to change, its children copied too: the one s holds is shared.
@@ -70,6 +104,7 @@ func (s *Session) hierarchy() SessionHierarchy {
 		c := *h.Children
 		h.Children = &c
 	}
+	h.EngineHistory = slices.Clone(h.EngineHistory)
 	return h
 }
 
@@ -106,12 +141,40 @@ func (s *Session) FoldedUnder() string {
 	return s.Hierarchy.FoldedUnder
 }
 
+// FoldedAs says why this row folds under FoldedUnder when it is no child (SessionHierarchy.FoldedAs); "" otherwise.
+func (s *Session) FoldedAs() string {
+	if s.Hierarchy == nil {
+		return ""
+	}
+	return s.Hierarchy.FoldedAs
+}
+
 // Children is the rollup of the sessions folded under this one; the zero value when none are.
 func (s *Session) Children() SessionChildren {
 	if s.Hierarchy == nil || s.Hierarchy.Children == nil {
 		return SessionChildren{}
 	}
 	return *s.Hierarchy.Children
+}
+
+// EngineHistory is the conversation's earlier stretches this session continues (SessionHierarchy.EngineHistory),
+// oldest first; nil when it never moved between engines. Shared with the row's other copies: not to be changed.
+func (s *Session) EngineHistory() []EngineLeg {
+	if s.Hierarchy == nil {
+		return nil
+	}
+	return s.Hierarchy.EngineHistory
+}
+
+// SetEngineHistory sets the conversation's earlier stretches (nil: none), with no new hierarchy when it already has
+// them.
+func (s *Session) SetEngineHistory(legs []EngineLeg) {
+	if SameEngineHistory(s.EngineHistory(), legs) {
+		return
+	}
+	h := s.hierarchy()
+	h.EngineHistory = slices.Clone(legs)
+	s.setHierarchy(h)
 }
 
 // SetStartedAt sets when the session began (zero: not known), with no new hierarchy when it is already so.
@@ -134,19 +197,20 @@ func (s *Session) SetAskingParentSessionID(id string) {
 	s.setHierarchy(h)
 }
 
-// SetFold sets what folding says of the session: the session it folds under ("" for none) and the rollup of those
-// folded under it (nil for none). Nothing new is made when the session already says so.
-func (s *Session) SetFold(under string, children *SessionChildren) {
+// SetFold sets what folding says of the session: the session it folds under ("" for none), why when it is no child
+// (as: FoldedAsWorker, "" for none) and the rollup of those folded under it (nil for none). Nothing new is made when
+// the session already says so.
+func (s *Session) SetFold(under, as string, children *SessionChildren) {
 	cur := s.Hierarchy
-	if cur == nil && under == "" && children == nil {
+	if cur == nil && under == "" && as == "" && children == nil {
 		return
 	}
-	if cur != nil && cur.FoldedUnder == under && (cur.Children == nil) == (children == nil) &&
+	if cur != nil && cur.FoldedUnder == under && cur.FoldedAs == as && (cur.Children == nil) == (children == nil) &&
 		(children == nil || *cur.Children == *children) {
 		return
 	}
 	h := s.hierarchy()
-	h.FoldedUnder = under
+	h.FoldedUnder, h.FoldedAs = under, as
 	h.Children = nil
 	if children != nil {
 		c := *children

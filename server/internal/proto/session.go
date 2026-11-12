@@ -295,6 +295,10 @@ type Session struct {
 	TurnErrorAfterWork bool `json:"turn_error_after_work,omitempty"`
 	// Known transcript provenance, packed with flags; its JSON remains a string.
 	TitleSource TitleSource `json:"title_source,omitempty"`
+	// SuggestionRisky: Suggestion names a command, a path, a link, a secret-looking string or a risky action (delete,
+	// push, deploy, send…): the apps fill it in but offer no one-tap send (#4644). Set by the manager; kept beside
+	// the flags above, where it fits in their padding: a larger Session costs every copy of a list.
+	SuggestionRisky bool `json:"suggestion_risky,omitempty"`
 	// TurnError: the agent's latest turn ended in a model API error (the connection lost mid-response, overloaded,
 	// rate limited, the model service down…). The node sets it when the agent's own record says the turn failed
 	// (Codex: a rollout's task_complete.error, an app-server's failed turn, #2185); otherwise the hub reads it off the
@@ -372,9 +376,9 @@ type Session struct {
 	Host string `json:"host,omitempty"`
 	// Hierarchy is where the session stands among the sessions that started one another, and when it began
 	// (docs/protocol/protocol.md "Session hierarchy"); nil for most rows. Its members are written on the row itself
-	// (folded_under, children, started_at, asking_parent_session_id: sessionWire), so it has no key of its own. Read it
-	// with FoldedUnder, Children, StartedAt and AskingParentSessionID; it is shared by every copy of the row, so it is
-	// never written in place: SetFold, SetStartedAt and SetAskingParentSessionID put a new one.
+	// (folded_under, folded_as, children, started_at, asking_parent_session_id: sessionWire), so it has no key of its
+	// own. Read it with FoldedUnder, FoldedAs, Children, StartedAt and AskingParentSessionID; it is shared by every copy
+	// of the row, so it is never written in place: SetFold, SetStartedAt and SetAskingParentSessionID put a new one.
 	Hierarchy *SessionHierarchy `json:"-"`
 }
 
@@ -429,11 +433,16 @@ const (
 )
 
 // PendingSwitch is Session.PendingSwitch: the launcher the Agent moves to, the model and effort to run it with ("":
-// the launcher's own default model; the effort it runs with now), and when the user picked it.
+// the launcher's own default model; the effort it runs with now), and when the user picked it. Agent is the engine
+// ("claude" or "codex") a switch to another engine moves the conversation to (#5054, docs/protocol/protocol.md
+// "Switching a running Agent to another engine"): its next message starts that engine in the same terminal, with a
+// handoff summary, or resumes the conversation's own earlier session of it. Empty for a switch between launchers of
+// the same engine (#5035).
 type PendingSwitch struct {
 	Launcher string    `json:"launcher"`
 	Model    string    `json:"model,omitempty"`
 	Effort   string    `json:"effort,omitempty"`
+	Agent    string    `json:"agent,omitempty"`
 	At       time.Time `json:"at"`
 }
 
