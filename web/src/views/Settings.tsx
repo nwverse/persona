@@ -47,6 +47,7 @@ import { LauncherQuota } from "./settings/LauncherQuota";
 import { LauncherExtensionSections } from "./settings/ExtensionView";
 import { hubHasExt } from "../lib/extension-api";
 import { hostOf, type ProviderView } from "../lib/providers";
+import { referenceState } from "../lib/secret-reference";
 import { forgetProviderNames, providerIdNote, providerTitle } from "../lib/provider-names";
 import { harnessGroups, harnessLabel, scopeSummary } from "../lib/provider-scope";
 import { foundAliases, type EditDraft, type FoundAlias } from "../lib/provider-paste";
@@ -1054,7 +1055,7 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit }: { nam
               {l.kind !== "api" && (!l.agent || l.agent === "claude") && l.subagent_model && <KVRow k={t("settings.subagent_model")} v={l.subagent_model} mono />}
               {l.kind !== "api" && (!l.agent || l.agent === "claude") && l.custom_model && <KVRow k={t("settings.custom_model")} v={l.custom_model} mono />}
               {l.kind !== "api" && (!l.agent || l.agent === "claude") && l.custom_model_name && <KVRow k={t("settings.custom_model_name")} v={l.custom_model_name} />}
-              <KVRow k="API Key" v={l.has_key ? t("settings.key_set_hidden") : t("settings.not_set")} />
+              <KVRow k="API Key" v={l.key_reference ? referenceState(l.key_reference) : l.has_key ? t("settings.key_set_hidden") : t("settings.not_set")} />
               {l.share && <KVRow k={t("settings.devices")} v={scopeSummary(l, mname)} />}
               {l.share && l.key_machines?.length ? <KVRow k={t("settings.machine_keys")} v={formatList(l.key_machines.map(mname), { type: "conjunction", style: "narrow" })} /> : null}
               {l.api !== "responses" && l.api !== "chat" && (!l.agent || l.agent === "claude") && <KVRow k={t("settings.auth")} v={l.auth === "bearer" ? "Bearer" : "x-api-key"} />}

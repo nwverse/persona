@@ -24,6 +24,7 @@ This table only points the way. Values and rules live in the sections it names, 
 | A color, font, spacing, radius, size or animation | the tokens in section 2 | 1.2 rule 1, 2 |
 | An icon or a brand mark | `ThemedIcon`, `IconTile`, `BrandMark` | 2.8 |
 | A field for a secret | `SecretField` | 1.2 rule 4 |
+| A key that may be a secret provider's reference | `KeyField` (web) | 1.2 rule 4 |
 | A new setting | Settings, showing its current value | principles 2 and 3 |
 | Any UI change | the UI change self-check | 1.4 |
 
@@ -61,7 +62,10 @@ Relationship to other docs:
 1. UI code uses only tokens: font level, `Theme.Space`, `Theme.Radius`, `Theme.Size` with `scaledFrame`, `Theme.Motion`, role colors, `Theme.Icon`. A plain `frame` is for lines of 4 pt or less.
 2. Never restyle an existing screen directly. A new look is a new `AppStyle` or `ThemeColor`. A change that brings a screen in line with this document is a fix, not a new look; when it changes what a primary screen shows, it is a large change (section 1.4).
 3. Button text never wraps (decided 2026-11-10). A button label stays on one line at every text size. When a label would be truncated, work through these in order: (a) shorten the copy, in every language; (b) ask whether a button is the right control here, since long or user-supplied text is content and belongs in a row, a list or the body, and a set of actions that doesn't fit goes into a menu; (c) at accessibility text sizes (`dynamicTypeSize.isAccessibilitySize`) stack the whole button group vertically, primary action first, each label still on one line. `minimumScaleFactor` is a last resort for small overflows such as long translations, never the fix for a label that is too long. HIG-003 and HIG-012 in `docs/design/HIG_AUDIT.md` are tracked against this rule.
-4. Use `SecretField`, not `SecureField`, for tokens and keys.
+4. Use `SecretField`, not `SecureField`, for tokens and keys. A key a secret provider's reference can stand in for uses
+   `KeyField` (web): its **Use a reference** switch stays with that key, at the end of the key's label row, so in a list of
+   computers' keys each switch sits with its own, and a reference is typed in plain text, never masked
+   (`docs/extensions/secret-providers.md` "In the apps").
 5. Never write `glassEffect` or `.glass` directly. Go through `.surface` and `.themedButton`.
 6. Docs are English only. User-visible strings go through the string catalogs (section 5.5).
 
