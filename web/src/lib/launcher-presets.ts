@@ -133,7 +133,9 @@ export function assignByDefault(claudeAnswers: boolean, test: TestResult | null 
 export interface PresetForm {
   name: string;
   display_name: string;
+  /** A key, or with `key_by_reference` a secret provider's reference (the hub's `launcher_secret_references`). */
   api_key: string;
+  key_by_reference?: boolean;
   model: string;
 }
 
@@ -146,7 +148,7 @@ export function presetBody(p: LauncherPreset, f: PresetForm, assign = false) {
   return {
     ...(n ? { name: n } : {}),
     ...(d ? { display_name: d } : {}),
-    api_key: f.api_key.trim(),
+    ...(f.key_by_reference ? { api_key_reference: f.api_key.trim() } : { api_key: f.api_key.trim() }),
     preset: p.id,
     ...(m && m !== presetDefaultModel(p) ? { model: m } : {}),
     ...(assign ? { assign: [...ASSIGN_PURPOSES] } : {}),

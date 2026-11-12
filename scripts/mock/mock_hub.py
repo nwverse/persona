@@ -5567,6 +5567,14 @@ if os.environ.get("MOCK_REWIND"):
     if os.environ.get("MOCK_REWIND") == "safeguards":
         ITEMS[REVIEW][-2]["text"] = "> Example quote\n\nRevise this paragraph"
         ITEMS[REVIEW][-1]["text"] = "API Error: Opus 5.5's safeguards flagged this message. Details: [frontier_llm]"
+# MOCK_REPLY_CUT=1|error (#5314): the review chat's last turn stopped right after its first words (a read, the words, then
+# the interrupt notice; =error: a model API error instead), so the web's reply bar says the reply did not complete.
+if os.environ.get("MOCK_REPLY_CUT"):
+    ITEMS[REVIEW] = ITEMS[REVIEW] + [it("user", "text", 12, text="再看一下新加的重试测试")] + tool(
+        "Read", {"file_path": "/Users/me/code/weather/Tests/RetryTests.swift"}, "func testRetriesThreeTimes() {}", 11) + [
+        it("assistant", "text", 10, text="重试测试一共三个用例：前两个覆盖了超时和 503，第三个"),
+        it("assistant", "text", 9, text="API Error: 529 Overloaded") if os.environ.get("MOCK_REPLY_CUT") == "error"
+        else it("system", "notice", 9, text="已中断")]
 # MOCK_WORKFLOW=1 (#3436): the Workflow calls that launched the review agent's runs, each drawn as its run's card (the
 # parity-audit one in a turn the hub folds: the app fetches that fold for the card), and each agent's own conversation.
 if os.environ.get("MOCK_WORKFLOW") == "1":
@@ -5687,6 +5695,18 @@ if os.environ.get("MOCK_COMMENTS") == "1":
             "> 改成整行宽的主按钮", "",
             "整体可以，改完这三处再提交。"])),
         it("assistant", "text", 0.4, text="好，三处都改：城市名改成可选，解析失败回退到上次的缓存，保存按钮改成整行宽的主按钮。"),
+    ]
+    # And Persona's main conversation has a quote of words picked in its answer and a comment on others (#5204): the
+    # blocks sit in the new layout's box, whatever the style's bubble.
+    _answer = next(i["id"] for i in ITEMS[ASK1] if i["role"] == "assistant" and i["kind"] == "text")
+    ITEMS[ASK1] = ITEMS[ASK1] + [
+        it("user", "text", 2.1, text=f'<persona-context kind="quote" title="Persona" url="" msg="{_answer}" part="selection">\n'
+           "照片同步脚本（Mac Studio）的计划写好了，等你批准。\n</persona-context>\n这个下周再看。"),
+        it("assistant", "text", 2.0, text="好，下周一提醒你看照片同步脚本的计划。"),
+        it("user", "text", 1.9, text="\n".join([
+            "> Comment 1", "> Selected text:", "> > 韩梅梅在飞书问你周五的发布能不能赶上", "> ", "> 她说的是哪个版本？", "",
+            "先帮我问清楚再答复她。"])),
+        it("assistant", "text", 1.7, text="好，我先在飞书问她是哪个版本，问清楚了再告诉你。"),
     ]
 # MOCK_LIVE_STEP=bash|command|reads|parallel|thinking|thinking-folded (#2987): the widget chat is a minute into a new turn whose newest
 # step is still going, for the running work line that names it: `bash` a command Claude described (its description alone),
@@ -19317,6 +19337,7 @@ MOCK_HELP = [
     "MOCK_NEEDS=none|two  Persona 首页「现在要你处理的事」：什么都没有 / 一个请求加一件收件箱（默认超过三件）",
     "MOCK_HISTORY=1  很长的 Persona 对话历史（最近 30 个 + 查看全部）、一段交接对话、一个置顶，置顶写入会保存",
     "MOCK_MODELS_SECONDS=<秒>  新建 Agent 里列一个启动器的模型要多久（默认 0.8，CLI 起来回答的时间）",
+    "MOCK_REPLY_CUT=1|error  The review chat's last turn stopped right after its first words (interrupted; =error: a model API error): its reply says it did not complete (#5314)",
 ]
 
 _features_without_voice = features

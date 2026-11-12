@@ -2,6 +2,7 @@
 // (cindy's AddProviderWizard: connect → models, the rest folded under "Advanced"; the hub's presets are lib/launcher-presets.ts), its checks, the POST / PUT body, and the import preview of a computer's aliases. Pure: the views
 // in views/settings/Provider*.tsx only render it.
 import { ApiError, errorText } from "./api";
+import type { SecretReference } from "./secret-reference";
 import { hostOf as urlHost } from "./hubs";
 import { displayNameProblem, launcherNameProblem, testableKey } from "./launcher-presets";
 import type { ScopeView } from "./provider-scope";
@@ -41,6 +42,8 @@ export interface ProviderView extends ScopeView {
   custom_model_description?: string;
   args?: string[];
   has_key?: boolean;
+  /** The stored key is this secret provider's reference (docs/extensions/secret-providers.md "Launcher keys"). */
+  key_reference?: SecretReference;
   auth?: "api_key" | "bearer";
   models?: ProviderModel[];
   opus_model?: string;
@@ -82,7 +85,10 @@ export interface ProviderForm {
   display_name: string;
   base_url: string;
   auth: "bearer" | "api_key";
+  /** What is typed for the key: a key, or with `key_by_reference` a secret provider's reference; "" keeps what is stored. */
   api_key: string;
+  /** The key field takes a reference (the hub's `launcher_secret_references`). */
+  key_by_reference: boolean;
   models: FormModel[];
   /** The default model: one of the checked models. */
   model: string;
@@ -127,6 +133,7 @@ export function newForm(): ProviderForm {
     // gateways mostly want Bearer (ANTHROPIC_AUTH_TOKEN)
     auth: "bearer",
     api_key: "",
+    key_by_reference: false,
     models: [],
     model: "",
     small_model: "",
@@ -177,6 +184,7 @@ export function formFromView(v: ProviderView): ProviderForm {
     display_name: v.display_name ?? "",
     base_url: v.base_url ?? "",
     auth: storedAuth(v),
+    key_by_reference: !!v.key_reference,
     models,
     model: v.model ?? "",
     small_model: v.small_model ?? "",
@@ -370,7 +378,7 @@ export function fallbackTitle(f: ProviderForm, autoName: boolean): string {
  *  key that looks whole (typed, or the stored one when editing). A saved provider is checked only once its address, key
  *  or sign-in method differs from what is stored, so opening it sends nothing (#4881). */
 export function autoCheckable(f: ProviderForm, old: ProviderView | null): boolean {
-  if (!f.base_url.trim() || gatewayProblem(f.base_url)) return false;
+  if (!f.base_url.trim() || gatewayProblem(f.base_url) || referencePending(f)) return false;
   const key = f.api_key.trim();
   if (key && !testableKey(key)) return false;
   if (!old) return !!key;
@@ -454,7 +462,7 @@ export function providerBody(f: ProviderForm, old: ProviderView | null, clearLeg
     args: api ? [] : f.args.split(/\s+/).filter(Boolean),
     auth: openAI ? "api_key" : f.auth,
   };
-  if (f.api_key.trim()) body.api_key = f.api_key.trim();
+  if (f.api_key.trim()) body[f.key_by_reference ? "api_key_reference" : "api_key"] = f.api_key.trim();
   const extra = extraFields(f);
   const before = old && extraFields(formFromView(old));
   for (const [k, v] of Object.entries(extra)) {
@@ -468,15 +476,22 @@ export function providerBody(f: ProviderForm, old: ProviderView | null, clearLeg
   return body;
 }
 
-/** POST /api/v1/launchers/test and /discover's body: by name when editing (the stored key and headers), what is typed over it. */
+/** POST /api/v1/launchers/test and /discover's body: by name when editing (the stored key and headers), what is typed over it.
+ *  A reference is never sent: the probe would hand its value to the address in the request (`referencePending`). */
 export function probeBody(f: ProviderForm, stored: string | null, model?: string): Record<string, unknown> {
   const b: Record<string, unknown> = { base_url: f.base_url.trim(), auth: f.auth, api: f.api };
   if (stored) b.name = stored;
-  if (f.api_key.trim()) b.api_key = f.api_key.trim();
+  if (f.api_key.trim() && !f.key_by_reference) b.api_key = f.api_key.trim();
   if (!(f.kind === "api" && f.api === "chat") && f.headers_touched) b.headers = f.headers.trim();
   if (model !== undefined) b.model = model;
   if (f.kind === "api") b.via_machine = f.via_machine; // tested from where it will be sent
   return b;
+}
+
+/** A reference is typed that is not saved yet: the connection test and the model list wait for the save, which checks
+ *  that it resolves (the stored provider is then probed by name). */
+export function referencePending(f: Pick<ProviderForm, "api_key" | "key_by_reference">): boolean {
+  return f.key_by_reference && !!f.api_key.trim();
 }
 
 export interface TestResult {

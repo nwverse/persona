@@ -52,6 +52,7 @@ import {
   newForm,
   probeBody,
   providerBody,
+  referencePending,
   testModel,
   testText,
   type FormModel,
@@ -73,7 +74,7 @@ import { Icon, type IconName } from "../../ui/icons";
 import { Segmented } from "../assistant/parts";
 import { InstallClaudeHelp } from "../assistant/Readiness";
 import { Pill, Switch } from "./SettingsParts";
-import { AUTO_TEST_MS, BusyLine, CheckMark, Disclosure, FIELD, INPUT, Labelled, LineAction, SecretField, SMALL, TextField } from "./ProviderFields";
+import { AUTO_TEST_MS, BusyLine, CheckMark, Disclosure, FIELD, INPUT, KeyField, Labelled, LineAction, SecretField, SMALL, TextField } from "./ProviderFields";
 import { ProviderPaste } from "./ProviderPaste";
 import { ProviderScope } from "./ProviderScope";
 import { t } from "../../i18n";
@@ -198,6 +199,8 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, found
   // when its hub returns one, a new one's when the hub says it takes it
   const scopeOn = useStore((s) => scopeShown(old, s.features));
   const machines = useStore((s) => s.machines);
+  // A provider's key may be a secret provider's reference (docs/extensions/secret-providers.md "Launcher keys").
+  const keyRefs = useStore((s) => hubHas(s.features, "launcher_secret_references"));
   const [scope, setScope] = useState<ScopeForm>(() => newScope());
   const [devicesOpen, setDevicesOpen] = useState(false);
 
@@ -262,16 +265,18 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, found
   // A preset's key is tested by itself once it stops changing: the hub fills in the address and the default model.
   useEffect(() => {
     const seq = ++testSeq.current;
-    if (step !== "key" || !preset || !presetTestable(preset) || !testableKey(pf.api_key)) {
+    // a reference is checked by the save, never sent to a test (lib/providers.ts referencePending)
+    if (step !== "key" || !preset || !presetTestable(preset) || pf.key_by_reference || !testableKey(pf.api_key)) {
       setKeyTest(null);
       return;
     }
     const timer = setTimeout(() => void runKeyTest(seq), AUTO_TEST_MS);
     return () => clearTimeout(timer);
-  }, [step, preset?.id, pf.api_key, pf.model]);
+  }, [step, preset?.id, pf.api_key, pf.key_by_reference, pf.model]);
 
   const runKeyTest = async (seq = ++testSeq.current) => {
-    if (!preset) return;
+    // here as well as at its callers: a reference sent as the key would hand its value to the preset's address
+    if (!preset || pf.key_by_reference) return;
     setKeyTest({ running: true });
     let result: TestResult;
     try {
@@ -570,7 +575,7 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, found
         ))}
 
         {step === "key" && preset && (
-          <KeyStep preset={preset} pf={pf} setPf={setPf} keyTest={keyTest} onRetest={() => void runKeyTest()} onOther={() => (setError(""), setChoice(""), setStep("pick"))} assign={hubNames ? assign : null} setAssign={setAssign} checking={pending && assignSet === null} works={works ? readiness?.machine?.name ?? "" : null} more={more} setMore={setMore}
+          <KeyStep keyRefs={keyRefs} preset={preset} pf={pf} setPf={setPf} keyTest={keyTest} onRetest={() => void runKeyTest()} onOther={() => (setError(""), setChoice(""), setStep("pick"))} assign={hubNames ? assign : null} setAssign={setAssign} checking={pending && assignSet === null} works={works ? readiness?.machine?.name ?? "" : null} more={more} setMore={setMore}
             devices={scopeOn && (
               <Disclosure title={t("settings-providerwizard.step_devices")} open={devicesOpen} onToggle={() => setDevicesOpen((o) => !o)}
                 badge={devicesOpen ? undefined : scopeSummary(formScope(scope, hubNames && assign), (id) => machines.find((m) => m.id === id)?.name || id)}>
@@ -631,7 +636,9 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, found
                 <Segmented<ProviderForm["auth"]> label={t("settings-providerwizard.auth")} value={f.auth} onChange={set("auth")} options={[{ v: "bearer", label: "Bearer" }, { v: "api_key", label: "x-api-key" }]} />
               </Labelled>
             )}
-            <SecretField label={isNew || !old?.has_key ? "API Key" : t("settings-providerwizard.key_keep")} value={f.api_key} onChange={set("api_key")} placeholder={old?.has_key ? t("settings-providerwizard.key_set") : "sk-…"} hint={t("settings-providerwizard.key_hint")} />
+            <KeyField label={isNew || !old?.has_key ? "API Key" : t("settings-providerwizard.key_keep")} value={f.api_key} onChange={set("api_key")} placeholder={old?.has_key ? t("settings-providerwizard.key_set") : "sk-…"} hint={f.key_by_reference ? undefined : t("settings-providerwizard.key_hint")}
+              byReference={f.key_by_reference} stored={old?.key_reference}
+              onByReference={keyRefs ? (on) => setF((x) => ({ ...x, key_by_reference: on, api_key: "" })) : undefined} />
             {f.kind === "api" && (
               <Labelled label={t("settings-providerwizard.via")} hint={t("settings-providerwizard.via_hint")}>
                 <select value={f.via_machine} onChange={(e) => set("via_machine")(e.target.value)} aria-label={t("settings-providerwizard.via")} className={INPUT}>
@@ -646,14 +653,14 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, found
                 <div className="flex flex-wrap items-center gap-2">
                   <input value={probeModel} onChange={(e) => setProbeModel(e.target.value)} placeholder={testModel(f) || t("settings-providerwizard.test_model")} aria-label={t("settings-providerwizard.test_model")} autoComplete="off" spellCheck={false}
                     className={cx(FIELD, "h-8 w-full min-w-0 px-2.5 font-mono text-[12.5px] sm:w-auto sm:flex-1")} />
-                  <Button tone="secondary" icon="run" busy={testing} disabled={!!problems.reach || hasLegacyChat} onClick={testByHand}>
+                  <Button tone="secondary" icon="run" busy={testing} disabled={!!problems.reach || hasLegacyChat || referencePending(f)} onClick={testByHand}>
                     {t("settings-providerwizard.test")}
                   </Button>
-                  <Button tone="secondary" icon="download" busy={discovering} disabled={!!problems.reach || hasLegacyChat} onClick={() => void runDiscover()}>
+                  <Button tone="secondary" icon="download" busy={discovering} disabled={!!problems.reach || hasLegacyChat || referencePending(f)} onClick={() => void runDiscover()}>
                     {t("settings-providerwizard.discover")}
                   </Button>
                 </div>
-                <p className="text-[11px] text-ink-3">{hasLegacyChat ? t("settings-providerwizard.chat_probe_legacy") : testModel(f) ? t("settings-providerwizard.test_cost_current", { model: testModel(f) }) : t("settings-providerwizard.test_cost")}</p>
+                <p className="text-[11px] text-ink-3">{hasLegacyChat ? t("settings-providerwizard.chat_probe_legacy") : referencePending(f) ? t("settings-providerfields.reference_saved") : testModel(f) ? t("settings-providerwizard.test_cost_current", { model: testModel(f) }) : t("settings-providerwizard.test_cost")}</p>
                 {!hasLegacyChat && (
                   <ConnectStatus
                     discovering={discovering}
@@ -785,7 +792,7 @@ function PickStep({ presets, error, choice, onPick, onPaste, found, onFound }: {
 }
 
 /** (2) for a preset: only the key; it is tested by itself. The names and another model wait under "More options". */
-function KeyStep({ preset, pf, setPf, keyTest, onRetest, onOther, assign, setAssign, checking, works, more, setMore, devices }: {
+function KeyStep({ preset, pf, setPf, keyTest, onRetest, onOther, assign, setAssign, checking, works, more, setMore, devices, keyRefs }: {
   preset: LauncherPreset;
   pf: PresetForm;
   setPf: React.Dispatch<React.SetStateAction<PresetForm>>;
@@ -804,6 +811,8 @@ function KeyStep({ preset, pf, setPf, keyTest, onRetest, onOther, assign, setAss
   setMore: (fn: (o: boolean) => boolean) => void;
   /** The "Devices" disclosure, when the hub takes a scope. */
   devices?: React.ReactNode;
+  /** The hub takes a secret provider's reference for the key (`launcher_secret_references`). */
+  keyRefs?: boolean;
 }) {
   const signup = signupHref(preset);
   const choices = presetChoices(preset);
@@ -824,15 +833,18 @@ function KeyStep({ preset, pf, setPf, keyTest, onRetest, onOther, assign, setAss
         </span>
       </div>
       {assign === null && nameField}
-      <SecretField label="API Key" value={pf.api_key} onChange={(v) => setPf((x) => ({ ...x, api_key: v }))} placeholder={t("settings-providerwizard.key_paste")}
-        hint={preset.key_hint ? t("settings-providerwizard.key_hint_with", { hint: preset.key_hint }) : t("settings-providerwizard.key_hint")} />
+      <KeyField label="API Key" value={pf.api_key} onChange={(v) => setPf((x) => ({ ...x, api_key: v }))} placeholder={t("settings-providerwizard.key_paste")}
+        hint={pf.key_by_reference ? undefined : preset.key_hint ? t("settings-providerwizard.key_hint_with", { hint: preset.key_hint }) : t("settings-providerwizard.key_hint")}
+        byReference={!!pf.key_by_reference} onByReference={keyRefs ? (on) => setPf((x) => ({ ...x, key_by_reference: on, api_key: "" })) : undefined} />
       {signup && (
         <a href={signup} target="_blank" rel="noopener noreferrer" className="touch-hit inline-flex items-center gap-1 self-start whitespace-nowrap text-[12px] font-medium text-accent hover:underline">
           {t("settings-providerwizard.where_key")}
           <Icon name="external" size={11} stroke={2} />
         </a>
       )}
-      {presetTestable(preset) ? (
+      {pf.key_by_reference ? (
+        <p className="text-[11.5px] leading-relaxed text-ink-3">{t("settings-providerfields.reference_saved")}</p>
+      ) : presetTestable(preset) ? (
         <KeyTestStatus keyTest={keyTest} hasKey={!!pf.api_key.trim()} onRetest={onRetest} onOther={onOther} />
       ) : (
         <p className="text-[11.5px] leading-relaxed text-ink-3">{t("settings-providerwizard.key_test_responses")}</p>

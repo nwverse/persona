@@ -1,6 +1,1202 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "%@'s settings": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@'s settings"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ 的设置"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@の設定"
+          }
+        }
+      }
+    },
+    "Agent tools and automation for this assistant's computers.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agent tools and automation for this assistant's computers."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此助手电脑上的 Agent 工具与自动化。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このアシスタントのコンピュータで使う Agent ツールと自動化です。"
+          }
+        }
+      }
+    },
+    "Agents List Layout": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agents List Layout"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agents 列表布局"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agents 一覧のレイアウト"
+          }
+        }
+      }
+    },
+    "Appearance & Display": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Appearance & Display"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "外观与显示"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "外観と表示"
+          }
+        }
+      }
+    },
+    "Choose models for each use.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose models for each use."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "为各项用途选择模型。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用途ごとにモデルを選びます。"
+          }
+        }
+      }
+    },
+    "Current Assistant's Settings": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Current Assistant's Settings"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "当前助手的设置"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "現在のアシスタントの設定"
+          }
+        }
+      }
+    },
+    "Devices & Pairing": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Devices & Pairing"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "设备与配对"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "デバイスとペアリング"
+          }
+        }
+      }
+    },
+    "Diagnostics": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diagnostics"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "诊断"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "診断"
+          }
+        }
+      }
+    },
+    "Disconnect and Forget Hub": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disconnect and Forget Hub"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "断开并忘记 Hub"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hub を切断して削除"
+          }
+        }
+      }
+    },
+    "Disconnect and Forget Hub…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disconnect and Forget Hub…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "断开并忘记 Hub…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hub を切断して削除…"
+          }
+        }
+      }
+    },
+    "Hub": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hub"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hub"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hub"
+          }
+        }
+      }
+    },
+    "Hub Connection": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hub Connection"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hub 连接"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hub 接続"
+          }
+        }
+      }
+    },
+    "Hub settings are shared by all assistants and devices.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hub settings are shared by all assistants and devices."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hub 设置由所有助手和设备共享。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hub の設定はすべてのアシスタントとデバイスで共有されます。"
+          }
+        }
+      }
+    },
+    "Language & Dictation": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Language & Dictation"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "语言与听写"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "言語と音声入力"
+          }
+        }
+      }
+    },
+    "Manage connections and keys. Choose how a model runs inside each use's advanced settings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Manage connections and keys. Choose how a model runs inside each use's advanced settings."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "管理连接与密钥。模型的运行方式可在各项用途的高级设置中选择。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接続とキーを管理します。モデルの実行方法は各用途の詳細設定で選べます。"
+          }
+        }
+      }
+    },
+    "Models": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Models"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "模型"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "モデル"
+          }
+        }
+      }
+    },
+    "No settings found": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No settings found"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没有找到相关设置"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "一致する設定がありません"
+          }
+        }
+      }
+    },
+    "Only the current assistant's settings are shown. Switch assistants to change another's settings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only the current assistant's settings are shown. Switch assistants to change another's settings."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这里只显示当前助手的设置。要修改其他助手，请先切换。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "現在のアシスタントの設定だけを表示しています。別のアシスタントを変更するには切り替えてください。"
+          }
+        }
+      }
+    },
+    "Providers and Keys": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Providers and Keys"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "供应商与密钥"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プロバイダーとキー"
+          }
+        }
+      }
+    },
+    "Search Results": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search Results"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "搜索结果"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "検索結果"
+          }
+        }
+      }
+    },
+    "Search Settings": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search Settings"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "搜索设置"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "設定を検索"
+          }
+        }
+      }
+    },
+    "Switch": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Switch"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "切换"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "切り替え"
+          }
+        }
+      }
+    },
+    "These settings stay the same when you switch assistants.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "These settings stay the same when you switch assistants."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "切换助手不会改变这些设置。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アシスタントを切り替えても、これらの設定は変わりません。"
+          }
+        }
+      }
+    },
+    "This Device [Settings Scope]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This Device"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台设备"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このデバイス"
+          }
+        }
+      }
+    },
+    "This assistant has no online computers. Connect one to change its Agent settings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This assistant has no online computers. Connect one to change its Agent settings."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此助手没有在线电脑。连接一台电脑后，即可修改其 Agent 设置。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このアシスタントにはオンラインのコンピュータがありません。接続すると Agent 設定を変更できます。"
+          }
+        }
+      }
+    },
+    "settings.search.about": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "about version build commit diagnostics new chat check"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "关于 版本 构建 commit 诊断 新对话 检查"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "情報 バージョン ビルド commit 診断 新しいチャット チェック"
+          }
+        }
+      }
+    },
+    "settings.search.agents": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agent Claude Code Codex session triage runtime"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agent Claude Code Codex 会话 分诊 运行时"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agent Claude Code Codex セッション トリアージ ランタイム"
+          }
+        }
+      }
+    },
+    "settings.search.appearance": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "appearance display color theme style text size layout dark light glow"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "外观 显示 颜色 主题 风格 字号 布局 深色 浅色 发光"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "外観 表示 色 テーマ スタイル 文字サイズ レイアウト ダーク ライト"
+          }
+        }
+      }
+    },
+    "settings.search.assistant": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "profile name memory notes triage"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "助手 资料 名字 记忆 备注 分诊"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アシスタント プロフィール 名前 メモリ メモ"
+          }
+        }
+      }
+    },
+    "settings.search.assistants": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "assistants managers create default switch"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "助手 管理 新建 默认 切换"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アシスタント 管理 作成 デフォルト 切り替え"
+          }
+        }
+      }
+    },
+    "settings.search.avatar": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "avatar face persona shared icon name"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "形象 头像 Persona 图标 名字 共享"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アバター 顔 Persona アイコン 名前 共有"
+          }
+        }
+      }
+    },
+    "settings.search.channels": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "channel bot messaging WeChat Feishu"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "渠道 机器人 消息 微信 飞书"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "チャネル ボット メッセージ WeChat Feishu"
+          }
+        }
+      }
+    },
+    "settings.search.colors": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "theme color palette accent"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "主题 颜色 配色"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "テーマ 色 パレット"
+          }
+        }
+      }
+    },
+    "settings.search.computers": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "computers machines nodes pairing"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "电脑 计算机 机器 节点 配对"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "コンピュータ マシン ノード ペアリング"
+          }
+        }
+      }
+    },
+    "settings.search.connectors": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "connector mail email sources accounts sent as you"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "连接器 邮件 邮箱 来源 账号 以你的名义发出"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "コネクタ メール ソース アカウント 自分として送信"
+          }
+        }
+      }
+    },
+    "settings.search.devices": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "devices pairing Watch sync disconnect unpair QR code"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "设备 配对 Watch 手表 同步 断开 扫码"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "デバイス ペアリング Watch 同期 切断 QR コード"
+          }
+        }
+      }
+    },
+    "settings.search.extensions": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "extension plugin market tools install"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "扩展 插件 市场 工具 安装"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "拡張機能 プラグイン マーケット ツール インストール"
+          }
+        }
+      }
+    },
+    "settings.search.health": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "health workout report Apple Health"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "健康 运动 报告 Apple 健康"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ヘルスケア ワークアウト レポート Apple ヘルスケア"
+          }
+        }
+      }
+    },
+    "settings.search.hubs": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hub server connection address network tunnel"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hub 服务器 连接 地址 网络 隧道"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hub サーバー 接続 アドレス ネットワーク トンネル"
+          }
+        }
+      }
+    },
+    "settings.search.knowledge": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "knowledge base selection sources priorities retention"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "知识库 选择 来源 优先级 保留"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ナレッジベース 選択 ソース 優先順位 保持"
+          }
+        }
+      }
+    },
+    "settings.search.language": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "language dictation speech voice keyboard"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "语言 听写 语音 键盘"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "言語 音声入力 ディクテーション キーボード"
+          }
+        }
+      }
+    },
+    "settings.search.layout": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agents list layout rows cards compact"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agents 列表 布局 行 卡片 紧凑"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agents 一覧 レイアウト 行 カード コンパクト"
+          }
+        }
+      }
+    },
+    "settings.search.meetings": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "meetings recording attendance transcription minutes"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会议 录音 参会 转写 纪要"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会議 録音 参加 文字起こし 議事録"
+          }
+        }
+      }
+    },
+    "settings.search.models": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "model providers API key purpose subscription launcher execution"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "模型 供应商 API Key 密钥 用途 订阅 运行方式"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "モデル プロバイダー API キー API Key 用途 サブスクリプション 実行方式"
+          }
+        }
+      }
+    },
+    "settings.search.notifications": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "notifications push alerts lock screen privacy"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "通知 推送 提醒 锁屏 隐私"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "通知 プッシュ アラート ロック画面 プライバシー"
+          }
+        }
+      }
+    },
+    "settings.search.phoneData": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "iPhone data permissions photos contacts calendar reminders location health clipboard"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "iPhone 数据 权限 授权 照片 联系人 日历 提醒事项 位置 健康 剪贴板"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "iPhone データ 権限 写真 連絡先 カレンダー リマインダー 位置 ヘルスケア クリップボード"
+          }
+        }
+      }
+    },
+    "settings.search.scheme": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "light dark system appearance"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "浅色 深色 系统 外观"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ライト ダーク システム 外観"
+          }
+        }
+      }
+    },
+    "settings.search.storage": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "storage cache disk clear cleanup"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "存储 空间 缓存 磁盘 清理"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ストレージ キャッシュ ディスク 消去"
+          }
+        }
+      }
+    },
+    "settings.search.style": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "interface style fonts text size"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "界面 风格 字体 字号"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "インターフェース スタイル フォント 文字サイズ"
+          }
+        }
+      }
+    },
+    "settings.search.translation": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "translation translate language"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "翻译 译文 语言"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "翻訳 言語"
+          }
+        }
+      }
+    },
+    "settings.search.triage": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "session triage delegation questions permissions"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会话 分诊 委托 问题 权限"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "セッション トリアージ 委任 質問 権限"
+          }
+        }
+      }
+    },
+    "settings.search.version": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hub server version update upgrade"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hub 服务器 版本 更新 升级"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hub サーバー バージョン 更新 アップグレード"
+          }
+        }
+      }
+    },
     "The app asks every address at once and uses the first in this order that answers; a later one when the earlier ones don't answer quickly. The paired address always comes first." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -37104,7 +38300,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已连接 hub"
+            "value" : "已连接 Hub"
           }
         }
       },
@@ -62087,7 +63283,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "hub 版本"
+            "value" : "Hub 版本"
           }
         }
       },
@@ -166655,6 +167851,2330 @@
           "stringUnit": {
             "state": "translated",
             "value": "这个 Agent 停止前没有留下消息。"
+          }
+        }
+      }
+    },
+    "%@ recorded": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ recorded"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已录 %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@録音済み"
+          }
+        }
+      }
+    },
+    "%@ recorded · transcribed to %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ recorded · transcribed to %2$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已录 %1$@ · 已转写到 %2$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@録音済み · %2$@まで文字起こし済み"
+          }
+        }
+      }
+    },
+    "%lld waiting for iPhone": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld waiting for iPhone"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld 段等待传到 iPhone"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld件がiPhoneへの送信待ち"
+          }
+        }
+      }
+    },
+    "A call or another app paused all-day recording. Tap Continue to pick it up again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A call or another app paused all-day recording. Tap Continue to pick it up again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "来电或其他 App 暂停了全天录音。点「继续」接着录。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "通話や他のアプリで終日録音が一時停止しました。「続ける」をタップすると再開します。"
+          }
+        }
+      }
+    },
+    "Added to to-dos": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Added to to-dos"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已加入待办"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ToDoに追加済み"
+          }
+        }
+      }
+    },
+    "Afternoon": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Afternoon"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "下午"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "午後"
+          }
+        }
+      }
+    },
+    "All-Day": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "All-Day"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "全天录音"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "終日録音"
+          }
+        }
+      }
+    },
+    "All-Day Recording": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "All-Day Recording"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "全天录音"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "終日録音"
+          }
+        }
+      }
+    },
+    "All-day recording couldn't pick up again by itself. Tap Continue to record.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "All-day recording couldn't pick up again by itself. Tap Continue to record."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "全天录音没能自己接着录。点「继续」开始录音。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "終日録音を自動で再開できませんでした。「続ける」をタップすると録音します。"
+          }
+        }
+      }
+    },
+    "Audio stays on this iPhone until 3 days after the day's final recap, 7 days at most. Only the text goes to Knowledge, where it's kept for %lld days; the recap is kept like meeting minutes.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio stays on this iPhone until 3 days after the day's final recap, 7 days at most. Only the text goes to Knowledge, where it's kept for %lld days; the recap is kept like meeting minutes."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "音频只留在这台 iPhone 上，当日最终回顾生成 3 天后删除，最多保留 7 天。只有文字会进入知识库，保留 %lld 天；当日回顾像会议纪要一样保留。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "音声はこのiPhoneにだけ保存され、その日の最終的なまとめができてから3日後（最長7日）に削除されます。ナレッジに送られるのはテキストだけで、%lld日間保存されます。1日のまとめは議事録と同じように保存されます。"
+          }
+        }
+      }
+    },
+    "Check recording": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check recording"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "检查录音"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "録音を確認"
+          }
+        }
+      }
+    },
+    "Couldn't ask the hub for a new recap: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't ask the hub for a new recap: %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没能请 hub 重新写当日回顾：%@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ハブに1日のまとめの再作成を依頼できませんでした：%@"
+          }
+        }
+      }
+    },
+    "Day Recap": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Day Recap"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "当日回顾"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1日のまとめ"
+          }
+        }
+      }
+    },
+    "Day · %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Day · %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "全天录音 · %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "終日録音 · %@"
+          }
+        }
+      }
+    },
+    "Erased": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erased"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已删掉"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "削除済み"
+          }
+        }
+      }
+    },
+    "Erased the last 10 minutes": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erased the last 10 minutes"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已删掉最近 10 分钟"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "直近10分を削除しました"
+          }
+        }
+      }
+    },
+    "Evening": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Evening"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "晚上"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "夜"
+          }
+        }
+      }
+    },
+    "Interrupted": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Interrupted"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "被打断"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "中断"
+          }
+        }
+      }
+    },
+    "It's written once the day's text reaches the hub.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "It's written once the day's text reaches the hub."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "当天的文字传到 hub 后就会写。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "その日のテキストがハブに届くと作成されます。"
+          }
+        }
+      }
+    },
+    "Kept on this iPhone": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kept on this iPhone"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保存在这台 iPhone 上"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このiPhoneに保存中"
+          }
+        }
+      }
+    },
+    "Lost on Apple Watch": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lost on Apple Watch"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在 Apple Watch 上丢失"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Watchで消失"
+          }
+        }
+      }
+    },
+    "Mark Meeting": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mark Meeting"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "标记会议"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会議をマーク"
+          }
+        }
+      }
+    },
+    "Meeting marked": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting marked"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已标记会议"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会議をマークしました"
+          }
+        }
+      }
+    },
+    "Morning": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Morning"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上午"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "午前"
+          }
+        }
+      }
+    },
+    "Not transcribed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not transcribed"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未能转写"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "文字起こしできず"
+          }
+        }
+      }
+    },
+    "Nothing in the day's text was worth noting.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nothing in the day's text was worth noting."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "当天的文字里没有值得记下的内容。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "その日のテキストに記録すべき内容はありませんでした。"
+          }
+        }
+      }
+    },
+    "Part of the recording couldn't be saved. What was recorded before is kept; tap Continue to record again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Part of the recording couldn't be saved. What was recorded before is kept; tap Continue to record again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "有一段录音没能保存。之前录的内容都在；点「继续」重新录音。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "録音の一部を保存できませんでした。それまでの録音は残っています。「続ける」をタップすると録音を再開します。"
+          }
+        }
+      }
+    },
+    "Paused on your Apple Watch": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paused on your Apple Watch"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已在 Apple Watch 上暂停"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Watchで一時停止中"
+          }
+        }
+      }
+    },
+    "Paused — tap Continue on your Apple Watch": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paused — tap Continue on your Apple Watch"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已暂停，在 Apple Watch 上点「继续」"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "一時停止中 — Apple Watchで「続ける」をタップしてください"
+          }
+        }
+      }
+    },
+    "Paused — tap to continue": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paused — tap to continue"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已暂停，点一下继续"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "一時停止中 — タップで再開"
+          }
+        }
+      }
+    },
+    "Persona stopped while recording all day. What was recorded is kept; tap Continue to record again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona stopped while recording all day. What was recorded is kept; tap Continue to record again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona 在全天录音时停止了。已录的内容都在；点「继续」重新录音。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "終日録音中にPersonaが停止しました。録音済みの内容は残っています。「続ける」をタップすると録音を再開します。"
+          }
+        }
+      }
+    },
+    "Recap copied": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recap copied"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已复制当日回顾"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1日のまとめをコピーしました"
+          }
+        }
+      }
+    },
+    "Recap failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recap failed"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "回顾生成失败"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "まとめの作成に失敗"
+          }
+        }
+      }
+    },
+    "Recap ready": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recap ready"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "当日回顾已生成"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1日のまとめができました"
+          }
+        }
+      }
+    },
+    "Recording Stopped": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording Stopped"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "录音已停止"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "録音が停止しました"
+          }
+        }
+      }
+    },
+    "Recording all day": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording all day"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "全天录音中"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "終日録音中"
+          }
+        }
+      }
+    },
+    "Recording all day since %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording all day since %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 起全天录音中"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@から終日録音中"
+          }
+        }
+      }
+    },
+    "Records the whole day on your Apple Watch": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Records the whole day on your Apple Watch"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在 Apple Watch 上全天录音"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Watchで1日中録音します"
+          }
+        }
+      }
+    },
+    "Shows whether all-day recording is on. A tap starts or continues it.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shows whether all-day recording is on. A tap starts or continues it."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "显示全天录音是否开着。点一下即可开始或继续。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "終日録音がオンかどうかを表示します。タップで開始または再開します。"
+          }
+        }
+      }
+    },
+    "Stop for Today": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop for Today"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "今天先停"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "今日は終了"
+          }
+        }
+      }
+    },
+    "Stop the other recording first.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop the other recording first."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请先结束另一段录音。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "先に別の録音を終了してください。"
+          }
+        }
+      }
+    },
+    "Stopped": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stopped"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已停止"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "停止中"
+          }
+        }
+      }
+    },
+    "Stopped — tap Continue on your Apple Watch": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stopped — tap Continue on your Apple Watch"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已停止，在 Apple Watch 上点「继续」"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "停止しました — Apple Watchで「続ける」をタップしてください"
+          }
+        }
+      }
+    },
+    "Stopped — tap to continue": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stopped — tap to continue"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已停止，点一下继续"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "停止しました — タップで再開"
+          }
+        }
+      }
+    },
+    "Stopping on your Apple Watch…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stopping on your Apple Watch…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在让 Apple Watch 停止…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Watchで停止しています…"
+          }
+        }
+      }
+    },
+    "Suggested To-Dos": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Suggested To-Dos"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "建议的待办"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ToDoの提案"
+          }
+        }
+      }
+    },
+    "Suggested from what was said. Confirm them on the web to add them to your to-dos.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Suggested from what was said. Confirm them on the web to add them to your to-dos."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "根据当天说过的话建议的。在网页上确认后才会加入你的待办。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "話された内容からの提案です。Webで確認するとToDoに追加されます。"
+          }
+        }
+      }
+    },
+    "Tap Start on your Apple Watch to begin": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tap Start on your Apple Watch to begin"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在 Apple Watch 上点「开始」即可开始"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Watchで「開始」をタップすると始まります"
+          }
+        }
+      }
+    },
+    "Tap to continue": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tap to continue"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "点一下继续"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "タップで再開"
+          }
+        }
+      }
+    },
+    "Tap to start": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tap to start"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "点一下开始"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "タップで開始"
+          }
+        }
+      }
+    },
+    "The day was too long to read in full, so part of it isn't in the recap.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The day was too long to read in full, so part of it isn't in the recap."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这一天太长，没能全部读完，当日回顾里少了一部分。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1日が長すぎて全体を読み切れなかったため、一部がまとめに含まれていません。"
+          }
+        }
+      }
+    },
+    "The hub is turning the day's text into a timeline, key points and suggested to-dos.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The hub is turning the day's text into a timeline, key points and suggested to-dos."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "hub 正在把当天的文字整理成时间线、要点和建议的待办。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ハブがその日のテキストをタイムライン、要点、ToDoの提案にまとめています。"
+          }
+        }
+      }
+    },
+    "The hub writes it in the evening, and again once the day's recording ends.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The hub writes it in the evening, and again once the day's recording ends."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "hub 会在晚上写好，当天录音结束后再写一次。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ハブが夜に作成し、その日の録音が終わったらもう一度作成します。"
+          }
+        }
+      }
+    },
+    "The microphone changed, so all-day recording paused. Tap Continue to pick it up again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The microphone changed, so all-day recording paused. Tap Continue to pick it up again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "麦克风变了，全天录音已暂停。点「继续」接着录。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "マイクが切り替わったため、終日録音を一時停止しました。「続ける」をタップすると再開します。"
+          }
+        }
+      }
+    },
+    "The newest recap couldn't be written.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The newest recap couldn't be written."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最新的当日回顾没能写出来。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最新の1日のまとめを作成できませんでした。"
+          }
+        }
+      }
+    },
+    "The recap comes later": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The recap comes later"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "当日回顾稍后生成"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1日のまとめは後で作成されます"
+          }
+        }
+      }
+    },
+    "The recap couldn't be written.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The recap couldn't be written."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "当日回顾没能写出来。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1日のまとめを作成できませんでした。"
+          }
+        }
+      }
+    },
+    "The recap needs a hub update.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The recap needs a hub update."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "当日回顾需要先更新 hub。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1日のまとめにはハブのアップデートが必要です。"
+          }
+        }
+      }
+    },
+    "The system audio service reset. What was recorded is kept; tap Continue to record again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The system audio service reset. What was recorded is kept; tap Continue to record again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "系统音频服务重置了。已录的内容都在；点「继续」重新录音。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "システムのオーディオサービスがリセットされました。録音済みの内容は残っています。「続ける」をタップすると録音を再開します。"
+          }
+        }
+      }
+    },
+    "The watch battery is too low. What was recorded is kept; charge the watch, then tap Continue.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The watch battery is too low. What was recorded is kept; charge the watch, then tap Continue."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "手表电量太低。已录的内容都在；给手表充电后点「继续」。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Watchのバッテリー残量が少なすぎます。録音済みの内容は残っています。充電してから「続ける」をタップしてください。"
+          }
+        }
+      }
+    },
+    "The watch is almost out of storage. What was recorded is kept; free up space, then tap Continue.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The watch is almost out of storage. What was recorded is kept; free up space, then tap Continue."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "手表存储空间快满了。已录的内容都在；腾出空间后点「继续」。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Watchのストレージがほぼいっぱいです。録音済みの内容は残っています。空き容量を増やしてから「続ける」をタップしてください。"
+          }
+        }
+      }
+    },
+    "This hub doesn't write day recaps yet. The day's text stays on this iPhone until it's updated.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This hub doesn't write day recaps yet. The day's text stays on this iPhone until it's updated."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这个 hub 还不会写当日回顾。在它更新之前，当天的文字会留在这台 iPhone 上。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このハブはまだ1日のまとめを作成できません。アップデートされるまで、その日のテキストはこのiPhoneに保存されます。"
+          }
+        }
+      }
+    },
+    "Updating the recap…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Updating the recap…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在更新当日回顾…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1日のまとめを更新中…"
+          }
+        }
+      }
+    },
+    "Writing the recap": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Writing the recap"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在写当日回顾"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1日のまとめを作成中"
+          }
+        }
+      }
+    },
+    "Writing the recap…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Writing the recap…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在写当日回顾…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1日のまとめを作成中…"
+          }
+        }
+      }
+    },
+    "Your Apple Watch hasn't answered. Open Persona on it.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your Apple Watch hasn't answered. Open Persona on it."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Watch 还没有回应。请在手表上打开 Persona。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Watchから応答がありません。Apple WatchでPersonaを開いてください。"
+          }
+        }
+      }
+    },
+    "Your iPhone asked to start it. Tap Start to record on this watch.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your iPhone asked to start it. Tap Start to record on this watch."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "iPhone 上打开了全天录音。点「开始」在这块手表上录音。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "iPhoneから開始を求められました。「開始」をタップするとこのApple Watchで録音します。"
+          }
+        }
+      }
+    },
+    "Agents and extensions allowed to read the knowledge base can read it too.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agents and extensions allowed to read the knowledge base can read it too."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "能读取知识库的 Agent 和扩展也能读到它。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ナレッジの読み取りを許可されたエージェントと拡張機能も、このテキストを読めます。"
+          }
+        }
+      }
+    },
+    "Agree": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agree"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "同意"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "同意する"
+          }
+        }
+      }
+    },
+    "Agree on your iPhone to start": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agree on your iPhone to start"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在 iPhone 上同意后即可开始"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "iPhoneで同意すると開始できます"
+          }
+        }
+      }
+    },
+    "Agree to Start on Apple Watch": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agree to Start on Apple Watch"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "同意后在 Apple Watch 上开始"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "同意してApple Watchで開始"
+          }
+        }
+      }
+    },
+    "All-day recording stops on your Apple Watch, and today's audio and text are deleted from it and this iPhone now. Its text in Knowledge is removed after sync succeeds.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "All-day recording stops on your Apple Watch, and today's audio and text are deleted from it and this iPhone now. Its text in Knowledge is removed after sync succeeds."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Watch 上的全天录音会停止，今天的音频和文字会马上从手表和这台 iPhone 上删除。知识库里的文字会在同步成功后移除。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Watchの終日録音が停止し、今日の音声とテキストはApple WatchとこのiPhoneからすぐに削除されます。ナレッジのテキストは同期が完了すると削除されます。"
+          }
+        }
+      }
+    },
+    "Before Your Apple Watch Records Your Day": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Before Your Apple Watch Records Your Day"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Watch 录下你的一天之前"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Watchで1日を録音する前に"
+          }
+        }
+      }
+    },
+    "Erase Last 10 Minutes": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erase Last 10 Minutes"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "删掉最近 10 分钟"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "直近10分を削除"
+          }
+        }
+      }
+    },
+    "Final recap": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Final recap"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最终当日回顾"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最終的な1日のまとめ"
+          }
+        }
+      }
+    },
+    "Final recap of what reached the hub in time": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Final recap of what reached the hub in time"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "按时送到 hub 的内容写成的最终回顾"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "期限までにハブに届いた内容による最終的なまとめ"
+          }
+        }
+      }
+    },
+    "It records all the sound around you, other people included. Ask them first: some places require everyone's consent.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "It records all the sound around you, other people included. Ask them first: some places require everyone's consent."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "它会录下你身边的所有声音，包括其他人说的话。请先征得他们同意：有些地方要求所有人都同意。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "周りのすべての音を、他の人の声も含めて録音します。先に相手の同意を得てください。全員の同意が必要な場所もあります。"
+          }
+        }
+      }
+    },
+    "It records the whole day, and your hub writes a recap of it every evening.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "It records the whole day, and your hub writes a recap of it every evening."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "它会录下一整天，hub 每晚据此写出当日回顾。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1日中録音し、ハブが毎晩その日のまとめを作成します。"
+          }
+        }
+      }
+    },
+    "Not Now [Day Consent]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not Now"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "以后再说"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "今はしない"
+          }
+        }
+      }
+    },
+    "Recap so far": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recap so far"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "目前的当日回顾"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "現時点の1日のまとめ"
+          }
+        }
+      }
+    },
+    "Records all the sound around you, other people included, so ask them first. Your iPhone turns it into text for your hub's recap of your day; the audio stays on your watch and iPhone and is deleted within 7 days.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Records all the sound around you, other people included, so ask them first. Your iPhone turns it into text for your hub's recap of your day; the audio stays on your watch and iPhone and is deleted within 7 days."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会录下你身边的所有声音，包括其他人说的话，所以请先征得他们同意。iPhone 会把它转成文字，供 hub 写出当日回顾；音频只留在你的手表和 iPhone 上，7 天内删除。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "周りのすべての音を、他の人の声も含めて録音します。先に相手の同意を得てください。iPhoneがテキストにし、ハブがそこから1日のまとめを作成します。音声はApple WatchとiPhoneにだけ保存され、7日以内に削除されます。"
+          }
+        }
+      }
+    },
+    "The audio stays on your Apple Watch and iPhone and is deleted within 7 days.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The audio stays on your Apple Watch and iPhone and is deleted within 7 days."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "音频只留在你的 Apple Watch 和 iPhone 上，7 天内删除。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "音声はApple WatchとiPhoneにだけ保存され、7日以内に削除されます。"
+          }
+        }
+      }
+    },
+    "The day's audio and text are deleted from this iPhone and your Apple Watch now. Its text in Knowledge is removed after sync succeeds.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The day's audio and text are deleted from this iPhone and your Apple Watch now. Its text in Knowledge is removed after sync succeeds."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这一天的音频和文字会马上从这台 iPhone 和你的 Apple Watch 上删除。知识库里的文字会在同步成功后移除。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この日の音声とテキストは、このiPhoneとApple Watchからすぐに削除されます。ナレッジのテキストは同期が完了すると削除されます。"
+          }
+        }
+      }
+    },
+    "The last 10 minutes weren't erased. Try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The last 10 minutes weren't erased. Try again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最近 10 分钟没有删掉，请再试一次。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "直近10分を削除できませんでした。もう一度お試しください。"
+          }
+        }
+      }
+    },
+    "The text goes to your Persona hub, which sends it to the AI model set up for the knowledge base and the main chat.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The text goes to your Persona hub, which sends it to the AI model set up for the knowledge base and the main chat."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "文字会发到你的 Persona hub，再由它发给知识库和主对话所用的 AI 模型。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "テキストはPersonaハブに送られ、ハブがナレッジとメインチャットに設定されたAIモデルに送ります。"
+          }
+        }
+      }
+    },
+    "The text is kept for %lld days, and the day's recap as long as meeting minutes, which is forever by default.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The text is kept for %lld days, and the day's recap as long as meeting minutes, which is forever by default."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "文字保留 %lld 天，当日回顾和会议纪要保留一样久，默认永久保留。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "テキストは%lld日間保存されます。1日のまとめは会議の議事録と同じ期間保存され、初期設定では無期限です。"
+          }
+        }
+      }
+    },
+    "Today's all-day recording was deleted on your iPhone.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Today's all-day recording was deleted on your iPhone."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "今天的全天录音已在 iPhone 上删除。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "今日の終日録音はiPhoneで削除されました。"
+          }
+        }
+      }
+    },
+    "What was said in the last 10 minutes is deleted from this iPhone and your Apple Watch now, and from Knowledge after sync succeeds.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "What was said in the last 10 minutes is deleted from this iPhone and your Apple Watch now, and from Knowledge after sync succeeds."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最近 10 分钟说的话会马上从这台 iPhone 和你的 Apple Watch 上删除，同步成功后也会从知识库删除。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "直近10分間の内容は、このiPhoneとApple Watchからすぐに削除され、同期が完了するとナレッジからも削除されます。"
+          }
+        }
+      }
+    },
+    "You can pause at any time, erase the last 10 minutes, or delete a whole day.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You can pause at any time, erase the last 10 minutes, or delete a whole day."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你随时可以暂停、删掉最近 10 分钟，或删除一整天的录音。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "いつでも一時停止したり、直近10分や1日分の録音を削除したりできます。"
+          }
+        }
+      }
+    },
+    "Agree on iPhone": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agree on iPhone"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在 iPhone 上同意"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "iPhoneで同意"
+          }
+        }
+      }
+    },
+    "Agree to Start": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agree to Start"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "同意并开始"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "同意して開始"
+          }
+        }
+      }
+    },
+    "Knowledge didn't accept this day's text, so it stays on this iPhone.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Knowledge didn't accept this day's text, so it stays on this iPhone."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "知识库没有收下这一天的文字，文字仍保存在这台 iPhone 上。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ナレッジがこの日のテキストを受け付けなかったため、テキストはこのiPhoneに保存されたままです。"
+          }
+        }
+      }
+    },
+    "Knowledge holds as much of this day as it can, so the rest stays on this iPhone.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Knowledge holds as much of this day as it can, so the rest stays on this iPhone."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "知识库已收下这一天能容纳的全部文字，其余文字仍保存在这台 iPhone 上。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ナレッジはこの日のテキストを受け取れる限り保存しました。残りはこのiPhoneに保存されたままです。"
+          }
+        }
+      }
+    },
+    "Knowledge keeps another kind of recording in this day's place, so its text stays on this iPhone.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Knowledge keeps another kind of recording in this day's place, so its text stays on this iPhone."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "知识库在这一天的位置保存着另一种录音，因此这一天的文字仍保存在这台 iPhone 上。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ナレッジにはこの日の場所に別の種類の録音が保存されているため、この日のテキストはこのiPhoneに保存されたままです。"
+          }
+        }
+      }
+    },
+    "Notifications are off for Persona, so you won't be told when recording pauses or stops.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notifications are off for Persona, so you won't be told when recording pauses or stops."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona 的通知已关闭，录音暂停或停止时不会提醒你。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Personaの通知がオフのため、録音が一時停止または停止しても通知されません。"
+          }
+        }
+      }
+    },
+    "This day's text was too large for Knowledge to take, so it stays on this iPhone.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This day's text was too large for Knowledge to take, so it stays on this iPhone."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这一天的文字太大，知识库无法收下，文字仍保存在这台 iPhone 上。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この日のテキストが大きすぎてナレッジが受け取れなかったため、テキストはこのiPhoneに保存されたままです。"
+          }
+        }
+      }
+    },
+    "To use All-Day Recording, update Persona on your iPhone.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "To use All-Day Recording, update Persona on your iPhone."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "要使用全天录音，请更新 iPhone 上的 Persona。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "終日録音を使うには、iPhoneのPersonaをアップデートしてください。"
+          }
+        }
+      }
+    },
+    "Update iPhone app": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Update iPhone app"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "需更新 iPhone App"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "iPhoneアプリを更新"
+          }
+        }
+      }
+    },
+    "What was said in the last 10 minutes is deleted from this watch now, and from your iPhone and Knowledge after sync.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "What was said in the last 10 minutes is deleted from this watch now, and from your iPhone and Knowledge after sync."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最近 10 分钟说的话会马上从这块手表上删除，同步后也会从 iPhone 和知识库删除。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "直近10分間の内容はこのApple Watchからすぐに削除され、同期後にiPhoneとナレッジからも削除されます。"
+          }
+        }
+      }
+    },
+    "All-day recording stops on your Apple Watch, and today's audio and text on this iPhone are deleted now. Its text in Knowledge is removed after sync succeeds.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "All-day recording stops on your Apple Watch, and today's audio and text on this iPhone are deleted now. Its text in Knowledge is removed after sync succeeds."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Watch 上的全天录音会停止，这台 iPhone 上今天的音频和文字会马上删除。知识库里的文字会在同步成功后移除。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Watchの終日録音が停止し、このiPhone上の今日の音声とテキストはすぐに削除されます。ナレッジのテキストは同期が完了すると削除されます。"
+          }
+        }
+      }
+    },
+    "All Day [All-Day Recording Page]": {
+      "comment": "Apple Watch: the All-Day Recording page's navigation title, short so it fits a 41 mm watch.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "All Day"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "全天录音"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "終日録音"
           }
         }
       }

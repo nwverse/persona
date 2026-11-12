@@ -24,6 +24,8 @@ import { setSidebarTerminals, useSidebarTerminals } from "../lib/sidebar-termina
 import { HubList } from "./Hubs";
 import { useDisconnect } from "./DisconnectBrowser";
 import { KnowledgeSelection } from "./settings/KnowledgeSelection";
+import { SourcesUI } from "./subscriptions/SourcesUI";
+import { useInboxSourcesShown } from "../lib/subscriptions";
 import { ModelConfiguration } from "./settings/ModelConfiguration";
 import { AgentSettings } from "./settings/AgentSettings";
 import { SidebarPagesGroup } from "./settings/SidebarPages";
@@ -47,6 +49,7 @@ import { LauncherQuota } from "./settings/LauncherQuota";
 import { LauncherExtensionSections } from "./settings/ExtensionView";
 import { hubHasExt } from "../lib/extension-api";
 import { hostOf, type ProviderView } from "../lib/providers";
+import { referenceState } from "../lib/secret-reference";
 import { forgetProviderNames, providerIdNote, providerTitle } from "../lib/provider-names";
 import { harnessGroups, harnessLabel, scopeSummary } from "../lib/provider-scope";
 import { foundAliases, type EditDraft, type FoundAlias } from "../lib/provider-paste";
@@ -203,7 +206,10 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   // "Extensions" only on a hub with the extension base (docs/extensions/extensions.md "The hub's API"); a link to it still opens it.
   const hasExtensions = useStore((s) => hubHasExt(s.features, "manager"));
   const hasChannels = useStore((s) => s.features.includes("channels"));
-  const shown = (k: Tab) => (k !== "extensions" || hasExtensions || tab === "extensions") && (k !== "channels" || hasChannels || tab === "channels");
+  // Inbox Sources (#5278) only with a manager that draws them; a link to it still opens it
+  const hasSources = useInboxSourcesShown();
+  const shown = (k: Tab) => (k !== "extensions" || hasExtensions || tab === "extensions") && (k !== "channels" || hasChannels || tab === "channels") &&
+    (k !== "sources" || hasSources || tab === "sources");
   const contentId = useId();
   const configurationOwner = useRef<string | null>(new URLSearchParams(location.search).get("manager"));
   const pick = (k: Tab, id: string | null = null, section?: SettingsSection) => {
@@ -301,6 +307,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
               )}
               {tab === "notifications" && <NotificationSettings />}
               {tab === "knowledge" && <KnowledgeSelection />}
+              {tab === "sources" && <SourcesUI title={TAB_INFO.sources.label} />}
               {tab === "models" && <>
                 <section id="settings-providers" className="scroll-mt-4">
                   <h2 className="mb-2 px-1 text-[15px] font-semibold text-ink">{TAB_INFO.models.label}</h2>
@@ -1054,7 +1061,7 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit }: { nam
               {l.kind !== "api" && (!l.agent || l.agent === "claude") && l.subagent_model && <KVRow k={t("settings.subagent_model")} v={l.subagent_model} mono />}
               {l.kind !== "api" && (!l.agent || l.agent === "claude") && l.custom_model && <KVRow k={t("settings.custom_model")} v={l.custom_model} mono />}
               {l.kind !== "api" && (!l.agent || l.agent === "claude") && l.custom_model_name && <KVRow k={t("settings.custom_model_name")} v={l.custom_model_name} />}
-              <KVRow k="API Key" v={l.has_key ? t("settings.key_set_hidden") : t("settings.not_set")} />
+              <KVRow k="API Key" v={l.key_reference ? referenceState(l.key_reference) : l.has_key ? t("settings.key_set_hidden") : t("settings.not_set")} />
               {l.share && <KVRow k={t("settings.devices")} v={scopeSummary(l, mname)} />}
               {l.share && l.key_machines?.length ? <KVRow k={t("settings.machine_keys")} v={formatList(l.key_machines.map(mname), { type: "conjunction", style: "narrow" })} /> : null}
               {l.api !== "responses" && l.api !== "chat" && (!l.agent || l.agent === "claude") && <KVRow k={t("settings.auth")} v={l.auth === "bearer" ? "Bearer" : "x-api-key"} />}

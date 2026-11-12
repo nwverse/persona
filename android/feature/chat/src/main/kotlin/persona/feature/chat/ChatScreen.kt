@@ -28,7 +28,7 @@ import persona.core.chatlist.*
 import persona.core.contracts.*
 import persona.core.contracts.api.*
 import persona.core.designsystem.*
-import persona.core.designsystem.icons.PhIcons
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import persona.core.domain.ChatTaps
 import persona.core.domain.chatBubbles
 import persona.core.domain.lines.ChatLine
@@ -387,18 +387,25 @@ private fun ChatPage(
     var backgroundOpen by rememberSaveable(key.path) { mutableStateOf(false) }
     // The message a hub link named (`?at=`, #2194) while it is being landed on: like a search hit, its drawer opens.
     var jumpItem by remember { mutableStateOf<String?>(null) }
-    val backgroundFolding = if (foldsBackground) persona.core.domain.tasks.BackgroundFolding(openWork, search.selected?.itemId ?: jumpItem) else null
-    // Glass draws the hub's task records among the lines, as iOS does (#4339 C13); Brief and Board keep them behind the trays.
+    // Glass draws the hub's task records among the lines, as iOS does (#4339 C13), and folds a supervision round into one
+    // line there rather than moving it to the background record; Brief and Board keep both behind the trays.
     val inlineRecords = PersonaTheme.style == AppStyle.Glass
+    val backgroundFolding = if (foldsBackground || (inlineRecords && renderStyle.compactToolSummary))
+        persona.core.domain.tasks.BackgroundFolding(openWork, search.selected?.itemId ?: jumpItem, rounds = foldsBackground) else null
     val assistantPresentation = remember(projection, snapshot.items, feed, renderStyle, backgroundFolding, inlineRecords) {
         if (renderStyle.compactToolSummary) {
-            val presentation = persona.core.domain.tasks.AssistantConversation.project(projection.lines, snapshot.items, backgroundFolding)
+            val presentation = persona.core.domain.tasks.AssistantConversation.project(projection.lines, snapshot.items, backgroundFolding,
+                inline = inlineRecords)
             presentation.copy(background = persona.core.domain.tasks.AssistantLines.lines(presentation.background,
                 persona.core.domain.tasks.AssistantTaskCards.backgroundFeed(feed, inlineRecords)))
         } else persona.core.domain.tasks.AssistantConversation(projection.lines, emptyList())
     }
     LaunchedEffect(key, tasks) { tasks?.load(key.sessionId); tasks?.loadTodayIfMain(key.sessionId) }
-    val lines = remember(assistantPresentation, search.selected, jumpItem, feed, tasks, taskPlans, taskTodos, taskCardProjection, renderStyle, inlineRecords) {
+    // Glass draws the subagents a subagent launched as task cards of their own among the steps, by when they started
+    // (#5045, DESIGN_SYSTEM.md 4.7 "Task cards"); Brief and Board do not.
+    val subagentCards = PersonaTheme.style == AppStyle.Glass
+    val nestedSubagents = if (subagentCards) session?.subagents.orEmpty() else emptyList()
+    val lines = remember(assistantPresentation, search.selected, jumpItem, feed, tasks, taskPlans, taskTodos, taskCardProjection, renderStyle, inlineRecords, nestedSubagents) {
         searchVisibleLines(assistantPresentation.foreground, search.selected?.itemId ?: jumpItem)
             .let {
                 when {
@@ -408,7 +415,7 @@ private fun ChatPage(
                     else -> persona.core.domain.tasks.AssistantLines.lines(it,
                         persona.core.domain.tasks.SentToAgents.shown(feed))
                 }
-            }.asReversed()
+            }.let { persona.core.domain.lines.Subagents.withNested(it, nestedSubagents) }.asReversed()
     }
     val searchableItems by produceState(emptyList<Item>(), snapshot.items, timelineVersion, search.visible) {
         if (search.visible) value = withContext(Dispatchers.Default) { timeline.searchItems(snapshot.items) }
@@ -430,6 +437,7 @@ private fun ChatPage(
     }
     val contentSourceLabels = remember(lines) { sourceLabelIds(lines.asReversed()) }
     val contentWorkGroups = remember(lines) { lines.filterIsInstance<ChatLine.Work>().associateBy { it.id } }
+    val contentLastSteps = remember(lines) { lines.asReversed().filterIsInstance<ChatLine.Step>().associate { it.groupId to it.step.id } }
     // Each open work line's plan card (web #1990 draws only the latest plan of an exchange).
     val contentPlans = remember(contentWorkGroups) { contentWorkGroups.filterValues { it.open }.mapValues { latestPlan(it.value.steps) } }
     val currentItems by rememberUpdatedState(snapshot.items)
@@ -460,6 +468,9 @@ private fun ChatPage(
     var folding by remember { mutableStateOf(emptySet<String>()) }
     var foldErrors by remember { mutableStateOf(emptyMap<String, String>()) }
     val terminal: (() -> Unit)? = if (readOnly || !canTerminal) null else onTerminal?.let { action -> { action(key) } }
+    // A session without a terminal (a Codex thread, an agent runtime's) has nothing to open or explain (#4339 C7).
+    val hasTerminal = ChatTerminalPlaces.has(readOnly, canTerminal, renderStyle)
+    val agentTerminal = terminal?.takeIf { hasTerminal }
     val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
 
     fun followEnd() {
@@ -596,14 +607,16 @@ private fun ChatPage(
                 }
             }
         }) else null
-    // "View sub-agent" under Task / Agent steps (iOS): the session's sub-agents by the call that started them, done ones too.
+    // The session's subagents by the call that started them, done ones too: what their task cards say (Glass), and the
+    // conversations "View sub-agent" opens under Task / Agent steps in Brief and Board.
     val subagentLinks = remember(session?.subagents, chrome.onOpenSession, readOnly, key.machineId) {
-        val open = chrome.onOpenSession
-        if (readOnly || open == null) null
-        else session?.subagents.orEmpty().filter { !it.toolUseId.isNullOrBlank() && it.sessionId.isNotBlank() }
-            .associate { it.toolUseId!! to SessionKey(key.machineId, it.sessionId) }
-            .takeIf { it.isNotEmpty() }?.let { ChatSubagents(it, open) }
+        val listed = session?.subagents.orEmpty()
+        if (listed.isEmpty()) null
+        else ChatSubagents(listed.filter { !it.toolUseId.isNullOrBlank() && it.sessionId.isNotBlank() }
+            .associate { it.toolUseId!! to SessionKey(key.machineId, it.sessionId) },
+            chrome.onOpenSession?.takeIf { !readOnly }, listed.associateBy(persona.core.domain.lines.Subagents::callOf))
     }
+    val subagentFolds = remember(key) { SubagentFolds() }
     // A Workflow call draws its run's card (#3435): the session's runs by the call that launched them, their agents
     // opening as "View sub-agent" does. What the reader opens or folds in them lasts while this chat is open.
     val workflowFolds = remember(key) { persona.core.designsystem.WorkflowFolds() }
@@ -854,10 +867,12 @@ private fun ChatPage(
         persona.core.contracts.api.AssistantManagerChoice.itemHeader(listOf("assistant", "conversations", key.sessionId)) else null
     CompositionLocalProvider(LocalChatMarkdownCache provides markdownCache, LocalChatRowActions provides rowActions,
         LocalContentColor provides PersonaTheme.palette.ink, LocalChatPorts provides chatPorts,
-        persona.core.designsystem.LocalAssistantCards provides cardsHost, LocalChatSubagents provides subagentLinks, LocalChatWorkflows provides workflowCards,
+        persona.core.designsystem.LocalAssistantCards provides cardsHost, LocalChatSubagents provides subagentLinks, LocalSubagentFolds provides subagentFolds, LocalChatWorkflows provides workflowCards,
         LocalChatTaskIndex provides projection.tasks, LocalChatJumpToCall provides callJumps::jump) {
+        // Under the files pane or the terminal's cover: hidden from screen readers too.
         ChatLinkHost(Modifier.fillMaxSize().background(PersonaTheme.palette.background)
-            .then(if (embedded) Modifier else Modifier.imePadding()), preloadUrls, list.isScrollInProgress,
+            .then(if (embedded) Modifier else Modifier.imePadding())
+            .then(if (chrome.covered) Modifier.clearAndSetSemantics {} else Modifier), preloadUrls, list.isScrollInProgress,
             onContext = { if (readOnly || !canSend) notice = res.getString(R.string.chat_screen_read_only_context) else linkContexts = linkContexts + it },
             onEdit = { selection, instruction ->
                 if (readOnly || !canSend) notice = res.getString(R.string.chat_screen_read_only_edit)
@@ -878,11 +893,8 @@ private fun ChatPage(
                                 onFiles = chrome.onFiles, onGit = chrome.onGit, gitLabel = chrome.gitLabel,
                                 statusState = status, onDetails = { statusSheet = true },
                                 onOpenTodo = chrome.onOpenTodo, agentShares = chrome.agentShares, worktrees = chrome.worktrees,
-                                onSearch = { search.open(chatList) { timeline.freeze(currentItems); timelineVersion++ } }) {
-                                // A session without a terminal (a Codex thread, an agent runtime's) has nothing to open or explain.
-                                if (!readOnly && canTerminal && renderStyle != ChatRenderStyle.Assistant) JIconButton(PhIcons.TerminalWindow, stringResource(if (terminal != null) R.string.chat_screen_open_terminal else R.string.chat_screen_terminal_help),
-                                    terminal ?: { terminalHelp = true })
-                            }
+                                onSearch = { search.open(chatList) { timeline.freeze(currentItems); timelineVersion++ } },
+                                onTerminal = agentTerminal, onTerminalHelp = if (hasTerminal && terminal == null) ({ terminalHelp = true }) else null)
                             // The space's other tabs under the title (iOS SiblingTabs); not for the assistant's conversation.
                             if (showTopBar && renderStyle != ChatRenderStyle.Assistant) ChatSiblingTabs(session, sessionList, chrome.onOpenSession)
                             // The ports it listens on (its dev servers, docs/operations/ports.md): a tap opens the page.
@@ -1088,11 +1100,13 @@ private fun ChatPage(
                                         imagesInUserBubble = line.id in contentHiddenImages,
                                         workRunning = (line as? ChatLine.Step)?.let { contentWorkGroups[it.groupId]?.live } == true,
                                         lastWorkStep = (line as? ChatLine.Step)?.let {
-                                            contentWorkGroups[it.groupId]?.steps?.lastOrNull()?.id == it.step.id
+                                            // A nested subagent's card can come after the line's own last step (Glass).
+                                            if (subagentCards) contentLastSteps[it.groupId] == it.step.id
+                                            else contentWorkGroups[it.groupId]?.steps?.lastOrNull()?.id == it.step.id
                                         } == true,
                                         plan = (line as? ChatLine.Step)?.let { contentPlans[it.groupId] },
                                         showSourceLabel = line.id in contentSourceLabels, waiting = waitingOnYou,
-                                        closeoutReply = closeoutReply, hideTaskPrompts = foldsBackground)
+                                        closeoutReply = closeoutReply, hideTaskPrompts = foldsBackground, onTerminal = agentTerminal)
                                         }
                                     }
                                 }

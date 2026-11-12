@@ -148,6 +148,9 @@ private class RoutedAssistantManagement(
     override suspend fun endConversation(session: SessionKey) = api().endConversation(session)
     override suspend fun compactConversation(session: SessionKey) = api().compactConversation(session)
     override suspend fun archiveConversation(session: SessionKey) = api().archiveConversation(session)
+    override suspend fun unarchiveConversation(session: SessionKey) = api().unarchiveConversation(session)
+    override suspend fun archivedConversations() = api().archivedConversations()
+    override suspend fun renameConversation(session: SessionKey, title: String) = api().renameConversation(session, title)
     override suspend fun makeDirection(session: SessionKey) = api().makeDirection(session)
     override suspend fun endDirection(session: SessionKey) = api().endDirection(session)
     override suspend fun newMainConversation(carrySummary: Boolean, expect: String?) =
