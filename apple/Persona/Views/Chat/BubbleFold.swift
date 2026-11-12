@@ -1,4 +1,7 @@
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 // MARK: - Your own long message, folded (#5676)
 
@@ -44,6 +47,24 @@ nonisolated enum BubbleFoldRule: Equatable, Sendable {
     static func lines(_ lengths: [Int], perLine: Int) -> Int {
         lengths.reduce(0) { $0 + max(1, ($1 + perLine - 1) / perLine) }
     }
+
+    #if !os(macOS)
+    /// The height of `lines` lines of body text at `size`, as `.lineHeight(.body)` spaces them: the font's line height each,
+    /// and the level's extra leading between them. From the font's metrics, not a hidden text measured in the bubble
+    /// (its lines were read as the bubble's own by what reads a message's lines, `readingShownWords`).
+    @MainActor static func height(lines: Int, size: DynamicTypeSize) -> CGFloat {
+        if let h = heights[Key(lines: lines, size: size)] { return h }
+        let traits = UITraitCollection(preferredContentSizeCategory: UIContentSizeCategory(size))
+        let line = UIFont.preferredFont(forTextStyle: .body, compatibleWith: traits).lineHeight
+        let spacing = Theme.Level.body.extraLeading * Theme.textScale(size)
+        let h = (CGFloat(lines) * line + CGFloat(max(lines - 1, 0)) * spacing).rounded()
+        heights[Key(lines: lines, size: size)] = h
+        return h
+    }
+    private struct Key: Hashable { var lines: Int; var size: DynamicTypeSize }
+    /// Twelve sizes, two rules.
+    @MainActor private static var heights: [Key: CGFloat] = [:]
+    #endif
 
     /// Each line's characters, once per text.
     static func lengths(_ text: String) -> [Int] {
@@ -120,7 +141,8 @@ struct BubbleFold<Words: View>: View {
         if let fold, !lifted, !BubbleFoldRule.whole,
            BubbleFoldRule.lines(lengths, perLine: BubbleFoldRule.perLine(BubbleFoldRule.narrowest, size: bodySize)) > rule.limit {
             let guess = BubbleFoldRule.lines(lengths, perLine: BubbleFoldRule.perLine(BubbleFoldRule.typical, size: bodySize)) > rule.limit
-            Folding(text: text, fold: fold, rule: rule, guess: guess, tint: tint, words: words)
+            Folding(text: text, fold: fold, rule: rule, cut: BubbleFoldRule.height(lines: rule.shown, size: typeSize), guess: guess,
+                    tint: tint, words: words)
         } else {
             words(text)
         }
@@ -133,14 +155,15 @@ private struct Folding<Words: View>: View {
     var text: String
     var fold: BubbleFoldKey
     var rule: BubbleFoldRule
+    /// The height of `rule.shown` body lines: what a folded bubble shows.
+    var cut: CGFloat
     /// Whether it folds by its characters, until it is measured.
     var guess: Bool
     var tint: Color
     var words: (String) -> Words
 
-    /// The drawn words' height, and the height of `rule.shown` body lines (what a folded bubble shows).
+    /// The drawn words' height.
     @State private var full: CGFloat = 0
-    @State private var cut: CGFloat = 0
     /// Its start reached no further than the rule's lines (narrow letters at a wide bubble): it is drawn whole.
     @State private var whole = false
     @Environment(\.rowMemoScope) private var scope
@@ -149,7 +172,7 @@ private struct Folding<Words: View>: View {
     private var key: String { fold.openKey(scope) }
     /// Measured: longer than the rule's lines (`full` is that many lines and a half past `cut`'s).
     private var long: Bool {
-        guard full > 0, cut > 0 else { return guess }
+        guard full > 0 else { return guess }
         return full > cut * (CGFloat(rule.limit) + 0.5) / CGFloat(rule.shown)
     }
 
@@ -163,13 +186,16 @@ private struct Folding<Words: View>: View {
                 .onGeometryChange(for: CGFloat.self) { $0.size.height.rounded() } action: { h in
                     full = h
                     // Only its start was laid out, and it did not run past the rule's lines: draw all of it.
-                    if start != nil, cut > 0, h <= cut * (CGFloat(rule.limit) + 0.5) / CGFloat(rule.shown) { whole = true }
+                    if start != nil, h <= cut * (CGFloat(rule.limit) + 0.5) / CGFloat(rule.shown) { whole = true }
                 }
-                .frame(height: folded && cut > 0 ? cut : nil, alignment: .top)
+                .frame(height: folded ? cut : nil, alignment: .top)
                 .clipped()
                 .contentShape(.rect) // what is folded away takes no touches (the words run on past the fold)
-                .mask { if folded && cut > 0 { fade } else { Rectangle() } }
-                .background(alignment: .top) { probe }
+                .mask { if folded { fade } else { Rectangle() } }
+                // Folded, one element as tall as what shows (its words all read out): the words' own frame runs on past
+                // the fold, and VoiceOver's box with it.
+                .accessibilityElement(children: folded ? .combine : .contain)
+                .accessibilityAddTraits(folded ? .isStaticText : [])
             if long {
                 FoldToggle(open: open, prefix: "bubble", tint: tint, showMore: true) {
                     BubbleFoldKey.flip(key, pinKey: fold.pin, open: open, pin: pin)
@@ -181,17 +207,6 @@ private struct Folding<Words: View>: View {
         .onChange(of: folded, initial: true) { _, now in
             if fold.folded.wrappedValue != now { fold.folded.wrappedValue = now }
         }
-    }
-
-    /// `rule.shown` lines of body text, unseen: the height the words are cut at (as `LineFold` measures it).
-    private var probe: some View {
-        Text(verbatim: Array(repeating: "X", count: rule.shown).joined(separator: "\n"))
-            .font(Theme.Font.body)
-            .lineHeight(.body)
-            .fixedSize(horizontal: false, vertical: true)
-            .hidden()
-            .accessibilityHidden(true)
-            .onGeometryChange(for: CGFloat.self) { $0.size.height.rounded() } action: { cut = $0 }
     }
 
     /// Opaque down to the last line shown, which fades out.

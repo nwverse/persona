@@ -6,6 +6,8 @@ import XCTest
 /// Mock: MOCK_LONG_INPUT=perf at TEST_RUNNER_PERSONA_PERF_HUB (`PerfTestCase`); without it the tests skip.
 final class PerfLongInputTests: PerfTestCase {
     static let chat = "macbook/a1f3c2d4-0000-4000-8000-000005676a00"
+    // The flicks go on the window, whose middle is the chat list: `mainScroller()`'s scroll view, found by index, was
+    // gone by the first flick here ("No matches found for Element at index 1").
 
     @MainActor private func open(whole: Bool) {
         launch(["-app.tab", "chats", "-tab", "dev", "-dev.openChat", "", "-openSession", Self.chat, "-holdChromeOpen", "YES",
@@ -18,21 +20,21 @@ final class PerfLongInputTests: PerfTestCase {
     /// Fast flicks back into the history and to the newest again.
     @MainActor func testScroll1Folded() throws {
         open(whole: false)
-        measureScroll(mainScroller(), first: .down)
+        measureScroll(app, first: .down)
     }
 
     @MainActor func testScroll2Whole() throws {
         open(whole: true)
-        measureScroll(mainScroller(), first: .down)
+        measureScroll(app, first: .down)
     }
 
     @MainActor func testScroll3Whole() throws {
         open(whole: true)
-        measureScroll(mainScroller(), first: .down)
+        measureScroll(app, first: .down)
     }
 
     @MainActor func testScroll4Folded() throws {
         open(whole: false)
-        measureScroll(mainScroller(), first: .down)
+        measureScroll(app, first: .down)
     }
 }
