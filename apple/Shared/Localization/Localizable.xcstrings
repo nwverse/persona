@@ -1473,19 +1473,19 @@
         }
       }
     },
-    "Back to Configured Model" : {
+    "Switch Back [Model Fallback Card]" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Back to Configured Model"
+            "value" : "Switch Back"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "設定済みのモデルに戻す"
+            "value" : "元に戻す"
           }
         },
         "zh-Hans" : {
@@ -81386,6 +81386,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "New Main Chat [Model Fallback Card]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New Main Chat"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新しいチャット"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新建主对话"
+          }
+        }
+      }
     },
     "New Main Chat?" : {
       "localizations" : {

@@ -197,9 +197,9 @@ struct ModelFallbackCard: View {
             let restore = card.offersRestore && !working && !busy
             let newMain = session.assistant == true && model.canStartNewMain(key)
             ReadinessCard(title: card.title, detail: card.lines.joined(separator: "\n"), tone: .caution,
-                          actionTitle: restore ? String(localized: "Back to Configured Model") : nil,
+                          actionTitle: restore ? String(localized: "Switch Back [Model Fallback Card]") : nil,
                           action: restore ? { go() } : nil,
-                          altTitle: newMain ? String(localized: "New Main Chat") : nil,
+                          altTitle: newMain ? String(localized: "New Main Chat [Model Fallback Card]") : nil,
                           alt: newMain ? { model.newMainAsked = true } : nil,
                           details: card.details,
                           busy: busy)

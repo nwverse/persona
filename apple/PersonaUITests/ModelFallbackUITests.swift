@@ -3,7 +3,7 @@ import XCTest
 /// After an upstream refusal (#4489), against scripts/mock/mock_hub.py with MOCK_MODEL_FALLBACK=1 MOCK_MAIN_ACTIONS=1
 /// (`TEST_RUNNER_PERSONA_MODEL_FALLBACK_HUB=http://127.0.0.1:<port>`): a terminal agent shows the refusal's line and a
 /// card with only the /model step, and its API error offers no Continue; the Persona main conversation's card offers
-/// Back to Configured Model and New Main Chat, and going back leaves only the pending note. There the line and the card
+/// Switch Back (「回到配置的模型」) and New Main Chat, and going back leaves only the pending note. There the line and the card
 /// each say one plain sentence with the model's short name, the record under a closed Details (#5202). Light and dark,
 /// and the main conversation at the largest text size in zh-Hans, English and Japanese, where the card's buttons stack;
 /// `TEST_RUNNER_PERSONA_SHOTS=<dir>` keeps the screenshots (`fallback-<step>-<scheme>.png`).
@@ -78,10 +78,10 @@ final class ModelFallbackUITests: XCTestCase {
             let app = launch(hub, ["-tab", "assistant", "-openAssistant", main] + look)
             let back = app.buttons["回到配置的模型"].firstMatch
             if scheme == "large-en" || scheme == "large-ja" {
-                // The card's words in English and Japanese, which are longer: one under another, each on one line in
-                // the screenshot.
+                // The card's words in English and Japanese: one under another, each whole on one line in the
+                // screenshot (the longer Back to Configured Model ended in "…" there, and so did the Japanese).
                 let (backTitle, newTitle) = scheme == "large-en"
-                    ? ("Back to Configured Model", "New Main Chat") : ("設定済みのモデルに戻す", "新しいメインチャット")
+                    ? ("Switch Back", "New Main Chat") : ("元に戻す", "新しいチャット")
                 let card = app.descendants(matching: .any)["model-fallback-card"].firstMatch
                 let backHere = card.buttons[backTitle].firstMatch
                 XCTAssertTrue(backHere.waitForExistence(timeout: 20), app.debugDescription)
