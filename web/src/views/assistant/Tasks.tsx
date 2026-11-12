@@ -1152,7 +1152,7 @@ function NeedsYouRow({ item, open, onToggle }: { item: NeedsYouItem; open: boole
       <StatusMark state="needs_you" />
       <span className="min-w-0 flex-1">
         <span className="block truncate font-semibold">{folded.title}</span>
-        {!open && folded.line && <span className="block truncate text-xs text-ink-2">{folded.line}</span>}
+        {!open && folded.line && folded.line !== folded.kicker && <span className="block truncate text-xs text-ink-2">{folded.line}</span>}
       </span>
       {!open && <span className="max-w-[40%] shrink-0 truncate text-right text-xs text-attention">{folded.kicker}</span>}
       <Icon name="chevronRight" size={14} className="shrink-0 text-ink-3 transition-transform duration-150 motion-reduce:transition-none" style={{ transform: open ? "rotate(90deg)" : "none" }} />
