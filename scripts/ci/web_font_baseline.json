@@ -226,7 +226,7 @@
  "web/src/views/machines/AgentRow.tsx": 4,
  "web/src/views/machines/AllowedComputerApps.tsx": 14,
  "web/src/views/machines/BotmuxSwitch.tsx": 1,
- "web/src/views/machines/BrowserLogins.tsx": 14,
+ "web/src/views/machines/BrowserLogins.tsx": 19,
  "web/src/views/machines/BrowserSection.tsx": 9,
  "web/src/views/machines/ComputerSection.tsx": 9,
  "web/src/views/machines/EngineHostsSection.tsx": 8,
