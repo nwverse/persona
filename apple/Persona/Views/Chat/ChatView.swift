@@ -2634,7 +2634,7 @@ struct ChatView: View {
                     if let openRecap, openRecap.line == line.id { recapInFlow(openRecap) } else { lineView(line) }
                 }
                     #if os(iOS)
-                    .pickable(Self.pickBar(line), pick: pick, selecting: pick.on, refused: pickRefused)
+                    .pickable(Self.pickBar(line), mark: Self.pickMark(line), pick: pick, selecting: pick.on, refused: pickRefused)
                     #endif
                     .background { if quoteFlash?.line == line.id { QuoteFlash().id(quoteFlash?.id) } }
                     .flippedBack()
@@ -4262,10 +4262,20 @@ struct ChatView: View {
     }
 
     #if os(iOS)
-    /// The message a line stands for while selecting (#3838); nil for lines that are not messages.
+    /// The message a line stands for while selecting (#3838); nil for lines that are not messages. A long answer's parts
+    /// (#4970) are each a line of the one answer.
     private static func pickBar(_ line: ChatLine) -> MessageBarInfo? {
-        if case .row(let r) = line.content { return r.pickBar }
-        return nil
+        switch line.content {
+        case .row(let r): r.pickBar
+        case .answerPart(let item, _, _, _): MessageBarInfo(id: item.id, text: item.text ?? "", isUser: false, date: item.ts, pending: false)
+        default: nil
+        }
+    }
+
+    /// Whether a line shows its message's mark: all but an answer's later parts, which pick with it.
+    private static func pickMark(_ line: ChatLine) -> Bool {
+        if case .answerPart(_, _, let index, _) = line.content { return index == 0 }
+        return true
     }
 
     /// The footer, or while selecting the bar with Cancel and Forward (N) in its place. The composer's words, quotes and

@@ -68,12 +68,13 @@ struct PickMark: View {
 
 extension View {
     /// A chat row while selecting: a message gets its mark on the leading edge and picks or unpicks with a tap anywhere
-    /// on it; nothing inside it (links, cards, long-press) answers. Not selecting, the row as it is.
-    @ViewBuilder func pickable(_ bar: MessageBarInfo?, pick: MessagePick, selecting: Bool, refused: @escaping () -> Void) -> some View {
+    /// on it; nothing inside it (links, cards, long-press) answers. Not selecting, the row as it is. `mark`: false for a
+    /// long answer's later parts (#4970), which keep the mark's room and pick the answer, and are one element with it.
+    @ViewBuilder func pickable(_ bar: MessageBarInfo?, mark: Bool = true, pick: MessagePick, selecting: Bool, refused: @escaping () -> Void) -> some View {
         if !selecting {
             self
         } else if let bar {
-            PickRow(pick: pick, id: bar.id, refused: refused) { self }
+            PickRow(pick: pick, id: bar.id, mark: mark, refused: refused) { self }
         } else {
             allowsHitTesting(false)
         }
@@ -83,12 +84,13 @@ extension View {
 private struct PickRow<Content: View>: View {
     let pick: MessagePick
     let id: String
+    let mark: Bool
     var refused: () -> Void
     @ViewBuilder var content: Content
 
     var body: some View {
         HStack(alignment: .top, spacing: Theme.Space.s) {
-            PickMark(pick: pick, id: id)
+            PickMark(pick: pick, id: id).opacity(mark ? 1 : 0)
             content.allowsHitTesting(false)
         }
         .padding(.leading, Theme.Space.page)
@@ -99,6 +101,7 @@ private struct PickRow<Content: View>: View {
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(pick.ids.contains(id) ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("chat.pick." + id)
+        .accessibilityHidden(!mark)
     }
 }
 
