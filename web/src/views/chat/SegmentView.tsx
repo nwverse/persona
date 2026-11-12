@@ -1,5 +1,6 @@
 import { type CSSProperties, Fragment, memo, type ReactNode, useContext, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { clock } from "../../lib/format";
+import { forwardRuns } from "../../lib/forward";
 import { stripCloseout } from "../../lib/closeout";
 import { getSession, getState, useStore } from "../../lib/store";
 import { withChildSessions } from "../../lib/child-cards";
@@ -22,7 +23,7 @@ import { InjectedHint, LoopTick, MergedBubble, PeerMessage } from "./Messages";
 import { ModelChangeDivider } from "./ModelChangeDivider";
 import { SourceMessage } from "./SourceMessage";
 import { ContextGroup } from "./ContextGroup";
-import { ForwardBlock } from "./ForwardCard";
+import { ForwardBlock, ForwardGroupBlock } from "./ForwardCard";
 import { AttachedPhotos } from "./AttachedPhotos";
 import { useFullText } from "./FullText";
 import { FileCards, ReplyFiles } from "./FileCards";
@@ -86,8 +87,9 @@ export function UserBubble({ msg, mid, sid, pending, sendState, starting, onDele
   // the message an extension opened the conversation with (#3758)
   const { opening } = useChatContext();
   const openedBy = opening && opening.id === msg.id ? opening.origin : undefined;
-  // forwards (#3899) are cards at the top of the bubble; the other contexts fold in the row above it
-  const forwards = msg.contexts.filter((c) => c.kind === "forward");
+  // forwards (#3899) are cards at the top of the bubble, several of one chat next to each other one card (#3838); the
+  // other contexts fold in the row above it
+  const forwards = useMemo(() => forwardRuns(msg.contexts).map((run) => run.map((i) => msg.contexts[i])), [msg.contexts]);
   const contexts = forwards.length ? msg.contexts.filter((c) => c.kind !== "forward") : msg.contexts;
   return (
     <div className="ml-auto flex max-w-[488px] min-w-0 flex-col items-end gap-1.5 pl-[12%]" style={pending ? { animation: `fade-up 300ms ${EASE} both` } : undefined} data-user-bubble data-send-state={sendState} data-items={pending || starting ? undefined : [msg.id, ...msg.images.map((i) => i.id)].join(" ")}>
@@ -121,7 +123,7 @@ export function UserBubble({ msg, mid, sid, pending, sendState, starting, onDele
 /** The bubble's words, folded to ten lines past fourteen; the fold scrolls (the wheel, a trackpad, a finger), with a
  *  fade at its bottom while there is more (fold-scroll.ts). `pending` (still being sent): dimmed, the same fold. A
  *  leading `> ` block ("Quote") is a folded quote card at its top instead of `>` lines (Quote.tsx). */
-function BubbleText({ text: full, forwards, ts, mid, sid, own, pending }: { text: string; forwards?: Context[]; ts?: string; mid: string; sid: string; own: boolean; pending?: boolean }) {
+function BubbleText({ text: full, forwards, ts, mid, sid, own, pending }: { text: string; forwards?: Context[][]; ts?: string; mid: string; sid: string; own: boolean; pending?: boolean }) {
   const fill = own ? "bg-user-bubble" : "bg-neutral-bubble";
   // a reply sent from a card (in an assistant conversation): its words, without the hub's tag, marked "From a card"
   const fromCard = useContext(CardConversation) ? cardReply(full) : undefined;
@@ -166,7 +168,7 @@ function BubbleText({ text: full, forwards, ts, mid, sid, own, pending }: { text
       )}
       {split || forwards?.length ? (
         <div className={`flex max-w-full flex-col gap-1.5 rounded-[12px] ${fill} px-4 py-2.5 text-ink ${pending ? "opacity-60" : ""}`} title={clock(ts)}>
-          {forwards?.map((c, i) => <ForwardBlock key={i} c={c} />)}
+          {forwards?.map((g, i) => (g.length > 1 ? <ForwardGroupBlock key={i} group={g} /> : <ForwardBlock key={i} c={g[0]} />))}
           {split && <QuoteStack blocks={split.quotes} mid={mid} sid={sid} />}
           {words}
         </div>

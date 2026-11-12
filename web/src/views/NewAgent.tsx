@@ -12,6 +12,7 @@ import type { DraftImage } from "../lib/drafts";
 import { withContexts } from "../lib/context-xml";
 import type { ContextRef } from "../lib/links";
 import { ForwardBar } from "./chat/ForwardBar";
+import { ForwardGroupBar } from "./chat/ForwardGroupBar";
 import { browserStartKeys, launchAgent, presetPrompt, type NewAgentPreset } from "../lib/new-agent";
 import type { WorkspaceTarget } from "../lib/workspace-target";
 import { AttachmentTray } from "../ui/AttachmentTray";
@@ -118,8 +119,9 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   const [prompt, setPrompt] = useState(() => localStorage.getItem("draft:new-agent") ?? "");
   const keys = useMemo(browserStartKeys, []);
   const [attachments, setAttachments] = useState<LocalAttachment[]>([]);
-  // a message forwarded to a new Agent (#3899, lib/forward.ts): its card over the first message, which carries it in front
-  const [forward, setForward] = useState<ContextRef | null>(null);
+  // messages forwarded to a new Agent (#3899, #3838, lib/forward.ts): their card over the first message, which carries
+  // them in front
+  const [forwards, setForwards] = useState<ContextRef[]>([]);
   const [dragging, setDragging] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const submitted = useRef(false);
@@ -167,7 +169,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
 
   useEffect(() => {
     if (!open) {
-      setForward(null); // a forward goes with the sheet it came in, not into the next one
+      setForwards([]); // a forward goes with the sheet it came in, not into the next one
       shownMid.current = "";
       touched.current = false;
       carrying.current = null;
@@ -222,7 +224,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
       promptRevision.current++;
       setPrompt((draft) => presetPrompt(preset.prompt, draft));
     }
-    if (preset.forward) setForward(preset.forward);
+    if (preset.forwards?.length) setForwards(preset.forwards);
     if (preset.images?.length) {
       const picked: LocalAttachment[] = [];
       for (const img of preset.images) {
@@ -475,7 +477,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     const owner = credentialOwner();
     const token = getToken();
     const revision = promptRevision.current;
-    const sent = forward ? withContexts([forward], prompt, attachments.some((a) => a.mime.startsWith("image/"))) : prompt.trim();
+    const sent = forwards.length ? withContexts(forwards, prompt, attachments.some((a) => a.mime.startsWith("image/"))) : prompt.trim();
     const snapshot = { text: sent, attachments: [...attachments] };
     const current = () => preparation.current === controller && !controller.signal.aborted && owner === credentialOwner()
       && getState().machines.some((m) => m.id === mid && m.online)
@@ -508,7 +510,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
       attachmentsRef.current = attachmentsRef.current.filter((a) => !ids.has(a.id));
       setAttachments(attachmentsRef.current);
       if (promptRevision.current === revision) setPrompt("");
-      setForward(null);
+      setForwards([]);
       dismiss();
     };
     // in a worktree of its own (#6115): made first; a failure says why here, and nothing starts
@@ -744,7 +746,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
               onDragOver={(e) => { if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setDragging(true); } }}
               onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragging(false); }}
               onDrop={(e) => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }}>
-              {forward && <div className="px-2 pt-2" data-new-agent-forward><ForwardBar forward={forward} onRemove={() => setForward(null)} /></div>}
+              {forwards.length > 0 && <div className="px-2 pt-2" data-new-agent-forward>{forwards.length > 1 ? <ForwardGroupBar forwards={forwards} onRemove={() => setForwards([])} /> : <ForwardBar forward={forwards[0]} onRemove={() => setForwards([])} />}</div>}
               {attachments.length > 0 && <div className="px-3 pt-2"><AttachmentTray attachments={attachments} onRemove={(id) => {
                 releaseAttachments(attachments.filter((a) => a.id === id));
                 setAttachments((current) => current.filter((a) => a.id !== id));

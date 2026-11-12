@@ -190,9 +190,13 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * card drawn as the same notice, and their words). And 444 B for cindy's run status bar (#5312: ja 590,296 B against
  * 589,852 B on main at a38ddd0cd: the state words worked out from the turn's newest steps in an Agent session and the plain
  * phases in a Persona conversation, Done only for a finished turn and its pop, their words; the speed history, its button
- * and card load once an Agent's turn runs). Raise it on purpose, in the change that needs it.
+ * and card load once an Agent's turn runs). And 239 B for forwarding several messages at once (#3838: ja 590,535 B
+ * against 588,896 B on main at 29c02b9513, +1,639 B, of which 1,400 B fit the room main had: each message a checkbox
+ * while the chat picks, the picks' store, several forwards of one chat as one card in the bubble, and their words; the
+ * pick bar, the group's bar over the box and the refusal past 30 load with Forward to). Raise it on purpose, in the
+ * change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 590_296;
+export const FIRST_SCREEN_BUDGET = 590_535;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
