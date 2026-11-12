@@ -939,3 +939,8 @@ To check that a failure is this, move `dev.json` aside in the app's data contain
   by clicking. A window's rounded corner clips a marker drawn in it: keep markers inset.
 - An agent's shell is not the login session: the login keychain is locked there and `security … -w` exits 36 (no user
   interaction allowed). A secret the user stored in the keychain can't be read; use a 0600 file outside the repository.
+
+## A test binary that is a container's PID 1 never reaps orphans (2026-11-11, #4363)
+
+- `docker run --entrypoint <test binary>` without `--init` makes the test binary PID 1, and every orphan is reparented to it. Go waits only for the children its `exec.Cmd`s started, so a background child killed after its shell exited stays a zombie, `kill(-pgid, 0)` still finds its group, and process-group tests fail. On `main`, `TestSecretRunTimeoutKillsTheGroup` and `TestSecretRunTimeoutEndsWhatIgnoresSIGTERM` failed in a `postgres:18-alpine` container this way and passed with `--init`.
+- Run such tests with `docker run --init` (Docker's own init, no image to pull), and compare with `main` in the same container before blaming a change.

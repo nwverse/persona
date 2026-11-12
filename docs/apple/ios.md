@@ -82,8 +82,8 @@ Chat page:
     thread, at most 1600 px), and the composer keeps it beside the photo (`ComposerAttachments.edited`), so a photo tapped in the strip opens with its
     crop, turn and marks as they were, still undoable; the photo removed or sent, its edits go. From the viewer, Add to Message adds the result as
     next-message attachment (`AppModel.composerInbox`), ready to send with a note; only available when opened from a chat. Pending input images (a
-    conversation's and the Persona tab's) can be tapped to edit before sending. Turned, the row of tools that does not fit at large text sizes shows icons;
-    the options row scrolls.
+    conversation's and the Persona tab's) can be tapped to edit before sending. Turned, the row of tools that does not fit at large text sizes shows icons,
+    and scrolls (Clear staying put) where even the icons don't fit; the options row scrolls.
   - Screenshots: `-openFirstImage YES` / `-openViewedImage N`, `-showViewerChromeHidden YES` hides bars, `-showViewerInfo YES` opens info.
 - Background sync (push + pull like IM; only foregrounded and connected): hub pushes which session changed; App pulls increments by cursor.
   Agents (`AgentSync`): changed `rev` in session list / `revs` triggers `after_seq` prefetch into the disk cache only for chats not retained in memory,
@@ -1451,6 +1451,36 @@ and the count are unchanged (`ActionTrayContent.grouped`); with one group the tr
 The hub's `main_background_folded` (`GET` / `PUT /api/v1/assistant`, on unless changed; an older hub that omits it
 counts as on and hides the switch) is Settings › Assistant › **Fold background rounds**. Off, the main conversation
 and Needs You look exactly as before. Tests: `ChatBackgroundRoundsTests`.
+
+## Background supervisor (#5083)
+
+The hub's built-in background supervisor (`docs/assistant/unified-entry.md`, "Background supervisor") on iPhone, iPad,
+Mac and Vision Pro. Nothing here shows on a hub from before it.
+
+- **Its conversation** is the one `GET /api/v1/assistant` names as `background_supervisor`
+  (`AssistantState.isBackgroundSupervisor`, never the main conversation). The hub opens it with `origin: "task"`, so it
+  is in All Chats under Scheduled Tasks and never in the sidebar's Directions or Recent (`AutoConversations`,
+  `AssistantSidebarGroups`). Its row has no Archive (swipe, menu, the Mac's Delete key), no Pin and no End, in the
+  sidebar's search results and in All Chats; Rename and the copy items stay. The hub refuses Archive and Pin itself;
+  End it does not refuse, the row only does not offer it. The hub makes the conversation on first use, usually while
+  the app is open, and only the assistant settings say which one it is: a new assistant conversation with
+  `origin: "task"` that the settings held do not list has them read again, once for a conversation
+  (`AppModel.unreadTaskConversations`), so the row has the three actions no longer than that request takes.
+- **The switch**: Settings › Assistant › **Main Chat Supervises Its Own Tasks** is the hub's `main_supervises_own_tasks`
+  (`GET` / `PUT /api/v1/assistant`), off by default: while it is off the background supervisor follows up the tasks
+  Persona hands out. It is read and written through `AppModel.assistantConfig` (`setMainSupervisesOwnTasks`: shown at
+  once, put back when the hub refuses), as the two switches above it. A hub that omits the field has no switch.
+- **Its model**: Settings › Models lists the use `assistant.supervise` after the categories and the other uses set
+  apart. The hub's catalog leaves it out, so `ModelConfigurationModel.load` asks for it by its id beside the catalog
+  (`listing`); a hub without it answers 404 and the list has no such row. Its page says "Follow Main Chat" where Lark
+  /agent says "Follow Agents", and saves to the use's own record.
+- **Its reviews in the main chat**: a review is the feed kind `review` in the conversation that planned the task,
+  whoever reviewed, so `ChatLines.mergeFeed` places it and `ReviewFeedLine` draws it as one line that opens the task.
+  Nothing marks the reviewer in the feed item, and the line does not name one.
+
+Mock hub: `MOCK_BACKGROUND_SUPERVISOR=1` adds the conversation (with `MOCK_ORIGINS=1` for the other sources); the
+switch and the model use are there without it, and `MOCK_LEGACY_HUB=1` has none of the three. Tests:
+`BackgroundSupervisorTests`, and `AssistantSettingsModelTests.testMainSupervisesOwnTasksSwitch` against the mock hub.
 
 ## Source mentions in the assistant conversation (#2130)
 

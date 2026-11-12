@@ -1971,8 +1971,8 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     var fields: [InteractionField]?
     /// Something to fill in before it can be allowed: every quick Allow (lists, menus, Siri, the watch) is off. The
     /// password card counts even without its field, so no path allows it without a password, and so does an MCP form or
-    /// link, answered only on its card.
-    var requiresInput: Bool { !(fields ?? []).isEmpty || isSecretRun || kind == .elicitation }
+    /// link, answered only on its card, and a hand-off card, approved on its card alone.
+    var requiresInput: Bool { !(fields ?? []).isEmpty || isSecretRun || isSecretHandoff || kind == .elicitation }
     /// Who asks when it is not Claude Code: "codex" / "traex" (a card read off a Codex TUI, docs/integrations/codex.md「Questions and approvals」).
     var agent: String?
     /// Why the agent asks for this permission, in its words.
