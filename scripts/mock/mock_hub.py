@@ -12864,9 +12864,11 @@ if os.environ.get("MOCK_PEER_FOLD") == "1":
 
 # MOCK_LONG_INPUT=1: your own long message folds (#5676): an Agent chat with a long pasted report (past 14 lines on a
 # phone), a twelve-line one that stays whole, and the same report at the end of Persona's conversation. MOCK_LONG_INPUT=perf:
-# forty exchanges, each opened by a long pasted report, for the chat's scrolling frames (docs/apple/performance.md P12).
-# Synthetic text.
+# forty exchanges, each opened by a long pasted report, for the chat's scrolling frames (docs/apple/performance.md P12),
+# and their twin (LONG_INPUT_TWIN): each report cut to about the lines a folded one takes on a phone, so as many rows
+# to the screen with nothing folded (PerfLongInputTests). Synthetic text.
 LONG_INPUT = "a1f3c2d4-0000-4000-8000-000005676a00"
+LONG_INPUT_TWIN = "a1f3c2d4-0000-4000-8000-000005676a01"
 LONG_REPORT = ("车道 sample-lane：A、C 的 PR 开好了，请批截图（只改 hub 文案 / hub 行为，网页和 App 代码没动）。\n"
                "A #1201（issue #1188）市场读取报错说清原因 + i18n：填错地址时不再说「版本号是 0」，改成「这个地址返回的不是扩展市场…"
                "仓库请填 owner/repo」「返回的是网页…」「要更新的 hub」，代理 / 登录页回的 JSON 会引用它的原话；限流、404、要 token 也走 i18n。\n"
@@ -12882,12 +12884,16 @@ LONG_REPLY = "收到。A、C 的截图我都看过了，没问题，可以合。
 
 def mock_long_input(perf):
     if perf:
-        items = []
-        for n in range(40):
-            m = 60 * 24 - n * 30
-            items.append(it("user", "text", m + 2, text="第 %d 份报告：\n" % (n + 1) + LONG_REPORT))
-            items.append(it("assistant", "text", m, text=LONG_REPLY))
-        ITEMS[LONG_INPUT] = items
+        cut = LONG_REPORT[:LONG_REPORT.index("代理 / 登录页")]  # ten lines and Show More's, on a phone
+        for sid, report in ((LONG_INPUT, LONG_REPORT), (LONG_INPUT_TWIN, cut)):
+            items = []
+            for n in range(40):
+                m = 60 * 24 - n * 30
+                items.append(it("user", "text", m + 2, text="第 %d 份报告：\n" % (n + 1) + report))
+                items.append(it("assistant", "text", m, text=LONG_REPLY))
+            ITEMS[sid] = items
+        SESSIONS.append(sess("macbook", LONG_INPUT_TWIN, "车道任务跟进（短）", "/Users/me/code/shop-app", "done", "read", "shop-app", 21,
+                             "lanes", 1, 5, LONG_REPLY))
     else:
         ITEMS[LONG_INPUT] = [
             it("user", "text", 30, text="各个车道的进展贴给你，帮我看哪些能合"),

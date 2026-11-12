@@ -223,8 +223,6 @@ struct UserBubble: View, Equatable {
     @Environment(\.openFile) private var openFile
     @Environment(\.loadImage) private var loadImage
     @Environment(\.chatPin) private var pin
-    /// Its words are folded (`BubbleFold`, #5676): a long press opens them instead of lifting the bubble.
-    @State private var folded = false
 
     var body: some View {
         #if DEBUG || PERF_SIGNPOST
@@ -245,7 +243,7 @@ struct UserBubble: View, Equatable {
             if !shown.isEmpty || !quotes.isEmpty {
                 HStack {
                     Spacer(minLength: 48)
-                    let fold = BubbleFoldKey(id: item.id, folded: $folded)
+                    let fold = BubbleFoldKey(id: item.id)
                     UserBubbleBody(quotes: quotes, text: d.words, paths: d.pathRefs, comments: d.comments, lead: d.lead, fold: fold)
                         .messageLongPress(id: item.id, opens: { fold.openOnPress(scope: memoScope, pin: pin) }) {
                             UserBubbleBody(quotes: quotes, text: d.words, paths: d.pathRefs, comments: d.comments, lead: d.lead)
@@ -376,8 +374,6 @@ struct PendingBubble: View {
     @Environment(\.chatImages) private var chatImages
     @Environment(\.rowMemoScope) private var memoScope
     @Environment(\.chatPin) private var pin
-    /// Folded as a sent bubble is (#5676), so a long message does not fill the chat until the transcript has it.
-    @State private var folded = false
 
     var body: some View {
         let parsed = ContextRef.parse(msg.text)
@@ -433,7 +429,7 @@ struct PendingBubble: View {
                     .accessibilityAction(named: Text("Delete"), discard)
                 }
                 let split = MessageComments.inBubble(shown)
-                let fold = BubbleFoldKey(id: "pending-" + msg.id.uuidString, folded: $folded)
+                let fold = BubbleFoldKey(id: "pending-" + msg.id.uuidString) // folded as a sent bubble is (#5676)
                 UserBubbleBody(quotes: ContextRef.quotes(parsed.refs) ?? [], text: split?.rest ?? shown, comments: split?.comments ?? [], lead: split?.quote,
                                fold: fold)
                     .opacity(msg.state == .failed || msg.state == .waiting ? 0.6 : 1)

@@ -72,6 +72,14 @@ nonisolated enum BubbleFoldRule: Equatable, Sendable {
     }
     private static let lengthsMemo = TextMemo<[Int]>(limit: 400)
 
+    /// The start a folded bubble draws under `rule` (`start(of:lines:)`), once per text: a bubble that appears again as
+    /// the chat scrolls does not walk its characters again.
+    static func shownStart(of text: String, rule: BubbleFoldRule) -> String? {
+        (rule == .regular ? regularStarts : largeStarts)(text) { start(of: $0, lines: rule.limit + 2) }
+    }
+    private static let regularStarts = TextMemo<String?>(limit: 100)
+    private static let largeStarts = TextMemo<String?>(limit: 100)
+
     /// The start of `text` a folded bubble draws (`startCharacters`, its first `lines` lines); nil when that is all of it.
     static func start(of text: String, lines: Int) -> String? {
         var count = 0
@@ -90,21 +98,26 @@ nonisolated enum BubbleFoldRule: Equatable, Sendable {
     }
 }
 
-/// What a bubble needs to fold its words: where its open state is kept (`OpenReports`, in the chat's scope), the key its
-/// row is pinned by (`chatPinned`), and the bubble's own `folded` (its long press opens it instead of lifting it).
+/// What a bubble needs to fold its words: where its open state is kept (`OpenReports`, in the chat's scope) and the key
+/// its row is pinned by (`chatPinned`).
 struct BubbleFoldKey {
     var id: String
-    var folded: Binding<Bool>
     /// The row's `chatPinned` key: opening and folding keep the bubble's top where it is on screen.
     var pin: String { "bubble-" + id }
 
     /// Where its open state is kept (`OpenReports`), in the chat's `scope`.
     func openKey(_ scope: String) -> String { scope + "/" + pin }
 
+    /// The bubbles on screen folded now, by `openKey` (`Folding` keeps it): what a long press asks as it begins. Not
+    /// SwiftUI state: a bubble that folds as it appears redraws nothing around it (a `@State` in the row redrew the whole
+    /// row once more for every long message scrolled in).
+    @MainActor static var folded: Set<String> = []
+
     /// A long press on the bubble (`messageLongPress(opens:)`): folded, it opens, as Show More does, and takes the press.
     @MainActor func openOnPress(scope: String, pin chat: ChatPin?) -> Bool {
-        guard folded.wrappedValue else { return false }
-        Self.flip(openKey(scope), pinKey: pin, open: false, pin: chat)
+        let key = openKey(scope)
+        guard Self.folded.contains(key) else { return false }
+        Self.flip(key, pinKey: pin, open: false, pin: chat)
         return true
     }
 
@@ -119,8 +132,8 @@ struct BubbleFoldKey {
 /// The words of your own bubble, folded past the rule's lines (`BubbleFoldRule`) with Show More / Show Less under them,
 /// in the bubble. A message that cannot run past the rule's lines even in the narrowest bubble is drawn as before, with
 /// nothing measured; one that can is measured once its words are laid out (`onGeometryChange` on their size, which
-/// scrolling does not change), not as it scrolls. Folded, only its start is laid out (`BubbleFoldRule.start`). The lifted
-/// copy (`liftCopy`) is always whole.
+/// scrolling does not change), not as it scrolls, and drawn again only when that changes what its characters said.
+/// Folded, only its start is laid out (`BubbleFoldRule.start`). The lifted copy (`liftCopy`) is always whole.
 struct BubbleFold<Words: View>: View {
     var text: String
     var fold: BubbleFoldKey?
@@ -162,36 +175,37 @@ private struct Folding<Words: View>: View {
     var tint: Color
     var words: (String) -> Words
 
-    /// The drawn words' height.
-    @State private var full: CGFloat = 0
+    /// Measured past the rule's lines or not, where that differs from `guess`; nil: as guessed. Written only when the
+    /// measuring changes the answer, so the usual long message is drawn once.
+    @State private var measured: Bool?
     /// Its start reached no further than the rule's lines (narrow letters at a wide bubble): it is drawn whole.
     @State private var whole = false
     @Environment(\.rowMemoScope) private var scope
     @Environment(\.chatPin) private var pin
 
     private var key: String { fold.openKey(scope) }
-    /// Measured: longer than the rule's lines (`full` is that many lines and a half past `cut`'s).
-    private var long: Bool {
-        guard full > 0 else { return guess }
-        return full > cut * (CGFloat(rule.limit) + 0.5) / CGFloat(rule.shown)
-    }
+    private var long: Bool { measured ?? guess }
+    /// Words this tall run past the rule's lines: that many lines and a half of `cut`'s.
+    private var past: CGFloat { cut * (CGFloat(rule.limit) + 0.5) / CGFloat(rule.shown) }
 
     var body: some View {
         let open = OpenReports.shared.isOpen(key)
         let folded = long && !open
-        let start = folded && !whole ? BubbleFoldRule.start(of: text, lines: rule.limit + 2) : nil
+        let start = folded && !whole ? BubbleFoldRule.shownStart(of: text, rule: rule) : nil
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
             words(start ?? text)
                 .fixedSize(horizontal: false, vertical: true)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height.rounded() } action: { h in
-                    full = h
-                    // Only its start was laid out, and it did not run past the rule's lines: draw all of it.
-                    if start != nil, h <= cut * (CGFloat(rule.limit) + 0.5) / CGFloat(rule.shown) { whole = true }
+                    if start != nil, h <= past {
+                        whole = true // only its start was laid out, and it did not run past the rule's lines: all of it
+                    } else if long != (h > past) {
+                        measured = h > past
+                    }
                 }
                 .frame(height: folded ? cut : nil, alignment: .top)
                 .clipped()
                 .contentShape(.rect) // what is folded away takes no touches (the words run on past the fold)
-                .mask { if folded { fade } else { Rectangle() } }
+                .modifier(FoldFade(on: folded, line: cut / CGFloat(max(rule.shown, 1))))
                 // Folded, one element as tall as what shows (its words all read out): the words' own frame runs on past
                 // the fold, and VoiceOver's box with it.
                 .accessibilityElement(children: folded ? .combine : .contain)
@@ -204,17 +218,34 @@ private struct Folding<Words: View>: View {
         }
         // Only a bubble that can fold reports where it is as the chat scrolls (what opening and folding keep in place).
         .chatPinned(fold.pin)
-        .onChange(of: folded, initial: true) { _, now in
-            if fold.folded.wrappedValue != now { fold.folded.wrappedValue = now }
-        }
+        .onAppear { keep(folded) }
+        .onChange(of: folded) { _, now in keep(now) }
+        .onDisappear { BubbleFoldKey.folded.remove(key) }
     }
 
-    /// Opaque down to the last line shown, which fades out.
-    private var fade: some View {
-        VStack(spacing: 0) {
-            Rectangle()
-            LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
-                .frame(height: cut / CGFloat(max(rule.shown, 1)))
+    /// What a long press asks (`BubbleFoldKey.folded`).
+    private func keep(_ folded: Bool) {
+        if folded { BubbleFoldKey.folded.insert(key) } else { BubbleFoldKey.folded.remove(key) }
+    }
+}
+
+/// Folded, the words are opaque down to the last line shown, which fades out. Open, no mask at all: a mask is drawn
+/// off screen first, every frame the bubble moves.
+private struct FoldFade: ViewModifier {
+    var on: Bool
+    /// One line's height: the fade.
+    var line: CGFloat
+
+    func body(content: Content) -> some View {
+        if on {
+            content.mask {
+                VStack(spacing: 0) {
+                    Rectangle()
+                    LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: line)
+                }
+            }
+        } else {
+            content
         }
     }
 }

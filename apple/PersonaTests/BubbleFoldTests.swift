@@ -44,6 +44,9 @@ struct BubbleFoldTests {
         let start = try #require(BubbleFoldRule.start(of: many, lines: 16))
         #expect(start.split(separator: "\n", omittingEmptySubsequences: false).count == 16)
         #expect(many.hasPrefix(start))
+        // What a bubble draws, kept once per text: the same start.
+        #expect(BubbleFoldRule.shownStart(of: many, rule: .regular) == start)
+        #expect(BubbleFoldRule.shownStart(of: many, rule: .large) == BubbleFoldRule.start(of: many, lines: 11))
         // Characters: one line of 10 000 is cut at `startCharacters`.
         let wide = String(repeating: "字", count: 10_000)
         #expect(BubbleFoldRule.start(of: wide, lines: 16)?.count == BubbleFoldRule.startCharacters)
