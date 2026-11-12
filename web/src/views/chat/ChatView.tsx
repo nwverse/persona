@@ -87,7 +87,8 @@ import { NavRail } from "./NavRail";
 import { useChatScrollbar } from "./useChatScrollbar";
 import { ChatLineView, closedRecap, closeRecap, OpenRecapLine } from "./Lines";
 import { useTranscript } from "./useTranscript";
-import { ArchiveCloseDialog, CloseAgentDialog, DeleteSessionDialog, HeaderModeButton, ModeChips, RenameDialog, RenameSpaceDialog, SessionInfoDialog } from "./SessionDialogs";
+import { ArchiveCloseDialog, CloseAgentDialog, DeleteSessionDialog, HeaderModeButton, RenameDialog, RenameSpaceDialog, SessionInfoDialog } from "./SessionDialogs";
+import { PermissionPicker, usePlanMode } from "./PermissionPicker";
 import { showsInHeader } from "../../lib/header-mode";
 import { archiveItems } from "../AgentMenus";
 import { ChatSidebarButton } from "../ShellSwitch";
@@ -1543,7 +1544,11 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const faceLast = useMemo(() => (lastRole && lastKind ? { role: lastRole, kind: lastKind } : undefined), [lastRole, lastKind]);
   // the main conversation's /clear (#5095, lib/main-clear.ts): Persona's other conversations take no commands
   const commands = useMemo(() => (assistant ? (clears ? mainCommands() : []) : agentCommands(AGENT_COMMANDS, session)), [assistant, clears, session]);
-  const footer = useMemo(() => (session ? <ComposerFooter session={session} assistant={assistant} /> : null), [session, assistant]);
+  // the permission picker after the + (#5324), where the mode can be switched: a Persona conversation whatever its state
+  // (the hub applies it, #2416), an agent with modes while it runs; Plan mode is the + panel's check row
+  const modesOn = Boolean(session) && (Boolean(assistant) || (hasModes(session) && stateOf(session!) !== "offline"));
+  const leading = useMemo(() => (session && modesOn ? <PermissionPicker session={session} assistant={assistant} /> : null), [session, modesOn, assistant]);
+  const planMode = usePlanMode(modesOn ? session : undefined, assistant);
   // the model pill: an Agent's (#5032), a Persona conversation's (#5033, its pick kept for the conversation)
   const trailing = useMemo(() => (session ? assistant ? <AssistantModelPill session={session} /> : <AgentModelPill session={session} /> : null), [session, assistant]);
 
@@ -1811,13 +1816,18 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           autoFocus
           onFocusChange={setTyping}
           blocked={gate.blocked ?? noRowBlock}
-          footer={footer}
+          leading={leading}
           trailing={trailing}
+          planMode={planMode}
           voice={voiceEntry.offer}
         />
         )}
-        {!stoppedLine && session && !assistant && contextUsage(session) !== null && (
-          <div data-composer-usage className="flex items-center justify-end px-2 pt-0.5"><ContextMeter session={session} /></div>
+        {!stoppedLine && session && (composerSource(session, assistant).length > 0 || (!assistant && contextUsage(session) !== null)) && (
+          // where the chat comes from and its folder at the left (cindy's working-folder line, #5324), the context meter at the right
+          <div data-composer-usage className="flex min-w-0 items-center justify-between gap-3 px-2 pt-0.5">
+            <ComposerSource session={session} assistant={assistant} />
+            {!assistant && contextUsage(session) !== null && <ContextMeter session={session} />}
+          </div>
         )}
         </div>
       </div>
@@ -1927,25 +1937,31 @@ function JumpPill({ label, onClick, inline }: { label: string; onClick: () => vo
   );
 }
 
-export function ComposerFooter({ session, assistant }: { session: Session; assistant?: boolean }) {
-  // the launcher, model and effort are the composer's model pill (an Agent's, #5032; a Persona conversation's, #5033):
-  // they switch there, so the line keeps only where the chat comes from and runs
-  const parts = [sourceSubtitle(session), ...(assistant ? [] : [shortPath(session.cwd)])].filter(Boolean);
+/** What the line under the composer says: where the chat comes from and, for an Agent, its folder (a Persona conversation
+ *  shows no folder). The launcher and model are the composer's model pill (#5032, #5033). */
+function composerSource(session: Session, assistant?: boolean): string[] {
+  return [sourceSubtitle(session), ...(assistant ? [] : [shortPath(session.cwd)])].filter((p): p is string => Boolean(p));
+}
+
+/** Under the composer at the left (#5324, as cindy's working-folder line): the source and folder in muted 12 px, truncating,
+ *  with the full values on hover. At phone width (#3533) it would show a letter or two, so it is a button that lists them. */
+export function ComposerSource({ session, assistant }: { session: Session; assistant?: boolean }) {
+  const parts = composerSource(session, assistant);
   const info = useMenu();
-  // a Persona conversation (the main one too) switches its permission mode whatever its state: the hub applies it (#2416)
-  const modes = assistant || (hasModes(session) && stateOf(session) !== "offline");
+  if (!parts.length) return <span />;
   return (
-    <span className="flex min-w-0 items-center gap-2">
-      {modes && <ModeChips session={session} assistant={assistant} />}
-      {parts.length > 0 && <span className="min-w-0 truncate max-sm:hidden" title={[sourceSubtitle(session), session.cwd].filter(Boolean).join(" · ")}>{parts.join(" · ")}</span>}
-      {/* phone width (#3533): the line would show a letter or two, so it is a button that lists the parts in full */}
-      {parts.length > 0 && <IconButton icon="info" label={t("chat-chatview.session_info")} onClick={info.open} active={Boolean(info.anchor)} size={22} iconSize={13} className="sm:hidden" />}
-      {info.anchor && <Menu anchor={info.anchor} onClose={info.close} side="top" align="right" width={280} header={t("chat-chatview.session_info")} items={footerRows(session, assistant)} />}
+    <span data-composer-source className="flex min-w-0 items-center gap-1 text-[12px] text-ink-3">
+      <span className="flex min-w-0 items-center gap-1 max-sm:hidden" title={[sourceSubtitle(session), session.cwd].filter(Boolean).join(" · ")}>
+        {!assistant && session.cwd && <Icon name="folder" size={12} className="shrink-0" />}
+        <span className="min-w-0 truncate">{parts.join(" · ")}</span>
+      </span>
+      <IconButton icon="info" label={t("chat-chatview.session_info")} onClick={info.open} active={Boolean(info.anchor)} size={22} iconSize={13} className="sm:hidden" />
+      {info.anchor && <Menu anchor={info.anchor} onClose={info.close} side="top" align="left" width={280} header={t("chat-chatview.session_info")} items={footerRows(session, assistant)} />}
     </span>
   );
 }
 
-/** The composer footer's parts as menu rows (#3533): the value in full (wrapped), what it is beside it; choosing one
+/** The line under the composer as menu rows (#3533): the value in full (wrapped), what it is beside it; choosing one
  *  copies it, except the source, which is a sentence to read rather than a value to paste. The launcher and model are
  *  the model pill's (#5032). */
 export function footerRows(session: Session, assistant?: boolean): MenuItem[] {

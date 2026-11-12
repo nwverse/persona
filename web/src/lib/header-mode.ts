@@ -98,3 +98,33 @@ export function modeMenuItems(s: Session, pick: (mode: string) => void, opts: { 
   }
   return rows;
 }
+
+/** The composer picker's symbol per mode (#5324, cindy's: a raised hand, code, a list, sparkles, a warning triangle); a
+ *  mode this app does not know the plain shield. Not reported yet reads as Default permissions, as the picker's label does. */
+export function pickerIcon(mode: string | undefined): IconName {
+  switch (mode) {
+    case undefined:
+    case "":
+    case "default":
+      return "palm";
+    case "acceptEdits":
+      return "code";
+    case "plan":
+      return "list";
+    case "auto":
+      return "sparkles";
+    case BYPASS_MODE:
+      return "warning";
+    default:
+      return "shield";
+  }
+}
+
+/** Where unchecking Plan mode (the + panel's check row, #5324) goes: the mode the agent had before it, as this page saw it,
+ *  while it can still switch to it; else Default permissions. Never Full access, which only the picker chooses, with its
+ *  confirmation. */
+export function leavePlanTo(s: Session, before: string | undefined, assistant?: boolean): string {
+  if (!before || before === "plan" || before === BYPASS_MODE) return "default";
+  const offered = switchableModes(assistant || s.assistant, s.agent, canSwitchToBypass(s));
+  return offered.some((m) => m.id === before) ? before : "default";
+}

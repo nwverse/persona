@@ -764,7 +764,7 @@ function MenuRow({ item: it, asking, working, refCb, onHover, onChoose }: { item
       ref={refCb}
       role={it.radio ? "menuitemradio" : "menuitem"}
       type="button"
-      title={it.state ? `${it.label} · ${STATE_LABEL[it.state]}` : undefined}
+      title={it.state ? `${it.label} · ${STATE_LABEL[it.state]}` : it.tip}
       disabled={it.disabled}
       aria-haspopup={it.children ? "menu" : undefined}
       aria-keyshortcuts={it.accel}
