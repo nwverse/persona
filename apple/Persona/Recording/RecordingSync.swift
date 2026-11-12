@@ -162,6 +162,10 @@ final class RecordingSync {
     @ObservationIgnored var onRoom: ((UUID, MeetingRoom, Bool?) -> Void)?
     /// Every save of a recording, after this sync's own reaction to it (the live log of a meeting Persona attends).
     @ObservationIgnored var onChange: ((UUID) -> Void)?
+    /// What a recording may send changed: a save (its role, Meeting / Note, the phone stopping attending: `stopped`) or
+    /// `roomMissing`. The segment length of the one being recorded follows it (`MeetingRecorder.followSegments`, #3862
+    /// phase 2: 15-second segments only while its lines go to the room).
+    @ObservationIgnored var onSegments: ((UUID) -> Void)?
     /// Uploaded first, without the save debounce: a recording whose attendance the hub doesn't have yet.
     @ObservationIgnored private var urgent: Set<UUID> = []
     /// Configuration refusals need a foreground/manual retry, not a timer or another transcript save.
@@ -212,6 +216,7 @@ final class RecordingSync {
             } else {
                 self.kick()
             }
+            self.onSegments?(id)
             self.onChange?(id)
         }
         #if canImport(UIKit) && !os(watchOS)
@@ -563,11 +568,17 @@ final class RecordingSync {
     private func roomAnswered(_ entry: RecordingEntry, sent body: RecordingUpload, _ took: String?, problem: String?,
                               room: MeetingRoom?, privateMark: Bool?) {
         guard let room else {
-            if !roomMissing.contains(entry.id) { roomMissing.insert(entry.id) }
+            if !roomMissing.contains(entry.id) {
+                roomMissing.insert(entry.id)
+                onSegments?(entry.id)
+            }
             attendanceStored[entry.id] = nil
             return
         }
-        if roomMissing.contains(entry.id) { roomMissing.remove(entry.id) }
+        if roomMissing.contains(entry.id) {
+            roomMissing.remove(entry.id)
+            onSegments?(entry.id)
+        }
         attendanceProblem[entry.id] = problem
         onRoom?(entry.id, room, privateMark)
         guard let mark = RecordingUpload.attendanceMark(entry), let sent = body.room?.attendance else { return }

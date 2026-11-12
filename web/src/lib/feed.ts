@@ -170,8 +170,10 @@ export interface BriefSetup {
 }
 
 /** The settings page a recommended mechanism is turned on at, for those that have one in this app: Session triage, the
- *  standing authorizations and the remembered kinds of task are on the assistant's own page. */
+ *  standing authorizations and the remembered kinds of task are on the assistant's own page; a lower tier for the
+ *  background supervisor (#5805) is its purpose's page of Model settings. */
 export function briefSetupPage(id: string): string | undefined {
+  if (id === "supervisor_tier") return "/settings?tab=models&purpose=assistant.supervise";
   return ["triage_decide", "triage_auto_continue", "triage_wake", "standing_authorizations", "task_trust"].includes(id) ? "/settings?tab=persona" : undefined;
 }
 

@@ -557,6 +557,7 @@
     </plurals>
     <string name="agents_todo_restore">Restore</string>
     <string name="agents_todo_pr_moved">%1$s · moved %2$s</string>
+    <string name="agents_todo_for_briefing">Decision comes with the next briefing</string>
     <string name="agents_todo_pr">PR</string>
     <string name="agents_todo_state_accepted">Accepted</string>
     <plurals name="agents_todos_related">
