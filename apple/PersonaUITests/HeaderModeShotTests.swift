@@ -109,6 +109,43 @@ final class HeaderModeShotTests: XCTestCase {
         }
     }
 
+    /// An agent that has not reported its mode yet (a Claude Code agent before its first prompt): the header's menu, its
+    /// button's VoiceOver label and the composer's model menu say just "Permission Mode", as the capsule does, never
+    /// "Permission Mode: Unknown" (#5596).
+    @MainActor func testUnknownModeShots() throws {
+        guard !isPad else { throw XCTSkip("iPhone shots") }
+        continueAfterFailure = true // every shot is taken even when a label is wrong (a build without the change)
+        let plain = ["权限模式", "Permission Mode"] // i18n-ignore: the test runs in zh-Hans
+        for scheme in ["light", "dark"] {
+            open(Self.review, scheme: scheme)
+            let mode = app.buttons["chat.permissionMode"]
+            XCTAssertTrue(mode.waitForExistence(timeout: 10), "the header's mode")
+            XCTAssertTrue(plain.contains(mode.label), "the header button's VoiceOver label: \(mode.label)")
+            mode.tap()
+            sleep(1)
+            shot("menu-unknown", scheme)
+            assertNoUnknownMode()
+            let title = app.descendants(matching: .any)
+                .matching(NSPredicate(format: "label IN %@ AND identifier != %@", plain, "chat.permissionMode")).firstMatch
+            XCTAssertTrue(title.waitForExistence(timeout: 3), "the menu's title line; the screen's elements:\n\(app.debugDescription)")
+
+            open(Self.review, scheme: scheme)
+            let modes = app.buttons["shell-composer-modes"]
+            XCTAssertTrue(modes.waitForExistence(timeout: 10), "the composer's model button")
+            modes.tap()
+            sleep(1)
+            shot("composer-menu-unknown", scheme)
+            assertNoUnknownMode()
+            let item = app.descendants(matching: .any).matching(NSPredicate(format: "label IN %@", plain)).firstMatch
+            XCTAssertTrue(item.waitForExistence(timeout: 3), "the model menu's Permission Mode item; the screen's elements:\n\(app.debugDescription)")
+        }
+    }
+
+    @MainActor private func assertNoUnknownMode() {
+        let unknown = NSPredicate(format: "label BEGINSWITH %@ OR label BEGINSWITH %@", "权限模式：未知", "Permission Mode: Unknown") // i18n-ignore
+        XCTAssertFalse(app.descendants(matching: .any).matching(unknown).firstMatch.exists, "a mode named Unknown")
+    }
+
     /// The menu's first line says the mode, "Permission Mode: …", as on the web and Android (the header's button has the
     /// same words as its VoiceOver label, so it is left out).
     @MainActor private func assertMenuTitle() {
