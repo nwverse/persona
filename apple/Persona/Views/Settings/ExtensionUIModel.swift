@@ -739,7 +739,7 @@ extension APIClient {
     static func opens(_ url: URL, item: String?, owner: String? = nil) -> Bool {
         if url.scheme?.lowercased() == "https" { return url.host()?.isEmpty == false && url.user == nil && url.password == nil }
         // the subscription pages' Set Up with … (#5278): their text to the assistant, never an extension's
-        if SubscriptionsUI.askText(url) != nil { return owner == SubscriptionsUI.id }
+        if SubscriptionsUI.askText(url) != nil || SubscriptionsUI.isGraph(url) { return owner == SubscriptionsUI.id }
         if let settings = ExtensionSettingsLink.extensionID(url) { return owner != nil && settings == owner }
         guard let item, let source = InboxSourceLink.item(url) else { return false }
         return source == item

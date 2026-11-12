@@ -117,6 +117,8 @@
   "field.title": "Title",
   "gone.detail": "It may have been deleted on another device.",
   "gone.title": "This subscription is gone",
+  "graph.row": "Source Relationships",
+  "graph.row_detail": "Where each one comes from, how it's read and where it goes",
   "group.source": "One conversation for the source",
   "group.thread": "One conversation per thread",
   "kind.sub_deadline": "Deadlines",

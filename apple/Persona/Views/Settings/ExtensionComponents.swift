@@ -363,7 +363,7 @@ enum ExtensionOutcome {
         } else if let t = o.toast {
             app.toast = Toast(t, style: .success)
         }
-        if let url = o.url, !app.openIfExtensionSettings(url), !app.openIfAsk(url) { link.wrappedValue = LinkTarget(url: url) }
+        if let url = o.url, !app.openIfExtensionSettings(url), !app.openIfAsk(url), !app.openIfSourcesGraph(url) { link.wrappedValue = LinkTarget(url: url) }
     }
 }
 

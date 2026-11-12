@@ -115,6 +115,8 @@
   "field.title": "タイトル",
   "gone.detail": "ほかのデバイスで削除された可能性があります。",
   "gone.title": "この購読はもうありません",
+  "graph.row": "ソースの関係図",
+  "graph.row_detail": "それぞれどこから来て、どう読まれ、どこへ入るか",
   "group.source": "ソース全体で 1 つの会話",
   "group.thread": "スレッドごとに 1 つの会話",
   "kind.sub_deadline": "締め切り",

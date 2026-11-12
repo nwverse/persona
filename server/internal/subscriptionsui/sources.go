@@ -27,6 +27,13 @@ func (p *pages) list() wire.View {
 		intro = "list.intro"
 	}
 	v.Sections = append(v.Sections, wire.Section{Items: []wire.Component{text("intro", p.t(intro), "secondary")}})
+	if p.env.Graph && !filtered {
+		// The app's own relationship view (#5741): what brings each source, how it is read, where it goes.
+		r := row("x.graph", p.t("graph.row"))
+		r.Subtitle, r.Icon, r.IconColor = p.t("graph.row_detail"), p.icon("branch"), "blue"
+		r.Action = &wire.Action{ID: "graph"}
+		v.Sections = append(v.Sections, wire.Section{Key: "graph", Items: []wire.Component{r}})
+	}
 	all := subs
 	if filtered { // a duplicate is told by any subscription, not only this connector's
 		all, _, _ = p.svc.List(p.ctx, subscriptions.Filter{})

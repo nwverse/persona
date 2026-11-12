@@ -115,6 +115,8 @@
   "field.title": "标题",
   "gone.detail": "可能在别的设备上删掉了。",
   "gone.title": "这个订阅已经没有了",
+  "graph.row": "来源关系图",
+  "graph.row_detail": "每个来源从哪来、怎么读、进到哪",
   "group.source": "整个来源一个会话",
   "group.thread": "每个线程一个会话",
   "kind.sub_deadline": "截止事项",

@@ -43,6 +43,7 @@ func (h *Manager) subscriptionUI(w http.ResponseWriter, r *http.Request) {
 		Native:    h.subscriptionNative,
 		Builtin:   builtinSources{h},
 		Assistant: in.Context.Assistant,
+		Graph:     in.Context.Graph,
 		Triage:    h.triagePreview,
 		Platform:  in.Context.Platform,
 	}
