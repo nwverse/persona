@@ -1111,12 +1111,15 @@ without Bun. Two things keep it current (#6001):
   generator (compared with the same base as the privacy scan; an orphan branch is skipped),
   `scripts/hooks/check-deno-adapter.sh <commit>` builds the adapter from that commit's files, never the worktree, with
   that commit's generator, and compares it with the committed one. A mismatch refuses the push and names the
-  regenerate command. **Without `bun` on PATH it refuses too**, naming the version `.github/workflows/server-test.yml`
-  pins and an install that leaves the global Bun alone:
-  `npm install --prefix ~/.bun-1.4.2 bun@1.4.2 && export PATH=~/.bun-1.4.2/node_modules/.bin:$PATH`. When the
-  `bun` on PATH is not the pinned version, the refusal says so, since another version may build other bytes.
-- Fix a refusal: `scripts/gen/deno_adapter.sh` with the pinned Bun first on PATH, commit `adapter.mjs`, push again.
-  By hand: `scripts/hooks/check-deno-adapter.sh HEAD`. Tests: `scripts/test/test_check_deno_adapter_sh.py` (a fake
+  regenerate command.
+- **Only the pinned Bun counts**: the version `.github/workflows/server-test.yml` pins (1.4.2). Without identifier
+  minification another version builds other bytes (1.4.0 renames a shadowed `out` to `out2`). The check uses
+  `~/.bun-<version>/node_modules/.bin/bun` or `~/.bun-<version>/bin/bun` when there, else `bun` on PATH.
+  **Without Bun it refuses**, and so does another version whose build differs; both name the pinned version and an
+  install that leaves the global Bun alone: `npm install --prefix ~/.bun-1.4.2 bun@1.4.2`.
+- Fix a refusal: `PATH=~/.bun-1.4.2/node_modules/.bin:$PATH scripts/gen/deno_adapter.sh`, commit `adapter.mjs`, push
+  again.
+- By hand: `scripts/hooks/check-deno-adapter.sh HEAD`. Tests: `scripts/test/test_check_deno_adapter_sh.py` (a fake
   `bun`, no real Bun needed). `git push --no-verify` skips every hook, the privacy scan included; don't.
 - CI does not run this check. `merge-pr.sh` does not either; the test on the hub machine still catches what a push
   without the hooks lets through.

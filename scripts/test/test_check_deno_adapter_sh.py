@@ -113,7 +113,7 @@ class DenoAdapterPrePushTests(unittest.TestCase):
 
     def test_without_bun_an_sdk_change_is_refused_with_the_pinned_version(self):
         self.commit("sdk/ts/src/index.ts", "export const connect = 2\n")
-        self.assert_refused(self.push(self.without_bun), "bun is not on PATH", "Install Bun 9.9.9",
+        self.assert_refused(self.push(self.without_bun), "there is no bun", "Install Bun 9.9.9",
                             "npm install --prefix ~/.bun-9.9.9 bun@9.9.9", "scripts/gen/deno_adapter.sh")
 
     def test_an_sdk_change_without_a_regenerated_adapter_is_refused(self):
@@ -137,10 +137,31 @@ class DenoAdapterPrePushTests(unittest.TestCase):
         self.commit(ADAPTER, "tampered\n")
         self.assert_refused(self.push(self.with_bun), "is stale")
 
-    def test_another_bun_version_is_named_when_the_adapter_looks_stale(self):
+    def test_another_bun_version_whose_build_differs_asks_for_the_pinned_one(self):
         self.commit("sdk/ts/src/index.ts", "export const connect = 2\n")
         result = self.push(dict(self.with_bun, FAKE_BUN_VERSION="9.8.0"))
-        self.assert_refused(result, "is stale", "bun on PATH is 9.8.0, not the pinned 9.9.9")
+        self.assert_refused(result, "bun is 9.8.0, not the pinned 9.9.9", "npm install --prefix ~/.bun-9.9.9 bun@9.9.9")
+        self.assertNotIn("is stale: it is not", result.stderr)
+
+    def pinned_bun(self, where):
+        """A fake bun of the pinned version where the install hint (node_modules/.bin) or a release zip (bin) puts it."""
+        target = self.home / ".bun-9.9.9" / where
+        target.mkdir(parents=True)
+        (target / "bun").write_text('#!/bin/bash\nFAKE_BUN_VERSION=9.9.9 exec "%s" "$@"\n' % (self.fake / "bun"))
+        (target / "bun").chmod(0o755)
+
+    def test_the_pinned_bun_is_found_without_being_on_path(self):
+        for where in ("node_modules/.bin", "bin"):
+            with self.subTest(where=where):
+                shutil.rmtree(self.home / ".bun-9.9.9", ignore_errors=True)
+                self.pinned_bun(where)
+                self.commit("sdk/ts/src/index.ts", "export const connect = '%s'\n" % where)
+                self.assert_refused(self.push(self.without_bun), "is stale", "Bun 9.9.9")
+                self.regenerate()
+                self.git("add", "server")
+                self.git("commit", "-q", "--no-verify", "-m", "regenerated")
+                # Another version first on PATH: the pinned one is used all the same.
+                self.assert_pushed(self.push(dict(self.with_bun, FAKE_BUN_VERSION="9.8.0")))
 
     def test_an_orphan_branch_has_no_adapter_to_compare(self):
         self.git("checkout", "-q", "--orphan", "shots")
