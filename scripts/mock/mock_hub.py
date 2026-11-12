@@ -2888,6 +2888,9 @@ RULE_SUGGESTIONS = {
         "scope": {}, "creates": "", "setting": "agents.delegate", "count": 3},
 } if os.environ.get("MOCK_RULE_SUGGESTIONS") == "1" else {}
 RULE_SUGGESTIONS_ANSWERED = set()  # answered with Always or Not now
+RULE_GRANTS = []  # the standing authorizations Always granted, as GET /api/v1/assistant/standing-authorizations lists them
+RULE_GRANTS_REVISION = [1]
+RULE_TRUST_ADDED = set()  # the tasks.trust keys Always added, which /mock/reset takes away again
 RULE_SUGGESTION_ON = {"todo_review": "rs_mock_merge", "ix_tests": "rs_mock_delegate", "plan_mock_3": "rs_mock_start"}
 
 
@@ -2904,7 +2907,20 @@ def suggested_plan(plan):
 
 
 def rule_suggestions_area(h, method, p):
-    """POST /api/v1/assistant/rule-suggestions/{id}/always | not-now (MOCK_RULE_SUGGESTIONS=1)."""
+    """POST /api/v1/assistant/rule-suggestions/{id}/always | not-now (MOCK_RULE_SUGGESTIONS=1), and the standing
+    authorizations Always granted: GET /api/v1/assistant/standing-authorizations lists them, DELETE …/{id} revokes one."""
+    if RULE_SUGGESTIONS and p == "/api/v1/assistant/standing-authorizations" and method == "GET":
+        h.send_json({"revision": RULE_GRANTS_REVISION[0], "authorizations": RULE_GRANTS})
+        return True
+    if RULE_SUGGESTIONS and p.startswith("/api/v1/assistant/standing-authorizations/") and method == "DELETE":
+        kept = [g for g in RULE_GRANTS if g["id"] != unquote(p.rsplit("/", 1)[1])]
+        if len(kept) == len(RULE_GRANTS):
+            h.send_json({"error": "not found", "code": "not_found"}, 404)
+            return True
+        RULE_GRANTS[:] = kept
+        RULE_GRANTS_REVISION[0] += 1
+        h.send_json({"revision": RULE_GRANTS_REVISION[0], "authorizations": RULE_GRANTS})
+        return True
     m = re.fullmatch(r"/api/v1/assistant/rule-suggestions/([^/]+)/(always|not-now)", p)
     if not m or method != "POST":
         return False
@@ -2919,11 +2935,18 @@ def rule_suggestions_area(h, method, p):
         key = "macbook|/Users/me/code/weather|edit"
         if MOCK_TASKS and not any(k["key"] == key for k in TASK_TRUST):
             TASK_TRUST.append({"key": key, "machine": "macbook", "cwd": "/Users/me/code/weather", "readonly": False})
+            RULE_TRUST_ADDED.add(key)
         h.send_json({"ok": True, "kind": sg["kind"], "creates": "tasks.trust", "key": key})
     elif sg["kind"] == "standing_authorization":
-        h.send_json({"ok": True, "kind": sg["kind"], "creates": "standing_authorization", "revision": 2,
-                     "authorization": {"id": "sa_mock_1", "action": "merge", "machine_id": "macbook", "directory": "/Users/me/code/weather",
-                                       "conditions": ["ci_green", "no_conflicts"], "quote": sg["scope"]["quote"]}})
+        grant = {"id": "sa_mock_%d" % (len(RULE_GRANTS) + 1), "action": "merge", "actions": ["merge"], "machine_id": "macbook",
+                 "directory": "/Users/me/code/weather", "conditions": ["ci_green", "no_conflicts"], "quote": sg["scope"]["quote"],
+                 # The hub's own words (server/internal/i18n/locales/en/assistant-rule_suggest.json "source").
+                 "source": "Suggested rule: the same answer 3 times in 14 days, confirmed with Always.",
+                 "granted_at": ago(), "reversible": True}
+        RULE_GRANTS.append(grant)
+        RULE_GRANTS_REVISION[0] += 1
+        h.send_json({"ok": True, "kind": sg["kind"], "creates": "standing_authorization", "revision": RULE_GRANTS_REVISION[0],
+                     "authorization": grant})
     else:
         h.send_json({"ok": True, "kind": sg["kind"], "creates": "", "setting": sg["setting"]})
     push_todos()  # a decision is worded again without the line; a pending card is sent again without it
@@ -21093,6 +21116,11 @@ class H(BaseHTTPRequestHandler):
             wire_reset()
             SEND_FAIL["on"] = False  # a FailedSendPlacementTests run that died before turning it off
             COOKIES_FAILED[0] = False  # MOCK_COOKIES_FAIL: the next read fails again
+            # MOCK_RULE_SUGGESTIONS: every suggestion is offered again, and what Always made is gone (web/e2e/rule-suggestions.mjs)
+            RULE_SUGGESTIONS_ANSWERED.clear(); del RULE_GRANTS[:]; RULE_GRANTS_REVISION[0] = 1
+            if MOCK_TASKS and RULE_TRUST_ADDED:
+                TASK_TRUST[:] = [k for k in TASK_TRUST if k["key"] not in RULE_TRUST_ADDED]
+                RULE_TRUST_ADDED.clear()
             HERDR_STOPPED.clear(); HERDR_STOPPED.update(herdr_env()); HERDR_STARTS.clear()  # the herdr row (#1916)
             HERDR_MODE["start"] = os.environ.get("MOCK_HERDR_START", ""); HERDR_MODE["gen"] += 1
             # A test that died before putting them back: the start-up delay (MOCK_DELAY), no paging.
@@ -21211,6 +21239,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/assistant":
             q = parse_qs(urlparse(self.path).query)
             return self.send_json(assistant_state(q.get("space", [""])[0], q.get("archived", [""])[0] == "1"))
+        if rule_suggestions_area(self, "GET", p): return  # the standing authorizations Always granted
         if p == "/api/v1/model-config": return self.send_json(listed_model_configuration())
         if p == "/api/v1/model-config/purposes/" + SUPERVISE_PURPOSE and (own := supervise_model_purpose()):
             return self.send_json(own)
