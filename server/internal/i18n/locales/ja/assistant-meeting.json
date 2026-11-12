@@ -41,7 +41,7 @@
   "photos_full": "この会議にはすでに {max} 枚の写真があります。",
   "hub_transcribes": "この会議はハブで文字起こし中です。リアルタイムの文ではなく音声を送信してください。",
   "not_hub": "この会議はデバイス上で文字起こししています。ハブに音声を送信することはできません。",
-  "transcription_final": "この会議の最終的な文字起こしは保存済みです。音声は追加できません。",
+  "transcription_final": "この会議の最終的な文字起こしが始まったため、音声はこれ以上追加できません。",
   "audio_full": "この会議の音声が上限に達しました。音声は追加できません。",
   "bad_audio": "音声が正しくありません。有効な開始時刻を指定し、16 kHzのモノラルPCM16音声を送信してください。",
   "bad_transcription_mode": "meeting_transcription_defaultはdeviceまたはhubにしてください。",

@@ -41,7 +41,7 @@
   "photos_full": "这场会已经有 {max} 张照片了。",
   "hub_transcribes": "Hub 正在转写这场会议。请发送音频，而不是实时句子。",
   "not_hub": "这场会议使用设备端转写，不能向 Hub 发送音频。",
-  "transcription_final": "这场会议的最终转写已保存，不能再添加音频。",
+  "transcription_final": "这场会议已开始最终转写，不能再添加音频。",
   "audio_full": "这场会议的音频已达到上限，不能再添加音频。",
   "bad_audio": "音频格式不正确。请发送带有效起始时间的 16 kHz 单声道 PCM16 音频。",
   "bad_transcription_mode": "meeting_transcription_default 必须是 device 或 hub。",

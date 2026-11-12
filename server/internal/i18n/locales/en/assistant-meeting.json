@@ -41,7 +41,7 @@
   "photos_full": "This meeting already has {max} photos.",
   "hub_transcribes": "The hub is transcribing this meeting. Send audio instead of live sentences.",
   "not_hub": "This meeting uses on-device transcription. It can’t receive audio on the hub.",
-  "transcription_final": "This meeting’s final transcript is already saved. No more audio can be added.",
+  "transcription_final": "The final transcription of this meeting has started, so no more audio can be added.",
   "audio_full": "This meeting has reached the audio limit. No more audio can be added.",
   "bad_audio": "The audio isn’t valid. Send PCM16 mono audio at 16 kHz with a valid start time.",
   "bad_transcription_mode": "meeting_transcription_default must be device or hub.",
