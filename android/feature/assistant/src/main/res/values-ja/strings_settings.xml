@@ -131,7 +131,6 @@
     <string name="assistant_settings_supervise_own">メインチャットが自分のタスクを監督する</string>
     <string name="assistant_settings_supervise_caption">オフのときはメインチャットが出したタスクをバックグラウンド監督が見守るので、メインチャットはあなたへの返答を優先でき、オンにするとメインチャット自身が見守ります。</string>
     <string name="assistant_settings_supervise_model">バックグラウンド監督のモデル</string>
-    <string name="assistant_settings_supervise_model_subtitle">別に選ぶまでメインチャットに従います</string>
     <string name="assistant_settings_unavailable">アシスタント設定を開けません</string>
     <string name="assistant_settings_unavailable_detail">先に hub とペアリングするか、体験モードを終了してください。</string>
 </resources>

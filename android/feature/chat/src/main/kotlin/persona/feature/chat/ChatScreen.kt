@@ -229,7 +229,7 @@ private fun ChatPage(
         if (renderStyle != ChatRenderStyle.Assistant) return@LaunchedEffect
         try {
             chrome.assistantManagement?.config()?.let {
-                foldSetting = BackgroundFoldSetting(it.backgroundFolded, it.main, persona.core.domain.tasks.BackgroundReviews.of(it))
+                foldSetting = BackgroundFoldSetting(it.backgroundFolded, it.main)
                 BackgroundFoldSetting.store(key.sessionId, foldSetting)
             }
         }
@@ -388,26 +388,21 @@ private fun ChatPage(
     // The message a hub link named (`?at=`, #2194) while it is being landed on: like a search hit, its drawer opens.
     var jumpItem by remember { mutableStateOf<String?>(null) }
     val backgroundFolding = if (foldsBackground) persona.core.domain.tasks.BackgroundFolding(openWork, search.selected?.itemId ?: jumpItem) else null
-    // #5084: a review the background supervisor wrote took no turn of the main conversation, so its feed entry stays in
-    // the conversation as one line that opens the task, not behind the trays.
-    val shownReviews = remember(foldSetting.reviews, feed, taskTodos, key, renderStyle) {
-        foldSetting.reviews?.takeIf { renderStyle.compactToolSummary }?.shown(key.sessionId, feed, taskTodos).orEmpty()
-    }
-    val assistantPresentation = remember(projection, snapshot.items, feed, renderStyle, backgroundFolding, shownReviews) {
+    val assistantPresentation = remember(projection, snapshot.items, feed, renderStyle, backgroundFolding) {
         if (renderStyle.compactToolSummary) {
-            val presentation = persona.core.domain.tasks.AssistantConversation.project(projection.lines, snapshot.items, backgroundFolding, shownReviews)
+            val presentation = persona.core.domain.tasks.AssistantConversation.project(projection.lines, snapshot.items, backgroundFolding)
             presentation.copy(background = persona.core.domain.tasks.AssistantLines.lines(presentation.background,
-                persona.core.domain.tasks.AssistantTaskCards.backgroundFeed(feed, shownReviews)))
+                persona.core.domain.tasks.AssistantTaskCards.backgroundFeed(feed)))
         } else persona.core.domain.tasks.AssistantConversation(projection.lines, emptyList())
     }
     LaunchedEffect(key, tasks) { tasks?.load(key.sessionId); tasks?.loadTodayIfMain(key.sessionId) }
-    val lines = remember(assistantPresentation, search.selected, jumpItem, feed, tasks, taskPlans, taskTodos, taskCardProjection, renderStyle, shownReviews) {
+    val lines = remember(assistantPresentation, search.selected, jumpItem, feed, tasks, taskPlans, taskTodos, taskCardProjection, renderStyle) {
         searchVisibleLines(assistantPresentation.foreground, search.selected?.itemId ?: jumpItem)
             .let {
                 when {
                     tasks == null -> it
                     renderStyle.compactToolSummary -> persona.core.domain.tasks.AssistantTaskCards.lines(it, feed, taskPlans,
-                        taskTodos, taskCardProjection[key.sessionId].orEmpty(), shownReviews)
+                        taskTodos, taskCardProjection[key.sessionId].orEmpty())
                     else -> persona.core.domain.tasks.AssistantLines.lines(it,
                         persona.core.domain.tasks.SentToAgents.shown(feed))
                 }

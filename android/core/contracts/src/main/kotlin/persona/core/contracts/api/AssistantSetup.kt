@@ -37,11 +37,10 @@ data class AssistantConfig(
      */
     @SerialName("main_supervises_own_tasks") val mainSupervisesOwnTasks: Boolean? = null,
     /**
-     * The background supervisor's conversation (its session id, on the assistant's machine) once the hub has made it,
-     * and when it started; read-only. Null until then and from a hub without it.
+     * The background supervisor's conversation (its session id, on the assistant's machine) once the hub has made it;
+     * read-only. Null until then and from a hub without it.
      */
     @SerialName("background_supervisor") val backgroundSupervisor: String? = null,
-    @SerialName("background_supervisor_at") val backgroundSupervisorAt: String? = null,
     /** Stable owner returned by hubs supporting per-assistant settings. */
     val manager: String? = null,
     @SerialName("default_permission_mode") val defaultPermissionMode: String? = null,

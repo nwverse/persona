@@ -136,7 +136,6 @@
     <string name="assistant_settings_supervise_own">Main chat supervises its own tasks</string>
     <string name="assistant_settings_supervise_caption">When off, a background supervisor follows up the tasks the main chat hands out, so the main chat answers you first; turn it on to have the main chat follow them up itself.</string>
     <string name="assistant_settings_supervise_model">Background supervisor model</string>
-    <string name="assistant_settings_supervise_model_subtitle">Follows Main chat until you pick another</string>
     <string name="assistant_settings_unavailable">Assistant settings aren\'t available</string>
     <string name="assistant_settings_unavailable_detail">Pair with a hub first, or leave the demo.</string>
 </resources>

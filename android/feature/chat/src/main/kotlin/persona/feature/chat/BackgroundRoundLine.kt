@@ -6,14 +6,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import persona.core.domain.tasks.BackgroundRound
 
-/**
- * The hub's "Fold background rounds" switch (#4314; on until read and on a hub without it) and the main conversation.
- * [reviews]: the background supervisor's reviews stay in the main conversation (#5084); null while none is in effect
- * and on a hub without it.
- */
-internal data class BackgroundFoldSetting(
-    val on: Boolean = true, val main: String? = null, val reviews: persona.core.domain.tasks.BackgroundReviews? = null,
-) {
+/** The hub's "Fold background rounds" switch (#4314; on until read and on a hub without it) and the main conversation. */
+internal data class BackgroundFoldSetting(val on: Boolean = true, val main: String? = null) {
     companion object {
         /**
          * The last value read this run, by conversation (in memory only): until the hub answers again the page draws

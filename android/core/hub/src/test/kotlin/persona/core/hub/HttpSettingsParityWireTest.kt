@@ -112,7 +112,6 @@ class HttpSettingsParityWireTest {
             assertEquals("""{"main_supervises_own_tasks":true}""", server.takeRequest().body.readUtf8())
             assertEquals(true, saved.mainSupervisesOwnTasks)
             assertEquals("bg-1", saved.backgroundSupervisor)
-            assertEquals("2026-11-12T08:00:00Z", saved.backgroundSupervisorAt)
             server.enqueue(MockResponse().setBody("""{"machine_id":"server","launcher":"claude","cwd":"","main_supervises_own_tasks":false}"""))
             val fresh = api.config()
             assertEquals(false, fresh.mainSupervisesOwnTasks)

@@ -307,16 +307,16 @@ private fun SettingsHome(
             }
 
             // #4927 / #5084: the background supervisor's off switch and its model, shown only by a hub that has it.
-            // The model row is there while it is in effect: with the switch on nothing runs under that model.
+            // The model row is there whichever way the switch is, as Settings › Model configuration lists the use: one
+            // rule for both pages. Its current value is on the page it opens.
             config.mainSupervisesOwnTasks?.let { own ->
                 item("supervise") { JSectionHeader(stringResource(R.string.assistant_settings_supervise_header)) }
                 val superviseRows = mutableListOf<@Composable () -> Unit>({
                     JSwitchRow(stringResource(R.string.assistant_settings_supervise_own), own, superviseOwn,
                         leadingIcon = PersonaIcons.todo, enabled = !state.busy)
                 })
-                if (!own && supervisorModel != null) superviseRows += {
+                if (supervisorModel != null) superviseRows += {
                     JRow(stringResource(R.string.assistant_settings_supervise_model),
-                        subtitle = stringResource(R.string.assistant_settings_supervise_model_subtitle),
                         leadingIcon = PersonaIcons.model, enabled = ready, onClick = supervisorModel)
                 }
                 rows("supervise", superviseRows)

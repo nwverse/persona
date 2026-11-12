@@ -5,72 +5,48 @@ import kotlinx.serialization.json.put
 import org.junit.Assert.*
 import org.junit.Test
 import persona.core.contracts.*
-import persona.core.contracts.api.AssistantConfig
 import persona.core.domain.lines.ChatLine
-import java.time.Instant
 
-/** #5084: a review the background supervisor wrote is one line in the main conversation, not a record behind the trays. */
+/** #5084: a review the background supervisor wrote is one line in the conversation, not a record behind the trays. */
 class BackgroundReviewsTest {
-    private fun config(json: String) = JsonCodec.decodeFromString(AssistantConfig.serializer(), json)
-    private fun review(id: String, todo: String, at: String, verdict: String = "accepted") =
-        FeedItem(id, "main", at, "review", todo, buildJsonObject { put("title", "Fix the login"); put("verdict", verdict) })
-    private fun todo(id: String, supervisor: String = "main") =
-        Todo(id, "Fix the login", origin = "main", supervision = Supervision(supervisor = supervisor))
-    private val reviews = BackgroundReviews("main", Instant.parse("2026-11-12T08:00:00Z"))
+    private fun review(id: String, by: String? = "background", verdict: String = "accepted") =
+        FeedItem(id, "main", "2026-11-12T10:00:00Z", "review", "t", buildJsonObject {
+            put("title", "Fix the login"); put("verdict", verdict); by?.let { put("by", it) }
+        })
+    private val todos = listOf(Todo("t", "Fix the login", origin = "main", supervision = Supervision(supervisor = "main")))
     private fun feedIds(lines: List<ChatLine>) =
         lines.filterIsInstance<ChatLine.Extra>().mapNotNull { (it.payload as? AssistantExtra.Feed)?.item?.id }
 
-    @Test fun theHubSaysWhetherABackgroundSupervisorIsInEffect() {
-        val on = config("""{"machine_id":"m","main":"main","main_supervises_own_tasks":false,
-            "background_supervisor":"bg","background_supervisor_at":"2026-11-12T08:00:00Z"}""")
-        assertEquals(reviews, BackgroundReviews.of(on))
-        // the main conversation supervises its own tasks: its reviews are its own turns, as before
-        assertNull(BackgroundReviews.of(on.copy(mainSupervisesOwnTasks = true)))
-        // not made yet, no start time, no main conversation
-        assertNull(BackgroundReviews.of(on.copy(backgroundSupervisor = null)))
-        assertNull(BackgroundReviews.of(on.copy(backgroundSupervisorAt = null)))
-        assertNull(BackgroundReviews.of(on.copy(main = null)))
+    @Test fun theHubMarksTheBackgroundSupervisorsReviews() {
+        assertTrue(AssistantTaskCards.isBackgroundSupervisorReview(review("a")))
+        assertTrue(AssistantTaskCards.isBackgroundSupervisorReview(review("b", verdict = "rework")))
+        // the conversation's own review, another author, and a hub that does not say who wrote it
+        assertFalse(AssistantTaskCards.isBackgroundSupervisorReview(review("c", by = "")))
+        assertFalse(AssistantTaskCards.isBackgroundSupervisorReview(review("d", by = "judge")))
+        assertFalse(AssistantTaskCards.isBackgroundSupervisorReview(review("e", by = null)))
+        // only a review: another entry with the same field is nothing new
+        assertFalse(AssistantTaskCards.isBackgroundSupervisorReview(review("f").copy(kind = "receipt")))
+        assertFalse(AssistantTaskCards.isBackgroundSupervisorReview(FeedItem("g", "main", "2026-11-12T10:00:00Z", "review", "t")))
     }
 
-    @Test fun anOlderHubHasNoneOfIt() {
-        val old = config("""{"machine_id":"m","launcher":"claude","cwd":"","main":"main"}""")
-        assertNull(old.mainSupervisesOwnTasks)
-        assertNull(old.backgroundSupervisor)
-        assertNull(BackgroundReviews.of(old))
+    @Test fun itsReviewIsALineOfTheConversationAndLeavesTheRecord() {
+        val feed = listOf(review("own", by = null), review("background"))
+        assertEquals(listOf("background"), feedIds(AssistantTaskCards.lines(emptyList(), feed, emptyMap(), todos)))
+        assertEquals(listOf("own"), AssistantTaskCards.backgroundFeed(feed).map { it.id })
+        // the task being gone from the list changes nothing: the entry says which task it was
+        assertEquals(listOf("background"), feedIds(AssistantTaskCards.lines(emptyList(), feed, emptyMap(), emptyList())))
     }
 
-    @Test fun onlyReviewsOfTheMainConversationWrittenSinceItStartedAreShown() {
-        val feed = listOf(
-            review("before", "t", "2026-11-12T07:59:59Z"),
-            review("since", "t", "2026-11-12T08:00:00Z"),
-            review("rework", "t", "2026-11-12T09:00:00Z", verdict = "rework"),
-            review("leader", "led", "2026-11-12T09:30:00Z"),
-            review("gone", "unknown", "2026-11-12T09:40:00Z"),
-            review("undated", "t", ""),
-            FeedItem("receipt", "main", "2026-11-12T09:50:00Z", "receipt", "t"),
-            FeedItem("no-task", "main", "2026-11-12T09:55:00Z", "review"),
-        )
-        val todos = listOf(todo("t"), todo("led", supervisor = "leader-chat"))
-        // a task whose ledger names a leader was reviewed by that leader; one the list no longer has is still shown
-        assertEquals(setOf("since", "rework", "gone"), reviews.shown("main", feed, todos))
-        assertEquals(emptySet<String>(), reviews.shown("side", feed, todos))
-    }
-
-    @Test fun aShownReviewIsALineOfTheConversationAndLeavesTheRecord() {
-        val feed = listOf(review("old", "t", "2026-11-11T10:00:00Z"), review("new", "t", "2026-11-12T10:00:00Z"))
-        val todos = listOf(todo("t"))
-        val shown = reviews.shown("main", feed, todos)
-        assertEquals(listOf("new"), feedIds(AssistantTaskCards.lines(emptyList(), feed, emptyMap(), todos, shown = shown)))
-        assertEquals(listOf("old"), AssistantTaskCards.backgroundFeed(feed, shown).map { it.id })
-        // without a background supervisor every review stays behind the trays, as before
+    @Test fun aHubWithoutTheMarkKeepsEveryReviewBehindTheTrays() {
+        val feed = listOf(review("one", by = null), review("two", by = null, verdict = "rework"))
         assertEquals(emptyList<String>(), feedIds(AssistantTaskCards.lines(emptyList(), feed, emptyMap(), todos)))
-        assertEquals(listOf("old", "new"), AssistantTaskCards.backgroundFeed(feed).map { it.id })
+        assertEquals(listOf("one", "two"), AssistantTaskCards.backgroundFeed(feed).map { it.id })
     }
 
-    @Test fun aShownReviewAlreadyAmongTheLinesStaysInTheForeground() {
-        val item = review("new", "t", "2026-11-12T10:00:00Z")
-        val lines = listOf<ChatLine>(ChatLine.Extra("feed-new", AssistantExtra.Feed(item)))
-        assertEquals(lines, AssistantConversation.project(lines, emptyList(), shownFeed = setOf("new")).foreground)
-        assertEquals(lines, AssistantConversation.project(lines, emptyList()).background)
+    @Test fun itsReviewAlreadyAmongTheLinesStaysInTheForeground() {
+        val shown = listOf<ChatLine>(ChatLine.Extra("feed-new", AssistantExtra.Feed(review("new"))))
+        assertEquals(shown, AssistantConversation.project(shown, emptyList()).foreground)
+        val own = listOf<ChatLine>(ChatLine.Extra("feed-own", AssistantExtra.Feed(review("own", by = null))))
+        assertEquals(own, AssistantConversation.project(own, emptyList()).background)
     }
 }
