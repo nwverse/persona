@@ -26,6 +26,7 @@ import persona.core.navigation.SettingsPageRoute
 import persona.core.navigation.SettingsRoute
 import persona.core.navigation.TodoDetailRoute
 import persona.core.navigation.TodosRoute
+import persona.core.navigation.tabRoot
 import persona.feature.inbox.ConnectorThreadRoute
 import persona.feature.inbox.InboxEventRoute
 import persona.feature.inbox.InboxItemDetailRoute
@@ -188,12 +189,22 @@ class AssistantPanePolicyTest {
         }
 
         val extension = ExtensionUiRoute("extension", "page", "Page")
-        val extensionStack = mutableListOf<NavKey>(AssistantRoute, extension)
+        val extensionStacks = mapOf<AppTab, MutableList<NavKey>>(AppTab.Persona to mutableListOf(AssistantRoute, extension))
+        var selected = AppTab.Persona
+        val navigator = AppNavigator(extensionStacks, { selected }, { selected = it })
+        val extensionStack = extensionStacks.getValue(AppTab.Persona)
+        val pushed = extension.copy(depth = 1)
+        navigator.navigate(pushed)
+        assertEquals(listOf(AssistantRoute, extension, pushed), extensionStack)
         assertSingleRightStack(extensionStack)
-        extensionStack.add(extension.copy(depth = 1))
-        assertSingleRightStack(extensionStack)
-        extensionStack.removeAt(extensionStack.lastIndex)
+        navigator.back()
         assertEquals(listOf(AssistantRoute, extension), extensionStack)
+
+        val deepLinkStacks = AppTab.entries.associateWith { mutableListOf<NavKey>(tabRoot(it)) }
+        val deepLink = Router().parse(RouteInput.DeepLink("persona://open?target=extension&extension=extension&ui=page"))!!
+        deepLink.restore(deepLinkStacks)
+        assertEquals(listOf(AssistantRoute, extension), deepLinkStacks.getValue(AppTab.Persona))
+        assertSingleRightStack(deepLinkStacks.getValue(AppTab.Persona))
     }
 
     @Test
