@@ -9,7 +9,7 @@ import { conversationPage } from "../../lib/conversation-page";
 import { navigate, withWorkView, type SessionView } from "../../lib/router";
 import { canShowTerminal, composerSlot, otherView, useSessionView, viewOnlyRow } from "../../lib/session-view";
 import { openLink } from "../../lib/links";
-import { openPanel, togglePanel, usePanel } from "../../lib/panel";
+import { togglePanel, usePanel } from "../../lib/panel";
 import { machineWithHub } from "../../lib/mesh";
 import { hasModes, isMuted, toggleMute } from "../../lib/session-actions";
 import { attachLive, flipPin } from "../../lib/agent-actions";
@@ -59,7 +59,7 @@ import { AWAIT_MS, awaitingTurn, DOCK_MAX, turnStart } from "./dock";
 import { HEADER_SLOT, HEADER_SLOT_END, HEADER_SLOT_START } from "./header";
 import { contextUsage } from "../../lib/context-usage";
 import { ContextMeter } from "./ContextMeter";
-import { AgentModelPill } from "./ModelPill";
+import { AgentModelPill, AssistantModelPill } from "./ModelPill";
 import { switchRefused } from "../../lib/session-models";
 import { NARROW, NO_HOVER, PHONE, SHORT, useFinePointer, useMedia } from "../../lib/viewport";
 import { UserBubble } from "./SegmentView";
@@ -69,8 +69,7 @@ import { paneRoute, tabSessions } from "../../lib/herdr-tree";
 import { CommentMarks } from "./CommentMarks";
 import { PaneTabs } from "./PaneTabs";
 import { RunningStatusBar } from "./RunningStatusBar";
-import { latestPlan, PlanPill, usePlanOutOfView } from "./PlanCard";
-import { publishPlan } from "../../lib/plan-store";
+import { latestPlan, usePlanClosed, usePlanOutOfView } from "./latest-plan";
 import { ChatContext, LiveClockContext, type ChatContextValue } from "./chat-context";
 import { addFreshWords, resetFreshWords } from "./fresh-words";
 import { backgroundLine, backgroundWaitLine, waitingOnWorkflow, workflowAgentFor, workflowCalls, workflowCallsKey } from "../../lib/workflows";
@@ -104,7 +103,7 @@ import { chatFiles } from "../../lib/mentions";
 import { sameMessage } from "../../lib/queue";
 import { OutboxBubbles } from "./OutboxBubbles";
 import { MainRuntimeSlot } from "../assistant/MainRuntimeSlot";
-import { AssistantFace, AssistantLauncherChip, CompactionStrip, useAssistantMenu } from "../assistant/AssistantChat";
+import { AssistantFace, CompactionStrip, useAssistantMenu } from "../assistant/AssistantChat";
 import { Segmented } from "../assistant/parts";
 import { PageBoundary } from "../PageBoundary";
 import { ViewLayer } from "../session/ViewLayer";
@@ -137,6 +136,8 @@ const SharingDialog = lazyOverlay(() => import("../../sharing/SharingDialog").th
 const TerminalPanel = lazy(() => loadTerminal().then((m) => ({ default: m.TerminalPanel })));
 // only on an Agent's page opened from a conversation's hand-off card (#5096): not part of the first screen
 const HandoffBack = lazy(() => import("./HandoffBack").then((m) => ({ default: m.HandoffBack })));
+// the plan's pill and its flyout load once a plan wants it shown, off the first screen
+const PlanPill = lazy(() => import("./PlanCard").then((m) => ({ default: m.PlanPill })));
 
 const NO_FEED: FeedItem[] = [];
 /** How many earlier pages a link to a child loads looking for the exchange its card is in. */
@@ -1392,11 +1393,11 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   }, []);
   const rounds = useMemo(() => segs.filter((x) => x.user).length, [segs]);
 
-  // the newest plan of the chat (lib/work-groups.ts planSteps): while its card is out of view, a pill above the composer
+  // the newest plan of the chat (PlanCard.tsx planCardStep draws its card): while that card is out of view, a pill above the composer
   const plan = useMemo(() => latestPlan(segs), [segs]);
   const planOut = usePlanOutOfView(scroller, plan?.id);
-  // the side panel's Plan follows this chat's newest plan (#5602)
-  useEffect(() => publishPlan(mid, sid, plan ? { todos: plan.todos, live: lastLive } : undefined), [mid, sid, plan, lastLive]);
+  // Close Plan in the pill's flyout hides it until the plan changes (cindy's PinnedPlanPanel)
+  const [planClosed, closePlan] = usePlanClosed(`${mid}/${sid}`, plan);
   const lastLine = lines[lines.length - 1];
   // "Retry" on an API error card: only when it is the last thing, the agent is not working (someone may have retried already)
   const retry = useCallback(() => void deliver({ text: t("chat-chatview.continue_text"), images: [] }, uuid()), [deliver]);
@@ -1459,8 +1460,11 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     const live = lines.flatMap((l) => l.kind === "supervision" ? l.lines : [l]).findLast((l) => l.kind === "segment" && l.live);
     return (live?.kind === "segment" ? turnStart(live.seg) : undefined) ?? stateSince;
   }, [lines, stateSince]);
-  const planPill = plan && planOut && (lastLive || !planProgress(plan.todos).allDone) ? (
-    <PlanPill todos={plan.todos} onClick={() => openPanel({ kind: "plan", mid, sid })} />
+  // as cindy's: gone once every step is done or a later message of the user's started another turn
+  const planPill = plan && planOut && !plan.superseded && !planClosed && !planProgress(plan.todos).allDone ? (
+    <Suspense key={plan.id} fallback={null}>
+      <PlanPill todos={plan.todos} live={lastLive} onClose={closePlan} />
+    </Suspense>
   ) : null;
   // Persona's own chats too (#3654), and from the moment the message is in, not from the hub's next push
   const background = useMemo(() => backgroundLine(session), [session]);
@@ -1471,14 +1475,15 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       <QueueStrip session={session} draftKey={draftKey} canEdit={canCompose} compact={short} persona={assistant ? persona.name : undefined} onWithdrawn={withdrawn}
         photosOf={assistant ? queuedPhotos : undefined} />
     ) : null;
-  // with the plan's pill showing, "Jump to bottom" goes beside it (over the chat, they hid each other)
+  // with the plan's pill showing, "Jump to bottom" goes beside it (over the chat, they hid each other); the pill keeps
+  // one wrapper either way, so a flyout pinned open on it stays when the reader scrolls
   const jumpInDock = Boolean(planPill);
-  const pills = jumpInDock && away ? (
-    <div className="flex shrink-0 items-center justify-center gap-2">
+  const pills = planPill ? (
+    <div className="flex shrink-0 items-center justify-center gap-2" data-plan-pills>
       {planPill}
-      <JumpPill label={jumpLabel(newSince)} onClick={toEnd} inline />
+      {away && <JumpPill label={jumpLabel(newSince)} onClick={toEnd} inline />}
     </div>
-  ) : planPill;
+  ) : null;
   // the header and the composer are memoized (a transcript push changes neither): what they get stays the same object
   // until it changes. The assistant's face reads only the last item's role and kind (lib/persona.ts personaState).
   const stopLoop = useCallback(() => void deliver({ text: STOP_LOOP_MESSAGE, images: [] }, uuid()), [deliver]);
@@ -1491,8 +1496,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // the main conversation's /clear (#5095, lib/main-clear.ts): Persona's other conversations take no commands
   const commands = useMemo(() => (assistant ? (clears ? mainCommands() : []) : agentCommands(AGENT_COMMANDS, session)), [assistant, clears, session]);
   const footer = useMemo(() => (session ? <ComposerFooter session={session} assistant={assistant} /> : null), [session, assistant]);
-  // an Agent's model pill (#5032); a Persona conversation keeps its launcher chip in the footer for now (#5033)
-  const trailing = useMemo(() => (session && !assistant ? <AgentModelPill session={session} /> : null), [session, assistant]);
+  // the model pill: an Agent's (#5032), a Persona conversation's (#5033, its pick kept for the conversation)
+  const trailing = useMemo(() => (session ? assistant ? <AssistantModelPill session={session} /> : <AgentModelPill session={session} /> : null), [session, assistant]);
 
   const pendingCards = (
     <PendingCards
@@ -1663,20 +1668,14 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
             cards, task questions and notes stood taller than the dock, drawn up over the chat or pushing it to nothing);
             the box clips what is in it, so its children keep a little room for their shadows (p-1; -m-1 gives it back) */}
         <div data-chat-dock-above data-scroll-box className="-m-1 flex min-h-0 shrink flex-col gap-2 overflow-y-auto overscroll-contain p-1 empty:hidden">
-        {short ? (
-          // a phone on its side: the plan's pill, the run's status and the queue share one line
-          (pills || running || queue) && (
-            <div className="flex shrink-0 items-center gap-2">
-              {pills && <div className="shrink-0">{pills}</div>}
-              {running && <div className="shrink-0">{running}</div>}
-              {queue && <div className="min-w-0 flex-1">{queue}</div>}
-            </div>
-          )
-        ) : (
-          <>
-            {pills}
-            {running}
-          </>
+        {/* a phone on its side: the plan's pill, the run's status and the queue share one line. One wrapper either way
+            (no box of its own otherwise), so the pill and a flyout pinned on it stay when the phone turns */}
+        {(pills || running || (short && queue)) && (
+          <div className={short ? "flex shrink-0 items-center gap-2" : "contents"}>
+            {pills && <div className={short ? "shrink-0" : "contents"}>{pills}</div>}
+            {running && <div className={short ? "shrink-0" : "contents"}>{running}</div>}
+            {short && queue && <div className="min-w-0 flex-1">{queue}</div>}
+          </div>
         )}
         {assistant && (
           <>
@@ -1858,17 +1857,15 @@ function JumpPill({ label, onClick, inline }: { label: string; onClick: () => vo
 }
 
 export function ComposerFooter({ session, assistant }: { session: Session; assistant?: boolean }) {
-  // the launcher and model are the composer's model pill (an Agent's, #5032) or the launcher chip (a Persona
-  // conversation's): they switch there, so the line keeps only where the chat comes from and runs
+  // the launcher, model and effort are the composer's model pill (an Agent's, #5032; a Persona conversation's, #5033):
+  // they switch there, so the line keeps only where the chat comes from and runs
   const parts = [sourceSubtitle(session), ...(assistant ? [] : [shortPath(session.cwd)])].filter(Boolean);
   const info = useMenu();
-  // a Persona conversation (the main one too) switches its modes whatever its state: the hub applies them (#2416). An
-  // Agent's effort (a Codex thread's too) is on its model pill
+  // a Persona conversation (the main one too) switches its permission mode whatever its state: the hub applies it (#2416)
   const modes = assistant || (hasModes(session) && stateOf(session) !== "offline");
   return (
     <span className="flex min-w-0 items-center gap-2">
-      {modes && <ModeChips session={session} assistant={assistant} withInfo={parts.length > 0} />}
-      {assistant && <AssistantLauncherChip session={session} />}
+      {modes && <ModeChips session={session} assistant={assistant} />}
       {parts.length > 0 && <span className="min-w-0 truncate max-sm:hidden" title={[sourceSubtitle(session), session.cwd].filter(Boolean).join(" · ")}>{parts.join(" · ")}</span>}
       {/* phone width (#3533): the line would show a letter or two, so it is a button that lists the parts in full */}
       {parts.length > 0 && <IconButton icon="info" label={t("chat-chatview.session_info")} onClick={info.open} active={Boolean(info.anchor)} size={22} iconSize={13} className="sm:hidden" />}
