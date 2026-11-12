@@ -517,9 +517,9 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, found
   // A gateway's startup ID: typed for a new one (where the hub makes one up, only if wanted, under "More options"), and
   // read-only on a saved one, whose launches and settings refer to it (#5029).
   const idInMore = autoName || !isNew;
-  // How the gateway is signed in to (Responses and Chat Completions always use Bearer, and Codex and Antigravity launch
-  // with their own key variables, so they don't ask, asksAuth): on the step for an older hub, under "More options" with
-  // Automatic where the hub finds it (#5329).
+  // How the gateway is signed in to: under "More options" with Automatic where the hub finds it (#5329), except where it
+  // chooses nothing (asksAuth: Responses and Chat Completions always use Bearer, Codex and Antigravity launch with their
+  // own key variables); an older hub keeps its two-way choice on the step as it was.
   const authInMore = autoAuth && asksAuth(f);
   const authField = (
     <Labelled label={t("settings-providerwizard.auth")}

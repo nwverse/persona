@@ -11583,7 +11583,9 @@ def _probe_signed_in(b):
     auth = b.get("auth") or ""
     takes = _gateway_takes(b.get("base_url"))
     stored = next((x for x in LAUNCHERS if b.get("name") and x["name"] == b.get("name")), None)
-    keyed = b.get("api_key") or (stored and stored.get("has_key"))
+    # the stored key goes only to the stored address (the hub's probeTarget)
+    keyed = b.get("api_key") or (stored and stored.get("has_key") and
+                                 (b.get("base_url") or "").rstrip("/") in ("", (stored.get("base_url") or "").rstrip("/")))
     if b.get("api") in ("responses", "chat"):
         sent = ("bearer",)
     elif auth == "auto" and keyed:  # no key, no header: nothing to find
@@ -11591,7 +11593,7 @@ def _probe_signed_in(b):
         return bool(found), found
     elif auth and auth != "auto":
         sent = (auth,)
-    elif stored and not auth and stored.get("agent") not in ("codex", "agy"):  # those launch with their own variables
+    elif stored and not auth:
         sent = ("bearer",) if stored.get("auth") == "bearer" else ("api_key",)
     else:
         sent = ("bearer", "api_key")

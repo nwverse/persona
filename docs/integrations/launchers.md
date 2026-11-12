@@ -167,7 +167,7 @@ Supported since herdr 0.7.1 (Linux) / 0.7.5 (macOS); ignored by older herdr and 
   `auth: "api_key"` → `x-api-key`, `"bearer"` → `Authorization: Bearer`; without `auth`, a stored provider (`name`) uses its stored method (the predicate `personad launch` uses) and a preset its own.
   A test that sent both headers used to pass for a gateway that then refused the launch with 401. Responses and Chat Completions probes send Bearer only, as their real calls do.
   A request with no `auth`, no `name` and no `preset` (an app from before #5329 typing a gateway) still sends both, as before, and so does a stored Codex or Antigravity
-  launcher by name: they launch with `OPENAI_API_KEY` / `GEMINI_API_KEY` (`node/managed.go`), which `auth` does not choose, and the wizard does not ask them.
+  launcher by name, whatever `auth` says: they launch with `OPENAI_API_KEY` / `GEMINI_API_KEY` (`node/managed.go`), which `auth` does not choose, and the web wizard does not ask them.
 - **Finding the method** (`auth: "auto"`, feature `launcher_auth_auto`): the probe sends Bearer first and, when the gateway answers 401 or 403 (not Anthropic's region block),
   the same request again with `x-api-key`. A passing test carries `auth` (`"bearer"` or `"api_key"`), the header that worked; a gateway that accepts both answers `bearer`,
   the web wizard's earlier default for a custom gateway and the variable most compatible gateways document. Any other failure is not retried and carries no `auth`;

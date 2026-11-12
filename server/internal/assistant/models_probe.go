@@ -101,9 +101,12 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 		if t.kind == "" {
 			t.kind = "launcher" // Stored entries without kind are legacy launchers.
 		}
-		// none named: the stored one. Codex and Antigravity launch with their own key variables (OPENAI_API_KEY,
-		// GEMINI_API_KEY; node managedEnv), which auth does not choose, so they keep both headers.
-		if a := l.AgentType(); auth == "" && a != "codex" && a != "agy" {
+		// None named: the stored one. Codex and Antigravity launch with their own key variables (OPENAI_API_KEY,
+		// GEMINI_API_KEY; node managedEnv), which auth does not choose, so they keep both headers whatever a client
+		// names (the iOS and Android editors send the stored auth for every provider).
+		if a := l.AgentType(); a == "codex" || a == "agy" {
+			auth = probeAuthBoth
+		} else if auth == "" {
 			auth = launchAuth(l.Auth)
 		}
 	}

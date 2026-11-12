@@ -200,7 +200,8 @@ func TestProbeByNameUsesTheStoredMethod(t *testing.T) {
 	}
 }
 
-// Codex and Antigravity launch with their own key variables, which auth does not choose: by name they keep both headers.
+// Codex and Antigravity launch with their own key variables, which auth does not choose: by name they keep both
+// headers, whatever auth the request names.
 func TestProbeByNameKeepsBothForOtherAgents(t *testing.T) {
 	_, mux := launcherTestService(t)
 	g := newAuthGateway(t, true, true)
@@ -209,9 +210,11 @@ func TestProbeByNameKeepsBothForOtherAgents(t *testing.T) {
 			`{"name":"by-`+agent+`","agent":"`+agent+`","base_url":"`+g.URL+`","model":"m","api_key":"`+fakeKey+`","auth":"bearer"}`); code != 200 {
 			t.Fatal(raw)
 		}
-		out := probeResult(t, mux, "/api/v1/launchers/test", `{"name":"by-`+agent+`"}`)
-		if sent := g.requests(); out["ok"] != true || !slices.Equal(sent, []string{"both"}) {
-			t.Fatalf("%s: %v sent %v", agent, out, sent)
+		for _, auth := range []string{"", probeAuthAPIKey, probeAuthBearer, probeAuthAuto} {
+			out := probeResult(t, mux, "/api/v1/launchers/test", `{"name":"by-`+agent+`","auth":"`+auth+`"}`)
+			if sent := g.requests(); out["ok"] != true || out["auth"] != nil || !slices.Equal(sent, []string{"both"}) {
+				t.Fatalf("%s with auth %q: %v sent %v", agent, auth, out, sent)
+			}
 		}
 	}
 }
