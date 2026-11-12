@@ -535,15 +535,32 @@ func CodexStart(args []string) error {
 }
 
 // claimCodexStartFile takes codex-start's file at path: renamed away first, then read and removed. A file the node
-// withdrew first (codexMessageMayHaveGone) is gone: an error, and nothing of it runs.
+// withdrew first (codexMessageMayHaveGone) is gone: an error, and nothing of it runs. A rename another program holds
+// up for a moment (claimBusy: a scanner opening the new file on Windows) is tried again for claimWait.
 func claimCodexStartFile(path string) ([]byte, error) {
 	taken := path + ".taken"
-	if err := os.Rename(path, taken); err != nil {
-		return nil, err
+	deadline := time.Now().Add(claimWait)
+	for {
+		err := claimRename(path, taken)
+		if err == nil {
+			break
+		}
+		if !claimRetryable(err) || time.Now().After(deadline) {
+			return nil, err
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 	defer os.Remove(taken)
 	return os.ReadFile(taken)
 }
+
+// claimWait bounds how long codex-start tries again a claim another program holds up; claimRename renames and
+// claimRetryable tells such a refusal (claimBusy), variables so a test can hold a claim up.
+var (
+	claimWait      = 2 * time.Second
+	claimRename    = os.Rename
+	claimRetryable = claimBusy
+)
 
 // codexStartNotef prints a note of codex-start's that it goes on after (codexStartNote): never what a start reads as
 // codex-start failing (codexStartError).

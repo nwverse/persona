@@ -1,7 +1,9 @@
 package node
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -555,6 +557,10 @@ func TestJoinStretches(t *testing.T) {
 		{"working elsewhere", proto.Session{Status: proto.StatusWorking}, false},
 		{"blocked", proto.Session{Status: proto.StatusBlocked}, false},
 		{"unknown", proto.Session{Status: proto.StatusUnknown}, false},
+		{"quit as the conversation left it", proto.Session{Status: off, UpdatedAt: t1.Add(10 * time.Second)}, true},
+		// resumed outside Persona's panes (an external Codex CLI, the Codex App) after the conversation moved on
+		{"used since the conversation left it", proto.Session{Status: proto.StatusDone, SourceKind: "codex_history",
+			UpdatedAt: t1.Add(10 * time.Minute)}, false},
 		{"switching on", proto.Session{Status: proto.StatusIdle, Starting: true, PendingSwitch: switching}, true},
 		{"starting", proto.Session{Status: proto.StatusIdle, Starting: true}, false},
 	} {
@@ -1029,5 +1035,200 @@ func TestEngineSwitchKeepsTheHandoffForTheNextMessage(t *testing.T) {
 	checkHandoffBlock(t, got[0], "codex", "claude", "", true, "and now?")
 	if st, _ := n.state.get(sidA); st.PendingHandoff != nil {
 		t.Errorf("the handoff still waits after going in: %+v", st.PendingHandoff)
+	}
+}
+
+// The handoff a held-back first message left is not put in front of a message once the session got one since (typed
+// at the computer, or sent before without its arrival confirmed): it would come twice, or after the conversation went on.
+func TestEngineSwitchDropsAHandoffTheSessionWentOnWithout(t *testing.T) {
+	n, f, home, cwd := guideNode(t, true)
+	at := time.Now().Add(-time.Minute).UTC()
+	n.state.put(sidA, sessionState{Launcher: "claude", Cwd: cwd, StartedAt: at,
+		PendingHandoff: &pendingHandoff{Text: "what happened", From: "codex", To: "claude", At: at}})
+	appendTranscript(t, home, cwd, sidA, promptLine(cwd, "typed at the computer", 0))
+	guidePane(t, f, home, cwd, func(int) string { return "" }, 1)
+	if _, err := request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "go on"}); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if got := promptsTo(f); len(got) != 1 || got[0] != "go on" {
+		t.Fatalf("typed %q", got)
+	}
+	if st, _ := n.state.get(sidA); st.PendingHandoff != nil {
+		t.Errorf("the handoff still waits: %+v", st.PendingHandoff)
+	}
+}
+
+// The handoff is cleared only once the message it went with is known to be in: one whose arrival is not confirmed (a
+// guide of Claude Code's took it) keeps it, and the next message carries it only while the transcript shows nothing
+// since (here it then shows the earlier one: the handoff is dropped, not put in front twice).
+func TestEngineSwitchKeepsTheHandoffUntilTheMessageIsIn(t *testing.T) {
+	n, f, home, cwd := guideNode(t, false)
+	at := time.Now().Add(-time.Minute).UTC()
+	h := &pendingHandoff{Text: "what happened", From: "codex", To: "claude", At: at}
+	n.state.put(sidA, sessionState{Launcher: "claude", Cwd: cwd, StartedAt: at, PendingHandoff: h})
+	teach := screenFixture(t, "claude-2.1.318-teach-auto-mode-184.txt")
+	guidePane(t, f, home, cwd, func(int) string { return teach })
+	_, err := request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "go on"})
+	if _, data := refusalOf(t, err); data["delivered"] != deliveredUnknown {
+		t.Fatalf("answered %v", err)
+	}
+	if st, _ := n.state.get(sidA); st.PendingHandoff == nil {
+		t.Fatal("the handoff was cleared with a message not known to be in")
+	}
+	got := promptsTo(f)
+	if len(got) == 0 || !strings.HasPrefix(got[0], `<persona-context kind="engine-switch"`) {
+		t.Fatalf("typed %q", got)
+	}
+	// It went in after all: the next message does not carry the handoff again.
+	appendTranscript(t, home, cwd, sidA, promptLine(cwd, "go on", 0))
+	f.reset()
+	empty, emptyANSI := screenFixture(t, "claude-2.1.312-empty-162.txt"), screenFixture(t, "claude-2.1.312-empty-162.ansi")
+	f.setScreens("w1:p1", empty, emptyANSI)
+	_, _ = request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "and then?"})
+	if got := promptsTo(f); len(got) == 0 || got[0] != "and then?" {
+		t.Fatalf("typed %q", got)
+	}
+}
+
+// A switch whose codex-start said it could not run the launcher falls back, even when the shell it failed back to
+// comes in front only a moment after the start gave up.
+func TestEngineSwitchFallsBackWhenCodexStartFailedLate(t *testing.T) {
+	withShortCodexWaits(t, time.Second, time.Second)
+	n, f, _, cwd, _ := switchNode(t, proto.StatusIdle, nil)
+	n.state.setPendingSwitch(sidA, &proto.PendingSwitch{Launcher: "cx", Agent: "codex", At: time.Now()})
+	f.reset()
+	quitsToShell(f, cwd)
+	var mu sync.Mutex
+	var failedAt time.Time
+	f.after(func(c herdrCall) {
+		if c.Method != "pane.send_input" || str(c.Params["pane_id"]) != "w1:p1" {
+			return
+		}
+		if m := startFileRE.FindStringSubmatch(str(c.Params["text"])); m != nil {
+			_, _ = claimCodexStartFile(m[1]) // codex-start claimed it, then could not run the launcher
+			f.setScreen("w1:p1", codexStartError+" codex not found in PATH\n% ")
+			mu.Lock()
+			failedAt = time.Now()
+			mu.Unlock()
+		}
+	})
+	f.handle("pane.process_info", func(map[string]any) any {
+		mu.Lock()
+		name := "zsh"
+		// the process codex-start was still in front while the start gave up; the shell comes back 1.5 s later
+		if !failedAt.IsZero() && time.Since(failedAt) < codexStartWait+1500*time.Millisecond {
+			name = "personad"
+		}
+		mu.Unlock()
+		return map[string]any{"process_info": map[string]any{"foreground_processes": []any{map[string]any{"pid": 1, "name": name, "argv0": name}}}}
+	})
+	claudeComesUp(t, f, cwd, func(typed string) bool { return strings.Contains(typed, "--resume "+sidA) })
+	err := tell(t, n, "hello", true)
+	if code, data := refusalOf(t, err); code != proto.CodeSwitchFailed || data["delivered"] != deliveredNone {
+		t.Fatalf("answered %q %v (%v), want switch_failed", code, data, err)
+	}
+}
+
+// codex-start tries a claim again that another program holds up for a moment (a scanner on Windows), and gives up on a
+// file that is gone.
+func TestCodexStartClaimWaitsForABusyFile(t *testing.T) {
+	busy := errors.New("the file is in use")
+	oldRename, oldRetry := claimRename, claimRetryable
+	t.Cleanup(func() { claimRename, claimRetryable = oldRename, oldRetry })
+	tries := 0
+	claimRename = func(from, to string) error {
+		if tries++; tries < 3 {
+			return busy
+		}
+		return os.Rename(from, to)
+	}
+	claimRetryable = func(err error) bool { return errors.Is(err, busy) }
+	file := filepath.Join(t.TempDir(), "start.json")
+	if err := os.WriteFile(file, []byte(`{"prompt":"hi"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := claimCodexStartFile(file); err != nil || !strings.Contains(string(b), "hi") || tries != 3 {
+		t.Fatalf("claimed %q, %v after %d tries", b, err, tries)
+	}
+	if _, err := claimCodexStartFile(file); err == nil {
+		t.Fatal("claimed a file that is gone")
+	}
+}
+
+// The user's Resume of an id that is no session's waits for nothing, even with a switch's flight under that name.
+func TestResumeTurnOfAnInvalidID(t *testing.T) {
+	n, _ := testNode(t)
+	n.switches().begin("not a session", proto.Session{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		n.resumeTurn(context.Background(), "not a session")()
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the Resume of an invalid id did not return")
+	}
+}
+
+// A late Codex thread leaves the session switched away from as it is when the user took that one up again meanwhile
+// (a switch picked for it since).
+func TestTookUpAgain(t *testing.T) {
+	n, _, _, _, _ := switchNode(t, proto.StatusIdle, nil)
+	left := time.Now().Add(-time.Minute)
+	n.state.setPendingSwitch(sidA, &proto.PendingSwitch{Launcher: "cx", Agent: "codex", At: time.Now()})
+	if !n.tookUpAgain(sidA, left) {
+		t.Error("a session that runs, with a switch picked since, counts as not taken up")
+	}
+	n.mu.Lock()
+	delete(n.agents, sidA)
+	n.mu.Unlock()
+	if !n.tookUpAgain(sidA, left) {
+		t.Error("a switch picked since does not count")
+	}
+	n.state.setPendingSwitch(sidA, &proto.PendingSwitch{Launcher: "cx", Agent: "codex", At: left.Add(-time.Hour)})
+	if n.tookUpAgain(sidA, left) {
+		t.Error("a switch picked before the session was left counts")
+	}
+}
+
+// An earlier session resumed elsewhere after the switch was planned (here while a message to it holds its typing lock)
+// is looked at again as soon as the switch holds it, before the first Ctrl+C: a fresh session takes the conversation at
+// once, without waiting for that lock.
+func TestEngineSwitchLooksAgainBeforeTheQuit(t *testing.T) {
+	n, f, _, cwd, _ := codexSwitchNode(t)
+	unlock := n.typing.lock(sidA) // a message to it going in
+	t.Cleanup(unlock)
+	n.state.setPendingSwitch(sidB, &proto.PendingSwitch{Launcher: "claude", Agent: "claude", At: time.Now()})
+	// The last look before the quit reads the pane a second time: by then sidA runs in another pane.
+	var mu sync.Mutex
+	reads := 0
+	f.after(func(c herdrCall) {
+		if c.Method != "pane.read" || str(c.Params["pane_id"]) != "w1:p1" {
+			return
+		}
+		mu.Lock()
+		reads++
+		second := reads == 2
+		mu.Unlock()
+		if second {
+			f.reply("session.snapshot", snapshot(nil, nil, []any{agentOf("codex", sidB, proto.StatusIdle, "w1:p1", "w1:t1", "w1", cwd, ""),
+				claudeAgent(sidA, proto.StatusIdle, "w1:p2", "w1:t2", "w1", cwd, "")}, nil))
+		}
+	})
+	quitsOn(f, "w1:p1", sidB, nil, shellPane("w1:p1", "w1:t1", "w1", cwd, sidB))
+	claudeComesUp(t, f, cwd, func(string) bool { return true })
+	sent := make(chan error, 1)
+	go func() { sent <- tellTo(t, n, sidB, "and now?") }()
+	select {
+	case err := <-sent:
+		if err != nil {
+			t.Fatalf("send: %v", err)
+		}
+	case <-time.After(40 * time.Second):
+		t.Fatal("the switch waited for the earlier session's typing lock")
+	}
+	if starts := typedStarts(f, "w1:p1"); len(starts) != 1 || !sessionIDArg.MatchString(starts[0]) {
+		t.Fatalf("typed %q", starts)
 	}
 }

@@ -256,7 +256,9 @@ engine: the same pick, the same message that carries it out, the same time bound
   switch moving it on). A Codex thread an app-server keeps loaded after a switch to Claude Code is parked too: listed,
   a message to it would start a turn on the conversation's old thread, and Persona no longer joins it again when that
   app-server comes back (`forgetCodexJoin`; the join of the running connection lasts until it ends). One that runs
-  again (in a pane, resumed by hand; a claude in another terminal) or works or waits for the user is its own row. The
+  again (in a pane, resumed by hand; a claude in another terminal) or works or waits for the user is its own row, and
+  so is one used after the conversation left it (its row's activity more than two minutes after its stretch's `until`,
+  `stretchGrace`: a Codex resumed in another terminal or the Codex App; the switch itself quits it right then). The
   most recent conversation counts first, and a row it left out names none, so two records still naming each other
   keep the newer one unless the older one runs. A row continuing a conversation shows its first stretch's title unless
   its own is manual.
@@ -265,10 +267,12 @@ engine: the same pick, the same message that carries it out, the same time bound
   it running, a stop, a pick or keys are refused, so no second writer of its conversation starts beside the switch's.
   The user's Resume registers itself while it starts a session (`resumeTurn`, `switchShare.resuming`, after it waited
   for any switch of it): a switch does not take up a session being resumed so (the hold is refused, and a fresh
-  session takes the conversation). Right before the resume the switch looks again (`resumeParked`): the session's
-  typing lock is taken and let go, which waits out a resume of it already under way (a Codex's, resumeCodexSession),
-  and one that runs by then, is open in another claude or is no Codex thread to resume any more is not resumed; a
-  start that finds it running elsewhere and typed nothing counts as one that did not come up. The typing lock is not
+  session takes the conversation). As soon as it holds the session, before the first Ctrl+C, the switch looks at it
+  again (`parkedNow`: running, or no longer passing its checks: a fresh session takes the conversation at once), and
+  once more right before the resume (`resumeParked`): the session's typing lock is waited out within the start's time
+  (`waitTyping`: a resume of it already under way, a Codex's resumeCodexSession), and one that runs by then, is open in
+  another claude or is no Codex thread to resume any more is not resumed; a start that finds it running elsewhere and
+  typed nothing counts as one that did not come up. The typing lock is not
   what holds it: the claude start's first prompt takes that lock itself.
 - **Fallbacks**: a parked session that does not come up gives way to a fresh one once (its record put back,
   `stateFile.putBack`); a fresh one that does not come up loses the history it was given, the pane is cleared and the
@@ -280,7 +284,8 @@ engine: the same pick, the same message that carries it out, the same time bound
   in time). codex-start claims the file by renaming it away before it reads it, and the node withdraws a file it gives
   up on by renaming it away too (`claimCodexStartFile`, `codexMessageMayHaveGone`): exactly one of them has it. Such a
   start's error is `delivered: "unknown"` (`unconfirmedStart`) when codex-start claimed the file and the pane does not
-  show only its shell again; what codex-start printed is not read for this (its notes, `personad codex-start (note):`,
+  show only its shell again (after a `personad codex-start:` failure line the shell gets three seconds to come back in
+  front, `codexFailWait`); what codex-start printed is not otherwise read for this (its notes, `personad codex-start (note):`,
   come right before the Codex with the message; a codex-start that failed is back at the shell). So is a claude start
   whose first prompt was typed but not taken (herdr's error is not one of nothing typed). Then the switch stops where
   it is (`unconfirmedSwitch`): no Ctrl+C, no other start, no rollback, the pending switch dropped, and the message
@@ -297,9 +302,12 @@ engine: the same pick, the same message that carries it out, the same time bound
 - **A first message a dialog held back** (the new claude came up behind a dialog of its own, such as a large session's
   resume prompt, or the ultracode command may still sit in its box: `firstPrompt`, `start`): the switch is done, and
   the session's row says its first message did not go in, as for any start. The handoff is kept on the new session's
-  record (`PendingHandoff`, persisted in the hub's Postgres like the history) and goes in front of the next message
-  sent to that session, whoever sends it (send.go), then is cleared: the words the user sends again do not go without
-  it.
+  record (`PendingHandoff`, persisted in the hub's Postgres like the history, with when that start began) and goes in
+  front of the next message sent to that session, whoever sends it (send.go): the words the user sends again do not go
+  without it. It is cleared once that message is known to be in (`afterPrompt`), and dropped instead of put in front
+  when the session got a message since it was kept or works (`promptedSince`: one typed at the computer, or the earlier
+  message whose arrival was not confirmed), so it never comes twice; also when the session's lost first message is
+  cleared that way, and on a session a later switch moves the conversation away from.
 - **Time**: as the provider switch, but up to three starts (the parked session, a fresh one, the agent back), so the
   switch's own clock is 5½ minutes (`engineSwitchBudget`); with the minute of checks and the handoff built before the
   quit it stays under the hub's 8-minute wait for a message with `apply_switch`.
@@ -315,7 +323,13 @@ engine: the same pick, the same message that carries it out, the same time bound
   resumed on a switch back: a fresh thread takes the conversation with the whole handoff. Rolling a Codex agent back
   resumes it with its record's model and plan mode only: a bypass or an effort it was started with is not restored, so
   it comes back more restricted than it ran. Between the plan and the hold, a claude --resume of the parked session
-  typed by hand in a terminal is caught only by the look again before the resume (it runs, or a claude has it open).
+  typed by hand in a terminal is caught only by the looks again (it runs, or a claude has it open). A first message
+  found lost only later, by the background check after it was typed (the box not back, other text in it, three tries),
+  does not keep the handoff for the next message. The late-Codex watcher belongs to its connection's Node: a resident
+  node that reconnects within those five minutes loses the late join, and the conversation is two rows. A hidden
+  earlier Codex thread still takes a message sent to its id directly (the web opens the conversation's row instead).
+  While the watcher looks, its pane counts as a Codex starting (`codexStarting`: a node self-update waits) and it
+  answers Codex's trust and update screens there, for up to five minutes.
 
 ## Session IDs and transcripts
 

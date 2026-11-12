@@ -9,6 +9,7 @@ import (
 	"os"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/host"
@@ -468,11 +469,18 @@ func (n *Node) applyEngineSwitch(ctx context.Context, id, pane, from string, ps 
 	// it and the user's Resume of it wait, so no second writer of its conversation starts (resumeParked). One the user's
 	// Resume is starting right now is not resumed here: a fresh session takes the conversation.
 	if plan.parked != "" {
+		why := "it is being started right now"
 		if n.switches().hold(plan.parked) {
-			defer n.switches().end(plan.parked)
-		} else {
-			n.logf("session %s: its earlier %s session %s is being started right now: a fresh one takes the conversation", id,
-				engineName(ps.Agent), plan.parked)
+			// Looked at again once held: one resumed elsewhere since the plan goes to a fresh session at once.
+			if why = n.parkedNow(ctx, plan, ps); why == "" {
+				defer n.switches().end(plan.parked)
+			} else {
+				n.switches().end(plan.parked)
+			}
+		}
+		if why != "" {
+			n.logf("session %s: its earlier %s session %s is not resumed (%s): a fresh one takes the conversation", id,
+				engineName(ps.Agent), plan.parked, why)
 			plan.parked = ""
 		}
 	}
@@ -606,7 +614,9 @@ func (n *Node) startEngine(ctx context.Context, c *engineCarry, h *pendingHandof
 	}
 	if err == nil && p.to == "claude" && n.firstPromptHeldBack(id, began) {
 		n.logf("session %s: its first message was held back by a dialog: the handoff waits for the next message", id)
-		n.state.update(id, func(v *sessionState) bool { v.PendingHandoff = h; return true })
+		held := *h
+		held.At = began.UTC()
+		n.state.update(id, func(v *sessionState) bool { v.PendingHandoff = &held; return true })
 	}
 	return id, err
 }
@@ -625,7 +635,10 @@ func (n *Node) firstPromptHeldBack(id string, began time.Time) bool {
 // Codex thread to resume any more is not resumed here.
 func (n *Node) resumeParked(ctx context.Context, c *engineCarry, cwd, prompt string) error {
 	p, ps := c.plan, c.ps
-	n.typing.lock(p.parked)() // the start's own first prompt takes it again: only waited out here
+	// The start's own first prompt takes it again: only waited out here, within the start's time.
+	if err := n.waitTyping(ctx, p.parked); err != nil {
+		return fmt.Errorf("a message to session %s is still going in: %w", p.parked, err)
+	}
 	_ = n.refreshHosts(ctx)
 	if a, live := n.agent(p.parked); live {
 		return fmt.Errorf("session %s runs again (in %s)", p.parked, a.PaneID)
@@ -652,6 +665,37 @@ func (n *Node) resumeParked(ctx context.Context, c *engineCarry, cwd, prompt str
 	return err
 }
 
+// waitTyping waits, within ctx, for whatever holds session id's typing lock (a message going in, a resume of it) to
+// let go of it, and lets go of it at once.
+func (n *Node) waitTyping(ctx context.Context, id string) error {
+	got := make(chan func(), 1)
+	go func() { got <- n.typing.lock(id) }()
+	select {
+	case unlock := <-got:
+		unlock()
+		return nil
+	case <-ctx.Done():
+		go func() { (<-got)() }() // taken later: let go then
+		return ctx.Err()
+	}
+}
+
+// parkedNow says why the parked session of plan is no longer to be resumed by the switch to ps ("" when it is): it
+// runs again, or its checks no longer pass (claudeParked, codexParked).
+func (n *Node) parkedNow(ctx context.Context, plan *enginePlan, ps proto.PendingSwitch) string {
+	_ = n.refreshHosts(ctx)
+	if _, live := n.agent(plan.parked); live {
+		return "it runs again"
+	}
+	var why string
+	if plan.to == "claude" {
+		_, _, why = n.claudeParked(ctx, plan.parked, ps)
+	} else {
+		_, why = n.codexParked(ctx, plan.parked, ps.Launcher)
+	}
+	return why
+}
+
 // unconfirmedSwitch ends a switch whose start in the pane may have the user's message (err, delivered "unknown"):
 // nothing more is pressed or typed there (another start would run the message twice, a rollback would leave the
 // client offering the words again), and the message is answered as not known to have gone. When the session that
@@ -670,6 +714,16 @@ func (n *Node) unconfirmedSwitch(ctx context.Context, c *engineCarry, id, prompt
 	}
 	return "", uncertain(fmt.Errorf("%s started in the terminal with the message, but did not show in time that it took it: look at the terminal "+
 		"before sending the message again (%v)", engineName(p.to), err))
+}
+
+// tookUpAgain: session id, which a switch left at left, runs again or has a switch picked for it since: the user took
+// it up, and what a late end of that switch writes leaves it as it is.
+func (n *Node) tookUpAgain(id string, left time.Time) bool {
+	if _, live := n.agent(id); live {
+		return true
+	}
+	ps := n.pendingSwitch(id)
+	return ps != nil && ps.At.After(left)
 }
 
 // lateCodexWait is how long the node keeps looking for the thread of a fresh Codex a switch did not see come up.
@@ -716,7 +770,7 @@ func (n *Node) watchLateCodex(c *engineCarry, prompt string) {
 			if err == nil {
 				n.bindPane(pane, id)
 				n.logf("session %s: Codex thread %s came up late in %s: it takes the conversation", c.id, id, pane)
-				n.engineSwitched(ctx, c, id)
+				n.engineSwitchedTo(ctx, c, id, !n.tookUpAgain(c.id, began))
 				return
 			}
 			select {
@@ -828,6 +882,12 @@ func (n *Node) forgetCodexJoin(id string) {
 // an earlier stretch of it, has neither history nor switch nor pane, and a Codex one is not joined again on its
 // app-server; the pane, when Persona opened it for id, is marked as the new session's terminal.
 func (n *Node) engineSwitched(ctx context.Context, c *engineCarry, newID string) {
+	n.engineSwitchedTo(ctx, c, newID, true)
+}
+
+// engineSwitchedTo is engineSwitched; old false leaves the session switched away from as it is (a late Codex thread
+// found after the user took that session up again, watchLateCodex).
+func (n *Node) engineSwitchedTo(ctx context.Context, c *engineCarry, newID string, old bool) {
 	p := c.plan
 	recorded := n.state.update(newID, func(v *sessionState) bool {
 		v.EngineHistory, v.PendingSwitch = slices.Clone(c.legs), nil
@@ -851,21 +911,23 @@ func (n *Node) engineSwitched(ctx context.Context, c *engineCarry, newID string)
 		}
 		n.state.put(newID, st)
 	}
-	if newID != c.id {
+	if newID != c.id && old {
 		n.state.update(c.id, func(v *sessionState) bool {
-			v.EngineHistory, v.PendingSwitch = nil, nil
+			v.EngineHistory, v.PendingSwitch, v.PendingHandoff = nil, nil, nil
 			if v.Pane == p.a.PaneID {
 				v.Pane = "" // the pane is the new session's: a reload binds it to that one only
 			}
 			return true
 		})
 	}
-	n.switches().setPending(c.id, nil)
+	if old {
+		n.switches().setPending(c.id, nil)
+		if p.from == "codex" {
+			n.forgetCodexJoin(c.id)
+		}
+	}
 	if p.to == "claude" {
 		n.noteSwitchedModel(newID, c.ps)
-	}
-	if p.from == "codex" {
-		n.forgetCodexJoin(c.id)
 	}
 	if p.a.Tokens[personaTabToken] == c.id {
 		if launch, ok := p.h.(host.Launcher); ok {
@@ -883,6 +945,21 @@ type pendingHandoff struct {
 	To      string `json:"to"`
 	Model   string `json:"model,omitempty"`
 	Resumed bool   `json:"resumed,omitempty"`
+	// At is when the start that held its first message back began: a message the session got since (typed at the
+	// computer, or one sent before whose arrival was not confirmed) went without it, or with it, and the handoff is
+	// dropped then rather than put in front again (send.go).
+	At time.Time `json:"at"`
+}
+
+// dropHandoff clears session id's pending handoff (h: only that one; nil: any).
+func (n *Node) dropHandoff(id string, h *pendingHandoff) {
+	n.state.update(id, func(v *sessionState) bool {
+		if v.PendingHandoff == nil || h != nil && v.PendingHandoff != h {
+			return false
+		}
+		v.PendingHandoff = nil
+		return true
+	})
 }
 
 // message is the handoff's block with message after it.
@@ -936,8 +1013,23 @@ func (n *Node) codexMessageMayHaveGone(ctx context.Context, pane, file string) b
 	}
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	return !n.paneAtShell(cctx, pane)
+	if n.paneAtShell(cctx, pane) {
+		return false
+	}
+	// A line saying codex-start could not run the launcher: the shell it fails back to may not be in front yet.
+	if sc, err := n.readPane(cctx, pane, "visible", 30); err == nil && strings.Contains(sc, codexStartError) {
+		for deadline := time.Now().Add(codexFailWait); time.Now().Before(deadline); {
+			time.Sleep(200 * time.Millisecond)
+			if n.paneAtShell(cctx, pane) {
+				return false
+			}
+		}
+	}
+	return true
 }
+
+// codexFailWait is how long a pane showing codex-start's failure has for its shell to come back in front.
+const codexFailWait = 3 * time.Second
 
 // paneAtShell: only shells run in front of pane, as its host says (false when it cannot say).
 func (n *Node) paneAtShell(ctx context.Context, pane string) bool {
@@ -979,9 +1071,13 @@ func (n *Node) codexHolds(path string) bool {
 	return open
 }
 
+// stretchGrace is how long after the conversation left a session that session's own last activity still counts as the
+// switch's (the agent quitting writes its transcript a moment after the first Ctrl+C).
+const stretchGrace = 2 * time.Minute
+
 // joinStretches gives the rows of list whose record carries earlier stretches (chains) those stretches, and returns
-// the sessions to leave out: every one named in another listed row's history that is parked there (parkedRow), so a
-// conversation that moved between engines is one row. A session that runs again or needs the user is never left out:
+// the sessions to leave out: every one named in another listed row's history that is parked there (parkedRow) and has
+// not been used since the conversation left it (stretchGrace), so a conversation that moved between engines is one row. A session that runs again or needs the user is never left out:
 // resumed by hand elsewhere, it is a row of its own once more. The most recent conversation counts first, and a row it
 // left out names none: two records that still name each other (a write that did not get through) keep the newer one,
 // unless the older one runs. A row that continues the conversation shows its first stretch's title, unless it has a
@@ -1011,9 +1107,15 @@ func joinStretches(list []proto.Session, chains map[string][]proto.EngineLeg) ma
 		if hidden[s.SessionID] {
 			continue
 		}
+		until := map[string]time.Time{} // when the conversation last left each session it names
 		for _, l := range s.EngineHistory() {
-			if j, listed := index[l.SessionID]; listed && j != i && parkedRow(&list[j]) {
-				hidden[l.SessionID] = true
+			until[l.SessionID] = l.Until
+		}
+		for id, left := range until {
+			// One used after the conversation left it (resumed by hand outside Persona's panes, in the Codex App) is a
+			// conversation of its own again: the switch itself quits it right then.
+			if j, listed := index[id]; listed && j != i && parkedRow(&list[j]) && !list[j].UpdatedAt.After(left.Add(stretchGrace)) {
+				hidden[id] = true
 			}
 		}
 		first, ok := index[s.EngineHistory()[0].SessionID]
