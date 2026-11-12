@@ -38,16 +38,17 @@ const markup = (node: React.ReactElement) => renderToStaticMarkup(node);
 const classOf = (html: string, attr: string) => new RegExp(`<[^>]*${attr}[^>]*class="([^"]*)"`).exec(html)?.[1] ?? new RegExp(`<[^>]*class="([^"]*)"[^>]*${attr}`).exec(html)?.[1] ?? "";
 
 describe("the pill's states", () => {
-  it("normal: provider tile, model, engine mark, effort, chevron; the tooltip and name say it all", () => {
+  it("normal: the engine's mark first, then model, effort, chevron; the tooltip and name say it all", () => {
     const html = markup(<ModelPill current={opus} onOpen={() => {}} />);
     expect(html).toMatch(/^<button type="button" data-model-pill="ready" aria-haspopup="listbox" aria-expanded="false"/);
     expect(html).toContain(`aria-label="${t("chat-modelpill.aria_effort", { model: "Opus 5.5", effort: "高" })}"`);
     expect(html).toContain('title="Claude Code · Opus 5.5 · gateway · 高"');
-    // in this order: the tile's letter, the name, the engine (no "·" before it), the effort, then the chevron
+    // in this order: the engine's mark (#5497: no letter tile, drawn once), the name, the effort, then the chevron
     const text = html.replace(/<[^>]+>/g, "|").split("|").filter(Boolean);
-    expect(text).toEqual(["G", "Opus 5.5", "高"]);
-    expect(html.indexOf('data-pill-engine="claude"')).toBeGreaterThan(html.indexOf("Opus 5.5"));
-    expect(html.indexOf("data-pill-effort")).toBeGreaterThan(html.indexOf('data-pill-engine="claude"'));
+    expect(text).toEqual(["Opus 5.5", "高"]);
+    expect(html.match(/data-agent-mark=/g)).toHaveLength(1);
+    expect(html.indexOf('data-agent-mark="claude"')).toBeLessThan(html.indexOf('<span title="Opus 5.5"'));
+    expect(html.indexOf("data-pill-effort")).toBeGreaterThan(html.indexOf('<span title="Opus 5.5"'));
     expect(html).not.toContain("·</span>");
     // bare at rest, a capsule on hover and while open
     expect(html).toContain("border-transparent");
@@ -55,7 +56,7 @@ describe("the pill's states", () => {
     expect(html).toContain("aria-expanded:bg-hover");
   });
 
-  it("takes the composer card's widths: 148 px under 600, a step smaller under 520, the tile and chevron alone under 420", () => {
+  it("takes the composer card's widths: 148 px under 600, a step smaller under 520, the mark and chevron alone under 420", () => {
     const html = markup(<ModelPill current={opus} onOpen={() => {}} />);
     const root = /^<button[^>]*class="([^"]*)"/.exec(html)![1];
     expect(root).toContain("max-w-[min(320px,100%)]");
@@ -67,7 +68,8 @@ describe("the pill's states", () => {
     expect(name).toContain("@max-[600px]/composer:max-w-[108px]");
     expect(name).toContain("@max-[420px]/composer:hidden");
     expect(name).toContain("shrink-[1000]"); // the name gives way before the effort
-    expect(classOf(html, 'data-pill-engine="claude"')).toContain("@max-[420px]/composer:hidden");
+    // the engine's mark stays under 420 px, with the chevron
+    expect(classOf(html, 'data-pill-engine="claude"')).not.toContain("@max-[420px]/composer:hidden");
     // narrow, the effort may truncate (the engine and effort stay; the name gives way first)
     expect(classOf(html, "data-pill-effort")).toContain("@max-[600px]/composer:truncate");
   });
@@ -105,14 +107,14 @@ describe("the pill's states", () => {
     expect(none).toContain("text-red");
     const known = markup(<ModelPill current={opus} failed onOpen={() => {}} />);
     expect(known).toContain(`title="Claude Code · Opus 5.5 · gateway · 高 · ${t("chat-modelpill.failed")}"`);
-    expect(known.match(/text-red/g)!.length).toBe(2); // the tile and the warning after the effort
+    expect(known.match(/text-red/g)!.length).toBe(2); // the mark and the warning after the effort
   });
 
   it("pending (#5035): a clock first, the next engine named, both setups in the tooltip", () => {
     const next = { engine: "codex", provider: "cx", model: "5.5", effort: "low" };
     const html = markup(<ModelPill current={opus} pending={next} onOpen={() => {}} />);
     expect(html).toContain('data-model-pill="pending"');
-    expect(html.indexOf("<svg")).toBeLessThan(html.indexOf(">C<")); // the clock before the tile
+    expect(html.indexOf("<svg")).toBeLessThan(html.indexOf('data-agent-mark="codex"')); // the clock before the target's mark
     // the target's engine before the name, gone when the pill is narrow
     expect(html).toContain('<span data-pill-target="true" class="max-w-[96px] shrink-0 truncate text-ink-3 @max-[600px]/composer:hidden">Codex</span>');
     expect(html).toContain('data-pill-engine="codex"');
@@ -120,12 +122,12 @@ describe("the pill's states", () => {
     expect(html).toContain(`aria-label="${t("chat-modelpill.aria_pending_effort", { agent: "Codex", model: "5.5", effort: "低" })}"`);
   });
 
-  it("pending on another launcher of the same engine: that launcher named and drawn before the model", () => {
+  it("pending on another launcher of the same engine: that launcher named before the model", () => {
     const next = { engine: "claude", provider: "work", model: "GLM 5.3", effort: "high" };
     const html = markup(<ModelPill current={opus} pending={next} onOpen={() => {}} />);
     expect(html).toMatch(/data-pill-target[^>]*>work<\/span>/);
-    expect(html).toContain(">W<"); // the target's tile
-    // under 420 px the clock, the tile and the chevron: wider than the plain pill's 64 px
+    expect(html).toContain('data-agent-mark="claude"'); // the target's engine
+    // under 420 px the clock, the mark and the chevron: wider than the plain pill's 64 px
     expect(html).toContain("@max-[420px]/composer:w-auto");
     expect(html).not.toContain("@max-[420px]/composer:w-[64px]");
     expect(html).toContain(`title="${t("chat-modelpill.current_and_next", { current: "Claude Code · Opus 5.5 · gateway · 高", next: "Claude Code · GLM 5.3 · work · 高" })}"`);

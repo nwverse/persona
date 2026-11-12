@@ -128,6 +128,16 @@ describe("the model panel", () => {
     expect([...document.body.querySelectorAll("[data-rail-cell]")].map((c) => `${c.getAttribute("data-rail-cell")}${c.getAttribute("aria-pressed") === "true" ? "*" : ""}`)).toEqual(["recent", "favorites", "all*", "claude", "codex"]);
   });
 
+  it("draws each provider's Agent mark once, first: on the rail and at the start of its rows, never a letter (#5497)", async () => {
+    await open({ providers: [claude(), codex(), { ...codex(), id: "dsh", name: "dsh", engine: "dsh" }] });
+    const mark = (sel: string) => document.body.querySelector(`${sel} [data-agent-mark]`)?.getAttribute("data-agent-mark");
+    expect(["claude", "codex", "dsh"].map((p) => mark(`[data-rail-cell="${p}"]`))).toEqual(["claude", "codex", "generic"]);
+    expect(row("Opus").querySelectorAll("[data-agent-mark]")).toHaveLength(1);
+    expect(row("Opus").firstElementChild!.querySelector("[data-agent-mark]")!.getAttribute("data-agent-mark")).toBe("claude");
+    expect(row("GPT").querySelector("[data-row-setup] [data-agent-mark]")).toBeNull();
+    expect(document.body.querySelector('[data-agent-mark="letter"]')).toBeNull();
+  });
+
   it("draws a provider's weekly quota bar and reset tooltip, and no bar when it is unknown", async () => {
     await open({ quotas: { claude: { quota: { gateway: "g", budget: [{ label: "每周预算", used_ratio: 0.62 }], pools: [{ name: "b", windows: [{ label: "每周", used_ratio: 0.77, resets_at: "2099-01-01T00:00:00Z" }] }] } } } });
     const cell = document.body.querySelector<HTMLButtonElement>('[data-rail-cell="claude"]')!;
