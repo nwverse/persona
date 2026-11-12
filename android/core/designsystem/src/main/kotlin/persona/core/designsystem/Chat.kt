@@ -160,7 +160,8 @@ fun UserBubble(text: String, modifier: Modifier = Modifier, time: String? = null
  * A folded run of work (tools and thinking between replies). [summary] is one plain sentence such as
  * "Did 6 steps in 7 minutes"; the steps go in [content] when [expanded]. [peek] is drawn under the header while folded:
  * a running group's latest steps (web #1990's "Working…"). [trailing] sits after the summary (a ticking clock: its own
- * leaf, so the clock redraws only itself).
+ * leaf, so the clock redraws only itself). [onTerminal], on Glass: the terminal mark at the line's far end (iOS
+ * `WorkLine`'s), said as [terminalLabel].
  */
 @Composable
 fun WorkGroup(
@@ -171,6 +172,8 @@ fun WorkGroup(
     running: Boolean = false,
     peek: (@Composable ColumnScope.() -> Unit)? = null,
     trailing: (@Composable () -> Unit)? = null,
+    onTerminal: (() -> Unit)? = null,
+    terminalLabel: String = "",
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val body: @Composable ColumnScope.() -> Unit = { if (expanded) content() else peek?.invoke(this) }
@@ -194,9 +197,9 @@ fun WorkGroup(
         }
     }
     // Glass as iOS's plain work line (#4339 C5): no card, the spinner while it runs, the words and the chevron after them.
-    val glassHeader: @Composable () -> Unit = {
+    val glassLine: @Composable (Modifier) -> Unit = { lineModifier ->
         Row(
-            Modifier.clickable(role = Role.Button, onClick = onToggle).semantics { contentDescription = spoken }
+            lineModifier.clickable(role = Role.Button, onClick = onToggle).semantics { contentDescription = spoken }
                 .padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.sm),
         ) {
@@ -204,6 +207,17 @@ fun WorkGroup(
             Text(summary, style = type.caption, color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
             trailing?.let { CompositionLocalProvider(LocalContentColor provides palette.ink2, LocalTextStyle provides type.micro) { it() } }
             JIcon(if (expanded) persona.core.designsystem.icons.PersonaIcons.expand else PhIcons.CaretRight, null, size = Tokens.Space.m, tint = palette.ink3)
+        }
+    }
+    // The terminal mark at the far end, as quiet as the words (#4339 C7); Compose widens its touch area to 48dp.
+    val glassHeader: @Composable () -> Unit = {
+        if (onTerminal == null) glassLine(Modifier)
+        else Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+            glassLine(Modifier.weight(1f, fill = false))
+            Box(Modifier.clickable(role = Role.Button, onClick = onTerminal).semantics { contentDescription = terminalLabel }
+                .padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s), contentAlignment = Alignment.Center) {
+                JIcon(persona.core.designsystem.icons.PersonaIcons.terminal, null, size = Tokens.Space.l, tint = palette.ink2)
+            }
         }
     }
     when (PersonaTheme.style) {

@@ -113,6 +113,7 @@ type Machine struct {
 	timings                    tailcatTimings
 	deployRetry                time.Duration // how long a node update waits before asking a busy node again (tests: shorter)
 	reconnectGrace             time.Duration // shown as it was this long after its node disconnected (warm.go; tests: shorter)
+	reloadUntil                time.Time     // a resident announced exec; never extends display/reconnect grace
 	storeWait                  time.Duration // how long a node event waits on the store (nodeStoreWait; tests: shorter)
 	engineMu                   sync.Mutex
 	link                       *mgrLink      // kind link: the link Persona Link keeps open, nil while there is none
@@ -474,11 +475,23 @@ func (m *Machine) open(ctx context.Context, via string) (*nodePipe, error) {
 	}, nil
 }
 
-func (m *Machine) call(ctx context.Context, method string, params any, out any) error {
+func (m *Machine) callOnce(ctx context.Context, method string, params any, out any) error {
 	m.mu.Lock()
 	p := m.peer
 	info := m.info
 	m.mu.Unlock()
+	if p != nil {
+		select {
+		case <-p.Done():
+			p = nil
+		default:
+		}
+	}
+	if p == nil && ctx.Err() == nil && (m.waitWarm(ctx) || m.waitFirst(ctx)) {
+		m.mu.Lock()
+		p, info = m.peer, m.info
+		m.mu.Unlock()
+	}
 	if info.Version != "" && info.EngineHosts == nil && devicewire.IsSessionStart(method) && proto.StartHost(params) != "" {
 		// An older node ignores host and would start in its engine instead (#2576): refused, nothing started.
 		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_engine_hosts")}
@@ -529,10 +542,8 @@ func (m *Machine) call(ctx context.Context, method string, params any, out any) 
 		// An older node would answer "unknown method"; this says what to do about it before the user types anything.
 		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_secret_run")}
 	}
-	if p == nil && (m.waitWarm(ctx) || m.waitFirst(ctx)) { // the manager just started: its node is on its way (warm.go)
-		m.mu.Lock()
-		p, info = m.peer, m.info
-		m.mu.Unlock()
+	if ctx.Err() != nil {
+		return ctx.Err()
 	}
 	if p == nil {
 		return fmt.Errorf("%s: %w", m.name(), errOffline)
@@ -586,7 +597,11 @@ func (m *Machine) waitFirst(ctx context.Context) bool {
 func (m *Machine) reachable() bool {
 	m.mu.Lock()
 	p := m.peer
+	waiting := m.warmLocked(time.Now()) || time.Now().Before(m.reloadUntil)
 	m.mu.Unlock()
+	if waiting {
+		return true // a bounded call waits for the resident handover; scheduling agrees with the apps
+	}
 	if p == nil {
 		return false
 	}
