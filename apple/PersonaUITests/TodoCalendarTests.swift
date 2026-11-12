@@ -260,6 +260,12 @@ final class TodoCalendarTests: XCTestCase {
         let calendarSwitch = app.buttons["日历"]
         XCTAssertTrue(calendarSwitch.waitForExistence(timeout: 60))
         XCTAssertTrue(waitForSheet(calendarSwitch), "no sheet; trace: \(trace())")
+        // the due date and time whole, inside the sheet (the compact picker's ran past both its edges)
+        let due = app.descendants(matching: .any)["todo.calendar.rescheduleDue"].firstMatch
+        let bar = app.navigationBars["改截止时间"]
+        XCTAssertTrue(due.waitForExistence(timeout: 5))
+        XCTAssertGreaterThanOrEqual(due.frame.minX, bar.frame.minX - 1, "due picker \(due.frame), sheet \(bar.frame)")
+        XCTAssertLessThanOrEqual(due.frame.maxX, bar.frame.maxX + 1, "due picker \(due.frame), sheet \(bar.frame)")
         shot("large-sheet")
         app.terminate()
         start(hub, ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"])
