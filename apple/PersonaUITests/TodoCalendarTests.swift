@@ -102,12 +102,12 @@ final class TodoCalendarTests: XCTestCase {
         let review = entry("检查 PR #42")
         XCTAssertTrue(review.waitForExistence(timeout: 60))
         /// Ready for the next move: due at 10:00 today again (a failed move leaves it wherever it went), the to-do's
-        /// page that the app before #2045 opens on a press closed, and the block in sight.
+        /// page closed (the app before #2045 opens it on a press, a failed move after can), and the block in sight.
         func ready(_ block: Bool = true) {
-            if before {
-                let back = app.buttons.matching(identifier: "BackButton").matching(NSPredicate(format: "label == %@", "待办")).firstMatch
-                if back.exists { back.tap() }
-            } else if (try? due(hub, "todo_review")) != Due(at: ten, day: nil) {
+            // the to-do's page: opened on a press before #2045, by a move that failed after
+            let back = app.buttons.matching(identifier: "BackButton").matching(NSPredicate(format: "label == %@", "待办")).firstMatch
+            if back.exists { back.tap() }
+            if !before, (try? due(hub, "todo_review")) != Due(at: ten, day: nil) {
                 try? resetReview(hub, to: ten)
             }
             guard block else { return }
@@ -232,14 +232,8 @@ final class TodoCalendarTests: XCTestCase {
         start(hub, ["-openRescheduleTitled", "检查 PR #42"])
         let calendarSwitch = app.buttons["日历"]
         XCTAssertTrue(calendarSwitch.waitForExistence(timeout: 60))
-        // The sheet opens with the calendar: at once when the page opens on it (a tap above the sheet would close it),
-        // else once it is switched to (from the list, or from the list and back).
+        XCTAssertTrue(waitForSheet(calendarSwitch), "no sheet; trace: \(trace())")
         let allDay = app.switches["todo.calendar.rescheduleAllDay"]
-        if !allDay.waitForExistence(timeout: 4) {
-            if calendarSwitch.isSelected { app.buttons["列表"].tap() }
-            calendarSwitch.tap()
-        }
-        XCTAssertTrue(allDay.waitForExistence(timeout: 30), "no sheet; trace: \(trace())")
         XCTAssertTrue(app.navigationBars["改截止时间"].exists)
         shot("reschedule-sheet")
         allDay.switches.firstMatch.tap()
@@ -265,12 +259,7 @@ final class TodoCalendarTests: XCTestCase {
                     "-openRescheduleTitled", "检查 PR #42"])
         let calendarSwitch = app.buttons["日历"]
         XCTAssertTrue(calendarSwitch.waitForExistence(timeout: 60))
-        let allDay = app.switches["todo.calendar.rescheduleAllDay"]
-        if !allDay.waitForExistence(timeout: 4) {
-            if calendarSwitch.isSelected { app.buttons["列表"].tap() }
-            calendarSwitch.tap()
-        }
-        XCTAssertTrue(allDay.waitForExistence(timeout: 30), "no sheet; trace: \(trace())")
+        XCTAssertTrue(waitForSheet(calendarSwitch), "no sheet; trace: \(trace())")
         shot("large-sheet")
         app.terminate()
         start(hub, ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"])
@@ -282,6 +271,17 @@ final class TodoCalendarTests: XCTestCase {
             XCTAssertTrue(app.descendants(matching: .any)[id].firstMatch.waitForExistence(timeout: 15), mode)
             shot("large-" + ["日": "day", "周": "week", "月": "month"][mode]!)
         }
+    }
+
+    /// The `-openRescheduleTitled` sheet is up. It opens with the calendar, asked again for a few seconds when the
+    /// page's push drops it; else once the calendar is switched to (from the list, or from the list and back). A tap
+    /// on the switch while it is up would close it, so the switch waits until the asking is over.
+    @MainActor private func waitForSheet(_ calendarSwitch: XCUIElement) -> Bool {
+        let allDay = app.switches["todo.calendar.rescheduleAllDay"]
+        if allDay.waitForExistence(timeout: 15) { return true }
+        if calendarSwitch.isSelected { app.buttons["列表"].tap() }
+        calendarSwitch.tap()
+        return allDay.waitForExistence(timeout: 20)
     }
 
     /// An hour on the axis (`Theme.CalendarGrid.hour`), and where a month day's first line is from its top (its date,
@@ -321,9 +321,12 @@ final class TodoCalendarTests: XCTestCase {
         let target = top + Self.hour, room = bottom - top - Self.hour
         // frames are the screen's; an iPad's app can sit in a window away from its corner
         let origin = app.coordinate(withNormalizedOffset: .zero), window = app.frame
+        var last = CGFloat.nan
         for _ in 0..<6 {
             let dy = target - element.frame.minY
-            if abs(dy) < Self.hour / 2 { return }
+            // close enough, or the axis is at its end (late in the day the 10:00 block can't get any higher)
+            if abs(dy) < Self.hour / 2 || abs(element.frame.minY - last) < Self.hour / 8 { return }
+            last = element.frame.minY
             let step = max(-room, min(room, dy))
             // from near the axis's bottom when it goes up, near its top when it goes down: the drag stays on it
             let y0 = step < 0 ? bottom - Self.hour / 2 : top + Self.hour / 2

@@ -26,6 +26,22 @@ does not compile): read it where it is set from (`StyleSpec.current.fontDesign`)
 - UI tests of this feature share one mock hub for the whole run, and the hub keeps each recording's live log and asks. A test that reads `asks.first` passes alone and fails after another test asked about the same sample recording. Restart the mock hub (stop it by its port) before each run, or run the test alone.
 - `Text(timerInterval:)` has no text a UI test can read: its accessibility label is the caller's ("Recording time") and the time is the spoken value, so assert on the value. A `Label` carrying an accessibility identifier gives the identifier to its icon too; combine its children first, or the test finds the SF Symbol name as the label.
 
+## A hold attached to a Button never begins (#2045, 2026-11-12)
+
+`.gesture(_:)` attaches a gesture "with a lower precedence than gestures defined by the view", and a `Button`'s press
+is one. A `UIGestureRecognizerRepresentable` hold put on the calendar's to-do buttons waited for the press, which only
+ends when the finger lifts. So the hold never began, a finger that moved a few points failed it and the axis
+scrolled, and on the lift the press fired: a drag across the week opened the to-do. Only the UI test recordings showed
+it; the compiler and the unit tests had nothing to say.
+
+- A representable has no `simultaneousGesture` or `highPriorityGesture`. Make the recognizer the button's own
+  interaction instead: a `PrimitiveButtonStyle` whose label carries it and calls `configuration.trigger()` on a tap
+  (`CalendarCarryStyle`). The recognizer recognizes the tap itself, so no gesture under it takes the touch as well.
+- A custom style loses the pointer's hover that a plain button has: add `.hoverEffect()`. Never wrap
+  `Button(configuration)` inside the style (`Styling.swift`).
+- When a gesture misbehaves only in UI tests, note its steps in a DEBUG trace shown as an accessibility value
+  (`CalendarDragTrace`) and print it in the failure message. An empty trace says the recognizer never saw the touch.
+
 ## A file only tests read still counts as a blocking read (#4695)
 
 `AssistantPickStore` (#3413) reads its picks from UserDefaults in the app and from a file only in a test's own state

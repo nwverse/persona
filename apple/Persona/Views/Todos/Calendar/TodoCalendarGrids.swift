@@ -327,9 +327,10 @@ struct TodoCalendarTimeline: View {
         }
     }
 
-    /// An entry's block or chip, picked up and carried on this timeline.
+    /// An entry's block or chip, a button that opens it, picked up and carried on this timeline.
     private func carried(_ content: some View, _ e: CalendarEntry) -> some View {
         content.calendarDraggable(e, in: Self.space, moves: moves, lifted: dragging?.entry.id == e.id,
+                                  open: { open(e) },
                                   began: { p, grab in
                                       dragging = CalendarDragging(entry: e, point: p, grab: grab)
                                       moves?.carrying(true)
@@ -423,8 +424,7 @@ struct TodoCalendarTimeline: View {
                             .calendarLanding()
                     }
                     ForEach(fit.shown) { e in
-                        carried(Button { open(e) } label: { CalendarEntryChip(entry: e, compact: narrow) }
-                            .buttonStyle(.plain), e)
+                        carried(CalendarEntryChip(entry: e, compact: narrow), e)
                     }
                     if fit.more > 0 {
                         Text(verbatim: "+\(fit.more)")
@@ -549,9 +549,8 @@ struct TodoCalendarTimeline: View {
                     Group {
                         if group.count == 1 {
                             // one to-do can be moved; several sharing a block open their day
-                            carried(Button { open(group[0]) } label: { CalendarEntryBlock(entry: group[0], narrow: true) }
-                                .buttonStyle(.plain)
-                                .frame(width: width - Theme.Space.xs, height: Theme.Size.tapTarget - Theme.Space.xxs), group[0])
+                            carried(CalendarEntryBlock(entry: group[0], narrow: true), group[0])
+                                .frame(width: width - Theme.Space.xs, height: Theme.Size.tapTarget - Theme.Space.xxs)
                         } else {
                             Button { pickDay(day) } label: { CalendarGroupBlock(entries: group) }
                                 .buttonStyle(.plain)
@@ -564,9 +563,8 @@ struct TodoCalendarTimeline: View {
                 ForEach(TodoCalendar.lanes(mine, minutes: blockMinutes)) { placed in
                     let lane = (width - Theme.Space.xs) / CGFloat(placed.lanes)
                     let start = TodoCalendar.minutes(placed.entry.start, in: day, calendar: calendar)
-                    carried(Button { open(placed.entry) } label: { CalendarEntryBlock(entry: placed.entry) }
-                        .buttonStyle(.plain)
-                        .frame(width: lane - Theme.Space.xxs, height: Theme.Size.tapTarget - Theme.Space.xxs), placed.entry)
+                    carried(CalendarEntryBlock(entry: placed.entry), placed.entry)
+                        .frame(width: lane - Theme.Space.xxs, height: Theme.Size.tapTarget - Theme.Space.xxs)
                         .offset(x: Theme.Space.xxs + lane * CGFloat(placed.lane), y: y(start) + pixel)
                 }
             }
@@ -642,9 +640,11 @@ struct TodoCalendarMonth: View {
         }
     }
 
-    /// An entry's chip, picked up and carried on this month.
+    /// An entry's chip, picked up and carried on this month: a button that opens it on an iPad (`wide`), on a phone
+    /// part of its day, which opens on a tap.
     private func carried(_ content: some View, _ e: CalendarEntry) -> some View {
-        content.calendarDraggable(e, in: Self.space, moves: moves, lifted: dragging?.entry.id == e.id, accessible: wide,
+        content.calendarDraggable(e, in: Self.space, moves: moves, lifted: dragging?.entry.id == e.id,
+                                  open: wide ? { open(e) } : nil, accessible: wide,
                                   began: { p, grab in
                                       dragging = CalendarDragging(entry: e, point: p, grab: grab)
                                       moves?.carrying(true)
@@ -742,12 +742,7 @@ struct TodoCalendarMonth: View {
                         .calendarLanding()
                 }
                 ForEach(fit.shown) { e in
-                    if wide {
-                        carried(Button { open(e) } label: { CalendarEntryChip(entry: e, showsTime: true) }
-                            .buttonStyle(.plain), e)
-                    } else {
-                        carried(CalendarEntryChip(entry: e, compact: true), e)
-                    }
+                    carried(CalendarEntryChip(entry: e, compact: !wide, showsTime: wide), e)
                 }
                 if fit.more > 0 {
                     Text(wide ? String(localized: "\(fit.more) more") : "+\(fit.more)")

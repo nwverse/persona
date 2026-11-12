@@ -119,22 +119,25 @@ struct TodoCalendarView: View {
                     debugRescheduleShown = true
                     CalendarDragTrace.shared.note("sheet shown") // i18n-ignore: DEBUG trace
                 }
+                .onDisappear { CalendarDragTrace.shared.note("sheet gone") } // i18n-ignore: DEBUG trace
                 #endif
         }
         #if DEBUG
         // `-openRescheduleTitled <text>`: the first to-do whose title has it opens its "Change Due Date…" (the UI test
         // of the way without dragging, screenshots). A sheet asked for during the page's push or the switch to the
-        // calendar can be dropped: it is asked for again until it is up.
+        // calendar can be dropped: it is asked for again until it is up. Each way out is in the drag trace.
         .task(id: todos.count) {
-            guard !debugRescheduleShown,
-                  let match = UserDefaults.standard.string(forKey: "openRescheduleTitled") else { return }
+            guard let match = UserDefaults.standard.string(forKey: "openRescheduleTitled") else { return }
+            let trace = CalendarDragTrace.shared
+            guard !debugRescheduleShown else { return trace.note("sheet: shown before") } // i18n-ignore: DEBUG trace
             guard let todo = todos.first(where: { $0.title.contains(match) }) else {
-                return CalendarDragTrace.shared.note("sheet: no to-do of \(todos.count)") // i18n-ignore: DEBUG trace
+                return trace.note("sheet: no to-do of \(todos.count)") // i18n-ignore: DEBUG trace
             }
-            for attempt in 1...5 {
+            for attempt in 1...10 {
                 try? await Task.sleep(for: .milliseconds(800))
-                guard !Task.isCancelled, !debugRescheduleShown else { return }
-                CalendarDragTrace.shared.note("sheet asked \(attempt)") // i18n-ignore: DEBUG trace
+                if Task.isCancelled { return trace.note("sheet: stopped at \(attempt)") } // i18n-ignore: DEBUG trace
+                guard !debugRescheduleShown else { return }
+                trace.note("sheet asked \(attempt)") // i18n-ignore: DEBUG trace
                 rescheduling = nil
                 try? await Task.sleep(for: .milliseconds(100))
                 rescheduling = todo

@@ -134,7 +134,7 @@ nonisolated struct MonthDropMap: Equatable {
     private(set) var text = ""
 
     func note(_ line: String) {
-        text = (text.split(separator: "|").suffix(3).map(String.init) + [line]).joined(separator: "|")
+        text = (text.split(separator: "|").suffix(7).map(String.init) + [line]).joined(separator: "|")
     }
 
     static func point(_ p: CGPoint) -> String { "(\(Int(p.x)),\(Int(p.y)))" } // i18n-ignore: DEBUG trace
@@ -152,30 +152,48 @@ extension View {
         #endif
     }
 
-    /// A to-do on the calendar that can be moved (#2045): picked up and carried in the grid's coordinate space `space`,
+    /// A to-do on the calendar that can be moved (#2045): a plain button that opens it (`open`; nil: not a button, a
+    /// phone's month chip, whose day opens on a tap), picked up and carried in the grid's coordinate space `space`,
     /// faded while it is (`lifted`), and "Change Due Date…" for VoiceOver and Switch Control (not on a phone's month,
-    /// whose day is one element that opens the day). Nothing without `moves`, and nothing on the Mac (frozen).
+    /// whose day is one element that opens the day). Only the button without `moves`, and on the Mac (frozen).
     @ViewBuilder
     func calendarDraggable(_ entry: CalendarEntry, in space: String, moves: CalendarMoves?, lifted: Bool,
-                           accessible: Bool = true,
+                           open: (() -> Void)?, accessible: Bool = true,
                            began: @escaping (CGPoint, CGFloat) -> Void, moved: @escaping (CGPoint) -> Void,
                            ended: @escaping (Bool) -> Void) -> some View {
         #if os(iOS)
         if let moves {
-            let carried = self
-                .opacity(lifted ? Theme.CalendarGrid.liftedFade : 1)
-                .gesture(CalendarHold(space: space, began: began, moved: moved, ended: ended))
+            let hold = CalendarHold(space: space, began: began, moved: moved, ended: ended)
+            let carried = Group {
+                if let open {
+                    Button(action: open) { self }
+                        .buttonStyle(CalendarCarryStyle(hold: hold))
+                } else {
+                    gesture(hold)
+                }
+            }
+            .opacity(lifted ? Theme.CalendarGrid.liftedFade : 1)
             if accessible {
                 carried.accessibilityAction(named: Text("Change Due Date…")) { moves.reschedule(entry) }
             } else {
                 carried
             }
         } else {
-            self
+            calendarButton(open)
         }
         #else
-        self
+        calendarButton(open)
         #endif
+    }
+
+    /// A to-do that opens on a tap, as a plain button; nil: not a button.
+    @ViewBuilder private func calendarButton(_ open: (() -> Void)?) -> some View {
+        if let open {
+            Button(action: open) { self }
+                .buttonStyle(.plain)
+        } else {
+            self
+        }
     }
 
     /// The block or chip drawn where a dragged to-do would land: on the calendar's ground, ringed in the accent.
@@ -202,6 +220,12 @@ final class CalendarHoldRecognizer: UIGestureRecognizer {
     static let wander = Theme.Space.s
     static let pointerMove = Theme.Space.xs
 
+    /// A touch let go before it is picked up is a tap, the button's (`CalendarCarryStyle`): recognized as one, so
+    /// nothing under it takes it as well. Without, it fails (a phone's month chip: its day opens on the tap).
+    var taps = false
+    /// The touch that ended was a tap, not a drag (for the action, before `reset`).
+    private(set) var tapped = false
+
     private var start: CGPoint?
     private var pointer = false
     private var timer: Timer?
@@ -215,12 +239,26 @@ final class CalendarHoldRecognizer: UIGestureRecognizer {
         }
         start = touch.location(in: nil)
         pointer = touch.type == .indirectPointer
+        trace(pointer ? "down pointer" : "down finger") // i18n-ignore: DEBUG trace
         guard !pointer else { return }
-        timer = Timer.scheduledTimer(withTimeInterval: Self.hold, repeats: false) { [weak self] _ in
-            MainActor.assumeIsolated {
-                if self?.state == .possible { self?.state = .began }
-            }
+        // in the common modes: it fires while the run loop tracks a scroll too
+        let timer = Timer(timeInterval: Self.hold, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.held() }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+
+    private func held() {
+        trace("held \(state.rawValue)") // i18n-ignore: DEBUG trace
+        if state == .possible { state = .began }
+    }
+
+    /// A step for the UI tests' drag trace, in DEBUG builds.
+    private func trace(_ line: @autoclosure () -> String) {
+        #if DEBUG
+        CalendarDragTrace.shared.note(line())
+        #endif
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
@@ -232,6 +270,7 @@ final class CalendarHoldRecognizer: UIGestureRecognizer {
             if pointer, moved > Self.pointerMove {
                 state = .began
             } else if !pointer, moved > Self.wander {
+                trace("swipe") // i18n-ignore: DEBUG trace
                 state = .failed
             }
         case .began, .changed:
@@ -243,11 +282,21 @@ final class CalendarHoldRecognizer: UIGestureRecognizer {
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
         super.touchesEnded(touches, with: event)
-        state = state == .began || state == .changed ? .ended : .failed
+        switch state {
+        case .began, .changed:
+            state = .ended
+        case .possible where taps:
+            trace("tap") // i18n-ignore: DEBUG trace
+            tapped = true
+            state = .ended
+        default:
+            state = .failed
+        }
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
         super.touchesCancelled(touches, with: event)
+        trace("touch cancelled \(state.rawValue)") // i18n-ignore: DEBUG trace
         state = state == .began || state == .changed ? .cancelled : .failed
     }
 
@@ -264,18 +313,28 @@ final class CalendarHoldRecognizer: UIGestureRecognizer {
         timer = nil
         start = nil
         pointer = false
+        tapped = false
     }
 }
 
 /// The pick-up as SwiftUI sees it: where it began in `space` and how far below the view's top edge, where it moves,
-/// and whether it ended let go (true) or cancelled.
+/// and whether it ended let go (true) or cancelled; and a tap, when it is a button's (`tapped`).
 struct CalendarHold: UIGestureRecognizerRepresentable {
     var space: String
     var began: (CGPoint, CGFloat) -> Void
     var moved: (CGPoint) -> Void
     var ended: (Bool) -> Void
+    var tapped: (() -> Void)?
 
-    func makeUIGestureRecognizer(context: Context) -> CalendarHoldRecognizer { CalendarHoldRecognizer() }
+    func makeUIGestureRecognizer(context: Context) -> CalendarHoldRecognizer {
+        let recognizer = CalendarHoldRecognizer()
+        recognizer.taps = tapped != nil
+        return recognizer
+    }
+
+    func updateUIGestureRecognizer(_ recognizer: CalendarHoldRecognizer, context: Context) {
+        recognizer.taps = tapped != nil
+    }
 
     func handleUIGestureRecognizerAction(_ recognizer: CalendarHoldRecognizer, context: Context) {
         let point = context.converter.location(in: .named(space))
@@ -284,6 +343,8 @@ struct CalendarHold: UIGestureRecognizerRepresentable {
             began(point, context.converter.localLocation.y)
         case .changed:
             moved(point)
+        case .ended where recognizer.tapped:
+            tapped?()
         case .ended:
             ended(true)
         case .cancelled, .failed:
@@ -291,6 +352,22 @@ struct CalendarHold: UIGestureRecognizerRepresentable {
         default:
             break
         }
+    }
+}
+
+/// A to-do's button on the calendar that can be moved (#2045): the hold takes its touches, and a tap that is let go
+/// before the pick-up opens it. A hold attached around a plain button never began: `gesture(_:)` ranks below the
+/// button's own press, so a drag ended as a tap, which opened the to-do. With the pointer's hover a plain button has.
+struct CalendarCarryStyle: PrimitiveButtonStyle {
+    var hold: CalendarHold
+
+    func makeBody(configuration: Configuration) -> some View {
+        var hold = hold
+        hold.tapped = { configuration.trigger() }
+        return configuration.label
+            .contentShape(.rect)
+            .hoverEffect()
+            .gesture(hold)
     }
 }
 #endif
