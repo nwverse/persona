@@ -1091,7 +1091,9 @@ private struct SecretProviderSections: View {
                     // named action for VoiceOver; the row confirms before anything goes.
                     .swipeActions(edge: .trailing) {
                         if editable {
-                            Button(role: .destructive) { confirming = r.id } label: { Text("Remove [Handoff Rule]") }
+                            // Tinted, not `.destructive`: that role folds the row away at once, and the dialog it anchors
+                            // went with it, closing Settings' cover instead.
+                            Button { confirming = r.id } label: { Text("Remove [Handoff Rule]") }.tint(Theme.danger)
                         }
                     }
                     .contextMenu {

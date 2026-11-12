@@ -33,7 +33,11 @@ final class ProviderKeyReferencesUITests: XCTestCase {
             XCTAssertTrue(app.textFields["wizard.key.reference"].exists, app.debugDescription)
             shot(app, "form-" + scheme)
 
-            // The server's own key, on the form's Computers page.
+            // The server's own key, on the form's Computers page: its row is under the models step's Advanced.
+            app.buttons["wizard.next"].tap()
+            let advanced = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "高级")).firstMatch
+            reach(advanced, in: app, timeout: 10)
+            advanced.tap()
             let computers = app.buttons["wizard.computers"]
             reach(computers, in: app)
             computers.tap()
