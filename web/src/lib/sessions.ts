@@ -15,7 +15,8 @@ export function useAgentSessions(): Session[] {
   const by = useStore((s) => s.sessions);
   const summaries = useStore((s) => s.sessionSummaries);
   const bounded = useStore((s) => s.features.includes(SESSIONS_LIST_FEATURE));
-  return useMemo(() => foldRows((bounded ? summaries : Object.values(by).flat()).filter((s) => !s.assistant)), [by, summaries, bounded]);
+  // folded before the assistant's conversations go: a child folded under one of them is no Agent of its own either
+  return useMemo(() => foldRows(bounded ? summaries : Object.values(by).flat()).filter((s) => !s.assistant), [by, summaries, bounded]);
 }
 
 const EMPTY_FULL_LIST = { sessions: [] as Session[], loaded: false, base: {} as Record<string, Session[]> };
@@ -68,7 +69,7 @@ function createFullCache(owner: string) {
       const result = await complete.read(controller.signal);
       // An unchanged delta leaves the published snapshot (and its older base, which only widens the overlay) as it is.
       if (valid() && (result.changed || !fullSnapshot.loaded)) {
-        fullSnapshot = { sessions: result.sessions.filter((s) => !s.assistant), loaded: true, base, epoch: fullSnapshot.epoch };
+        fullSnapshot = { sessions: foldRows(result.sessions).filter((s) => !s.assistant), loaded: true, base, epoch: fullSnapshot.epoch };
         fullChanged();
       }
     } catch {
@@ -152,7 +153,7 @@ function useCompleteAgentSessions(on: boolean): { sessions: Session[]; loaded: b
   return useMemo(() => {
     // `on` false: the caller has no use for the list now and asks the hub for nothing
     if (!on) return EMPTY_FULL_LIST;
-    if (!bounded) return { sessions: Object.values(by).flat().filter((s) => !s.assistant), loaded };
+    if (!bounded) return { sessions: foldRows(Object.values(by).flat()).filter((s) => !s.assistant), loaded };
     if (!loaded) return EMPTY_FULL_LIST;
     if (by === full.base) return full;
     // Reflect actions on retained details (rename, mark seen) without copying the complete list into the store.

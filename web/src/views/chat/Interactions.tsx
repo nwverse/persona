@@ -1179,7 +1179,8 @@ export function InteractionCard({ ix }: { ix: Interaction }) {
     : ix.kind === "permission" ? <PermissionCard ix={ix} />
     : ix.kind === "elicitation" ? <ElicitationCard ix={ix} /> : <ScreenCard ix={ix} />;
   const asked = useVoiceAsking(ix);
-  const from = ix.folded_under && ix.kind !== "permission" ? permissionFrom(ix) : "";
+  // a permission card says it in its body (PermissionBody); a secret run's or hand-off's card has none, so it says it here
+  const from = ix.folded_under && (ix.kind !== "permission" || isSecretRun(ix) || isSecretHandoff(ix)) ? permissionFrom(ix) : "";
   // data-card: which card this is, for the sync scenarios (spec/fixtures/sync); `contents` keeps the layout as it was.
   // The fieldset is always there (switching it in would remount the card): disabled, it stops every answer and the
   // card's keys (lib/card-keys.ts) while the session can't be approved here or an answer is on its way

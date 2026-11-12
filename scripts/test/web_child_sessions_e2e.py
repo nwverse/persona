@@ -13,13 +13,13 @@ read of the Agents list asks for roots. Light / dark × 1280 / 390.
     (cd web && PERSONA_HUB_URL=http://127.0.0.1:18921 npx vite --port 5192 --strictPort &)
     python3 scripts/test/web_child_sessions_e2e.py http://127.0.0.1:5192 [--paged] [--shots <dir>]
 
-Prints one line per check and a verdict; exits 1 on the first failure.
+Prints one line per check and a verdict (also when a wait fails or times out); exits 1 on the first failure.
 """
 import argparse
 import os
 import sys
 
-from playwright.sync_api import expect, sync_playwright
+from playwright.sync_api import Error as PlaywrightError, expect, sync_playwright
 
 MID = "server"
 LEAD = "9a5e0000-0000-4000-8000-000000000002"
@@ -164,6 +164,8 @@ def main():
             for size in [a.only] if a.only else SIZES:
                 for theme in ("light", "dark"):
                     run(browser, a.base.rstrip("/"), a.token, size, theme, a.shots, a.paged)
+        except (AssertionError, PlaywrightError) as e:  # an expect() that failed or timed out: the verdict line too
+            fail(str(e).strip().splitlines()[0] if str(e).strip() else type(e).__name__)
         finally:
             browser.close()
     print("PASS web child sessions e2e")

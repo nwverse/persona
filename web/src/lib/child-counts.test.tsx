@@ -84,6 +84,19 @@ describe("child sessions counted once, under their parent (#5120)", () => {
     expect(tabTitle("Agents", stateCounts(shown).badge)).toBe(`(${NEEDS}) Agents · Persona`);
   });
 
+  it("a child folded under a Persona conversation is no Agent of its own either", () => {
+    const chat = row("persona-chat", { state: "idle", assistant: true, children: { total: 1, working: 1 } });
+    const kid = row("chat-kid", { state: "working", is_subagent: true, folded_under: "persona-chat" });
+    fake.state = { sessions: { m: [chat, kid, plain] }, sessionSummaries: [], features: [], interactions: [], loaded: true };
+    let out: string[] = [];
+    function Probe() {
+      out = keys(useAgentSessions());
+      return null;
+    }
+    renderToStaticMarkup(<Probe />);
+    expect(out).toEqual(["plain"]);
+  });
+
   it("the paged list on a folding hub: its rows are the parents, the Earlier fold counts the parent as needing you", () => {
     // roots=1 leaves the folded children out; the parent comes with its own state and its rollup
     const page = [parent, orphan, plain];

@@ -1215,7 +1215,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // The child sessions folded under this one (#5120, a Codex subagent, an Agent a Paseo Agent created): each a card in
   // the exchange during which it started (lib/child-cards.ts). The placement is kept while nothing moves it, so a push
   // for a child redraws only its card, and a streamed item none of the exchanges.
-  const kids = useChildSessions(mid, sid, Boolean(session?.children?.total));
+  // read while the row says it has some, or a link to one waits (its parent's rollup may not be in yet)
+  const linkedChild = linkedAgent ? childOfCall(linkedAgent) : undefined;
+  const kids = useChildSessions(mid, sid, Boolean(session?.children?.total) || Boolean(linkedChild));
   const seenAt = useRef(new Map<string, string>());
   const lastPlaces = useRef<Map<string, ChildPlace[]> | undefined>(undefined);
   const places = useMemo(
@@ -1226,9 +1228,10 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // A link to a child's own conversation (lib/subagent-link.ts): its card opened, in view, once its row is in. A child
   // that started before the loaded history: earlier pages until its exchange is in (at most CHILD_LINK_PAGES); a child
   // that is not this session's (any more): just the chat.
-  const linkedChild = linkedAgent ? childOfCall(linkedAgent) : undefined;
   const childLinkPages = useRef({ child: "", pages: 0 });
   useEffect(() => {
+    // a link followed to its end gives the next one, the same child's again too, its whole budget of earlier pages
+    if (!linkedChild) childLinkPages.current.child = "";
     if (!linkedChild || !session || tr.loading || detail.loading || tr.loadingEarlier) return;
     if (!kids.rows.some((c) => c.session_id === linkedChild)) {
       if (kids.loaded) doneSubagentLink(mid, sid);
