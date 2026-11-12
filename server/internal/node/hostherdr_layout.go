@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"maps"
+	"path/filepath"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/herdr"
@@ -188,7 +189,8 @@ func fromHerdrAgent(session string, a herdr.Agent) host.Agent {
 	return out
 }
 
-// directorySpaces retains every candidate directory, rather than guessing one cwd for a multi-pane workspace.
+// directorySpaces only attributes pane directories to a workspace when they agree: herdr creates from that
+// workspace's repository, not from whichever pane happened to match the requested directory.
 // Each server is queried independently so equal workspace ids in named sessions cannot collide.
 func (h *herdrHost) directorySpaces(ctx context.Context) ([]spaceDirectory, error) {
 	read := func(ctx context.Context, c *herdr.Client, session string) ([]spaceDirectory, error) {
@@ -203,26 +205,49 @@ func (h *herdrHost) directorySpaces(ctx context.Context) ([]spaceDirectory, erro
 					out = append(out, spaceDirectory{workspace: herdr.QualifyID(session, w.ID), cwd: dir})
 				}
 			}
-			add(w.Cwd)
-			if w.Worktree != nil {
-				add(w.Worktree.CheckoutPath)
-				add(w.Worktree.RepoRoot)
-			}
 			if w.Cwd != "" {
+				add(w.Cwd)
 				continue
 			}
 			panes, err := c.Panes(ctx, w.ID)
 			if err != nil {
 				return nil, err
 			}
+			var cwd, foreground string
+			var conflict, foregroundConflict bool
 			for _, p := range panes {
 				if p.WorkspaceID != "" && p.WorkspaceID != w.ID {
 					continue
 				}
-				add(p.Cwd)
-				if p.ForegroundCwd != "" {
-					out = append(out, spaceDirectory{workspace: herdr.QualifyID(session, w.ID), cwd: p.ForegroundCwd, fallback: true})
+				if p.Cwd != "" {
+					dir := realPath(filepath.Clean(p.Cwd))
+					if cwd != "" && cwd != dir {
+						conflict = true
+					}
+					cwd = dir
 				}
+				if p.ForegroundCwd != "" {
+					dir := realPath(filepath.Clean(p.ForegroundCwd))
+					if foreground != "" && foreground != dir {
+						foregroundConflict = true
+					}
+					foreground = dir
+				}
+			}
+			if conflict {
+				continue
+			}
+			if w.Worktree != nil {
+				add(w.Worktree.CheckoutPath)
+				add(w.Worktree.RepoRoot)
+				if w.Worktree.CheckoutPath != "" || w.Worktree.RepoRoot != "" {
+					continue
+				}
+			}
+			if cwd != "" {
+				add(cwd)
+			} else if foreground != "" && !foregroundConflict {
+				out = append(out, spaceDirectory{workspace: herdr.QualifyID(session, w.ID), cwd: foreground, fallback: true})
 			}
 		}
 		return out, nil

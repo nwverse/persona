@@ -112,6 +112,21 @@ func worktreeNode(t *testing.T) worktreeFixture {
 	return worktreeFixture{n: n, f: f, home: home, repo: repo}
 }
 
+// snapshotWorktreeHost deliberately exposes no directorySpaces capability, so these regressions exercise
+// the full-layout path used by the other terminal hosts.
+type snapshotWorktreeHost struct {
+	host.Host
+	host.Launcher
+}
+
+func snapshotWorktreeNode(t *testing.T) worktreeFixture {
+	t.Helper()
+	w := worktreeNode(t)
+	h := w.n.hosts.Get(host.Herdr)
+	w.n.hosts.Set(&snapshotWorktreeHost{Host: h, Launcher: h.(host.Launcher)})
+	return w
+}
+
 func branchOf(t *testing.T, dir string) string { return runPullGit(t, dir, "branch", "--show-current") }
 
 // resolved is dir as git names it: its symlinks resolved (on macOS the temporary directories are under /var, a link
@@ -155,7 +170,7 @@ func TestWorktreePrepareReadsTheRepository(t *testing.T) {
 }
 
 func TestWorktreePrepareUsesSnapshotDirectoryForCwd(t *testing.T) {
-	w := worktreeNode(t)
+	w := snapshotWorktreeNode(t)
 	w.f.reply("workspace.list", map[string]any{"workspaces": []any{
 		map[string]any{"workspace_id": "w1", "label": "proj", "number": 1},
 	}})
@@ -174,10 +189,14 @@ func TestWorktreePrepareUsesSnapshotDirectoryForCwd(t *testing.T) {
 	if res["root"] != resolved(t, w.repo) || res["path"] != filepath.Join(w.home, ".herdr", "worktrees", "proj") {
 		t.Fatalf("prepare from pane directories = %v", res)
 	}
+	if got := w.f.trace("session.snapshot"); len(got) != 1 {
+		t.Fatalf("snapshot calls = %v", got)
+	}
+
 }
 
 func TestSpaceHoldingFallsBackToWorkspaceList(t *testing.T) {
-	w := worktreeNode(t)
+	w := snapshotWorktreeNode(t)
 	w.f.reply("session.snapshot", herdrFail{Code: "unavailable", Message: "snapshot unavailable"})
 	w.f.reply("workspace.list", map[string]any{"workspaces": []any{
 		map[string]any{"workspace_id": "w1", "label": "proj", "number": 1, "cwd": w.repo},
@@ -198,10 +217,14 @@ func TestSpaceHoldingFallsBackToWorkspaceList(t *testing.T) {
 	if got := w.f.trace("workspace.list"); len(got) != 1 {
 		t.Fatalf("workspace.list calls = %v", got)
 	}
+	if got := w.f.trace("session.snapshot"); len(got) != 1 {
+		t.Fatalf("snapshot calls = %v", got)
+	}
+
 }
 
 func TestSpaceHoldingEmptySnapshotPreservesWorkspaceListError(t *testing.T) {
-	w := worktreeNode(t)
+	w := snapshotWorktreeNode(t)
 	w.f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
 	w.f.reply("workspace.list", herdrFail{Code: "unavailable", Message: "workspace list unavailable"})
 	h, err := w.n.hostOfKind(host.Herdr)
@@ -217,9 +240,13 @@ func TestSpaceHoldingEmptySnapshotPreservesWorkspaceListError(t *testing.T) {
 	if got := w.f.trace("workspace.list"); len(got) != 1 {
 		t.Fatalf("workspace.list calls = %v", got)
 	}
+	if got := w.f.trace("session.snapshot"); len(got) != 1 {
+		t.Fatalf("snapshot calls = %v", got)
+	}
+
 }
 
-func TestWorktreePrepareUsesExplicitCwdWithConflictingPaneDirectories(t *testing.T) {
+func TestWorktreePrepareDoesNotGuessFromConflictingPaneDirectories(t *testing.T) {
 	w := worktreeNode(t)
 	w.f.reply("workspace.list", map[string]any{"workspaces": []any{
 		map[string]any{"workspace_id": "w1", "label": "proj", "number": 1},
@@ -236,6 +263,11 @@ func TestWorktreePrepareUsesExplicitCwdWithConflictingPaneDirectories(t *testing
 	))
 	listSessions(t, w.n)
 	w.f.reset()
+
+	h := w.n.hosts.Get(host.Herdr)
+	if workspace, err := spaceHolding(t.Context(), h, w.repo); workspace != "" || !errors.Is(err, errNoHoldingSpace) {
+		t.Fatalf("conflicting pane directories must not hold the source: %q, %v", workspace, err)
+	}
 
 	res, err := request(t, w.n, "worktree.prepare", map[string]any{"cwd": w.repo})
 	if err != nil {
@@ -613,6 +645,72 @@ func TestWorktreeWithoutHoldingSpaceKeepsIsolation(t *testing.T) {
 	}
 }
 
+func TestWorktreeFromSecondRepositoryPaneKeepsItsSource(t *testing.T) {
+	for _, automatic := range []bool{false, true} {
+		t.Run(map[bool]string{false: "explicit", true: "automatic"}[automatic], func(t *testing.T) {
+			w := worktreeNode(t)
+			other := mkdir(t, filepath.Join(w.home, "other"))
+			runPullGit(t, other, "init", "--initial-branch=main")
+			if err := os.WriteFile(filepath.Join(other, "other.txt"), []byte("other repository\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			runPullGit(t, other, "add", "other.txt")
+			runPullGit(t, other, "commit", "-m", "other repository")
+			w.f.reply("workspace.list", map[string]any{"workspaces": []any{
+				map[string]any{"workspace_id": "w1", "label": "other", "number": 1},
+			}})
+			panes := []any{
+				map[string]any{"pane_id": "w1:p1", "tab_id": "w1:t1", "workspace_id": "w1", "cwd": other},
+				map[string]any{"pane_id": "w1:p2", "tab_id": "w1:t1", "workspace_id": "w1", "cwd": w.repo},
+			}
+			w.f.reply("pane.list", map[string]any{"panes": panes})
+			w.f.reply("session.snapshot", snapshot(
+				[]any{map[string]any{"workspace_id": "w1", "label": "other", "number": 1}},
+				[]any{map[string]any{"tab_id": "w1:t1", "workspace_id": "w1", "label": "1", "number": 1}}, nil, panes,
+			))
+			// Model herdr's source selection: the workspace's first pane belongs to the other repository.
+			w.f.handle("worktree.create", func(p map[string]any) any {
+				runPullGit(t, other, "worktree", "add", "-b", str(p["branch"]), "--", str(p["path"]))
+				return map[string]any{
+					"workspace": map[string]any{"workspace_id": "w2"},
+					"tab":       map[string]any{"tab_id": "w2:t1"}, "root_pane": map[string]any{"pane_id": "w2:p1"},
+					"worktree": map[string]any{"path": p["path"], "branch": p["branch"]},
+				}
+			})
+			listSessions(t, w.n)
+			w.f.reset()
+			prep, err := request(t, w.n, "worktree.prepare", map[string]any{"cwd": w.repo})
+			if err != nil || prep["root"] != resolved(t, w.repo) {
+				t.Fatalf("prepare the requested repository: %v, %v", prep, err)
+			}
+			args := map[string]any{"cwd": w.repo, "branch": "feature/requested", "path": filepath.Join(w.home, "requested-checkout")}
+			if automatic {
+				args = map[string]any{"cwd": w.repo, "auto_name": true}
+			}
+			res, err := request(t, w.n, "worktree.create", args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := str(res["path"])
+			if got, want := runPullGit(t, path, "rev-parse", "HEAD"), runPullGit(t, w.repo, "rev-parse", "HEAD"); got != want {
+				t.Fatalf("created from another repository: HEAD %q, want %q", got, want)
+			}
+			if b, err := os.ReadFile(filepath.Join(path, "app.txt")); err != nil || string(b) != "one\n" {
+				t.Fatalf("requested repository contents: %q, %v", b, err)
+			}
+			if _, err := os.Stat(filepath.Join(path, "other.txt")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("included the other repository: %v", err)
+			}
+			if len(w.f.trace("worktree.create")) != 0 || len(w.f.trace("workspace.create")) != 1 {
+				t.Fatal("ambiguous workspace must use Git and open a plain workspace")
+			}
+			if branchOf(t, w.repo) != "main" || branchOf(t, other) != "main" {
+				t.Fatal("changed a source checkout")
+			}
+		})
+	}
+}
+
 func TestSpaceHoldingPaneCandidates(t *testing.T) {
 	w := worktreeNode(t)
 	h, err := w.n.hostOfKind("")
@@ -644,6 +742,11 @@ func TestSpaceHoldingPaneCandidates(t *testing.T) {
 	w.f.reply("pane.list", map[string]any{"panes": []any{map[string]any{"foreground_cwd": w.repo}}})
 	if got, err := spaceHolding(t.Context(), h, w.repo); err != nil || got == "" {
 		t.Fatalf("foreground fallback: %q, %v", got, err)
+	}
+	other := mkdir(t, filepath.Join(w.home, "foreground-other"))
+	w.f.reply("pane.list", map[string]any{"panes": []any{map[string]any{"cwd": w.repo, "foreground_cwd": other}}})
+	if got, err := spaceHolding(t.Context(), h, other); got != "" || !errors.Is(err, errNoHoldingSpace) {
+		t.Fatalf("foreground directory must not override the workspace's stable source: %q, %v", got, err)
 	}
 	w.f.reply("pane.list", map[string]any{"panes": []any{}})
 	w.f.reply("workspace.list", map[string]any{"workspaces": []any{map[string]any{"workspace_id": "w3", "worktree": map[string]any{"repo_root": w.repo, "checkout_path": child}}}})
