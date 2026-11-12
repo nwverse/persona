@@ -734,7 +734,7 @@ describe("the / palette", () => {
     typeInto("/co");
     await until(() => expect(rows()).toEqual(["compact", "context"]));
     typeInto("/");
-    expect(rows()).toHaveLength(8);
+    expect(rows()).toHaveLength(9); // with /workflows (#5421)
     expect(palette()!.textContent).not.toContain("Esc");
   });
 

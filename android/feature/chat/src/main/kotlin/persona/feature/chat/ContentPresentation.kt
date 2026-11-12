@@ -345,11 +345,13 @@ internal data class ToolPresentation(
     val title: String, val verb: String, val detail: String? = null, val mono: Boolean = false, val kind: ToolVerb = ToolVerb.Use,
     /** A tool with words of its own ("Operate computer", `namedToolVerb`): the running line says them, not "Running x". */
     val named: Boolean = false,
+    /** What a tool no table knows is about, under its name in words ([detail]); the running line says it after them. */
+    val about: String? = null,
 ) {
-    /** The running line's words for this call: "Reading x", or a named tool's "Operate computer x". */
+    /** The running line's words for this call: "Reading x", a named tool's "Operate computer x", "GitHub · Create issue x". */
     fun running(res: Resources): String = when {
         !named -> res.getString(kind.running, title)
-        title == verb -> verb
+        title == verb -> about?.let { res.getString(R.string.chat_tool_running_named, verb, it) } ?: verb
         else -> res.getString(R.string.chat_tool_running_named, verb, title)
     }
 }
@@ -372,9 +374,16 @@ internal fun toolPresentation(res: Resources, item: Item): ToolPresentation {
     }
     // Persona's own tools, the computer's and the phone's have words of their own (iOS ToolPresentation.verb); any
     // other reads its name in words, another server's MCP tool as "GitHub · Create issue" (#2986), never "Use".
-    val named = if (kind == ToolVerb.Use && name.isNotEmpty())
-        persona.core.domain.namedToolVerb(name)?.resolve(res) ?: persona.core.domain.toolWords(name) else null
+    val table = if (kind == ToolVerb.Use && name.isNotEmpty()) persona.core.domain.namedToolVerb(name)?.resolve(res) else null
+    val words = if (kind == ToolVerb.Use && name.isNotEmpty() && table == null) persona.core.domain.toolWords(name) else null
+    val named = table ?: words
     val verb = named ?: res.getString(kind.label)
+    // A tool no table knows has no icon of its own to say what it is: its name in words stays the title, and what the
+    // call is about (`ToolNaming.subject`, #4339 C1) goes under it, as iOS's row reads the verb, then the subject.
+    if (words != null) {
+        val about = persona.core.domain.toolSubjectText(item).resolve(res).trim().ifBlank { null }
+        return ToolPresentation(words, words, about, kind = kind, named = true, about = about)
+    }
     val path = input?.string("file_path") ?: input?.string("notebook_path")
     if (!path.isNullOrBlank()) {
         val normalized = path.replace('\\', '/')

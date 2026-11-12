@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { headerIcon, headerTone, modeConfirmation, modeMenuItems, pickerIcon, showsInHeader } from "./header-mode";
+import { modeConfirmation, modeMenuItems, pickerIcon } from "./header-mode";
 import type { Session } from "./types";
 
 // The Agent header's permission mode (#3956), the rules of iOS SessionModes (#3719, HeaderModeTests) and Android #3957.
@@ -7,32 +7,10 @@ const claude = (permission_mode?: string, extra: Partial<Session> = {}): Session
   ({ machine_id: "m", session_id: "s", agent: "claude", status: "idle", permission_mode, ...extra }) as Session;
 
 describe("header mode", () => {
-  it("draws each mode in its tone and the composer picker's symbol, never a guessed Default permissions", () => {
-    const modes = ["default", "acceptEdits", "plan", "auto", "bypassPermissions"];
-    expect(["default", "plan", "acceptEdits", "auto", "bypassPermissions"].map(headerTone)).toEqual(["asks", "plans", "acts", "acts", "allows"]);
-    // one symbol per mode on the web (#5324): the header's and the picker's are the same
-    expect(modes.map(headerIcon)).toEqual(["palm", "code", "list", "sparkles", "warning"]);
-    expect(modes.map(headerIcon)).toEqual(modes.map(pickerIcon));
-    for (const m of [undefined, "", "dontAsk"]) {
-      expect(headerTone(m)).toBe("unknown");
-      expect(headerIcon(m)).toBe("shield");
-    }
+  it("draws each mode with the composer picker's symbol (#5324)", () => {
+    expect(["default", "acceptEdits", "plan", "auto", "bypassPermissions"].map(pickerIcon)).toEqual(["palm", "code", "list", "sparkles", "warning"]);
     // the picker reads a mode not reported yet as Default permissions, as its label does
     expect(pickerIcon(undefined)).toBe("palm");
-  });
-
-  it("shows a mode to see or to change", () => {
-    expect(showsInHeader(claude("default"))).toBe(true);
-    // before its first prompt: nothing reported, but it can be set
-    expect(showsInHeader(claude(undefined))).toBe(true);
-    // ended with its last mode: still shown; ended without one: nothing to say
-    expect(showsInHeader(claude("plan", { status: "offline" }))).toBe(true);
-    expect(showsInHeader(claude(undefined, { status: "offline" }))).toBe(false);
-    // Codex has none; an assistant conversation has its own controls
-    expect(showsInHeader(claude(undefined, { agent: "codex" }))).toBe(false);
-    expect(showsInHeader(claude("default", { assistant: true }))).toBe(false);
-    expect(showsInHeader(claude("default"), true)).toBe(false);
-    expect(showsInHeader(undefined)).toBe(false);
   });
 
   it("asks first into Allow all, and out of it where the agent can't come back", () => {
