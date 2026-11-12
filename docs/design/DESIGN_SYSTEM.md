@@ -333,6 +333,11 @@ For every component: use the design-system one, not a lookalike. Counts are appr
 - Accessibility: every control labelled; hold-to-talk has a hint and a tap action (`apple/Persona/DesignSystem/ComposerHoldMic.swift:105-110`). Reduce Motion read in the bar.
 - Source: `apple/Persona/DesignSystem/ShellComposerBar.swift:11`, `apple/Persona/DesignSystem/ComposerButtons.swift`.
 - Platforms: web composer (14 px radius, 28 px buttons, `web/src/views/chat/Composer.tsx:648`); Android `ComposerFrame` (radius 32 in Glass).
+- Pictures and videos (iOS `mediaPicker`, `VideoAttachmentsBar`, `PasteImageChip`): + › Photos takes pictures and videos,
+  four together. A video waits above the field as a row with the video mark, its name and, once on the computer, "size ·
+  length", and ✕. While the clipboard holds a picture not yet offered, the focused composer offers **Paste** (the accent's
+  capsule on iOS, a Secondary button on Android) and ✕ **Don't paste** at its top, once per copy; the field itself pastes
+  only text. Android: the video row in every style, the Paste chip on Glass (`ComposerPaste.kt`).
 - Web bottom row (#5324, cindy's toolbar at the owner's request; cindy wins over this section's earlier rules for it):
   `[+][permission picker] … [model pill][Stop][voice][send / queue / stop]`. The + and the picker are bare 30 px round
   controls that show the model pill's frame (`line-strong` border, `hover` fill) on hover or while open; the action is one
@@ -427,6 +432,12 @@ For every component: use the design-system one, not a lookalike. Counts are appr
   Persona's place in the message actions; the card over the composer (`ForwardBar`) and in the bubble (`ForwardBlock`)
   are the quote bar's and quote card's shapes (`views/chat/Quote.tsx`) with the `forward` icon, and Forward to is a
   `Dialog` (a bottom sheet on phones) with palette-style rows; no Share as Image row, as the web has no share card.
+- Share as Image (iOS `MessageShareSheet`): a full-screen page with the message as a card (who said it, where and when, the
+  words with code blocks that wrap and have no Copy bar, a quiet Persona mark, on a pale blue-to-lilac gradient), Light /
+  Dark at the top, and Share (the picture), Save, Copy and Share Text along the bottom; the card is 390 pt wide, wider for
+  tables, code and very tall cards, at most 520 pt (`ShareCardWidth`). Android has no Forward: on Glass the message
+  menu's Share opens the page (`MessageSharePage`, Light / Dark in the top bar, the picture drawn from the card's
+  `GraphicsLayer`); Brief and Board share the words.
 - A message sent from here and not in the transcript yet (iOS `PendingBubble`): drawn as a sent bubble at once, with a
   mark before it, level with its last line: a quiet clock while it sends; a clock while it waits for the network, whose
   small menu is Retry Now and Don't Send, with "Sends when connected" under the bubble; a red mark once it failed, with

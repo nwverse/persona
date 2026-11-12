@@ -2446,6 +2446,7 @@ the video shows as a card above the input box (reading → compressing if needed
   and dropping a tier if it's over. iPhone originals are about 60 MB/minute at 1080p30 HEVC and 170 MB/minute at 4K30, so up to about 3 minutes at 1080p or about 1 minute at 4K goes as is.
 - **Limit**: even compressed it must stay within 200 MB, which at 540p fits about **5 minutes** (the estimate goes by bitrate and depends little on the content). Longer ones aren't uploaded, with the message
   ""IMG_0002.MOV" is 12:34 long and still over 200 MB at 540p, so it can't be sent. Trim it in Photos first." One still in iCloud that can't be downloaded shows "Couldn't read a video".
+- Android sends videos the same way (+ › Photos, the system photo picker) but does not transcode: a video over 200 MB is refused with the file limit's message (the composer section of `docs/android/android.md`).
 - Tapping the card uses the system player (a full-screen AVPlayerViewController on iOS, AVKit's player on Mac): videos sent from this phone play the local copy directly (`Caches/attached-videos`,
   keeping 1 GB by most recently played, counted under "Other Caches" in **Settings › Storage**); ones sent from other devices are first downloaded from that computer (`/file/download`, progress shown on the card, tap again to stop),
   and a copy is kept afterwards too. Once the temporary file on the computer is cleaned up, it can't be played ("Can't play").
