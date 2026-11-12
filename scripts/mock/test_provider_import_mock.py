@@ -353,6 +353,17 @@ class ProviderLinkMockTests(unittest.TestCase):
             self.assertNotIn(secret, json.dumps(out))
             self.assertNotIn("example.invalid", json.dumps(out))
 
+    def test_broken_links_ports_and_request_paths(self):
+        ep = {"protocol": "openai-chat", "baseUrl": "https://example.invalid/v1"}
+        link = web_link({"kind": "custom", "name": "Example", "endpoints": [ep]})
+        self.assertEqual(self.parse(link + " and more"), {"format": "link", "drafts": [], "notes": [{"code": "link_invalid"}]})
+        self.assertNotEqual(self.parse("Here it is: " + link)["format"], "link")
+        out = self.parse(web_link({"kind": "custom", "name": "Example", "endpoints": [dict(ep, modelsUrl="https://example.invalid:99999999999999999999/m")]}))
+        self.assertEqual(out["notes"], [{"code": "link_invalid", "name": "endpoints[0].modelsUrl"}])
+        pasted = self.parse(json.dumps({"kind": "custom", "name": "Example", "endpoints": [dict(ep, requestPath="/secret-path/chat")]}))
+        self.assertIn({"code": "cindy_request_path"}, pasted["drafts"][0]["notes"])
+        self.assertNotIn("secret-path", json.dumps(pasted))
+
 
 if __name__ == "__main__":
     unittest.main()

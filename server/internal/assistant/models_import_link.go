@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf16"
@@ -76,28 +77,33 @@ var linkPriority = map[string]map[string]int{
 
 // parseLink reads t (the paste, trimmed) when it is an import link: one word starting with cindy:// (in any case), or
 // an http(s) address whose fragment has import. ok is false for anything else, which the other readers take (an
-// address with another fragment is no link).
+// address with another fragment is no link). Text whose first word is a link but which goes on after a blank is a
+// link a chat app broke at a space or a line break: which part of it is the data is unknown, so it is refused whole.
 func parseLink(t string) (res pasteResult, ok bool) {
-	cindy := hasPrefixFold(t, "cindy://")
-	if !cindy && !hasPrefixFold(t, "http://") && !hasPrefixFold(t, "https://") || strings.ContainsFunc(t, unicode.IsSpace) {
+	word := t
+	if i := strings.IndexFunc(t, unicode.IsSpace); i >= 0 {
+		word = t[:i]
+	}
+	cindy := hasPrefixFold(word, "cindy://")
+	if !cindy && !hasPrefixFold(word, "http://") && !hasPrefixFold(word, "https://") {
 		return res, false
 	}
+	// a web link: only its fragment is read, what comes before it is the user's own web address
+	_, frag, _ := strings.Cut(word, "#")
+	params, broken := linkQuery(frag)
 	var data string
 	var n pasteNote
-	if cindy {
-		data, n = cindyLinkData(t[len("cindy://"):])
-	} else {
-		// a web link: only its fragment is read, what comes before it is the user's own web address
-		_, frag, _ := strings.Cut(t, "#")
-		params, broken := linkQuery(frag)
-		switch {
-		case params["import"] == nil:
-			return res, false
-		case len(frag) > linkMost:
-			n = pasteNote{Code: noteLinkTooLong}
-		default:
-			data, n = linkParams(params, broken, "import", false)
-		}
+	switch {
+	case !cindy && params["import"] == nil:
+		return res, false
+	case word != t:
+		n = pasteNote{Code: noteLinkInvalid}
+	case cindy:
+		data, n = cindyLinkData(word[len("cindy://"):])
+	case len(frag) > linkMost:
+		n = pasteNote{Code: noteLinkTooLong}
+	default:
+		data, n = linkParams(params, broken, "import", false)
 	}
 	var payload []byte
 	var obj map[string]any
@@ -534,6 +540,11 @@ func linkURL(v any) *url.URL {
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "http" && u.Scheme != "https" || u.Opaque != "" || u.User != nil || u.Hostname() == "" {
 		return nil
+	}
+	if port := u.Port(); port != "" { // Go takes any digits, a browser's URL only a port number
+		if p, err := strconv.Atoi(port); err != nil || p > 65535 {
+			return nil
+		}
 	}
 	return u
 }

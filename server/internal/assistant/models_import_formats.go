@@ -665,11 +665,12 @@ type cindyProvider struct {
 
 // cindyEndpoint is one of a cindy provider's endpoints: an API (protocol) at an address.
 type cindyEndpoint struct {
-	Protocol string         `json:"protocol"`
-	BaseURL  string         `json:"baseUrl"`
-	APIKey   string         `json:"apiKey"`
-	Headers  map[string]any `json:"headers"`
-	Models   []cindyModel   `json:"models"`
+	Protocol    string         `json:"protocol"`
+	BaseURL     string         `json:"baseUrl"`
+	RequestPath string         `json:"requestPath"`
+	APIKey      string         `json:"apiKey"`
+	Headers     map[string]any `json:"headers"`
+	Models      []cindyModel   `json:"models"`
 }
 
 // cindyModel is a model as cindy lists it: its id alone, or an object.
@@ -718,10 +719,10 @@ func cindyNamed(v string, known []string) string {
 
 // parseCindy reads a cindy v1 provider import's JSON: one provider, or {providers: […]}. A custom provider is one
 // draft: its first Messages endpoint as a Claude Code gateway, else its first Responses or Chat endpoint as a direct
-// API; its other endpoints are noted. A gateway's draft has no auth: v1 does not say which header it takes, and the
-// wizard's check finds it (#5329, launcher_auth_auto); a direct API takes Bearer. Presets and built-in key slots name
-// cindy's own catalog: noted, as is OAuth. A field of another type than cindy's is left out; data that is no JSON is
-// invalid_json.
+// API; its other endpoints are noted, and so is the picked one's own request path (the draft calls the API's usual
+// one). A gateway's draft has no auth: v1 does not say which header it takes, and the wizard's check finds it (#5329,
+// launcher_auth_auto); a direct API takes Bearer. Presets and built-in key slots name cindy's own catalog: noted, as
+// is OAuth. A field of another type than cindy's is left out; data that is no JSON is invalid_json.
 func parseCindy(data []byte) pasteResult {
 	var batch struct {
 		Providers []json.RawMessage `json:"providers"`
@@ -807,6 +808,9 @@ func (res *pasteResult) cindyProvider(p cindyProvider) {
 		}
 	}
 	d.setHeaders(hs, true)
+	if strings.TrimSpace(e.RequestPath) != "" { // a provider has no request path of its own: say so, never the path
+		addNote(&d.Notes, pasteNote{Code: noteCindyPath})
+	}
 	if p.Auth.Method == "none" {
 		pr.Auth = ""
 		addNote(&d.Notes, pasteNote{Code: noteCindyAuth, Name: p.Auth.Method})
