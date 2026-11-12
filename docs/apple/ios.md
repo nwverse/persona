@@ -167,7 +167,21 @@ Chat page:
   - **Sent**: the block is a card at the top of the bubble, as a quote's, with the arrow, "Forwarded from Claude · chat",
     the computer and time, and four lines; a tap opens the original chat at the message (`AppModel.openLinked`), or the
     whole text when this app does not have that chat. Nothing is written to the original chat.
-  - Tests: `ForwardTests` (`spec/fixtures/forward`), `ForwardMessageTests` (the whole way on the mock hub, screenshots).
+  - **Several at once** (#3838, `MessagePick.swift`): Forward To's Select Messages…, under Share as Image, closes the
+    picker and starts selecting in the chat with the pressed message picked; the long-press bar is unchanged. Each
+    message (your own, a reply, a relayed or another session's; not steps, notices, injected lines or `/loop` ticks) gets
+    the Inbox Select's round mark on its leading edge, and a tap anywhere on it picks or unpicks it; nothing inside it
+    answers. The footer gives way to `PickBar`: Cancel (the chat as it was: the box's words, quotes and photos are the
+    model's), "N Selected", and Forward N, off with none picked; a 31st pick shows a toast. Forward N opens Forward To
+    with the picked messages in the chat's order (`ForwardDraft.pieces`), without Share as Image or Select Messages….
+    They go over the target's box as one bar (`QuoteBar` groups forwards of one chat: "2 Forwarded Messages · chat", a
+    line each, one × for all) and are sent as one block each; the sent bubble shows them as one card
+    (`ForwardGroupBlock`: the chat and computer, then each message's author, time and two lines, a tap opening it; past
+    three, "N More"). Size: each cut at the smaller of 20,000 and 60,000 / N characters (`ForwardMessage.limit(count:)`),
+    at most 30; photos share the box's limit. Selecting ends once a target is picked; cancelling Forward To comes back
+    to the selection.
+  - Tests: `ForwardTests` (`spec/fixtures/forward`, `several.json`), `ForwardMessageTests` and `ForwardSeveralTests` (the
+    whole way on the mock hub, screenshots).
   - Screenshots `-showSampleComments YES` (two code comments and an element over the box); `MOCK_COMMENTS=1` gives the widget chat a review sent from the web; end-to-end `CommentBubbleTests`.
 - Files: message paths and Read / Edit / Write tool paths become tappable file tags, read from the session's computer
   (`GET /api/v1/machines/{mid}/file`, at most 2 MB, iCloud directories denied), rendered Markdown / numbered code / images / PDF / directories.

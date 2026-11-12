@@ -3829,7 +3829,7 @@ The web shows a prefs change at once and then PUTs it. When the PUT fails (other
 | `<persona-context kind="context\|edit\|doc\|instructions" title="…" url="…">text</persona-context>` | phone (text selected in a link card), hub (Lark /agent instructions and context) | not written by the user: all blocks gather into one "Context · N items" row beside the bubble (with one block, "Context · title"), collapsed by default; expanding shows a title list, each opening the body and link. Attributes may be in any order or omitted (`url` is often absent); only text outside the tags is user-written |
 | Rename (#3182): tags are moving from `<persona-context>` to `<persona-context>`, with attributes unchanged | | readers (hub, node, web, Android, Apple, DSH) accept both names, with mixed opening / closing tags allowed; closing tags of either name are stripped from block bodies. Attribute-free live snapshots and run instructions already write only `<persona-context>` (written and stripped by the same node, never seen by the App); blocks with attributes (hub templates, the three clients) still write `<persona-context>`, to switch once Apps that recognize the new name are widespread: old Apps only recognize `persona-context` and show an entire `<persona-context …>` block as body text |
 | `<persona-context kind="workspace" title="…" url="" machine="<machine id>" cwd="<folder>" branch="…">` | web (a workspace picked in the assistant's @ menu, #5594) | shown like the other blocks. Before the assistant gets it, the manager replaces the block (same tag, `branch` dropped) with where to dispatch by default, knowledge-base projects and recent Agents in that folder (docs/assistant/assistant.md "Workspace mentions"); a block naming an unknown computer is passed on as written |
-| `<persona-context kind="forward" title="…" url="persona://session/…?at=…" msg="…" role="…" author="…" chat="…" project="…" machine="…" time="…">` | iOS (Forward on a message, #3807), web (#3899) | the user forwarded a message from another chat: a card at the top of the user's bubble that opens the original; see "Forwarded messages" below |
+| `<persona-context kind="forward" title="…" url="persona://session/…?at=…" msg="…" role="…" author="…" chat="…" project="…" machine="…" time="…">` | iOS (Forward on a message, #3807; several at once, #3838), web (#3899) | the user forwarded a message (or several, one block each) from another chat: a card at the top of the user's bubble that opens the original; see "Forwarded messages" below |
 | `<cross-session-message from-name="…">…</cross-session-message>` | Claude Code (cross-session messages) | a left-side "From name" card, body rendered as Markdown |
 
 ### Quote and comment blocks at the start of messages (web and iOS, #2427, #2437, #151)
@@ -3939,6 +3939,15 @@ Clients draw the block as a card at the top of the user's bubble (the heading, t
 of the original) that opens the original chat at that message; a reader that does not know `forward` folds it like the
 other context blocks ("Context · title"). Persona's CLAUDE.md says how to read it, and that `agent_read` and
 `conversation_read` read the original chat from the ids in `url`. Shared cases: `spec/fixtures/forward`.
+
+**Several at once (#3838).** Messages picked together go as one message with one block per message, in the original
+chat's order (not the order they were picked), one per line, then a blank line and the note; with no note, "Please look
+at the forwarded messages above.". Nothing new is written into a block. Each is cut at the smaller of 20,000 characters
+and 60,000 divided by how many go (rounded down), and at most 30 go at once; the user's own photos go along up to the
+box's limit, the earlier messages' first. Readers show forward blocks that sit next to each other and whose `url` names
+the same session as one card: the chat, then each message with its author, time and first lines, each opening the
+original at that message. Another session's forward or any other block starts a new card. Shared cases:
+`spec/fixtures/forward/several.json`.
 
 ## Messages injected by Persona
 
