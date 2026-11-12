@@ -334,12 +334,14 @@ struct BriefAcceptRow: View {
     /// The to-do the row is about, where Later and Don't handle belong on it (the tray and the board); nil in a brief card,
     /// which has no such buttons.
     var decision: TodoItem? = nil
+    /// False where a line right above already says the title (a Needs You row opened in place).
+    var showsTitle = true
     private var actions: BriefActions { .shared }
 
     var body: some View {
         if actions.outcome(accepting: row, group: group) != .completed {
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                Text(row.title).font(Theme.Font.secondaryMedium)
+                if showsTitle { Text(row.title).font(Theme.Font.secondaryMedium) }
                 if let verdict = row.verdict, !verdict.isEmpty { Text(verdict).font(Theme.Font.caption) }
                 if let detail = row.detail, !detail.isEmpty { Text(detail).font(Theme.Font.caption).foregroundStyle(.secondary) }
                 if let option = row.recommend, !option.isEmpty {
@@ -349,7 +351,6 @@ struct BriefAcceptRow: View {
                 if row.forBriefing { BriefHeldMark(id: row.id) }
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: Theme.Space.s) {
-                        Spacer(minLength: 0)
                         secondaryActions
                         primaryAction
                     }
@@ -359,6 +360,8 @@ struct BriefAcceptRow: View {
                         primaryAction.frame(maxWidth: .infinity)
                     }
                 }
+                // wide: the row sits at the trailing edge, as it did (ViewThatFits takes the chosen row's own width)
+                .frame(maxWidth: .infinity, alignment: .trailing)
                 .padding(.top, Theme.Space.xs)
                 RuleSuggestionLine(suggestion: row.suggestion, card: .todo(row.id, round: row.askedAt ?? ""), group: group)
             }

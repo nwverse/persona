@@ -28,11 +28,17 @@ extension Session {
 
     /// When a limit resets, in the user's time zone: the clock when that is today, the date as well on another day.
     nonisolated static func usageLimitClock(_ at: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
-        if calendar.isDate(at, inSameDayAs: now) {
-            return at.formatted(Date.FormatStyle(calendar: calendar, timeZone: calendar.timeZone).hour().minute())
+        // rows and cards ask on every redraw: the format style is built once per time and form (docs/apple/performance.md P4)
+        let today = calendar.isDate(at, inSameDayAs: now)
+        let key = "\(Int(at.timeIntervalSince1970))|\(today)|\(calendar.identifier)|\(calendar.timeZone.identifier)|\(Locale.current.identifier)"
+        return clockMemo(key) { _ in
+            today ? at.formatted(Date.FormatStyle(calendar: calendar, timeZone: calendar.timeZone).hour().minute())
+                  : at.formatted(Date.FormatStyle(calendar: calendar, timeZone: calendar.timeZone).month(.defaultDigits).day().hour().minute())
         }
-        return at.formatted(Date.FormatStyle(calendar: calendar, timeZone: calendar.timeZone).month(.defaultDigits).day().hour().minute())
     }
+
+    nonisolated private static let clockMemo = TextMemo<String>(limit: 64)
+
 
     /// The line for rows and cards; nil when this is not a usage-limit wait, so callers keep the interrupted text.
     nonisolated func usageLimitLabel(now: Date = Date(), calendar: Calendar = .current) -> String? {

@@ -1,8 +1,8 @@
 import SwiftUI
 
 // What Persona sent to its tasks' agents (`routed` items it wrote, #1542, docs/assistant/unified-entry.md "Messages to agents"):
-// never the user's bubble. A message on its own is one folded line on the left (`AgentSentLine`); a task's card lists every
-// one sent to it, and the hand-off sent together with a task's card is left out of the chat (`SentToAgents`).
+// never the user's bubble. A message on its own is one folded line on the left (`AgentSentLine`); the hand-off sent
+// together with a task's card is drawn like any other (nothing applies `SentToAgents.takenIn` now, docs/design/task-cards.md §5.1).
 
 /// One of Persona's messages to a task's agent in the conversation: a capsule like the answered and review lines, with
 /// its mark (a stop when Persona cut in first), where it went and the first line. A tap opens the whole text with Copy,

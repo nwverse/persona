@@ -310,7 +310,7 @@ lines, and in the user's own color and alignment they read as something the user
 - What the user sends to a task (its card's Message, or the composer's routing label) has no `from` and keeps the bubble.
 - Older entries: migration `0441_feed_routed_from.sql` marks those Persona wrote before the field existed (see "Chat activity").
   Older apps ignore `from` and keep drawing the bubble.
-- Apple: `AgentSentLine`, `TaskSentList` (`apple/Persona/Views/Assistant/Tasks/SentViews.swift`), the pure rules in
+- Apple: `AgentSentLine` (`apple/Persona/Views/Assistant/Tasks/SentViews.swift`; `TaskSentList` was removed in #5569; iOS no longer applies `takenIn`, so a task's hand-off is drawn in the chat like any other message of Persona's), the pure rules in
   `SentToAgents` (`apple/Shared/Tasks.swift`); web: `web/src/views/assistant/Sent.tsx`, `takenIn` / `sentTo` in `web/src/lib/feed.ts`;
   Android (#1623): `SentLine`, `TaskSentList` in `android/feature/chat/.../AssistantTasks.kt`, the pure rules in `SentToAgents`
   (`android/core/domain/.../tasks/SentToAgents.kt`), the chat page filtering the feed with `SentToAgents.shown`; checked by

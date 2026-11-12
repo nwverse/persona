@@ -17,8 +17,52 @@ struct HandoffCards: View {
     }
 }
 
+/// What a hand-off card says about its task, worked out from the stores. The card reads them (which makes it re-evaluate
+/// on any to-do or session change, as the stores are shared) and hands this value to `HandoffCardBody`, which is
+/// `Equatable`: a change that leaves it as it was redraws nothing below (docs/apple/performance.md P5, P6).
 struct HandoffCard: View {
     var entry: DispatchedTasks.Entry
+    private var store: TasksStore { .shared }
+
+    /// What the meta line under the title says.
+    enum Meta: Equatable {
+        /// An Agent has the task: when it last moved (nil when nothing yet) and the task's state.
+        case agent(at: Date?, state: TaskState)
+        case failed(String)
+        case gone
+        case closedEarly
+        case starting
+    }
+
+    var body: some View {
+        let todo = entry.todoID.flatMap { store.todos[$0] }
+        let lead = todo.flatMap { store.leadSession($0) }
+        let meta = meta(todo: todo, lead: lead)
+        HandoffCardBody(entry: entry, meta: meta).equatable()
+    }
+
+    private func meta(todo: TodoItem?, lead: Session?) -> Meta {
+        if let lead, let todo {
+            let at = lead.activityAt ?? lead.updatedAt
+            return .agent(at: at.flatMap { $0.isMeaningful ? $0 : nil }, state: store.state(todo))
+        }
+        if let failure = failure(todo) { return .failed(failure) }
+        if todo?.doneAt != nil { return .closedEarly }
+        if todo == nil, entry.todoID != nil, !store.todos.isEmpty { return .gone }
+        return .starting
+    }
+
+    /// Why the task's Agent did not start: the hub's word on the to-do, its plan's, the Agent's own row, or the plan task's.
+    private func failure(_ todo: TodoItem?) -> String? {
+        let why = todo.flatMap { store.startFailure($0) ?? $0.agents.first(where: { !($0.startError ?? "").isEmpty })?.startError } ?? entry.error
+        let trimmed = why?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+struct HandoffCardBody: View, Equatable {
+    var entry: DispatchedTasks.Entry
+    var meta: HandoffCard.Meta
     private var store: TasksStore { .shared }
 
     /// "3 min. ago": minutes are enough for when an Agent last moved.
@@ -29,10 +73,6 @@ struct HandoffCard: View {
     }()
 
     var body: some View {
-        let todo = entry.todoID.flatMap { store.todos[$0] }
-        let lead = todo.flatMap { store.leadSession($0) }
-        let failure = failure(todo)
-        let state: TaskState? = lead == nil ? nil : todo.map { store.state($0) }
         let card = HStack(spacing: Theme.Space.m) {
             ThemedIcon(Theme.Icon.followOn).font(Theme.Font.bodyStrong)
                 .scaledFrame(width: Theme.Size.well, height: Theme.Size.well)
@@ -43,7 +83,7 @@ struct HandoffCard: View {
                     Text(entry.title).font(Theme.Font.bodyStrong).lineLimit(1)
                     badge
                 }
-                meta(todo: todo, lead: lead, state: state, failure: failure)
+                metaLine
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             if entry.todoID != nil {
@@ -69,7 +109,7 @@ struct HandoffCard: View {
     /// How the Agent came to the task: filled for New and Resumed, outlined for one that was running already.
     @ViewBuilder private var badge: some View {
         let active = entry.wake == "active"
-        Text(active ? String(localized: "Already Active") : entry.wake == "resumed" ? String(localized: "Resumed") : String(localized: "New"))
+        Text(active ? String(localized: "Already Active") : entry.wake == "resumed" ? String(localized: "Resumed") : String(localized: "New [Task Handoff Badge]"))
             .font(Theme.Font.labelHeavy)
             .textCase(.uppercase)
             .lineLimit(1)
@@ -82,10 +122,11 @@ struct HandoffCard: View {
             .accessibilityIdentifier("dispatch.badge")
     }
 
-    @ViewBuilder private func meta(todo: TodoItem?, lead: Session?, state: TaskState?, failure: String?) -> some View {
-        if let lead, let state {
+    @ViewBuilder private var metaLine: some View {
+        switch meta {
+        case .agent(let at, let state):
             HStack(spacing: Theme.Space.xs) {
-                if let at = lead.activityAt ?? lead.updatedAt, at.isMeaningful {
+                if let at {
                     ThemedIcon(Theme.Icon.recent).font(Theme.Font.label).foregroundStyle(.secondary)
                     VisibleTimelineView(interval: 60) { now in
                         Text(Self.relative.localizedString(for: min(at, now), relativeTo: now)).lineLimit(1)
@@ -99,22 +140,16 @@ struct HandoffCard: View {
             }
             .font(Theme.Font.caption)
             .foregroundStyle(.secondary)
-        } else if let failure {
+        case .failed(let failure):
             Text("Didn't start: \(failure) [Tasks Store 38bbb7]").font(Theme.Font.caption).foregroundStyle(Theme.danger).lineLimit(2)
                 .accessibilityIdentifier("dispatch.failure")
-        } else if todo?.doneAt != nil || (todo == nil && entry.todoID != nil && !store.todos.isEmpty) {
-            Text(todo == nil ? String(localized: "This task no longer exists") : String(localized: "Closed before an Agent started"))
-                .font(Theme.Font.caption).foregroundStyle(.tertiary).lineLimit(1)
-        } else {
+        case .gone:
+            Text("This task no longer exists").font(Theme.Font.caption).foregroundStyle(.tertiary).lineLimit(1)
+        case .closedEarly:
+            Text("Closed before an Agent started").font(Theme.Font.caption).foregroundStyle(.tertiary).lineLimit(1)
+        case .starting:
             Text("Starting the agent").font(Theme.Font.caption).foregroundStyle(.tertiary).lineLimit(1)
         }
-    }
-
-    /// Why the task's Agent did not start: the hub's word on the to-do, its plan's, the Agent's own row, or the plan task's.
-    private func failure(_ todo: TodoItem?) -> String? {
-        let why = todo.flatMap { store.startFailure($0) ?? $0.agents.first(where: { !($0.startError ?? "").isEmpty })?.startError } ?? entry.error
-        let trimmed = why?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
     }
 
     private func open(_ id: String) {

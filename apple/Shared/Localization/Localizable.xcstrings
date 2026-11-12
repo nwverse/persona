@@ -81766,6 +81766,29 @@
       },
       "extractionState" : "manual"
     },
+    "New [Task Handoff Badge]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新規"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新任务"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "New %@ items show in the Inbox. This is the same switch as Show in Inbox on the connector's page." : {
       "localizations" : {
         "zh-Hans" : {

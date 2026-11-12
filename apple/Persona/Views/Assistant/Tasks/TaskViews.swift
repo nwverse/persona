@@ -759,8 +759,8 @@ struct ReceiptCard: View {
 
     nonisolated static func outcome(_ item: FeedItem, todo: TodoItem?) -> Outcome {
         if item.failed { return .failed }
-        if item.turnInterrupted { return .interrupted(reason: APIErrorInfo.parse(item.receiptError ?? item.summary)?.reason) }
-        if let apiError = APIErrorInfo.parse(item.summary) { return .interrupted(reason: apiError.reason) }
+        if item.turnInterrupted { return .interrupted(reason: TurnErrorReason.of(item.receiptError ?? item.summary)) }
+        if let reason = TurnErrorReason.of(item.summary) { return .interrupted(reason: reason) }
         if let todo, todo.doneAt == nil { return .stopped }
         return .done
     }
@@ -787,7 +787,7 @@ struct ReceiptCard: View {
     /// "Show All": the whole summary, not its first four lines.
     @State private var all = false
     /// The summary is longer than its four lines, measured (so Show All and Hide appear only when there is more).
-    @State private var cut = false
+    @State private var cuts: Set<Int> = []
 
     /// What the actions under a receipt are (docs/design/task-cards.md §3.3), apart from the PR and View: a failed start
     /// is retried while its to-do still is one, a turn cut off is continued unless the usage limit continues by itself.
@@ -825,8 +825,9 @@ struct ReceiptCard: View {
         }
         let heading = Self.heading(outcome, title: title)
         let detail = limited ? lead?.usageLimitLabel() : Self.detail(outcome, summary: item.summary)
-        if outcome == .failed, todo != nil, !failedNow {
-            // already started again: a quiet line, not a red card with a Retry that has nothing to retry
+        if outcome == .failed, let todo, !failedNow, lead != nil, todo.doneAt == nil {
+            // started again (it has an Agent, is not failed and not closed): a quiet line, not a red card with a Retry that has
+            // nothing to retry; one closed another way has no restart to claim
             Label(String(localized: "“\(title)” started on retry"), systemImage: Theme.Icon.successFilled)
                 .font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(2)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -848,10 +849,10 @@ struct ReceiptCard: View {
                         // The Agent's last words as Markdown, not raw `**` (#2363).
                         let text = ExchangeText.linked(s)
                         Text(text).font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(all ? nil : 4)
-                            .background { ClampMeasure(text: text, lines: 4, font: Theme.Font.secondary, cut: $cut) }
+                            .background { ClampMeasure(text: text, lines: 4, font: Theme.Font.secondary, cuts: $cuts) }
                             .animation(Theme.Motion.state, value: all)
-                        if cut || all {
-                            Button { all.toggle() } label: { Text(all ? String(localized: "Hide") : String(localized: "Show All")).lineLimit(1) }
+                        if !cuts.isEmpty || all {
+                            Button { all.toggle() } label: { Text(all ? String(localized: "Show Less") : String(localized: "Show All")).lineLimit(1) }
                                 .font(Theme.Font.captionStrong)
                                 .buttonStyle(.plain)
                                 .foregroundStyle(Theme.accent)

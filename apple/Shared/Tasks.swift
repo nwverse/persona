@@ -288,15 +288,16 @@ nonisolated struct FeedItem: Codable, Hashable, Identifiable, Sendable {
 }
 
 /// What Persona sent to its tasks' agents in a conversation's feed (#1542, docs/assistant/unified-entry.md "Messages to agents"):
-/// a task's card lists them, the hand-off sent with the card is drawn only there, a later one is a folded line.
+/// each is a folded line or an exchange in the chat.
 nonisolated enum SentToAgents {
     /// How long after its task's card a message of Persona's counts as the card's hand-off: agent_send with a task writes
     /// the card and, right after it, what it sent.
     static let handOff: TimeInterval = 60
 
     /// The hand-offs a task's feed item takes in (not drawn on their own): Persona's messages within `handOff` after their own
-    /// task's item in the same conversation, from today. No card lists them any more (the old task card did, until
-    /// docs/design/task-cards.md P7 removed it), so they stay out of the chat; they are on the task's page.
+    /// task's item in the same conversation, from today. Nothing in the app applies this (`shown`) any more: the old task card
+    /// listed them and the chat left them out, until docs/design/task-cards.md P7 removed that card, so they are drawn like any
+    /// other message of Persona's. The rule stays, with its tests, for the day a card lists them again.
     static func takenIn(_ feed: [FeedItem], now: Date = .now, calendar: Calendar = .current) -> Set<String> {
         var cards: [String: [Date]] = [:]
         for item in feed where item.kind == .task && calendar.isDate(item.at, inSameDayAs: now) {

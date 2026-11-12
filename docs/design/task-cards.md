@@ -113,7 +113,7 @@ Web 是本地 vite 页面，视口 430 px 宽（手机宽度，和 iPhone 可比
 
 - iOS：失败 / 中断卡底色 = `danger` 12% 透明，深浅色都是红底。
 - Web：`--red-tint`，浅色 `#f7f8f9`（几乎灰），深色 `#1f2022`（几乎黑）；红只在图标和文字上。
-- **选 iOS：底色用 `danger` 的 12%。** Web 的 `--red-tint` 重新取值（浅色约 `#fbe9ea`，深色约 `#3a2224`，实现时再配对比度）。
+- **选 iOS：底色用 `danger` 的 12%。** Web 新增 token `--danger-wash` = `color-mix(in srgb, var(--red) 12%, transparent)`，只给失败 / 中断结论卡和失败行用；`--red-tint` 不动（别处还在用）。对比度（按 `--bg` 白 `#fff` / 深 `#1a1b1d` 估算）：浅色混出约 `#f7e6e7`，`--red` 字 4.8:1、`--ink-2` 4.9:1；深色约 `#352a2c`，`--red` 字 6.6:1、`--ink-2` 5.8:1，都过 4.5:1，字色不用改。
 - 理由：失败是要用户注意的状态，浅色下和普通灰卡片分不出来是缺陷；两端同一个语义色按同一个比例混合，也方便做 token 表。
 
 ### D11 圆角、间距、字号
@@ -242,7 +242,7 @@ Waited 2 h · 来自 Agent「…」
 | 第三级文字 | `.tertiary` | 系统 | `--ink-3` | `#66696f` / `#979aa0` |
 | 凹陷底（行、输入） | `Theme.Fill.well` | 系统 quaternary | `--field` | `#f2f2f3` / `#2b2c2f` |
 | 成功底 | `positive` 12% | — | `--green-tint` | `#e8f5ed` / `#3dbb7224` |
-| 危险底 | `danger` 12% | — | `--red-tint` | `#f7f8f9` / `#1f2022` → **要改，见 D10** |
+| 危险底 | `danger` 12% | — | `--danger-wash`（新增，`--red` 12% 混色；`--red-tint` 不动） | 浅色约 `#f7e6e7`，深色约 `#352a2c`，见 D10 |
 
 两端的绿、红、橙数值并不相同（只有 AI 紫相同），这是各自为了对比度调的，不要求逐值一致；一致的是**角色**和**用在哪**。
 Web 的 `--orange` 浅色 `#a64c00` 比 iOS 的 `caution` 暗很多，更接近 `cautionText`；Web 没有对应 `Theme.caution`（图标用的亮橙）的变量，建议补一个 `--caution`。
@@ -264,7 +264,7 @@ Web 的 `--orange` 浅色 `#a64c00` 比 iOS 的 `caution` 暗很多，更接近 
 - **P4 Don't handle / Later 的语义（D9）。** 推荐：Don't handle 落库可撤销，Later 只推迟当前会话；iOS 补。需要确认 iOS 的「Do not handle」（回复草稿用）和这里是不是同一个概念，要不要统一成一个词。
   **已定：Don't handle 落库可撤销，Later 只推迟当前会话；iOS 补上。两端和 iOS 回复草稿统一成一对词：「Later / Don't handle」（中文 稍后 / 不处理，日文 あとで / 対応しない），就是 Web 已有的词；iOS 的「Do not handle」改成「Don't handle」。这条是可逆的选择，不是字面的 Dismiss。**
 - **P5 失败底色（D10）。** 推荐：Web 的 `--red-tint` 重新取值。这是改已有界面的样子，按仓库约定属于「按用户明确要求改」，需要你确认才算。
-  **已定：Web 的 `--red-tint` 改成 `danger` 12% 混色，和 iOS 一致。**
+  **已定：不动 `--red-tint`，Web 新增 `--danger-wash` = `--red` 12% 混色，用于失败 / 中断结论卡和失败行，和 iOS 的 `danger` 12% 一致；先查文字在底色上的对比度，不到 4.5:1 就调字色（D10 已测，都过）。**
 - **P6 token 表是否进仓库作为双端约束。** 推荐：先放在文档里，Web 侧加 `scripts` 检查写死的 px 字号只能减少（仿 iOS 的 `TokenRatchetTests`），不立刻改页面。
   **已定：token 表先放文档；Web 加写死 px 字号只减不增的检查（baseline / ratchet）。**
 - **P7 清理死代码。** Web 的 `TaskCard` / `OutcomeReceipt` / `TaskLine` 和 iOS 的 `TaskCard` / `TaskLine` 要不要删，还是 P3 恢复时复用。推荐：P3 定了再决定；定之前不删。
@@ -276,12 +276,12 @@ Web 的 `--orange` 浅色 `#a64c00` 比 iOS 的 `caution` 暗很多，更接近 
 | --- | --- |
 | P1 拍板行窄屏堆叠 | 已做：`BriefAcceptRow` 去掉「Actions」菜单，次要按钮一排（放不下就换行），主按钮独占下一行满宽（主按钮在下，跟 §3.4 的图；DESIGN_SYSTEM 3(c) 写的是主按钮在上，这里以设计稿为准） |
 | P2 Needs you 折叠行 + 原地展开 | 已做：计划、回复草稿、有未答 ask 的任务三类行默认折叠，点行或箭头原地展开成完整卡；不自动展开单独的一行；会话自己的提问行仍然是「关托盘去看底部卡」。展开的卡留在视图树里（折成 0 高度），计划卡的勾选和草稿的编辑不丢 |
-| P3 / D7 结论卡 | 已做：Show All / Hide、Copy / Quote（⋯ 菜单）、失败 Retry、中断 Continue（用量限制会自己续的不给 Continue） |
+| P3 / D7 结论卡 | 已做：Show All / Show Less、Copy / Quote（⋯ 菜单）、失败 Retry、中断 Continue（用量限制会自己续的不给 Continue） |
 | P4 一对词 | 已做：Later / Don't handle（稍后 / 不处理，あとで / 対応しない）；拍板行的 Later 只在本次 App 运行内，Don't handle 落库、可撤销（6 秒 Undo） |
 | §3.1 计划卡 | 已做：Start 满宽、放不下时 Edit / Don't Start 换到下一行；brief 折叠显示；托盘里按钮钉在列表下方；「Start these directly from now on」 |
 | §3.2 进度行 / D3 | 已做：状态词右列带色、行尾 ›、第二行（用量限制 = 原因 + 重置时间，橙色时钟）、Starting 空心圈 + caution 点 |
 | D6 交接卡 | 已做：`HandoffCard`，**一个任务一张卡**（Web 是每个 Agent 一张，120 秒内合并）；这是可接受的差别 |
-| P7 清理 | 已做：`TaskCard`、`TaskLine`、`TaskNowLine`、`TaskSentList`、`TaskProgressLine`、`TaskOpenButton` 已删；`SentToAgents.takenIn` 没动（它让 Persona 的交接消息不在聊天里单独画，原因是旧任务卡会画它们；现在没有地方画，这是已有的缺口，留给后续） |
+| P7 清理 | 已做：`TaskCard`、`TaskLine`、`TaskNowLine`、`TaskSentList`、`TaskProgressLine`、`TaskOpenButton` 已删；`SentToAgents.takenIn` / `shown` 没动，但 App 里本来就没有调用它们（交接消息一直按普通消息画成 exchange 行），所以这次没有消息消失；要让交接卡列出它们是后续的事 |
 | 与 Web 的已知差别 | iOS 的 usage limit 状态不加 10 分钟宽限（共用的 `entries` fixture 不认）；宽限只用在第二行的重置时间和结论卡上 |
 
 ## 6. 局限
@@ -290,7 +290,7 @@ Web 的 `--orange` 浅色 `#a64c00` 比 iOS 的 `caution` 暗很多，更接近 
 - iOS 的「Dispatched」行截到的都是已有 mock 数据里的任务，没有单独造「运行中 / 需要你」状态的交接行；这两种状态的进度在托盘截图里。
 - Web 的结论卡（`OutcomeReceipt`）线上不画，所以也没有截图；§3.3 的样子是按源码和 iOS 的实际样子合成的设计，不是现状。
 - 只看了英文；中文和日文的文案长度没有对比。
-- 没有测对比度，D10 的建议色是估的，实现时要过 `StyleSpecTests` 同口径的检查。
+- D10 的对比度是按假定的页面底色估算的（见 D10），没有过 `StyleSpecTests` 同口径的检查；Web 实现时要过。
 
 ## 截图索引
 

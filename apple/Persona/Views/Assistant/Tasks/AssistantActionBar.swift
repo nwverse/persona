@@ -578,7 +578,7 @@ struct AssistantActionBar: View {
         }
     }
 
-    /// The first open plan whose row is opened: its buttons stay under the list.
+    /// The open plan whose row is opened (only one is at a time): its buttons stay under the list.
     private func pinnedPlan(_ rows: [ActionTrayContent.Row]) -> (TaskPlan, PlanChoices)? {
         for row in rows {
             guard case .entry(.plan(let id)) = row, expanded.contains("plan:" + id), let choices = planChoices["plan:" + id],
@@ -589,7 +589,8 @@ struct AssistantActionBar: View {
     }
 
     /// A Needs You row that opens in place: folded it is a line (mark, words, a chevron), opened it is the card that answers
-    /// it, right under the line. Another row opening does not close it, and a card drawn once stays in the tree.
+    /// it, right under the line. Another row opening does not close it (except a plan, there is one plan bar), and a message or
+    /// brief card drawn once stays in the tree, folded to nothing, so its edit is still there.
     private func opening<Mark: View, Card: View>(_ id: String, title: String, detail: String, subtitle: String?,
                                                  @ViewBuilder mark: () -> Mark, @ViewBuilder card: () -> Card) -> some View {
         let isOpen = expanded.contains(id)
@@ -601,7 +602,17 @@ struct AssistantActionBar: View {
                     if id.hasPrefix("plan:"), planChoices[id] == nil { planChoices[id] = PlanChoices() }
                 }
                 withAnimation(Theme.Motion.state) {
-                    if isOpen { expanded.remove(id) } else { expanded.insert(id) }
+                    if isOpen {
+                        expanded.remove(id)
+                        // a plan card is not kept: its choices are in `planChoices`, and a folded card would go on reading the stores
+                        if id.hasPrefix("plan:") { drawn.remove(id) }
+                    } else {
+                        // one plan at a time: its Start / Edit / Don't Start are the bar under the list, and there is one bar
+                        if id.hasPrefix("plan:") {
+                            for other in expanded where other.hasPrefix("plan:") { expanded.remove(other); drawn.remove(other) }
+                        }
+                        expanded.insert(id)
+                    }
                 }
             } label: {
                 line(title: title, detail: detail, tint: AgentState.needsYou.tone.text, subtitle: subtitle, trail: isOpen ? .expanded : .folded, mark: mark)
@@ -632,7 +643,7 @@ struct AssistantActionBar: View {
                     let brief = ask.row(for: todo)
                     opening(row.id, title: todo.title, detail: brief.isDecision ? String(localized: "Decision") : String(localized: "To Verify"),
                             subtitle: ask.verdict, mark: { TaskMark(state: .needsYou) }) {
-                        BriefAcceptRow(row: brief, group: AppModel.shared.hub?.group ?? "", decision: todo)
+                        BriefAcceptRow(row: brief, group: AppModel.shared.hub?.group ?? "", decision: todo, showsTitle: false)
                             .padding(.horizontal, Theme.Space.m)
                     }
                 } else {
@@ -769,7 +780,7 @@ struct AssistantActionBar: View {
             let when = lead?.usageLimitWhen()
             return [reason, when].compactMap { $0 }.joined(separator: " · ").nilIfEmpty
         case .interrupted:
-            return one(lead?.turnError.flatMap { APIErrorInfo.parse($0)?.reason ?? $0 })
+            return one(lead?.turnError.flatMap { TurnErrorReason.of($0) ?? $0 })
         case .notStarted:
             return String(localized: "Starting the agent")
         case .failed:

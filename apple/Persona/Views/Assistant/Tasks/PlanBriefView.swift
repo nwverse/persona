@@ -2,11 +2,13 @@ import SwiftUI
 
 /// Whether `text` needs more than `lines` lines at the width it is drawn at: two copies of it, one held to `lines` and one
 /// not, measured out of sight (they are a background, never part of the layout). Drives the Show All a clamp needs.
+/// Several texts on one card each report under their own `id` into `cuts`, so a short one cannot hide that a long one is cut.
 struct ClampMeasure: View {
     var text: AttributedString
     var lines: Int
     var font: Font
-    @Binding var cut: Bool
+    var id: Int = 0
+    @Binding var cuts: Set<Int>
     @State private var held: CGFloat = 0
     @State private var natural: CGFloat = 0
 
@@ -24,7 +26,7 @@ struct ClampMeasure: View {
 
     private func update() {
         let now = natural > held + 1
-        if now != cut { cut = now }
+        if now != cuts.contains(id) { if now { cuts.insert(id) } else { cuts.remove(id) } }
     }
 }
 
@@ -36,11 +38,11 @@ struct PlanBriefView: View {
     var brief: TaskBrief
     var title: String
     @State private var open = false
-    @State private var cut = false
+    @State private var cuts: Set<Int> = []
 
     var body: some View {
         let summary = brief.summary
-        let more = cut || open || brief.hasMore(title: title)
+        let more = !cuts.isEmpty || open || brief.hasMore(title: title)
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
             asked
             if open { fields }
@@ -86,7 +88,7 @@ struct PlanBriefView: View {
                 row(icon: Theme.Icon.info, prefix: "", text: String(localized: "Reconstructed: the original request was not recorded"), tone: .secondary)
                 if let handover = brief.handover?.trimmingCharacters(in: .whitespacesAndNewlines), !handover.isEmpty {
                     Text("Hand-over Prompt").font(Theme.Font.captionStrong).foregroundStyle(.tertiary)
-                    clamped(AttributedString(handover), tone: .secondary)
+                    clamped(AttributedString(handover), tone: .secondary, id: 1)
                 }
             }
         case .started(let by, let why, let at):
@@ -118,10 +120,10 @@ struct PlanBriefView: View {
         return lead + AttributedString(text)
     }
 
-    private func clamped(_ text: AttributedString, tone: HierarchicalShapeStyle) -> some View {
+    private func clamped(_ text: AttributedString, tone: HierarchicalShapeStyle, id: Int = 0) -> some View {
         Text(text).font(Theme.Font.caption).foregroundStyle(tone).lineLimit(open ? nil : 2)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background { ClampMeasure(text: text, lines: 2, font: Theme.Font.caption, cut: $cut) }
+            .background { ClampMeasure(text: text, lines: 2, font: Theme.Font.caption, id: id, cuts: $cuts) }
             .textSelection(.enabled)
     }
 
