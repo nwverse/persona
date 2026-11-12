@@ -215,9 +215,21 @@ final class PendingCardsTests: XCTestCase {
             XCTAssertTrue(submit.waitForExistence(timeout: 5), "no long review:\n\(app.debugDescription)")
             let cards = app.scrollViews["pending-cards"]
             shot("long-review-actions-\(scheme)")
-            XCTAssertTrue(submit.isHittable && cards.frame.insetBy(dx: -1, dy: -1).contains(submit.frame),
-                          "review Submit needs scrolling first (\(submit.frame) in \(cards.frame))")
-            submit.tap()
+            var reachable = false
+            let hitDeadline = Date().addingTimeInterval(5)
+            while Date() < hitDeadline {
+                if cards.frame.insetBy(dx: -1, dy: -1).contains(submit.frame) {
+                    reachable = true
+                    break
+                }
+                RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+            }
+            let submitFrame = submit.frame
+            XCTAssertTrue(submit.isEnabled, "review Submit is disabled")
+            XCTAssertTrue(reachable, "review Submit needs scrolling first (\(submitFrame) in \(cards.frame))")
+            // Tap its visible centre directly: XCUIElement.tap() may first try to make a nested-scroll child hittable.
+            app.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx: submitFrame.midX, dy: submitFrame.midY)).tap()
             let deadline = Date().addingTimeInterval(10)
             while resolutionCount("ix_ask_long", hub: hub) == before && Date() < deadline { usleep(300_000) }
             XCTAssertGreaterThan(resolutionCount("ix_ask_long", hub: hub), before, "review Submit did not resolve the card")
