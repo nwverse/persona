@@ -179,9 +179,12 @@ type Phase = "on" | "linger" | "fading" | "off";
 export function RunningStatusView({ live, working, startedAt, clock = true, plain, step, background, subtasks, offline, speedKey = "" }: RunningStatusProps & { live: SessionLive | null; offline?: boolean; speedKey?: string }) {
   const phase = usePhase(working);
   const [pinned, setPinned] = useState(false);
-  // after the turn: what it last said, while it lingers and fades
+  // after the turn: what it last said, while it lingers and fades. Its status line goes a moment before the turn ends,
+  // so the last one of this turn stays for that (not one from a turn before)
   const last = useRef({ live, background, clock, subtasks, step });
-  if (working) last.current = { live, background, clock, subtasks, step };
+  const wasWorking = useRef(working);
+  if (working) last.current = { live: live ?? (wasWorking.current ? last.current.live : null), background, clock, subtasks, step };
+  wasWorking.current = working;
   const kept = working ? { live, background, clock, subtasks, step } : last.current;
   const shown = kept.live;
   const bg = kept.background;
@@ -191,8 +194,12 @@ export function RunningStatusView({ live, working, startedAt, clock = true, plai
   // the turn's own work, measured: an Agent's, not the Persona conversation's, not background work's
   const own = !plain && !behind && !usage;
   const now = useNow(1000, phase === "on" && !offline && !usage);
-  // from the run's start; a run that does not say when it started, from the turn's (not from when the bar appeared)
-  const elapsed = useElapsed(behind ? null : shown, behind ? (bg.since ?? startedAt) : startedAt, now);
+  // from the run's start; a run that does not say when it started, from the turn's (not from when the bar appeared).
+  // After the turn it stays as it last was (cindy): the turn's start and its status line are gone by then.
+  const counted = useElapsed(behind ? null : shown, behind ? (bg.since ?? startedAt) : startedAt, now);
+  const lastElapsed = useRef(counted);
+  if (working) lastElapsed.current = counted;
+  const elapsed = working ? counted : lastElapsed.current;
   const tokens = useCountUp(shown?.tokens_down ?? 0);
   const done = !working && !behind && !usage;
   const state = statusWords(shown, kept.step, plain);

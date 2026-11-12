@@ -161,6 +161,21 @@ describe("the running bar's speed (#5312)", () => {
 });
 
 describe("the end of a turn", () => {
+  it("keeps its time and its tokens through the end: the status line goes a moment before the turn does", async () => {
+    draw(bar(line(1, 50)));
+    await loaded();
+    await run(2, 4);
+    // the line goes first (the time counts on from the turn's start), then the turn, whose start the chat no longer knows
+    draw(bar(null));
+    const before = q("[data-running-elapsed]")?.textContent;
+    draw(<RunningStatusView live={null} working={false} startedAt={new Date(Date.now()).toISOString()} speedKey="m/s" />);
+    expect(q("[data-running-done]")).not.toBeNull();
+    expect(q("[data-running-elapsed]")?.textContent).toBe(before);
+    expect(q("[data-running-tokens]")).not.toBeNull();
+    // a turn that is over generates nothing: no speed
+    expect(q("[data-running-rate]")).toBeNull();
+  });
+
   it("says Done with a check for the linger second, then fades and goes", async () => {
     draw(bar(line(3, 150)));
     expect(q("[data-running-done]")).toBeNull();

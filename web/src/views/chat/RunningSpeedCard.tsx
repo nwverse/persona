@@ -250,9 +250,9 @@ function SpeedButton({ elapsed, card, onPinned, children }: { elapsed: string; c
   );
 }
 
-/** The bar's right side in an Agent session once this is loaded: the time, then the latest speed while there is a fresh
- *  one, else the tokens (`count`), never both (cindy). With a speed, or while its card is pinned, the two are a button.
- *  Fed with each status line while the turn runs (`working`) and the hub is in reach. */
+/** The bar's right side in an Agent session once this is loaded: the time, then the latest speed while the turn runs and
+ *  there is a fresh one, else the tokens (`count`), never both (cindy). With a speed, or while its card is pinned, the two
+ *  are a button. Fed with each status line while the turn runs (`working`) and the hub is in reach. */
 export function RunningSpeed({ speedKey, turn, live, working, offline, now, elapsed, time, count, onPinned }: {
   speedKey: string;
   turn: string | undefined;
@@ -266,7 +266,8 @@ export function RunningSpeed({ speedKey, turn, live, working, offline, now, elap
   onPinned: (pinned: boolean) => void;
 }) {
   const history = useRateHistory(speedKey, turn, live?.tokens_down, live?.at, working && !offline);
-  const rate = offline ? null : shownRate(history, now);
+  // a turn that is over generates nothing: its tokens stand where its speed was
+  const rate = working && !offline ? shownRate(history, now) : null;
   const [pinned, setPinned] = useState(false);
   const pin = useCallback((p: boolean) => {
     setPinned(p);
