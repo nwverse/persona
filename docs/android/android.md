@@ -129,6 +129,42 @@ The main conversation folds the rounds it did not start, as web and iOS do (rule
 - **Tests**: `BackgroundRoundsTest` (core/domain), `AssistantSettingsStateTest.backgroundFoldSwitchSavesAndComesBackOnFailure`,
   `HttpSettingsParityWireTest.mainBackgroundFoldedIsSentOnlyWhenSetAndOnWhenMissing`.
 
+#### The background supervisor (#5084)
+
+Where the built-in background supervisor shows (what it is:
+[unified-entry.md](../assistant/unified-entry.md#background-supervisor-4927)). Everything here follows fields of
+`GET /api/v1/assistant` and is absent against a hub that does not send them.
+
+- **Its conversation**: `AssistantSnapshot.backgroundSupervisor` (`background_supervisor`, `backgroundSupervisorOf`).
+  This app's drawer has no group for scheduled tasks' conversations: they wait under **All chats** with every other
+  conversation Persona opened itself, and so does this one. It is never listed under 常驻 or Recent
+  (`conversationGroups`, `recentConversations`), is named by the app (`assistant_background_supervisor`, in the app's
+  language whatever language the hub titled it in; a search finds it by that name), and its row's menu only copies
+  its session ID: no Pin, Archive or End chat (`AssistantDrawer`). The hub refuses the first two as well.
+- **Switch**: Settings › Assistant › Task follow-up › **Main chat supervises its own tasks**
+  (`main_supervises_own_tasks`, `AssistantSettingsState.setMainSupervisesOwnTasks`, as the fold switch: it moves at
+  once and comes back on a failure), with one sentence under it. Shown when the hub sends the field.
+- **Model**: the same section has **Background supervisor model** while the switch is off, which opens
+  `ModelPurposeRoute("assistant.supervise")` (`BackgroundSupervisor.PURPOSE`). The hub's catalog leaves that use out,
+  so Settings › Model configuration asks for it by its ID after the catalog (`ModelCatalogModel`,
+  `modelPurposesWith`) and lists it after the last use of its group; a hub without it, or one that fails that one
+  request, lists the catalog as it is.
+- **Its reviews in the main conversation**: a review it writes takes no main-conversation turn, so the `review` feed
+  entry is drawn in the conversation as the existing one-line `ReviewLine` (task · verdict · note; the task's name opens
+  the task) instead of staying in the background record (`BackgroundReviews`, `AssistantTaskCards.isBackgroundEvent`'s
+  `shown`). The feed does not say who wrote a review, so the rule is by time and ledger: in the main conversation
+  only, while `main_supervises_own_tasks` is off and `background_supervisor` is set, the reviews written at or after
+  `background_supervisor_at` whose task's ledger does not name another supervisor (a leader's). A review the main
+  conversation made itself in that time is drawn the same way; reviews from before stay where they were. When the hub
+  replaces a background supervisor that is gone, `background_supervisor_at` moves and the lines of the one before go
+  back to the record.
+- **Tests**: `BackgroundReviewsTest` (core/domain), `AssistantTest.theBackgroundSupervisorIsListedUnderAllChatsOnly`,
+  `AssistantSettingsStateTest.superviseOwnTasksSwitchSavesAndComesBackOnFailure`,
+  `HttpSettingsParityWireTest.mainSupervisesOwnTasksIsSentOnlyWhenSetAndTheBackgroundSupervisorIsReadOnly`,
+  `DirectionNamesTest.theBackgroundSupervisorIsReadWhenTheHubNamesOne`,
+  `ModelConfigurationStateTest.theBackgroundSupervisorsUseIsListedWhenTheHubHasIt`; `AssistantSettingsShotsTest` draws
+  the section in the three languages and styles.
+
 #### Shared data contract
 
 The only hub API addition is `task_cards` on the existing `GET /api/v1/assistant/conversations/{id}/feed?since=` response:

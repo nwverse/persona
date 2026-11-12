@@ -33,15 +33,19 @@ data class DispatchHint(val tasks: List<DispatchedTask>) : AssistantExtra {
 object AssistantTaskCards {
     private val lifecycle = setOf("plan", "task", "receipt", "review", "report")
 
-    /** Explicit hub housekeeping, drafts and assistant-to-Agent instructions live behind the trays. */
-    fun isBackgroundEvent(item: FeedItem): Boolean = (item.kind in lifecycle && !interruptShown(item)) || item.kind in setOf("notice", "message") ||
-        (item.kind == "routed" && item.field("from") == "assistant")
+    /**
+     * Explicit hub housekeeping, drafts and assistant-to-Agent instructions live behind the trays. [shown]: the entries
+     * drawn in the conversation all the same (the background supervisor's reviews, [BackgroundReviews.shown]).
+     */
+    fun isBackgroundEvent(item: FeedItem, shown: Set<String> = emptySet()): Boolean = item.id !in shown &&
+        ((item.kind in lifecycle && !interruptShown(item)) || item.kind in setOf("notice", "message") ||
+            (item.kind == "routed" && item.field("from") == "assistant"))
 
     /** An interrupted receipt the hub worked out stays in the chat as its record (#3834): a batch's card, a handled line
      *  or a pending one; a batch's other receipts are drawn inside its head. */
     private fun interruptShown(item: FeedItem): Boolean = InterruptLook.of(item).let { it != null && it != InterruptLook.Hidden }
 
-    fun backgroundFeed(feed: List<FeedItem>): List<FeedItem> = feed.filter(::isBackgroundEvent)
+    fun backgroundFeed(feed: List<FeedItem>, shown: Set<String> = emptySet()): List<FeedItem> = feed.filter { isBackgroundEvent(it, shown) }
 
     /** Pure fallback for older hubs, also joining live events to incremental server projection upserts. */
     fun merge(feed: List<FeedItem>, plans: Map<String, TaskPlan>, todos: List<Todo>, projected: List<AssistantTaskCard> = emptyList()): List<MergedTaskCard> {
@@ -110,7 +114,8 @@ object AssistantTaskCards {
         }.sortedWith(compareBy({ AssistantLines.time(it.identity.at) }, { it.identity.id }))
     }
 
-    fun lines(lines: List<ChatLine>, feed: List<FeedItem>, plans: Map<String, TaskPlan>, todos: List<Todo>, projected: List<AssistantTaskCard> = emptyList()): List<ChatLine> {
+    fun lines(lines: List<ChatLine>, feed: List<FeedItem>, plans: Map<String, TaskPlan>, todos: List<Todo>, projected: List<AssistantTaskCard> = emptyList(),
+        shown: Set<String> = emptySet()): List<ChatLine> {
         val cards = merge(feed, plans, todos, projected)
         val dispatched = cards.groupBy { it.identity.planId ?: it.identity.id }.filterValues { group ->
             group.any { it.todo != null || it.plan?.state == "started" || it.records.any { record -> record.kind == "task" } }
@@ -122,7 +127,7 @@ object AssistantTaskCards {
                     card.todo?.title ?: card.identity.index?.let { card.plan?.tasks?.getOrNull(it)?.title }.orEmpty())
             })
         }
-        val combined = feed.filterNot(::isBackgroundEvent) + dispatched.map { (id, group) ->
+        val combined = feed.filterNot { isBackgroundEvent(it, shown) } + dispatched.map { (id, group) ->
             FeedItem(id, at = group.first().identity.at, kind = "unknown")
         }
         return AssistantLines.lines(lines, combined.sortedWith(compareBy({ AssistantLines.time(it.at) }, { it.id }))).map { line ->

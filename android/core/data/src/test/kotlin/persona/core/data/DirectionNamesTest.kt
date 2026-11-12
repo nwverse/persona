@@ -20,6 +20,14 @@ class DirectionNamesTest {
         assertEquals(emptyList<String>(), leadersOf(json("""{"main": "m"}""")))
     }
 
+    // #5084: the background supervisor's conversation, once the hub has made it; an older hub names none.
+    @Test fun theBackgroundSupervisorIsReadWhenTheHubNamesOne() {
+        assertEquals("bg", backgroundSupervisorOf(json("""{"main": "m", "background_supervisor": "bg"}""")))
+        assertEquals(null, backgroundSupervisorOf(json("""{"main": "m"}""")))
+        assertEquals(null, backgroundSupervisorOf(json("""{"main": "m", "background_supervisor": ""}""")))
+        assertEquals(null, backgroundSupervisorOf(json("""{"main": "m", "background_supervisor": "m"}""")))
+    }
+
     // #4352: the tree lists the current directions in order, then the secretary group (skipped), each with its counts.
     @Test fun theTreeListsTheDirectionsWithTheirNamesAndCounts() {
         val tree = directionTreeOf(json("""{"directions": [

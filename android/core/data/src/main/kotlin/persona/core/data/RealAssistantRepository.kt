@@ -65,6 +65,7 @@ class RealAssistantRepository(
             if (machine.isNotEmpty() && main.isNotEmpty()) SessionKey(machine, main) else null,
             conversations, request.manager, request.owner,
             leaders = leadersOf(data),
+            backgroundSupervisor = backgroundSupervisorOf(data),
         )
     }
 
@@ -309,6 +310,7 @@ class RealAssistantRepository(
                 put("machine_id", snapshot.mainSession?.machineId ?: session.machineId)
                 put("main", snapshot.mainSession?.sessionId.orEmpty())
                 put("conversations", JsonArray(snapshot.conversations.map { JsonCodec.encodeToJsonElement(it) }))
+                snapshot.backgroundSupervisor?.let { put("background_supervisor", it) }
             })
         }
         return session.key
@@ -332,6 +334,13 @@ internal fun leadersOf(data: JsonObject): List<String> {
     val main = data.string("main")
     return data.array("leaders").mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.takeIf { id -> id.isNotEmpty() && id != main } }
 }
+
+/**
+ * `background_supervisor` of `GET /api/v1/assistant` (#4927): the built-in background supervisor's conversation id, null
+ * until the hub has made it and from a hub without it. Never the main conversation's.
+ */
+internal fun backgroundSupervisorOf(data: JsonObject): String? =
+    data.string("background_supervisor").takeIf { it.isNotEmpty() && it != data.string("main") }
 
 /** `GET /api/v1/assistant/leaders`'s names by leader conversation id: current directions with a name only. */
 internal fun directionNamesOf(data: JsonObject): Map<String, String> = data.array("leaders").mapNotNull { it as? JsonObject }

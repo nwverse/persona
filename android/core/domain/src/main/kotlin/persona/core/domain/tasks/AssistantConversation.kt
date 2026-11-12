@@ -11,9 +11,11 @@ data class AssistantConversation(val foreground: List<ChatLine>, val background:
     companion object {
         /**
          * [folding]: the main conversation folds its background rounds (#4314, [BackgroundFolding]); null leaves every
-         * round as it was.
+         * round as it was. [shownFeed]: the feed entries that stay in the conversation
+         * ([AssistantTaskCards.isBackgroundEvent]).
          */
-        fun project(lines: List<ChatLine>, items: List<Item>, folding: BackgroundFolding? = null): AssistantConversation {
+        fun project(lines: List<ChatLine>, items: List<Item>, folding: BackgroundFolding? = null,
+            shownFeed: Set<String> = emptySet()): AssistantConversation {
             val quiet = mutableSetOf<String>()
             val hints = mutableSetOf<String>()
             var background = false
@@ -61,7 +63,7 @@ data class AssistantConversation(val foreground: List<ChatLine>, val background:
                     is ChatLine.End -> line.groupId in quietGroups
                     is ChatLine.ApiError -> line.id in quiet
                     is ChatLine.Recaps, is ChatLine.Wakes -> true
-                    is ChatLine.Extra -> (line.payload as? AssistantExtra.Feed)?.item?.let(AssistantTaskCards::isBackgroundEvent) == true
+                    is ChatLine.Extra -> (line.payload as? AssistantExtra.Feed)?.item?.let { AssistantTaskCards.isBackgroundEvent(it, shownFeed) } == true
                     else -> false
                 }
                 if (hidden) { record += line; null }

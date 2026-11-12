@@ -100,6 +100,12 @@ work out as today; it no longer receives supervision messages for it.
   unchanged, lets the off switch move every open task at once and leaves no task naming a conversation that is gone.
   Asks climb through it only with leaders configured, as today. A `needs_user` writes the `escalated` entry leaders
   write, and that entry is a supervision message to the main chat, so it is one folded main-chat round, not none.
+- **As built on Android (step B2, #5084)** (`docs/android/android.md` "The background supervisor (#5084)"): that app's
+  drawer has no scheduled group, so the conversation is under All chats with the other conversations Persona opened
+  itself. The feed's `review` entry does not say who wrote it, so the app draws as one line the reviews of the main
+  chat's own tasks written since the background supervisor started and while it is in effect; one the main chat wrote
+  itself in that time is drawn too. The hub's model catalog leaves `assistant.supervise` out, so the app asks for it by
+  its ID to list it.
 
 Alternatives considered:
 
