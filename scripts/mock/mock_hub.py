@@ -1387,6 +1387,15 @@ if os.environ.get("MOCK_SOURCES"):
              read_only_reason="这个 Claude 没有开放会话之间的消息通道（版本较旧或功能关着）：手机上只能看，回复请在电脑上",
              capabilities={"read": True}, **NO_SPACE),
     ]
+# MOCK_OUTSIDE_DIALOG=1 (#5890): a Claude Code session started in a plain terminal, waiting on a question only the
+# computer can answer; a message to it goes into its queue, and the answer says so (waits_on_computer).
+OUTSIDE_DIALOG = "c1a0de00-0000-4000-8000-000000005890"
+if os.environ.get("MOCK_OUTSIDE_DIALOG"):
+    SESSIONS.append(sess("macbook", OUTSIDE_DIALOG, "整理更新日志", "/Users/me/code/notes", "blocked", "needs_you", "", 0, "", 0, 1,
+                         "要不要把旧版本的条目也一起改？", agent="claude", source_kind="claude_cli", agent_surface="cli",
+                         started_by_persona=False, attention_reason="它在等电脑上的一个问题或权限请求：手机上答不了，请到电脑上处理",
+                         capabilities={"read": True, "send": True, "interrupt": False, "approve": False, "terminal": False,
+                                       "attach": False, "modes": False}, **NO_SPACE))
 if os.environ.get("MOCK_MODE_CAPS"):
     # A runtime that explicitly takes Claude-style modes, and a desktop Claude that explicitly cannot (#1843).
     SESSIONS.append(
@@ -14039,7 +14048,9 @@ if os.environ.get("MOCK_CHAT_CONTENT") == "1":
         + tool("AskUserQuestion", {"questions": [{"question": "快照测试放在哪个 target？", "header": "Target", "multiSelect": False,
                                                   "options": [{"label": "WeatherWidgetTests (Recommended)", "description": "和小组件放在一起"},
                                                               {"label": "新建 SnapshotTests", "description": "单独的 target，跑得更快"}]}]},
-               "User answered: WeatherWidgetTests", 28)
+               # Claude Code's own answer shape (#5937)
+               'User has answered your questions: "快照测试放在哪个 target？"="WeatherWidgetTests (Recommended)". '
+               "You can now continue with the user's answers in mind.", 28)
         + tool("Task", {"description": "补齐深色模式的快照测试", "subagent_type": "general-purpose",
                         "prompt": "在 WeatherWidgetTests 里给 WidgetView 补快照测试：\n1. 深色、浅色各一套\n2. 六个城市：上海、北京、Tokyo、"
                                   "Lisbon、Reykjavík、Nairobi\n3. 每张图检查温度文字和背景的对比度，低于 4.5:1 就失败\n4. 跑一遍 "
@@ -25980,6 +25991,21 @@ _plugins_route_without_agent_archives = plugins_route
 
 def plugins_route(handler, p, body):
     return agent_archives_route(handler, p, body) or _plugins_route_without_agent_archives(handler, p, body)
+
+
+_plugins_route_without_outside_dialog = plugins_route
+
+
+def plugins_route(handler, p, body):
+    """MOCK_OUTSIDE_DIALOG: a message to the waiting terminal Claude is delivered into its queue (#5890)."""
+    if (os.environ.get("MOCK_OUTSIDE_DIALOG") and handler.command == "POST"
+            and p == "/api/v1/sessions/macbook/%s/messages" % OUTSIDE_DIALOG):
+        return handler.send_json({"ok": True, "waits_on_computer": True}) or True
+    return _plugins_route_without_outside_dialog(handler, p, body)
+
+
+MOCK_HELP.append("MOCK_OUTSIDE_DIALOG=1  A Claude Code session in a plain terminal on the MacBook waits on a question only the computer "
+                 "can answer (#5890): a message to it answers {ok, waits_on_computer}")
 
 
 _features_without_agent_archives = features

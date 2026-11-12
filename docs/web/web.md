@@ -2150,6 +2150,14 @@ An open page picks up a new web build by itself (#4331, `lib/new-version.ts`, te
 
 When the build changed, the page reloads by itself if nothing would be lost: no text field holds a draft, no dialog, sheet or menu is open, and the page is in the background or has had no key, pointer or wheel for 60 seconds. Otherwise a toast that stays until it is closed says **A new version is available** with **Reload** (zh-Hans 有新版本 / 点此刷新), and the page keeps looking every 15 seconds and reloads at the next quiet moment. Before the reload it asks the service worker to update (at most 3 seconds), so the worker and its cached shell are new too. Composer drafts are kept in `localStorage` (`lib/drafts.ts`), so even the button's reload keeps them.
 
+## GitHub star prompts (#5761)
+
+The pill at the foot of the Agents page's start area, the milestone line under the hub notice in the sidebar's Agents
+block and the toast when setup finishes; how they look and when they show is `../design/DESIGN_SYSTEM.md` "GitHub star
+prompts", the rule `spec/fixtures/star-prompt`. `lib/star-prompt.ts` holds the rule and this browser's state
+(`localStorage` `persona.starPrompt`); `views/agents/StarPrompt.tsx` the pill and the line. Neither is on the first
+screen: the line is its own chunk, and the launch count and the readiness check load the rule when they need it.
+
 ## Gaps versus the phone apps (#297, #433, 2026-11-03)
 
 Compared item by item with iOS as the reference and Android for comparison. #297 did the first round; #433 filled in what that round marked "won't do". "Web": Yes / Partial / No / Separate PR / N/A (phone-only, or meaningless in a browser); "Round" is which round did it.

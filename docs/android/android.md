@@ -776,6 +776,8 @@ Item 16 of `docs/assistant/onboarding.md` 7.2, built after the web (`ProviderWiz
 
 Screenshots: `AssistantReadinessShotsTest`, `ReadinessMainShotsTest`, `PairingOtherWaysTest` (Robolectric, three styles × light / dark, written to each module's `build/onboarding-shots/`).
 
+GitHub star prompts (#5761, `docs/design/DESIGN_SYSTEM.md` "GitHub star prompts"): the readiness screen's **Done** owes the onboarding toast, which `StarPromptWelcome` shows from the root's toast host once the shell is up, so leaving the checklist (or a relaunch that drew it outside the shell) keeps it; the Agents list puts the pill under its first-run empty state and the milestone card in the hub notice's slot (`StarPrompts.kt`), and each fresh start from New Agent counts. The rules are core:domain's `StarPrompt.kt` (`StarPromptFixtureTest` replays `spec/fixtures/star-prompt`); the state is `StarPromptStore` in device-wide preferences (`persona-star-prompt`) that unpairing keeps. Tests and pictures: `StarPromptStoreTest`, `NewAgentStarCountTest`, `StarPromptShotsTest` (three styles × light / dark, `build/star-prompt-shots/`), `StarPromptWelcomeTest`.
+
 ## Design token adoption baseline
 
 Run the standalone check from the repository root; no Android SDK needed:
