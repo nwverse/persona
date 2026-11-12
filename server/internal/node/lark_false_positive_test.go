@@ -68,6 +68,7 @@ func TestLarkInertHeredoc(t *testing.T) {
 		{"execute makefile", "cat > /tmp/Makefile <<'EOF'\nsend:\n\tlark-cli im +messages-send\nEOF\nmake -f /tmp/Makefile send", 1},
 		{"execute go program", "cat > /tmp/a.go <<'EOF'\n// lark-cli im +messages-send\nEOF\ngo run /tmp/a.go", 1},
 		{"custom cat executable", "/tmp/cat > /tmp/a.go <<'EOF'\n// lark-cli im +messages-send\nEOF", 1},
+		{"PATH changes cat executable", "PATH=/tmp/tools:$PATH\ncat > /tmp/a.go <<'EOF'\nlark-cli im +messages-send --as user --text hi\nEOF", 1},
 		{"test executable override", "cat > /tmp/a.go <<'EOF'\n// lark-cli im +messages-send\nEOF\ngo test -exec sh ./...", 1},
 		{"test executes generated Go code", "cat > /tmp/a_test.go <<'EOF'\npackage x\nimport (\"testing\"; \"os/exec\")\nfunc TestSend(t *testing.T) { exec.Command(\"lark-cli\", \"im\", \"+messages-send\").Run() }\nEOF\ngo test ./...", 1},
 
@@ -102,6 +103,7 @@ func TestLarkLiteralCommandVariable(t *testing.T) {
 		{"unassigned", `$A`, 1},
 		{"dynamic value", `A=$B; $A`, 1},
 		{"IFS splits literal command", `A=lark-cli/im; IFS=/; $A +messages-send --as user --text hi`, 1},
+		{"arithmetic changes IFS", `A=lark-cli0im; B=$((IFS=0)); $A +messages-send --as user --text hi`, 1},
 		{"lark send", `A=/x/lark-cli; $A im +messages-send --text hi`, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) { assertAssistantBypassClassification(t, tc.command, tc.cards) })
@@ -146,6 +148,8 @@ func TestLarkLoopWritesStayBehindApproval(t *testing.T) {
 		{"variable command", `for x in a b; do $CLI GET "/documents/$x"; done`},
 		{"unquoted route becomes delete", `for route in '/health -X DELETE'; do ex GET $route; done`},
 		{"unquoted query becomes delete", `for query in 'q=a -X DELETE'; do ex GET /health --url-query $query; done`},
+		{"command substitution becomes delete", `ex GET /health --url-query $(printf 'q=a -X DELETE')`},
+		{"quoted positional expansion becomes delete", `set -- /health -X DELETE; ex GET "$@"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			v := classifyLark(tc.command, olGate(""), t.TempDir(), nil)

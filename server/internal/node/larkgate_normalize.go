@@ -26,8 +26,14 @@ func normalizeLarkCommand(cmd, cwd string) string {
 			return cmd
 		}
 		for _, a := range call.Assigns {
-			if a.Name != nil && a.Name.Value == "IFS" {
-				return cmd // field splitting can change the expanded executable's identity
+			if a.Name == nil || a.Append || a.Index != nil || a.Array != nil || a.Value == nil {
+				return cmd
+			}
+			if a.Name.Value == "IFS" || larkExecutableEnv[a.Name.Value] {
+				return cmd // executable lookup and field splitting invalidate earlier inferences
+			}
+			if _, dynamic := executionWord(a.Value); dynamic {
+				return cmd // expansions can assign shell state or alter executable lookup
 			}
 		}
 	}

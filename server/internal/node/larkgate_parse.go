@@ -177,7 +177,7 @@ func classifyLarkDepth(cmd string, gates []proto.CommandGate, cwd string, risk l
 					v.other = true
 				}
 			}
-			if unquotedCommandParameter(s.Text) {
+			if s.ArgSubst || splitGateArguments(s.Text) {
 				v.other, v.unknown = true, true
 				v.unread = append(v.unread, gate)
 				continue
@@ -337,10 +337,17 @@ func gateAimed(gates []proto.CommandGate, text string) (proto.CommandGate, bool)
 	return proto.CommandGate{}, false
 }
 
-// unquotedCommandParameter reports a parameter expansion that shell field
-// splitting can turn into extra arguments. Redirect targets are not command
-// arguments, and quoted expansions stay in one argument.
-func unquotedCommandParameter(cmd string) bool {
+// scalarParameter is a plain quoted scalar expansion, not "$@", an array
+// expansion, or a parameter operation whose result needs further parsing.
+func scalarParameter(p *syntax.ParamExp) bool {
+	return p != nil && p.Param != nil && p.Param.Value != "@" && p.Param.Value != "*" &&
+		!p.Excl && !p.Length && !p.Width && p.Index == nil && p.Slice == nil && p.Repl == nil && p.Exp == nil && p.Names == 0
+}
+
+// splitGateArguments reports an expansion that can produce extra arguments.
+// Redirect targets are excluded. Double quotes protect scalar variables, but
+// "$@", arrays and other multi-value expansions still need confirmation.
+func splitGateArguments(cmd string) bool {
 	cmd = strings.TrimSpace(cmd)
 	for {
 		stripped := false
@@ -361,8 +368,17 @@ func unquotedCommandParameter(cmd string) bool {
 	found := false
 	scanWord := func(word *syntax.Word) {
 		syntax.Walk(word, func(node syntax.Node) bool {
-			switch node.(type) {
-			case *syntax.SglQuoted, *syntax.DblQuoted:
+			switch n := node.(type) {
+			case *syntax.SglQuoted:
+				return false
+			case *syntax.DblQuoted:
+				syntax.Walk(n, func(inner syntax.Node) bool {
+					if p, ok := inner.(*syntax.ParamExp); ok && !scalarParameter(p) {
+						found = true
+						return false
+					}
+					return true
+				})
 				return false
 			case *syntax.ParamExp:
 				found = true
