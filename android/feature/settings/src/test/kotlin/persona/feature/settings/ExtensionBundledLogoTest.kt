@@ -79,6 +79,33 @@ class ExtensionBundledLogoTest {
         assertEquals("A different pairing/manager API cannot reuse the old private cache", 1, otherCalls.get())
     }
 
+    @Test fun marketDefaultOwnerChangesRebuildThePrivateLoaderEvenWithOneSingletonApi() {
+        val choice = persona.core.contracts.api.AssistantManagerChoice
+        val owners = CopyOnWriteArrayList<String>()
+        val sameApi = object : ExtensionApiStub() {
+            override suspend fun catalog(query: String, market: String?, refresh: Boolean) = persona.core.contracts.api.ExtensionCatalog(
+                markets = listOf(persona.core.contracts.api.ExtensionMarket(id = "official", name = "Official")),
+                extensions = listOf(persona.core.contracts.api.CatalogExtension(id = "notes", name = "Notes", market = "official", iconUrl = path)),
+            )
+            override suspend fun icon(path: String): ByteArray {
+                val pinned = kotlinx.coroutines.currentCoroutineContext()[persona.core.contracts.api.ManagerPins]
+                    ?.manager(listOf("extensions", "notes", "-", "icon"))
+                owners += if (pinned == "") choice.current.value.defaultId else pinned ?: "unpinned"
+                return png
+            }
+        }
+        choice.choose("icon-hub", null, "owner-a")
+        try {
+            rule.setContent { PersonaTheme(reduceMotion = true) { ExtensionMarketPage(sameApi, {}, {}, {}) } }
+            loaded(1)
+            assertEquals(listOf("owner-a"), owners.toList())
+            rule.runOnIdle { choice.choose("icon-hub", null, "owner-b") }
+            rule.waitUntil(10_000) { owners.size == 2 }
+            loaded(1)
+            assertEquals(listOf("owner-a", "owner-b"), owners.toList())
+        } finally { choice.reset(); choice.forgetItems() }
+    }
+
     @Test fun pendingDownloadIsCancelledOnUrlChangeAndOnDisposal() {
         var url by mutableStateOf<String?>(path + "slow")
         var visible by mutableStateOf(true)

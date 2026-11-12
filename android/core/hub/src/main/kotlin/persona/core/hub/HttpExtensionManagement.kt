@@ -74,7 +74,7 @@ class HttpExtensionManagement internal constructor(
         extensionStreamBindings(connection) { "paired" to "primary" }
     } ?: flowOf(null)
     constructor(connection: OkHttpHubConnection, available: Flow<Boolean>, legacy: Boolean = false) : this({ path, method, body ->
-        connection.request(path, method, body)
+        connection.request(path, method, body, buffered = !persona.core.contracts.api.ExtensionIconPath.matches(path))
     }, available, legacy = legacy, streamConnection = connection)
 
     private val base = if (legacy) "api/v1/plugins" else "api/v1/extensions"
@@ -162,9 +162,9 @@ class HttpExtensionManagement internal constructor(
     }
 
     /** Catalog icons have their own allowlist; the signed ui.image route stays unchanged. */
-    override suspend fun icon(path: String): ByteArray {
+    override suspend fun icon(path: String): ByteArray = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         require(persona.core.contracts.api.ExtensionIconPath.matches(path)) { "Invalid extension icon path" }
-        return request(path, "GET", null).use { response ->
+        request(path, "GET", null).use { response ->
             if (!response.isSuccessful) throw HubFailure.from(response)
             val type = response.header("Content-Type").orEmpty().substringBefore(';').trim().lowercase()
             if (type != "image/png") throw HubFailure(HubError.Protocol)

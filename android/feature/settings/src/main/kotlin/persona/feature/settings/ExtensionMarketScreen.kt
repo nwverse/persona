@@ -100,8 +100,10 @@ fun ExtensionMarketPage(extensions: ExtensionManagement?, onBack: () -> Unit, on
         return
     }
     val res = LocalResources.current
-    val model = remember(extensions, res) { CatalogModel(extensions, res) }
-    val logoLoader = rememberExtensionLogoLoader(extensions)
+    val assistant = currentAssistant()
+    val api = rememberPinned(extensions, listOf(listOf("extensions"), listOf("plugins")), assistant.id)
+    val model = remember(api, res) { CatalogModel(api, res) }
+    val logoLoader = rememberExtensionLogoLoader(api)
     val state by model.state.collectAsState()
     val scope = rememberCoroutineScope()
     val feedback = LocalAppFeedback.current
@@ -144,7 +146,7 @@ fun ExtensionMarketPage(extensions: ExtensionManagement?, onBack: () -> Unit, on
             itemsIndexed(list, key = { _, it -> "plugin-${it.market}-${it.id}" }) { index, extension ->
                 JGroupItem(GroupPosition.of(index, list.size)) {
                     JRow(extension.label, subtitle = catalogSubtitle(res, extension, showMarket = state.market == null && state.markets.size > 1), subtitleLines = 4,
-                        leading = { ExtensionLogo(extension.iconUrl, extensions, logoLoader) },
+                        leading = { ExtensionLogo(extension.iconUrl, api, logoLoader) },
                         trailing = CatalogText.badge(res, extension)?.let { badge -> { JTag(badge, standingTone(extension)) } },
                         chevron = true, onClick = { onExtension(extension) })
                 }
