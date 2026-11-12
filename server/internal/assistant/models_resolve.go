@@ -226,6 +226,10 @@ func (s *Service) apiConfig(ctx context.Context, b ModelBinding) (ai.Config, err
 			}
 		}
 		if !found { // plain claude, a computer's own launcher, a managed one without a Messages gateway
+			// Claude Code only (an empty agent is Claude Code) and one the manager knows: a deleted launcher is an error.
+			if name != "claude" && !slices.ContainsFunc(s.launcherViews(ctx), func(v LauncherView) bool { return v.Name == name && (viewAgent(v) == "" || viewAgent(v) == "claude") }) {
+				return c, i18n.Err("assistant-models.err_not_callable")
+			}
 			c = ai.Config{RunLauncher: name, ViaMachine: s.settings(ctx).MachineID}
 			if c.ViaMachine == "" {
 				return c, i18n.Err("assistant-models.err_run_no_machine")

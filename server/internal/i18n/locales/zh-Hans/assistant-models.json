@@ -90,6 +90,7 @@
   "err_read_tasks": "读不到定时任务",
   "err_read_config": "读取模型配置失败: {error}",
   "err_key_decrypt": "供应商密钥解密失败",
+  "err_not_callable": "这个供应商不能在 hub 上直接调用 API",
   "err_not_api": "不是 API 供应商",
   "err_api_protocol": "不支持这个 API 协议",
   "err_provider_type": "供应商要是字符串或 null",

@@ -53,7 +53,7 @@ It is returned by the model-configuration list and detail endpoints, never store
 | --- | --- | --- | --- |
 | `assistant`, `schedule`, `task.*`, `assistant.supervise`, `inbox.agent`, `lark.agent` | `launcher` | `headless` | Background process, without a terminal panel |
 | `agent.new` | `launcher` | `engine` | Interactive Agent in the target computer's terminal host |
-| `kb`, `inbox.triage`, `agent.delegate`, other API purposes, `extension.*` | `api` | omitted | HTTP requests sent directly by the assistant; with a launcher picked, one headless CLI run per request on the main chat's computer (#5823) |
+| `kb`, `inbox.triage`, `agent.delegate`, other API purposes, `extension.*` | `api` | omitted | HTTP requests sent directly by the assistant; with a Claude Code launcher that has no Messages gateway picked, one `claude -p` run per request on the main chat's computer (#5823) |
 | `plugin.*` | `plugin` | omitted | The plugin's own model service |
 
 Non-launcher purposes always have an empty launch value, even if their parent is a launcher.
@@ -115,9 +115,12 @@ main chat and Agents. An API purpose (`kb`, `inbox.triage`, `agent.delegate`, th
 pick a launcher provider too: each request then runs that launcher's CLI headless, once, on a computer and returns its
 final text. Nothing reads, copies or re-serves the login (#4220 is a different thing): only the prompt and the answer travel.
 
-- **Which providers**: a launcher whose CLI is Claude Code or Codex (plain `claude`, a `~/.zshrc` or `PATH` launcher, a
-  managed launcher that does not speak Messages), on that computer and in its scope. A managed launcher that speaks
-  Messages keeps being called over HTTP with its own address and key, as before; direct API connections are unchanged.
+- **Which providers**: a launcher whose CLI is Claude Code (plain `claude`, a `~/.zshrc` or `PATH` launcher, a managed
+  launcher that does not speak Messages), on that computer and in its scope. A managed launcher that speaks Messages
+  keeps being called over HTTP with its own address and key, as before; direct API connections are unchanged. Codex is
+  not offered: `codex exec` has no switch that turns off all its tools (its shell reads any file even in the read-only
+  sandbox, and the user's MCP servers, apps and plugins come along), and a request's text may be anyone's (a mail, an
+  extension). A launcher deleted since it was picked fails with "can't call this provider", never a run.
 - **Which computer**: the main chat's (Settings › Assistant), which the purpose's `machine_id` in
   `GET /api/v1/model-config` names. With none set, the purpose says so.
 - **What is sent**: the manager resolves the purpose as always, then sends one `model.run` call to that computer's node
@@ -127,9 +130,8 @@ final text. Nothing reads, copies or re-serves the login (#4220 is a different t
 - **How it runs**: the node runs the launcher as a start does (`personad launch` for a managed one, the login shell's
   function or alias otherwise, with its environment, settings and default model), in a fresh temporary directory that
   is removed afterwards. Claude Code runs as `-p --output-format json --max-turns 1 --no-session-persistence` with
-  `--tools ""`, `--strict-mcp-config` (no MCP servers), hooks disabled and the system prompt from a file. Codex runs as
-  `exec --ephemeral --skip-git-repo-check --sandbox read-only`, the system prompt put before the conversation (it has no
-  flag for one). No tools, no session left behind, no file written in the user's projects.
+  `--tools ""`, `--strict-mcp-config` (no MCP servers), hooks disabled and the system prompt from a file. No tools, no
+  session left behind, no file written in the user's projects.
 - **Concurrency and time**: at most two runs at a time on one computer; others wait for a slot within their own time.
   The call's deadline goes along as `timeout_ms` (2 minutes without one, at most 10); when the manager stops waiting it
   sends `rpc.cancel` and the node kills the run. Each run pays a CLI start (seconds) on top of the answer, so this suits

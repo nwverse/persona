@@ -91,11 +91,11 @@ describe("执行形态", () => {
       expect(executionForm(direct, [{ id: "direct", name: "Direct", kind: "api", api: protocol }]))
         .toEqual({ label: "直接 API", backend });
     }
-    // A keyless launcher picked for an API purpose runs headless; one with a key is called over HTTP (#5823).
+    // A launcher picked for an API purpose runs claude -p, unless it is a managed one speaking Messages (#5823).
     const kb: ModelPurpose = { ...chat, id: "kb", kind: "api", launch: undefined, effective: { provider: "launcher.x" } };
     expect(executionForm(kb, [{ id: "launcher.x", name: "Claude Code", kind: "launcher", agent: "claude" }]).backend).toBe("claude -p");
-    expect(executionForm(kb, [{ id: "launcher.x", name: "Codex", kind: "launcher", agent: "codex" }]).backend).toBe("codex exec");
     expect(executionForm(kb, [{ id: "launcher.x", name: "Gateway", kind: "launcher", has_key: true }]).backend).toBe("Messages");
+    expect(executionForm(kb, [{ id: "launcher.x", name: "Other", kind: "launcher", api: "chat", has_key: true }]).backend).toBe("claude -p");
   });
 });
 

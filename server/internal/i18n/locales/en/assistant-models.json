@@ -90,6 +90,7 @@
   "err_read_tasks": "Couldn’t read the scheduled tasks",
   "err_read_config": "Couldn’t read the model config: {error}",
   "err_key_decrypt": "Couldn’t decrypt the provider’s key",
+  "err_not_callable": "The hub can’t call this provider’s API directly",
   "err_not_api": "Not an API provider",
   "err_api_protocol": "This API protocol isn’t supported",
   "err_provider_type": "Provider must be a string or null",

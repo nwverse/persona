@@ -77,8 +77,10 @@ func (s *Service) modelPurpose(ctx context.Context, id string, providers []Model
 	} else if p.Kind == "api" {
 		config, e := s.apiConfig(ctx, p.Effective)
 		switch {
-		case e == nil && config.RunLauncher != "": // the launcher's own model when none is chosen
-			if d, ok := s.device(ctx, config.ViaMachine); ok && !d.Online {
+		case config.RunLauncher != "": // the launcher's own model when none is chosen
+			if e != nil {
+				p.Status = i18n.Localize(e, l) // no main chat computer
+			} else if d, ok := s.device(ctx, config.ViaMachine); ok && !d.Online {
 				p.Status = mc(l, "status_machine_offline")
 			}
 		case p.Effective.Model == "":

@@ -70,13 +70,12 @@ func (s *Service) modelProviderCompatible(p ModelPurpose, v ModelProvider, store
 		compatible = messagesAPI(v.API)
 	}
 	if p.Kind == "api" && v.Kind == "launcher" {
-		// Claude Code or Codex answering on the main chat's computer (models_run.go); a managed launcher with a Messages
-		// gateway is called over HTTP, as before.
-		compatible = p.MachineID != "" && slices.Contains([]string{"", "claude", "codex"}, v.Agent) &&
-			(len(v.Machines) == 0 || slices.Contains(v.Machines, p.MachineID))
+		// Claude Code answering on the main chat's computer (models_run.go); a managed launcher with a Messages gateway is
+		// called over HTTP, as before. With no such computer it stays offered, and its status says to choose one.
+		compatible = (v.Agent == "" || v.Agent == "claude") && (p.MachineID == "" || len(v.Machines) == 0 || slices.Contains(v.Machines, p.MachineID))
 		for _, l := range stored {
 			if v.ID == "launcher."+l.Name {
-				compatible = messagesAPI(l.API) || compatible && s.scopeReason(l, p.MachineID) == ""
+				compatible = messagesAPI(l.API) || compatible && (p.MachineID == "" || s.scopeReason(l, p.MachineID) == "")
 				break
 			}
 		}

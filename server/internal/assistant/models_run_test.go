@@ -38,10 +38,10 @@ func (d *runDevs) CallNode(ctx context.Context, id, method string, params json.R
 
 // An API purpose may pick plain claude (no gateway, no key): Model configuration offers it with the main chat's computer,
 // and its requests run there as model.run with the system prompt, the turns and the chosen model; "off" leaves the
-// effort to the launcher. Offline, logged out and old nodes say so; a launcher that is neither Claude Code nor Codex is
-// not offered.
+// effort to the launcher. Offline, logged out and old nodes say so; with no main chat computer the status says to choose
+// one; Codex and other CLIs are not offered, and a launcher since deleted is an error, not a run.
 func TestAPIPurposeRunsOnALauncher(t *testing.T) {
-	s, _, _ := modelService(t)
+	s, f, _ := modelService(t)
 	devs := &runDevs{}
 	s.devs = devs
 
@@ -99,10 +99,23 @@ func TestAPIPurposeRunsOnALauncher(t *testing.T) {
 		}
 	}
 
-	// Neither Claude Code nor Codex: not offered, not saved.
-	putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "anti", Agent: "agy", API: "responses"}})
-	if p := purposeOf(t, s, "kb"); slices.Contains(p.ProviderIDs, "launcher.anti") {
-		t.Fatalf("agy offered: %v", p.ProviderIDs)
+	// Not Claude Code: not offered, not run (codex exec can't be kept from its shell and MCP servers).
+	putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "anti", Agent: "agy", API: "responses"}},
+		storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "cx", Agent: "codex", API: "responses"}})
+	if p := purposeOf(t, s, "kb"); slices.Contains(p.ProviderIDs, "launcher.anti") || slices.Contains(p.ProviderIDs, "launcher.cx") {
+		t.Fatalf("offered: %v", p.ProviderIDs)
+	}
+	for _, name := range []string{"cx", "gone"} {
+		if _, err := s.apiConfig(context.Background(), ModelBinding{Provider: "launcher." + name}); err == nil {
+			t.Fatalf("%s runs", name)
+		}
+	}
+
+	// No main chat computer (the only one is a work computer): still offered, and the status names the setting.
+	f.hello.Assistant.WorkMachines = []string{"server"}
+	s.settingsChanged(context.Background())
+	if p := purposeOf(t, s, "kb"); !slices.Contains(p.ProviderIDs, "launcher.claude") || p.Status != i18n.T(lang, "assistant-models.err_run_no_machine") {
+		t.Fatalf("no machine: %v %q", p.ProviderIDs, p.Status)
 	}
 }
 

@@ -90,6 +90,7 @@
   "err_read_tasks": "定期タスクを読み込めません",
   "err_read_config": "モデル設定を読み込めませんでした: {error}",
   "err_key_decrypt": "プロバイダーのキーを復号できませんでした",
+  "err_not_callable": "このプロバイダーのAPIはハブから直接呼び出せません",
   "err_not_api": "APIプロバイダーではありません",
   "err_api_protocol": "このAPIプロトコルには対応していません",
   "err_provider_type": "プロバイダーは文字列かnullにしてください",
