@@ -16,11 +16,10 @@
 // running, still consuming model usage…" with no time and no tokens (the turn's would be left over); cindy's "Stop all"
 // waits for a node that can stop a subagent (#5044). With the hub out of reach the bar says so in front of the last
 // state it knew, its clock stands still (nothing new can have arrived) and it shows no speed.
-import { lazy, Suspense, useCallback, useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { useSessionLive } from "../../lib/live";
 import type { RunStep } from "../../lib/run-step";
 import { useStore } from "../../lib/store";
-import { formatRate, shownRate, turnAverage, useRateHistory, type RateHistory } from "../../lib/token-rate";
 import { compactTokens } from "../../lib/tokens";
 import { toolDisplayName } from "../../lib/turns";
 import type { SessionLive } from "../../lib/types";
@@ -30,13 +29,23 @@ import { stateName } from "../../lib/state-labels";
 import { useNow } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
 import { FADE_OUT_MS, LINGER_MS, useBreath, useCountUp } from "../../ui/motion";
-import { useEscapeClose } from "../../ui/overlay";
 import { Rolling } from "../../ui/Rolling";
 import "../../ui/stream/stream.css";
 import { t } from "../../i18n";
 
-const loadCard = () => import("./RunningSpeedCard");
-const SpeedCard = lazy(() => loadCard().then((m) => ({ default: m.RunningSpeedCard })));
+// The speed (its history, the button and its card) loads once an Agent's turn runs, off the chat's first screen: a
+// speed shows only once one is measured, seconds in, and until then the time and the tokens stand as they are.
+type SpeedType = typeof import("./RunningSpeedCard").RunningSpeed;
+let Speed: SpeedType | undefined;
+const loadSpeed = () => import("./RunningSpeedCard").then((m) => (Speed = m.RunningSpeed));
+
+function useSpeed(want: boolean): SpeedType | undefined {
+  const [, loaded] = useState(0);
+  useEffect(() => {
+    if (want && !Speed) void loadSpeed().then(() => loaded((n) => n + 1));
+  }, [want]);
+  return Speed;
+}
 
 /** The tick in the bar's time ("1m 5s"): the work summary's format with cindy's status bar options. */
 const elapsedText = (seconds: number) => workDuration(seconds * 1000, TICKING_DURATION);
@@ -185,14 +194,13 @@ export function RunningStatusView({ live, working, startedAt, clock = true, plai
   // from the run's start; a run that does not say when it started, from the turn's (not from when the bar appeared)
   const elapsed = useElapsed(behind ? null : shown, behind ? (bg.since ?? startedAt) : startedAt, now);
   const tokens = useCountUp(shown?.tokens_down ?? 0);
-  const history = useRateHistory(speedKey, startedAt, shown?.tokens_down, shown?.at, working && own && !offline);
-  const rate = own && !offline ? shownRate(history, now) : null;
   const done = !working && !behind && !usage;
   const state = statusWords(shown, kept.step, plain);
   const words = behind ? "" : usage ? t("chat-runningstatusbar.background_subtasks") : done ? t("chat-runningstatusbar.done") : state.text;
   const compacting = !behind && !usage && !done && state.compacting;
   const breath = useBreath(useMoves(`${words}\n${shown?.tokens_down ?? ""}`), phase === "on");
   const onPinned = useCallback((p: boolean) => setPinned(p), []);
+  const SpeedView = useSpeed(working && own);
   // a card pinned open keeps its button through the end of the turn and after it (cindy)
   if (phase === "off" && !pinned) return null;
   const hidden = phase === "off";
@@ -205,7 +213,6 @@ export function RunningStatusView({ live, working, startedAt, clock = true, plai
       <span data-running-tokens>{t("chat-runningstatusbar.token_count", { tokens: compactTokens(tokens) })}</span>
     </>
   ) : null;
-  const speed = rate !== null ? <span data-running-rate>{t("chat-runningstatusbar.token_rate", { rate: formatRate(rate) })}</span> : count;
   const time = <span data-running-elapsed>{elapsedText(elapsed)}</span>;
   return (
     <div
@@ -226,13 +233,8 @@ export function RunningStatusView({ live, working, startedAt, clock = true, plai
         {behind ? <BackgroundWords line={bg} /> : <span className="truncate" data-running-verb>{words}</span>}
       </div>
       <div className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-ink-3 tabular-nums" style={pinned ? undefined : fade}>
-        {usage ? null : own && !offline && (rate !== null || pinned) ? (
-          <SpeedButton label={`${elapsedText(elapsed)}${rate !== null ? ` · ${t("chat-runningstatusbar.latest_speed")}: ${formatRate(rate)}` : shown?.tokens_down ? ` · ${t("chat-runningstatusbar.token_count", { tokens: compactTokens(shown.tokens_down) })}` : ""}`} onPinned={onPinned}
-            card={{ rate, average: turnAverage(history), output: shown?.tokens_down ?? 0, history }}>
-            {time}
-            {speed && <span aria-hidden>·</span>}
-            {speed}
-          </SpeedButton>
+        {usage ? null : own && SpeedView ? (
+          <SpeedView speedKey={speedKey} turn={startedAt} live={shown} working={working} offline={offline} now={now} elapsed={elapsedText(elapsed)} time={time} count={count} onPinned={onPinned} />
         ) : (
           <>
             {time}
@@ -250,103 +252,6 @@ function useMoves(key: string): number {
   const moves = useRef({ key, n: 0 });
   if (moves.current.key !== key) moves.current = { key, n: moves.current.n + 1 };
   return moves.current.n;
-}
-
-type Reveal = "idle" | "hover" | "pinned" | "dismissed";
-/** cindy's tooltip delay before a hovered card shows, and the moment the pointer has to cross to the card. */
-const HOVER_MS = 500;
-const LEAVE_MS = 120;
-
-export interface SpeedCardData {
-  rate: number | null;
-  average: number | null;
-  output: number;
-  history: RateHistory;
-}
-
-/** The time and speed as a button (cindy's RunningTokenRatePopover trigger): hovering shows the speed history card, a
- *  click pins it open with a ✕, and ✕, Esc or a second click close it; while pinned, clicks elsewhere leave it (cindy).
- *  Closed by hand, it does not open again on the same hover. The card loads on the first hover or click. */
-function SpeedButton({ label, card, onPinned, children }: { label: string; card: SpeedCardData; onPinned: (pinned: boolean) => void; children: ReactNode }) {
-  const button = useRef<HTMLButtonElement>(null);
-  const closeButton = useRef<HTMLButtonElement>(null);
-  const [mode, setMode] = useState<Reveal>("idle");
-  const [loaded, setLoaded] = useState(false);
-  const timer = useRef<number | undefined>(undefined);
-  const pinned = mode === "pinned";
-  const revealed = pinned || mode === "hover";
-  useEffect(() => {
-    if (!pinned) return;
-    onPinned(true);
-    return () => onPinned(false);
-  }, [pinned, onPinned]);
-  useEffect(() => () => clearTimeout(timer.current), []);
-  // pinned it is a dialog: Esc closes it first, and the chat's Esc, which stops the turn, leaves it be (ChatView)
-  useEscapeClose(pinned, () => setMode("dismissed"));
-  if (revealed && !loaded) setLoaded(true);
-  const later = (next: (m: Reveal) => Reveal, ms: number) => {
-    clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => setMode(next), ms);
-  };
-  const enter = (e: React.PointerEvent) => {
-    if (e.pointerType !== "mouse") return;
-    void loadCard();
-    clearTimeout(timer.current);
-    setMode((m) => (m === "dismissed" ? "idle" : m));
-    later((m) => (m === "idle" ? "hover" : m), HOVER_MS);
-  };
-  const leave = (e: React.PointerEvent) => {
-    if (e.pointerType === "mouse") later((m) => (m === "hover" ? "idle" : m), LEAVE_MS);
-  };
-  const id = useId();
-  return (
-    <>
-      <button
-        ref={button}
-        type="button"
-        onPointerEnter={enter}
-        onPointerLeave={leave}
-        onFocus={(e) => e.currentTarget.matches(":focus-visible") && (void loadCard(), setMode((m) => (m === "idle" ? "hover" : m)))}
-        onBlur={() => setMode((m) => (m === "hover" || m === "dismissed" ? "idle" : m))}
-        onClick={() => {
-          clearTimeout(timer.current);
-          setMode((m) => (m === "pinned" ? "dismissed" : "pinned"));
-        }}
-        onKeyDown={(e) => {
-          // the card is drawn on the body: Tab goes from here to its ✕, as if it came right after the button
-          if (e.key === "Tab" && !e.shiftKey && pinned && closeButton.current) {
-            e.preventDefault();
-            closeButton.current.focus();
-          }
-        }}
-        aria-label={label}
-        aria-expanded={revealed}
-        aria-controls={revealed ? id : undefined}
-        className="inline-flex min-h-6 min-w-6 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-1 tabular-nums transition-colors hover:bg-hover hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-        data-running-speed={mode}
-      >
-        {children}
-      </button>
-      {loaded && (
-        <Suspense fallback={null}>
-          <SpeedCard
-            id={id}
-            anchor={button}
-            closeRef={closeButton}
-            open={revealed}
-            pinned={pinned}
-            data={card}
-            onClose={() => {
-              setMode("dismissed");
-              button.current?.focus({ preventScroll: true });
-            }}
-            onPointerEnter={() => clearTimeout(timer.current)}
-            onPointerLeave={(e) => leave(e)}
-          />
-        </Suspense>
-      )}
-    </>
-  );
 }
 
 /** on while working; after it, a second as it was, then the fade, then gone. */

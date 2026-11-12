@@ -16,7 +16,6 @@
   "reading_web": "正在读取网页…",
   "organizing": "正在整理对话…",
   "processing": "正在处理…",
-  "latest_speed": "最近速度",
   "token_rate": "{rate} tok/s",
   "token_count": "{tokens} tok",
   "background_workflow": "后台 workflow",

@@ -56,12 +56,13 @@ const pointer = (type: string, el: Element) => act(() => {
 });
 const click = (el: Element) => act(() => el.dispatchEvent(new MouseEvent("click", { bubbles: true })));
 const key = (k: string) => act(() => document.body.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true })));
-/** The card loads on its first showing. */
+/** The speed button and its card load once an Agent's turn runs. */
 const loaded = () => act(async () => { await import("./RunningSpeedCard"); await vi.advanceTimersByTimeAsync(0); });
 
 describe("the running bar's speed (#5312)", () => {
   it("shows the latest speed or the tokens, never both, and drops the speed once the count stands still", async () => {
     draw(bar(line(1, 50)));
+    await loaded();
     expect(q("[data-running-rate]")).toBeNull();
     expect(speed()).toBeNull();
     await run(2, 3);
@@ -77,6 +78,7 @@ describe("the running bar's speed (#5312)", () => {
 
   it("opens the history on hover, pins it on a click with a ✕, and closes it with ✕ or Esc", async () => {
     draw(bar(line(1, 50)));
+    await loaded();
     await run(2, 4);
     pointer("pointerover", speed()!);
     expect(card()).toBeNull();
@@ -110,6 +112,7 @@ describe("the running bar's speed (#5312)", () => {
 
   it("keeps a pinned card and its button after the turn, until it is closed", async () => {
     draw(bar(line(1, 50)));
+    await loaded();
     await run(2, 3);
     click(speed()!);
     await loaded();
@@ -125,6 +128,7 @@ describe("the running bar's speed (#5312)", () => {
 
   it("keeps the history per conversation while the page is open", async () => {
     draw(bar(line(1, 50)));
+    await loaded();
     await run(2, 4);
     draw(<></>);
     draw(bar(line(5, 250), true, "m/other"));

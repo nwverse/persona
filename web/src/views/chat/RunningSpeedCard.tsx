@@ -1,16 +1,30 @@
-// The running bar's speed history card (cindy's RunningTokenRatePopover card; the owner asked on 2026-11-12 that the bar
-// follow cindy, #5312): the latest speed large, a sparkline of the samples, then the turn's average, its output and its
-// peak. It opens above the bar's time and speed, its right edge on theirs, on hover as a tooltip or pinned by a click
-// with a ✕ (the button in RunningStatusBar.tsx keeps that state). It loads on the first hover or click, off the chat's
-// first screen.
-import { useLayoutEffect, useState, type CSSProperties, type RefObject } from "react";
+// The running bar's speed (cindy's RunningTokenRatePopover; the owner asked on 2026-11-12 that the bar follow cindy,
+// #5312): the speed history of the conversation (lib/token-rate.ts), the latest speed in place of the tokens once one
+// is measured, and the time and speed as a button whose card shows the latest speed large, a sparkline of the samples,
+// then the turn's average, its output and its peak. The card opens above the button, its right edge on the button's,
+// on hover as a tooltip or pinned by a click with a ✕. RunningStatusBar.tsx loads this once an Agent's turn runs, off
+// the chat's first screen.
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { t } from "../../i18n";
-import { formatRate, type RateSample } from "../../lib/token-rate";
+import { formatRate, shownRate, turnAverage, useRateHistory, type RateHistory, type RateSample } from "../../lib/token-rate";
+import type { SessionLive } from "../../lib/types";
 import { compactTokens } from "../../lib/tokens";
 import { EASE, EXIT_MS, useExit } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
-import type { SpeedCardData } from "./RunningStatusBar";
+import { useEscapeClose } from "../../ui/overlay";
+
+type Reveal = "idle" | "hover" | "pinned" | "dismissed";
+/** cindy's tooltip delay before a hovered card shows, and the moment the pointer has to cross to the card. */
+const HOVER_MS = 500;
+const LEAVE_MS = 120;
+
+export interface SpeedCardData {
+  rate: number | null;
+  average: number | null;
+  output: number;
+  history: RateHistory;
+}
 
 /** cindy's card: 320 wide (less the screen's margins), 8 above the button. */
 const CARD_WIDTH = 320;
@@ -126,7 +140,7 @@ export function RunningSpeedCard({ id, anchor, closeRef, open, pinned, data, onC
         <div className="min-w-0 self-center">
           <div className="mb-1 flex items-center gap-1.5 text-[12px] text-ink-2">
             <Icon name="activity" size={14} className="shrink-0" />
-            <span className="truncate">{t("chat-runningstatusbar.latest_speed")}</span>
+            <span className="truncate">{t("chat-runningspeed.latest")}</span>
           </div>
           <div className="flex items-baseline gap-1.5 tabular-nums">
             <span className="text-[28px] leading-none font-medium" data-speed-latest>{rate !== null ? formatRate(rate) : "—"}</span>
@@ -151,5 +165,126 @@ export function RunningSpeedCard({ id, anchor, closeRef, open, pinned, data, onC
       </div>
     </div>,
     document.body,
+  );
+}
+
+/** The time and speed as a button (cindy's RunningTokenRatePopover trigger): hovering shows the speed history card, a
+ *  click pins it open with a ✕, and ✕, Esc or a second click close it; while pinned, clicks elsewhere leave it (cindy).
+ *  Closed by hand, it does not open again on the same hover. `onPinned` tells the bar, which keeps a pinned card's button
+ *  after the turn. */
+function SpeedButton({ elapsed, card, onPinned, children }: { elapsed: string; card: SpeedCardData; onPinned: (pinned: boolean) => void; children: ReactNode }) {
+  const button = useRef<HTMLButtonElement>(null);
+  const closeButton = useRef<HTMLButtonElement>(null);
+  const [mode, setMode] = useState<Reveal>("idle");
+  const timer = useRef<number | undefined>(undefined);
+  const pinned = mode === "pinned";
+  const revealed = pinned || mode === "hover";
+  useEffect(() => {
+    if (!pinned) return;
+    onPinned(true);
+    return () => onPinned(false);
+  }, [pinned, onPinned]);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  // pinned it is a dialog: Esc closes it first, and the chat's Esc, which stops the turn, leaves it be (ChatView)
+  useEscapeClose(pinned, () => setMode("dismissed"));
+  const later = (next: (m: Reveal) => Reveal, ms: number) => {
+    clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => setMode(next), ms);
+  };
+  const enter = (e: React.PointerEvent) => {
+    if (e.pointerType !== "mouse") return;
+    clearTimeout(timer.current);
+    setMode((m) => (m === "dismissed" ? "idle" : m));
+    later((m) => (m === "idle" ? "hover" : m), HOVER_MS);
+  };
+  const leave = (e: React.PointerEvent) => {
+    if (e.pointerType === "mouse") later((m) => (m === "hover" ? "idle" : m), LEAVE_MS);
+  };
+  const id = useId();
+  const label = card.rate !== null
+    ? `${elapsed} · ${t("chat-runningspeed.latest")}: ${rateText(card.rate)}`
+    : card.output ? `${elapsed} · ${t("chat-runningstatusbar.token_count", { tokens: compactTokens(card.output) })}` : elapsed;
+  return (
+    <>
+      <button
+        ref={button}
+        type="button"
+        onPointerEnter={enter}
+        onPointerLeave={leave}
+        onFocus={(e) => e.currentTarget.matches(":focus-visible") && setMode((m) => (m === "idle" ? "hover" : m))}
+        onBlur={() => setMode((m) => (m === "hover" || m === "dismissed" ? "idle" : m))}
+        onClick={() => {
+          clearTimeout(timer.current);
+          setMode((m) => (m === "pinned" ? "dismissed" : "pinned"));
+        }}
+        onKeyDown={(e) => {
+          // the card is drawn on the body: Tab goes from here to its ✕, as if it came right after the button
+          if (e.key === "Tab" && !e.shiftKey && pinned && closeButton.current) {
+            e.preventDefault();
+            closeButton.current.focus();
+          }
+        }}
+        aria-label={label}
+        aria-expanded={revealed}
+        aria-controls={revealed ? id : undefined}
+        className="inline-flex min-h-6 min-w-6 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-1 tabular-nums transition-colors hover:bg-hover hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        data-running-speed={mode}
+      >
+        {children}
+      </button>
+      <RunningSpeedCard
+        id={id}
+        anchor={button}
+        closeRef={closeButton}
+        open={revealed}
+        pinned={pinned}
+        data={card}
+        onClose={() => {
+          setMode("dismissed");
+          button.current?.focus({ preventScroll: true });
+        }}
+        onPointerEnter={() => clearTimeout(timer.current)}
+        onPointerLeave={leave}
+      />
+    </>
+  );
+}
+
+/** The bar's right side in an Agent session once this is loaded: the time, then the latest speed while there is a fresh
+ *  one, else the tokens (`count`), never both (cindy). With a speed, or while its card is pinned, the two are a button.
+ *  Fed with each status line while the turn runs (`working`) and the hub is in reach. */
+export function RunningSpeed({ speedKey, turn, live, working, offline, now, elapsed, time, count, onPinned }: {
+  speedKey: string;
+  turn: string | undefined;
+  live: SessionLive | null;
+  working: boolean;
+  offline?: boolean;
+  now: number;
+  elapsed: string;
+  time: ReactNode;
+  count: ReactNode;
+  onPinned: (pinned: boolean) => void;
+}) {
+  const history = useRateHistory(speedKey, turn, live?.tokens_down, live?.at, working && !offline);
+  const rate = offline ? null : shownRate(history, now);
+  const [pinned, setPinned] = useState(false);
+  const pin = useCallback((p: boolean) => {
+    setPinned(p);
+    onPinned(p);
+  }, [onPinned]);
+  const speed = rate !== null ? <span data-running-rate>{rateText(rate)}</span> : count;
+  const shown = (
+    <>
+      {time}
+      {speed && <span aria-hidden>·</span>}
+      {speed}
+    </>
+  );
+  // the hub out of reach: no speed, and a pinned card closes (cindy)
+  if (offline || (rate === null && !pinned)) return shown;
+  return (
+    <SpeedButton elapsed={elapsed} onPinned={pin} card={{ rate, average: turnAverage(history), output: live?.tokens_down ?? 0, history }}>
+      {shown}
+    </SpeedButton>
   );
 }
