@@ -241,6 +241,8 @@ fun JTextField(
     visualTransformation: VisualTransformation = VisualTransformation.None,
     /** False keeps the field out of Autofill: nothing is filled into it, nothing typed is offered to be saved. */
     autofill: Boolean = true,
+    /** Configuration and code use the design system's code type scale, never a page-local font. */
+    monospace: Boolean = false,
 ) {
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
@@ -260,7 +262,7 @@ fun JTextField(
         BasicTextField(
             value = value, onValueChange = onValueChange, enabled = enabled, singleLine = singleLine,
             minLines = minLines, maxLines = maxLines, interactionSource = interaction,
-            textStyle = PersonaTheme.type.body.copy(color = palette.ink), cursorBrush = SolidColor(palette.accent.takeIf { style != AppStyle.Brief } ?: palette.ink),
+            textStyle = (if (monospace) PersonaTheme.type.code else PersonaTheme.type.body).copy(color = palette.ink), cursorBrush = SolidColor(palette.accent.takeIf { style != AppStyle.Brief } ?: palette.ink),
             keyboardOptions = keyboardOptions, keyboardActions = keyboardActions, visualTransformation = visualTransformation,
             // On the text field's own semantics node: Autofill reads the node it would fill, not its parents.
             modifier = if (autofill) Modifier.fillMaxWidth() else Modifier.fillMaxWidth().semantics { contentDataType = ContentDataType.None },
@@ -273,7 +275,7 @@ fun JTextField(
                 ) {
                     leading?.let { JIcon(it, null, size = 20.dp, tint = palette.ink3); Spacer(Modifier.width(10.dp)) }
                     Box(Modifier.weight(1f)) {
-                        if (value.isEmpty() && placeholder != null) Text(placeholder, style = PersonaTheme.type.body, color = palette.ink3, maxLines = if (singleLine) 1 else maxLines, overflow = TextOverflow.Ellipsis)
+                        if (value.isEmpty() && placeholder != null) Text(placeholder, style = if (monospace) PersonaTheme.type.code else PersonaTheme.type.body, color = palette.ink3, maxLines = if (singleLine) 1 else maxLines, overflow = TextOverflow.Ellipsis)
                         field()
                     }
                     trailing?.let { Spacer(Modifier.width(6.dp)); it() }

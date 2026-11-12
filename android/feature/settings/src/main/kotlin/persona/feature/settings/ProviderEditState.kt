@@ -76,6 +76,15 @@ private fun numberOk(s: String) = s.isBlank() || s.trim().all { it.isDigit() } &
 private fun number(s: String): Int = s.trim().takeIf { it.isNotEmpty() }?.toIntOrNull() ?: 0
 private fun numberText(n: Int) = if (n > 0) n.toString() else ""
 
+/** Arguments as the form shows them, with whitespace preserved by quoting. */
+internal fun argumentText(arguments: List<String>): String = arguments.joinToString(" ") { arg ->
+    if (arg.any { it.isWhitespace() || it == '\'' }) "'${arg.replace("'", "'\\''")}'" else arg
+}
+
+/** Exact parsed arguments until the user edits their displayed text; the old manual form still splits on whitespace. */
+internal fun NewProviderDraft.argumentValues(): List<String> =
+    parsedArgs?.takeIf { args == argumentText(it) } ?: args.split(Regex("\\s+")).filter { it.isNotEmpty() }
+
 /** A Chat Completions API: none of the launch settings, headers or proxy apply (docs/integrations/launchers.md "Direct-API providers"). */
 internal val NewProviderDraft.chat: Boolean get() = kind == "api" && api == "chat"
 
@@ -87,7 +96,8 @@ internal fun NewProviderDraft.advancedProblem(): ResText? {
         proxyProblem()?.let { return it }
         if (!(numberOk(timeoutMs) && numberOk(compactWindow) && numberOk(maxContext))) return ResText.of(R.string.settings_pedit_number)
     }
-    if (kind != "api" && args.split(Regex("\\s+")).any { it.isNotEmpty() && !it.startsWith("-") }) return ResText.of(R.string.settings_pedit_args_dash)
+    if (kind != "api" && parsedArgs?.takeIf { args == argumentText(it) } == null && args.split(Regex("\\s+")).any { it.isNotEmpty() && !it.startsWith("-") })
+        return ResText.of(R.string.settings_pedit_args_dash)
     return null
 }
 
@@ -100,7 +110,7 @@ internal fun providerDraftOf(l: HubLauncher): NewProviderDraft {
     val noProxy = l.noProxy.orEmpty()
     val mode = proxyModeOf(l.proxy.orEmpty(), noProxy, gatewayHost(url))
     return NewProviderDraft(
-        name = l.name, kind = if (l.isApi) "api" else "launcher", api = l.api?.takeIf { it.isNotBlank() } ?: "messages",
+        name = l.name, displayName = l.displayName, kind = if (l.isApi) "api" else "launcher", api = l.api?.takeIf { it.isNotBlank() } ?: "messages",
         baseUrl = url, auth = if (l.auth == "bearer") "bearer" else "api_key", model = model,
         smallModel = l.smallModel.orEmpty(), subagentModel = l.subagentModel.orEmpty(), args = l.args.joinToString(" "),
         agent = l.agent?.takeIf { it.isNotBlank() } ?: "claude", models = models,
@@ -154,7 +164,7 @@ internal fun providerUpdate(d: NewProviderDraft, old: HubLauncher, scope: ScopeF
         smallModel = if (api) "" else d.smallModel.trim(), subagentModel = if (api) "" else d.subagentModel.trim(),
         customModel = if (api) "" else d.customModel.trim(), customModelName = if (api) "" else d.customModelName.trim(),
         customModelDescription = if (api) "" else d.customModelDescription.trim(),
-        args = if (api) emptyList() else d.args.split(Regex("\\s+")).filter { it.isNotEmpty() },
+        args = if (api) emptyList() else d.argumentValues(),
         auth = if (openAi) "api_key" else d.auth,
         agent = d.agent.takeIf { !api && it.isNotBlank() && it != "claude" },
         apiKey = d.apiKey.trim().takeIf { it.isNotEmpty() },
