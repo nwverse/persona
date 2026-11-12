@@ -700,6 +700,24 @@ A dispatched task's Open link (#3711) is a compact row using existing typography
  starting/failure detail. This targeted navigation correction reuses existing pages; no new visual style or setting.
  Details and wire contract: `docs/assistant/unified-entry.md`, "What a dispatch opens".
 
+### 4.1.1 Apple settings scope and search
+
+The shared Apple Settings page follows three scopes, in this order: **Current Assistant's Settings**, **This Device**,
+and **Hub**. With several installed assistants its first heading reuses `AssistantSwitcherHeader` (avatar, name, state,
+and a one-line Switch label); with one it retains the chosen Persona face and name, without a roster switcher.
+A caption explains that only the current assistant's settings are shown. Device and Hub captions explain their shared scope.
+
+Common model choices open **Models**, with providers and keys under **Advanced**. Runtime configuration and session triage
+open through **Agent**. Appearance and display have a device-owned page; the shared avatar belongs to Hub. Diagnostics
+(build commit and the last new-chat check) are folded inside About. Watch sync and disconnection belong to Devices & Pairing.
+Existing settings route values remain valid; changing assistants returns the settings navigation to its list and retires old drafts.
+
+Search reuses the system searchable field and SettingsRow navigation. It searches localized entry names and common aliases,
+including developer terms, and opens the existing destination directly. Results have stable catalog identities; a query changes
+only navigation, never a setting. Pairing and storage use the `Theme.Icon.pairing` and `Theme.Icon.storage` vocabulary tokens.
+Why this arrangement: the earlier unscoped list mixed shared configuration with device preferences and exposed expert controls
+before common choices. It introduces no visual style, color palette, model default, or primary navigation destination.
+
 ### 4.2 Gestures
 
 | Gesture | Behavior |
@@ -901,7 +919,7 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   item it comes from, the Agent and its computer, where it runs and what it is asked, never a reference or a value. Like the
   password card it is answered on the card only: no quick answer on a row, a notification, the Live Activity, the watch or
   Siri, and no key approves it (`docs/extensions/secret-providers.md` "In the apps").
-- **Task-review decisions (web, #4808)**: reuse the answerable decision row, its recommendation tag, the `Button` action group and the draft's Later / Don't handle labels. The two secondary actions stay on a separate footer so they never displace the recommended choice; the footer follows the tray's scrolling edge and uses the existing 44 px button minimum. Later defers only this browser session and this review round. Don't handle persists a dismissal of this exact review, offers receipt-scoped Undo, leaves the task open and takes no option; a dismissed review cannot take its timed default. A new review is visible again. Old reviews without an acceptance ask show their original explanation and these same controls, never invented choices or an acceptance button with a made-up round. This is a requested correction to the existing row, not a new style or setting.
+- **Task-review decisions (web, #4808)**: reuse the answerable decision row, its recommendation tag, the `Button` action group and the draft's Later / Don't handle labels. The two secondary actions stay on a separate footer so they never displace the recommended choice; the footer follows the tray's scrolling edge and uses the existing 44 px button minimum. Later defers only this browser session and this review round. Don't handle persists a dismissal of this exact review, offers receipt-scoped Undo, leaves the task open and takes no option; a dismissed review cannot take its timed default. A new review is visible again. The web hides the row and updates its count optimistically; a confirmed same-round dismissal stays hidden across reads and reloads, while a failed write restores the row with an error. An old Agent runtime error does not override dismissal or Later for that review; an actual Agent input request keeps its home visible. Old reviews without an acceptance ask show their original explanation and these same controls, never invented choices or an acceptance button with a made-up round. This is a requested correction to the existing row, not a new style or setting.
 - **Questions**: one at a time, with single choice, multiple choice, Other and voice. An unsent answer is kept as a draft per request.
 - **Everywhere at once**: the first decision on any surface (phone, web, notification, watch) wins. Every other entry updates at once, with a light haptic, and offers Undo where the action can be undone.
 

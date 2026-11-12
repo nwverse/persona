@@ -4,8 +4,10 @@ import SwiftUI
 /// the way to its page. Extensions are installed on the hub's side only (docs/extensions/extensions.md「Install, upgrade, roll back, uninstall」): with `personad plugin` on
 /// its machine or in its admin UI (/admin); the footer says how.
 struct ExtensionsView: View {
+    @Environment(AppModel.self) private var app
     @State private var page = ExtensionsModel()
     @State private var cardLink: LinkTarget?
+    @State private var settingsSlots: ExtensionSlots?
 
     var body: some View {
         SettingsForm {
@@ -22,28 +24,18 @@ struct ExtensionsView: View {
                     .bareListRow()
                 }
             }
-            #if os(macOS)
-            // The plugins' overview cards (docs/extensions/extensions.md「UI slots」): the Mac has no Overview, they lead the installed ones (their
-            // pages are in the sidebar). The iPhone has them on Settings itself.
-            ExtensionCardsSection(link: $cardLink)
-            #endif
+            if let settingsSlots {
+                #if os(macOS)
+                ExtensionCardsSection(link: $cardLink, slots: settingsSlots)
+                #else
+                ExtensionSlotsSettingsSection(link: $cardLink, slots: settingsSlots)
+                #endif
+            }
             if let plugins = page.plugins, plugins.isEmpty {
                 Section {
                     EmptyStateView(symbol: Theme.Icon.plugins, title: String(localized: "No Extensions"),
                                    message: String(localized: "Install extensions in the hub's admin page (/admin) or on the hub machine with personad extension install, then turn them on and set them up here."))
                         .listRowBackground(Color.clear)
-                }
-            } else if let groups = page.groups {
-                // Several managers (docs/assistant/managers.md "Grouping"): each one's under its name, the default first.
-                ForEach(groups) { group in
-                    Section {
-                        Group { rows(group.items) }
-                            .bareListRow()
-                    } header: {
-                        ManagerHeading(manager: group.manager, count: group.items.count)
-                    } footer: {
-                        if group.id == groups.last?.id { footer }
-                    }
                 }
             } else if let plugins = page.plugins {
                 Section {
@@ -72,21 +64,23 @@ struct ExtensionsView: View {
         }
         .accessibilityIdentifier("extensions-list")
         .themedPage()
-        #if os(macOS)
         .pluginLinks($cardLink)
-        #endif
+        .extensionPushes(settingsSlots?.cardPages ?? [])
         .overlay { if page.plugins == nil && page.loading { ProgressView() } }
         .detailTitle(String(localized: "Extensions"))
         .navigationBarTitleDisplayMode(.inline)
-        .task { await page.load() }
-        #if os(macOS)
-        .task { await ExtensionSlots.shared.reload() }
-        #endif
+        .task(id: "\(app.assistantManagerID ?? "")|\(app.managersRevision)|\(app.settingsPath.count)|\(app.config?.url.absoluteString ?? "")") { await page.load() }
+        .task(id: "\(app.assistantManagerID ?? "")|\(app.config?.url.absoluteString ?? "")") {
+            let scope = AssistantSettingsRequestScope(app)
+            let slots = ExtensionSlots(deps: .init(api: { scope.api(app) }, connection: { app.socket(scope.group) }),
+                                       manager: scope.manager)
+            settingsSlots = slots
+            await slots.reload()
+        }
         .refreshable {
             await page.load()
-            await ExtensionSlots.shared.reload()
+            await settingsSlots?.reload()
         }
-        .onChange(of: AppModel.shared.managersRevision) { Task { await page.load() } }
     }
 
     /// The rows of a list, each opening its manager's copy: an id is listed once per manager (each one's built-ins).
@@ -194,6 +188,7 @@ struct ExtensionDetailView: View {
     /// `manager`: another manager's copy (docs/assistant/managers.md "Grouping"): everything the page reads and changes is
     /// that manager's, and so are the pages and connectors it opens. nil: the default manager's.
     init(id: String, manager: String? = nil) {
+        let manager = manager ?? AppModel.shared.assistantManagerID
         _page = State(initialValue: ExtensionModel(id: id, manager: manager))
         _signIn = State(initialValue: ExtensionSignInModel(id: id, manager: manager))
         _connectorInbox = State(initialValue: ExtensionConnectorsModel(manager: manager))
@@ -273,7 +268,7 @@ struct ExtensionDetailView: View {
         .tabActiveTask(id: ExtensionTextSource(group: AppModel.shared.hub?.group ?? "", features: AppModel.shared.hubFeatures,
                                                hub: AppModel.shared.api?.config.url.absoluteString, active: phase == .active)) {
             guard phase == .active else { return }
-            await declarations.refreshWhileActive(api: AppModel.shared.api)
+            await declarations.refreshWhileActive(api: AppModel.shared.api?.manager(page.manager))
         }
         .refreshable { await page.load() }
         // What the page read is the hub's latest word on the sign-in too; an install that ended waiting for a sign-in
@@ -644,7 +639,8 @@ private struct ExtensionFieldRow: View {
                 // The page's hub's machines (the app's first group), as the machine switches list them.
                 ExtensionChoicePicker(title: title, placeholder: placeholder, path: path, page: page,
                                       choices: ExtensionPickerChoice.machines(field, current: page.value(path)?.string,
-                                                                              machines: model.machines.filter { $0.group.isEmpty }.map { ($0.id, $0.name, $0.os) }))
+                                                                              machines: AssistantSettingsRequestScope(group: model.hub?.group ?? "", manager: page.manager, roster: model.managerRoster)
+                                                                                .machines(model).map { ($0.id, $0.name, $0.os) }))
             } else if field.picksLauncher, let launchers = page.launchers {
                 ExtensionChoicePicker(title: title, placeholder: placeholder, path: path, page: page,
                                       choices: ExtensionPickerChoice.launchers(current: page.value(path)?.string, launchers: launchers))
@@ -769,9 +765,10 @@ private struct ExtensionMachineSwitches: View {
     /// The page's hub's machines (the app's first group), of the systems asked for.
     private var machines: [Machine] {
         let os = field.items?.os ?? []
-        return model.machines.filter { $0.group.isEmpty && (os.isEmpty || os.contains($0.os ?? "")) }
+        return AssistantSettingsRequestScope(group: model.hub?.group ?? "", manager: page.manager, roster: model.managerRoster)
+            .machines(model).filter { os.isEmpty || os.contains($0.os ?? "") }
     }
-    private var unknown: [String] { items.filter { id in !model.machines.contains { $0.group.isEmpty && $0.id == id } } }
+    private var unknown: [String] { items.filter { id in !machines.contains { $0.id == id } } }
     /// A plugin for operating computers (extension point computer) or their browsers (browser): the rows say how Cua
     /// Driver or ego lite is there too.
     private var computers: Bool { page.detail?.plugin.contributes?["computer"] != nil }
