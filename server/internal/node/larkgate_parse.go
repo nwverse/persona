@@ -69,16 +69,19 @@ func classifyLarkDepth(cmd string, gates []proto.CommandGate, cwd string, risk l
 	vars := map[string]string{}
 	executableEnv := false
 	for _, s := range segs {
-		if s.ArgSubst {
-			v.unsure, v.other = true, true
-			v.unknown = v.unknown || larkCLIRe.MatchString(cmd)
-		}
+		nestedUnsure := false
 		for _, nested := range s.Nested {
 			child := classifyLarkDepth(nested, gates, cwd, risk, depth+1)
 			if len(child.calls) > 0 || child.unknown || child.unparsed {
 				v.other = true
 			}
+			nestedUnsure = nestedUnsure || !larkFilterSubstitution(nested) || child.unknown || child.unparsed || child.unsure
 			merge(child)
+		}
+		// Output filters in a substitution do not make the enclosing command
+		// opaque. Gated calls and unresolved execution inside it still do.
+		if s.ArgSubst && nestedUnsure {
+			v.unsure, v.other = true, true
 		}
 		if v.deny != "" {
 			return v
@@ -208,6 +211,25 @@ func classifyLarkDepth(cmd string, gates []proto.CommandGate, cwd string, risk l
 	return v
 }
 
+// larkFilterSubstitution reports whether a command substitution only formats
+// or prints data. Other programs keep the enclosing gated call conservative.
+func larkFilterSubstitution(cmd string) bool {
+	segs, ok := shellcmd.Split(cmd)
+	if !ok || len(segs) == 0 {
+		return false
+	}
+	for _, s := range segs {
+		if s.Subst || len(s.Words) == 0 {
+			return false
+		}
+		words, ok := unwrapCommand(s.Words)
+		if !ok || len(words) == 0 || len(words) != len(s.Words) || !larkFilters[words[0]] {
+			return false
+		}
+	}
+	return true
+}
+
 func isAssignment(w string) bool {
 	k, _, ok := strings.Cut(w, "=")
 	if !ok || k == "" {
@@ -324,12 +346,15 @@ func parseGateCall(g proto.CommandGate, args []string, vars map[string]string, c
 		})
 		return out, !strings.Contains(out, "$")
 	}
-	if len(args) < 2 || !httpMethod.MatchString(strings.ToUpper(args[0])) && !strings.Contains(args[0], "$") {
+	// A literal method is part of the call's identity: even a previously
+	// assigned variable could change before a loop invokes it. A literal GET
+	// remains a read when its route or query contains ordinary variables.
+	if len(args) < 2 || !httpMethod.MatchString(strings.ToUpper(args[0])) {
 		return larkCall{}, "", false // a subcommand of its own (ol events …): not a call the rules know
 	}
-	method, ok1 := expand(strings.ToUpper(args[0]))
-	path, ok2 := expand(args[1])
-	if !ok1 || !ok2 {
+	method := strings.ToUpper(args[0])
+	path, resolved := expand(args[1])
+	if strings.Contains(path, "$(") || strings.Contains(path, "`") || !resolved && method != "GET" {
 		return larkCall{}, "", false
 	}
 	c := larkCall{Method: method}

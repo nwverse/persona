@@ -222,5 +222,8 @@ func larkBypassSafe(c larkCall) bool {
 	if c.CLI && c.Method == "CLI" {
 		return c.Risk == "write"
 	}
+	if c.Method == "GET" && !strings.Contains(c.Path, "$(") && !strings.Contains(c.Path, "`") {
+		return true
+	}
 	return httpMethod.MatchString(c.Method) && !strings.Contains(c.Path, "$")
 }

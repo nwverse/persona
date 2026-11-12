@@ -107,6 +107,57 @@ func TestLarkLiteralCommandVariable(t *testing.T) {
 	}
 }
 
+func TestLarkLiteralGetWithShellVariables(t *testing.T) {
+	for _, tc := range []struct {
+		name, command string
+	}{
+		{"single", `ex GET "/documents/read?url=https://example.test/docx/a"`},
+		{"for loop", `for x in a b; do ex GET "/documents/read?url=$x" > /tmp/o_$x.json; done`},
+		{"while loop", `x=a; while [ "$x" = a ]; do ex GET "/documents/read?url=$x" > /tmp/o_$x.json; x=b; done`},
+		{"route variable", `for id in a b; do ex GET "/documents/$id" > /tmp/o_$id.json; done`},
+		{"incident", `for x in "docx a b" "wiki c d"; do set -- $x; ex GET "/documents/read?url=https://example.larkoffice.com/$2/$1" > /tmp/d_$3.json; python3 -I x.py; echo "$3 $(jq -r '.data.title' /tmp/d_$3.json | tr '\n' ' ') $(wc -c < /tmp/d_$3.json)"; done`},
+		{"output substitutions", `ex GET /health; echo "$(jq -r '.data.title' /tmp/o.json | tr '\n' ' ') $(wc -c < /tmp/o.json)"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := classifyLark(tc.command, olGate(""), t.TempDir(), nil)
+			if v.deny != "" || v.unparsed || v.unknown || v.unsure || len(v.calls) != 1 {
+				t.Fatalf("verdict = %+v", v)
+			}
+			call := v.calls[0]
+			if call.Method != "GET" || larkDecision(olCfg(), call) != "allow" || !larkBypassSafe(call) {
+				t.Fatalf("call = %+v, default decision = %q, bypass safe = %v", call, larkDecision(olCfg(), call), larkBypassSafe(call))
+			}
+			assertAssistantBypassClassification(t, tc.command, 0)
+		})
+	}
+}
+
+func TestLarkLoopWritesStayBehindApproval(t *testing.T) {
+	for _, tc := range []struct {
+		name, command string
+	}{
+		{"post", `for x in a b; do ex POST "/documents/$x" '{}'; done`},
+		{"put", `for x in a b; do ex PUT "/documents/$x" '{}'; done`},
+		{"patch", `for x in a b; do ex PATCH "/documents/$x" '{}'; done`},
+		{"delete", `for x in a b; do ex DELETE "/documents/$x"; done`},
+		{"variable read method", `for method in GET; do ex "$method" /health; done`},
+		{"variable write method", `for method in POST; do ex "$method" /documents '{}'; done`},
+		{"variable command", `for x in a b; do $CLI GET "/documents/$x"; done`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := classifyLark(tc.command, olGate(""), t.TempDir(), nil)
+			if v.deny == "" && !v.unknown {
+				for _, call := range v.calls {
+					if larkDecision(olCfg(), call) == "allow" {
+						t.Fatalf("write unexpectedly allowed: %+v", call)
+					}
+				}
+			}
+			assertAssistantBypassClassification(t, tc.command, 1)
+		})
+	}
+}
+
 func TestLarkHeredocUnsafeTargets(t *testing.T) {
 	dir := t.TempDir()
 	fifo := filepath.Join(dir, "pipe")
