@@ -116,6 +116,29 @@
         }
       }
     },
+    "%lld Selected [Selected Messages]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld Selected"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld件を選択"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已选 %lld 条"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "%lld more on the map [Place Map]" : {
       "localizations" : {
         "en" : {
@@ -7939,6 +7962,29 @@
       },
       "extractionState" : "manual"
     },
+    "%@: %@ [Forwarded Line]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@: %2$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@：%2$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@：%2$@"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "%@: %@ → %@" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -8529,6 +8575,52 @@
       },
       "extractionState" : "manual"
     },
+    "%lld Forwarded Messages · %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld Forwarded Messages · %2$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "転送された%1$lld件のメッセージ · %2$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "转发的 %1$lld 条消息 · %2$@"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "%lld Forwarded Messages" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld Forwarded Messages"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "転送された%lld件のメッセージ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "转发的 %lld 条消息"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "%lld Groups" : {
       "localizations" : {
         "en" : {
@@ -8629,6 +8721,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已选 %1$lld 件"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "%lld More [Forwarded Messages]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld More"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ほか%lld件"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还有 %lld 条"
           }
         }
       },
@@ -60281,6 +60396,29 @@
       },
       "extractionState" : "manual"
     },
+    "Forward %lld [Selected Messages]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Forward %lld"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld件を転送"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "转发 %lld 条"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Forward 15 Seconds" : {
       "localizations" : {
         "en" : {
@@ -103123,6 +103261,29 @@
       },
       "extractionState" : "manual"
     },
+    "Please look at the forwarded messages above." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Please look at the forwarded messages above."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上の転送されたメッセージを見てください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请看上面转发的几条消息。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Please look at the image [Assistant View 5ad878]" : {
       "localizations" : {
         "en" : {
@@ -118125,6 +118286,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "本地选择"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Select Messages…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Select Messages…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "複数選択…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "多选…"
           }
         }
       },
@@ -152391,6 +152575,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "一条最多 %1$lld 字，长的拆开发"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Up to %lld messages at a time" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Up to %lld messages at a time"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一度に転送できるのは%lld件までです"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一次最多转发 %lld 条"
           }
         }
       },
