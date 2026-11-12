@@ -292,10 +292,13 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
  * the idle ModelPicker, out of the first screen into a chunk of its own), and 64 B for managing launchers from the
  * pickers (#4389's controls took the idle tier 8 B over; take it back if those controls get lighter), and 13,113 B for
  * the extension view renderer (#3614: it left the first screen for the idle tier, which went from 18,615 B to 31,728 B;
- * 31,802 B after merging main).
+ * 31,802 B after merging main). And 535 B for the composer's + / @ panel (#5324, 2026-11-12: ComposerPanel, which
+ * took the @ menu's rows off the first screen, beside #5325's / palette and #5327's queue panel, which together left
+ * less room than it needs: 43,729 B merged with main at f18875688; 43,809 B with the review's fixes merged with main at
+ * 0fef425ef, and 31 B over that so the next main does not tip it). It stays idle: a typed @ opens it at once.
  * Every other lazy page loads on intent, not at idle; raise it on purpose, in the change that needs it.
  */
-export const IDLE_TIER_BUDGET = 43_194;
+export const IDLE_TIER_BUDGET = 43_840;
 
 const gzip = promisify(gzipCompress);
 

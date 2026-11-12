@@ -21,7 +21,7 @@ func TestInboxTriagePreviewKeepsNothing(t *testing.T) {
 			At: time.Now(), Last: title, Rules: "Newsletters are noise"}
 	}
 	v := h.InboxTriagePreview(context.Background(), assistantwire.InboxTriagePreview{Name: "News",
-		Kinds: map[string]string{"sub_notice": "A notice from the News subscription"},
+		Kinds:  map[string]string{"sub_notice": "A notice from the News subscription"},
 		Things: []connector.InboxThing{thing("one"), thing("two"), thing("three"), thing("four")}})
 	if len(v) != 3 || v[0].Tier != "noise" || v[0].Summary != "A newsletter" || v[2].Reason != "bulk" {
 		t.Fatalf("verdicts: %+v", v)
