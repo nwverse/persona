@@ -47,6 +47,7 @@
   "desc_agent_title": "根据 Agent 在做的事给它的标签起名。",
   "desc_todo_title": "给任务的待办起标题。",
   "desc_subscription_recipe": "起草一个来源订阅怎样取内容。",
+  "desc_suggest_next": "给自己不出建议的对话（Persona 自己的、Codex 和其他 Agent）根据最近几条消息提一句接下来可以发的话。只在打开「建议下一句」时运行，每次回复一次小调用。",
   "desc_meeting_answer": "回答 Persona 参加的会议里提出的问题，只依据会议材料。",
   "desc_schedule": "定时任务（如早报），作为 Persona 自己的对话运行。",
   "desc_assistant_supervise": "跟进并验收 Persona 派出的任务，让主对话随时能回你：看任务的信号、核对证据、要求返工。没有人在等它。",
