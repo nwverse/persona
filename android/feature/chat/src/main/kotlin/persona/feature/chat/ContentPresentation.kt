@@ -394,7 +394,7 @@ internal fun toolPresentation(res: Resources, item: Item): ToolPresentation {
         return ToolPresentation(command.ifBlank { res.getString(R.string.chat_tool_command) }, verb, input?.string("description"), mono = true, kind = kind)
     }
     // A computer_run with steps or a script says what it does (iOS ComputerSteps): "MacBook · Click AC → 6 → ×".
-    val subject = ComputerSteps.subject(res, name, input) ?: persona.core.domain.toolSubjectText(item).resolve(res).trim()
+    val subject = persona.core.domain.ComputerSteps.runSubject(name, input)?.resolve(res) ?: persona.core.domain.toolSubjectText(item).resolve(res).trim()
     return ToolPresentation(subject.ifBlank { when (name) {
         "TodoWrite" -> res.getString(R.string.chat_tool_todo_list)
         "Task", "Agent" -> res.getString(R.string.chat_tool_subagent)
