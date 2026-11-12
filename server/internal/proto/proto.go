@@ -19,6 +19,7 @@ var Features = []string{
 	"locale",                   // Accept-Language, client_hello.locale and a device's locale pick the language of text for people (docs/protocol/i18n.md)
 	"assistant_compact",        // POST /api/v1/assistant/conversations/{id}/compact, session.compaction
 	"assistant_main_new",       // POST /api/v1/assistant/main/new: archive the main conversation, the next message starts one
+	"assistant_main_clear",     // POST /api/v1/assistant/main/clear: clear the main conversation's context in place (closed, archived, nothing carried)
 	"assistant_start_ops",      // POST /api/v1/assistant/conversations takes X-Persona-Op-Id: one start per op id (#1349)
 	"assistant_readiness",      // GET /api/v1/assistant/readiness, …/readiness/dismiss, warm's readiness (docs/assistant/onboarding.md 5.1)
 	"android_update",           // authenticated Android release metadata and APK downloads
@@ -32,6 +33,7 @@ var Features = []string{
 	"ultracode",                // session-only Claude Code workflow switch, queued changes and resume-loss notices
 	"model_configuration",      // unified per-purpose models and provider selection
 	"typed_models",             // a model ID the launcher's list lacks: starts, POST …/modes, the Persona chat's pick; custom rows, DELETE …/models/custom (#1644)
+	"launcher_switch",          // POST …/modes {launcher, model?, effort?} switches a running Claude Code Agent to another launcher with its next message; Session.pending_switch (#5035)
 	"client_msg_id",            // session.send dedupes retries
 	"client_ops",               // durable operation receipts and read-only status queries
 	"send_refusals",            // 409 dialog_open / input_draft, clear_draft
