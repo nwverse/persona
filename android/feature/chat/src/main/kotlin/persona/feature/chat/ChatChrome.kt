@@ -1,5 +1,6 @@
 package persona.feature.chat
 
+import persona.core.designsystem.dense
 import persona.core.designsystem.text
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -81,7 +82,9 @@ internal fun ChatHeader(
         statusText = linkTitle ?: when (line?.kind) {
             StatusLineKind.Ended -> stringResource(if (statusState.replaced) R.string.chat_chrome_status_replaced else R.string.chat_chrome_status_ended)
             StatusLineKind.MachineOffline -> stringResource(R.string.chat_chrome_status_machine_offline)
-            StatusLineKind.Submitting -> stringResource(R.string.chat_chrome_status_submitting)
+            StatusLineKind.Submitting -> if (statusState.answering) stringResource(R.string.chat_chrome_status_submitting)
+                else stringResource(persona.core.designsystem.R.string.designsystem_message_sending)
+            StatusLineKind.Processing -> stringResource(persona.core.designsystem.R.string.designsystem_message_processing)
             StatusLineKind.Unconfirmed -> stringResource(R.string.chat_chrome_status_unconfirmed)
             StatusLineKind.NeedsYou -> stringResource(R.string.chat_chrome_status_needs_you)
             StatusLineKind.Stopping -> stringResource(R.string.chat_chrome_status_stopping)
@@ -212,7 +215,7 @@ internal fun ChatHeader(
         "info" -> session?.let { target -> ChatSessionInfoSheet(target, machine, state, onOpenTodo = onOpenTodo, onDismiss = { dialog = null }) }
         "peers" -> JSheet(onDismiss = { dialog = null }, title = stringResource(R.string.chat_chrome_peers_title)) {
             if (peers.isEmpty()) JEmptyState(stringResource(R.string.chat_chrome_peers_empty_title), stringResource(R.string.chat_chrome_peers_empty_text))
-            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 400.dp), contentPadding = PaddingValues(bottom = 16.dp)) {
+            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 400.dp), contentPadding = PaddingValues(bottom = 16.dp.dense)) {
                 items(peers, key = { it.key.path }) { peer ->
                     val place = places[peer.key]
                     val where = peer.slotName ?: peer.agentLabel
@@ -241,10 +244,10 @@ internal fun ChatActionsSheet(actions: List<JAction>, onDismiss: () -> Unit, tit
     // leading slot), so every label starts in one column.
     val iconColumn = actions.any { it.icon != null }
     JSheet(onDismiss = onDismiss, title = title) {
-        LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(bottom = 16.dp)) {
+        LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(bottom = 16.dp.dense)) {
             items(actions) { action ->
                 JRow(action.label, leadingIcon = action.icon, enabled = action.enabled, destructive = action.destructive,
-                    leading = if (action.icon == null && iconColumn) ({ Spacer(Modifier.width(24.dp)) }) else null,
+                    leading = if (action.icon == null && iconColumn) ({ Spacer(Modifier.width(24.dp.dense)) }) else null,
                     chevron = false, onClick = { onDismiss(); action.onClick() })
             }
         }
