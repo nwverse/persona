@@ -599,6 +599,8 @@ targets:
       # The All-Day Recording complication's view, for its debug preview (-openWatchItem allday-complication). Its
       # snapshot (Shared/Recording/AllDaySnapshot.swift) comes with Shared.
       - path: PersonaWatchWidgets/AllDayComplicationView.swift
+      # The Record complication's view, for its debug preview (-openWatchItem record-complication).
+      - path: PersonaWatchWidgets/MeetingRecordingComplicationView.swift
     dependencies:
       - target: PersonaWatchWidgets
     entitlements:

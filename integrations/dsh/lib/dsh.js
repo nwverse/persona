@@ -99,6 +99,21 @@ export function createDshRuntime(deps, options = {}) {
   const assistants = new Map()
   const presets = { ...DEFAULT_PRESETS, ...(options.presets ?? {}) }
   const isAssistant = (id) => assistants.has(id)
+  const webPending = new Map() // sessionId -> count of pending requests handed to Web GUI (#5980)
+
+  async function passToWeb(sessionId, next) {
+    const cur = webPending.get(sessionId) ?? 0
+    webPending.set(sessionId, cur + 1)
+    rt.sessionsChanged()
+    try {
+      return await next()
+    } finally {
+      const left = (webPending.get(sessionId) ?? 1) - 1
+      if (left <= 0) webPending.delete(sessionId)
+      else webPending.set(sessionId, left)
+      rt.sessionsChanged()
+    }
+  }
 
   const state = (id) => {
     let s = known.get(id)
@@ -140,21 +155,22 @@ export function createDshRuntime(deps, options = {}) {
       if (archived.has(id)) continue // archived in DSH (or closed from the phone): DSH hides it too
       if (options.assistant && assistantDir(s.cwd) && !assistants.has(id)) assistants.set(id, {})
       const st = known.get(id)
-      const running = s.running === true || st?.running === true
-      const waiting = activeQuestions(s) > 0 // asked in the Web GUI; cards on the phone the SDK marks itself
+      const openTurn = hasOpenTurn(s, st)
+      const isWebBlocked = (webPending.get(id) ?? 0) > 0
+      const waiting = activeQuestions(s) > 0 || isWebBlocked // asked in the Web GUI; cards on the phone the SDK marks itself
       if (s.blank && !rt.touched(id)) continue // before its first prompt, only one the phone started
-      rows.push({ s, id, running, waiting })
+      rows.push({ s, id, openTurn, waiting, isWebBlocked })
     }
     for (const r of rows) {
       r.subagents = subagentsOf(r.id, kids.get(r.id) ?? [])
-      r.background = backgroundOf(r.id)
+      r.background = backgroundOf(r.id, r.s)
       r.busy = r.subagents.some((a) => a.running) || r.background.length > 0
     }
     // Running and waiting ones always, those with work still running and those the phone touched always, the rest by
     // age and count (the SDK's rule).
-    const chosen = rt.recent(rows, { days: listDays, max: maxSessions, pinned: (r) => r.running || r.waiting || r.busy,
+    const chosen = rt.recent(rows, { days: listDays, max: maxSessions, pinned: (r) => r.openTurn || r.waiting || r.busy,
       id: (r) => r.id, updatedAt: (r) => r.s.updatedAt ?? 0 })
-    return chosen.map(({ s, id, running, waiting, subagents, background }) => {
+    return chosen.map(({ s, id, openTurn, waiting, isWebBlocked, subagents, background }) => {
       const st = known.get(id)
       const hints = s.projections
       const title = typeof hints?.values?.title === 'string' ? hints.values.title : ''
@@ -163,8 +179,11 @@ export function createDshRuntime(deps, options = {}) {
         session_id: id,
         title: title || (s.cwd ? basename(s.cwd) : ''),
         cwd: s.cwd ?? '',
-        status: waiting ? 'blocked' : running ? 'working' : 'done',
+        status: waiting ? 'blocked' : openTurn ? 'working' : 'done',
         updated_at: new Date(s.updatedAt ?? Date.now()).toISOString(),
+      }
+      if (isWebBlocked) {
+        row.attention_reason = 'waiting for an answer in DSH Web'
       }
       if (runtimeID !== 'dsh') row.agent_label = label // the node names only a runtime's own agent itself
       if (s.cwd) {
@@ -252,11 +271,30 @@ export function createDshRuntime(deps, options = {}) {
   }
 
   /**
+   * Whether a DSH session currently has an active foreground turn under way.
+   * Projections (turnBoundary or approvalState) or session events (st.running) determine whether the turn
+   * is open; background commands or jobs alone do not count as an open turn (#5981).
+   */
+  function hasOpenTurn(summary, st) {
+    const vals = summary?.projections?.values
+    if (vals?.turnBoundary && Object.prototype.hasOwnProperty.call(vals.turnBoundary, 'openTurnStartSeq')) {
+      return vals.turnBoundary.openTurnStartSeq !== null && vals.turnBoundary.openTurnStartSeq !== undefined
+    }
+    if (vals?.approvalState && typeof vals.approvalState.turnOpen === 'boolean') {
+      return vals.approvalState.turnOpen
+    }
+    if (st && typeof st.running === 'boolean') {
+      return st.running
+    }
+    return summary?.running === true
+  }
+
+  /**
    * A session's background tasks: its DSH jobs still running (workflows, shells run in the background) — not one whose
    * tool call is still waiting for its result (that call is in the foreground). From the job events the plugin saw,
-   * and DSH's job registry for those that started before it.
+   * DSH's job registry for those that started before it, and background commands in contextTimeline (#5981).
    */
-  function backgroundOf(id) {
+  function backgroundOf(id, summary) {
     const open = openCalls.get(id) ?? new Set()
     const tracked = jobs.get(id) ?? new Map()
     const out = new Map()
@@ -273,6 +311,20 @@ export function createDshRuntime(deps, options = {}) {
       }
     } catch (err) {
       log(`persona: jobs of ${id}: ${err.message}`)
+    }
+    const commands = summary?.projections?.values?.contextTimeline?.commands
+    if (Array.isArray(commands)) {
+      for (const cmd of commands) {
+        if (cmd?.background !== true || (cmd.status && cmd.status !== 'running')) continue
+        const cmdId = String(cmd.id ?? cmd.commandId ?? '')
+        if (cmdId && out.has(cmdId)) continue
+        const key = cmdId || `cmd-${out.size + 1}`
+        out.set(key, task(key, {
+          kind: 'bash',
+          label: cmd.command ?? cmd.label,
+          startedAt: cmd.startedAt ?? cmd.startTime,
+        }))
+      }
     }
     return [...out.values()]
   }
@@ -749,7 +801,7 @@ export function createDshRuntime(deps, options = {}) {
   async function onApproval(req, next) {
     const agent = req?.agent
     const { sessionId, on, child } = askFor(agent)
-    if (!sessionId || !(isAssistant(on) ? rt.hubConnected : rt.phoneFirst(on))) return next()
+    if (!sessionId || !(isAssistant(on) ? rt.hubConnected : rt.phoneFirst(on))) return passToWeb(on, next)
     const call = req.callId ? calls.get(sessionId)?.get(req.callId) : undefined
     const name = call?.name ?? req.toolName
     const input = call ? toolInput(call.name, call.args) : undefined
@@ -778,7 +830,7 @@ export function createDshRuntime(deps, options = {}) {
       if (req.signal?.aborted) return 'cancelled'
       throw err
     }
-    if (res?.dismiss || typeof res?.allow !== 'boolean') return next() // handed back: the Web GUI asks
+    if (res?.dismiss || typeof res?.allow !== 'boolean') return passToWeb(on, next) // handed back: the Web GUI asks
     if (!res.allow && !child) steerReason(sessionId, ix.id, ix.tool_name, res.message) // a subagent takes no steering
     return res.allow ? 'allowed-once' : 'rejected'
   }
@@ -804,7 +856,7 @@ export function createDshRuntime(deps, options = {}) {
     const agent = request?.agent
     const { sessionId, on, child } = askFor(agent)
     const questions = request?.questions ?? []
-    if (!sessionId || questions.length === 0 || !(isAssistant(on) ? rt.hubConnected : rt.phoneFirst(on))) return next()
+    if (!sessionId || questions.length === 0 || !(isAssistant(on) ? rt.hubConnected : rt.phoneFirst(on))) return passToWeb(on, next)
     const callId = request.wait?.callId
     const plan = questions.length === 1 && questions[0].intent?.kind === 'plan-review' ? questions[0] : undefined
     const ix = {
@@ -836,7 +888,7 @@ export function createDshRuntime(deps, options = {}) {
     const first = await Promise.race([asked.then((res) => ({ res }), (err) => ({ err })), aborted.then(() => ({ aborted: true }))])
     if (first.err) throw first.err
     if (!first.aborted) {
-      if (first.res?.dismiss) return next()
+      if (first.res?.dismiss) return passToWeb(on, next)
       return { answers: answerOf(questions, plan, first.res) }
     }
     const late = request.wait?.timed === true && callId && deps.userQuestions
