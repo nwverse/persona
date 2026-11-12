@@ -12,6 +12,13 @@ import { formatList, t } from "../i18n";
 
 export type ProviderAPI = "messages" | "responses" | "chat";
 
+/** How a gateway is signed in to: `Authorization: Bearer` (ANTHROPIC_AUTH_TOKEN) or `x-api-key` (ANTHROPIC_API_KEY). */
+export type AuthMethod = "bearer" | "api_key";
+
+/** The hub's hello feature for `auth: "auto"` on the connection check (#5329): it tries Bearer, then x-api-key, and
+ *  answers with the one that worked. */
+export const AUTH_AUTO_FEATURE = "launcher_auth_auto";
+
 /** Claude Code's thinking levels (proto.EffortLevels), in order. */
 export const EFFORT_LEVELS = EFFORTS.map((e) => e.id);
 
@@ -44,7 +51,7 @@ export interface ProviderView extends ScopeView {
   has_key?: boolean;
   /** The stored key is this secret provider's reference (docs/extensions/secret-providers.md "Launcher keys"). */
   key_reference?: SecretReference;
-  auth?: "api_key" | "bearer";
+  auth?: AuthMethod;
   models?: ProviderModel[];
   opus_model?: string;
   sonnet_model?: string;
@@ -84,7 +91,11 @@ export interface ProviderForm {
   /** What people see, any language; "" shows the startup ID. */
   display_name: string;
   base_url: string;
-  auth: "bearer" | "api_key";
+  /** "auto" (a hub with `launcher_auth_auto`): the connection check finds the method, `auth_found`. */
+  auth: "auto" | AuthMethod;
+  /** What the connection check found the gateway signs in with while `auth` is "auto"; "" until then. Cleared whenever
+   *  the connection changes, and never sent as is: the probes and the save send it in place of "auto". */
+  auth_found: "" | AuthMethod;
   /** What is typed for the key: a key, or with `key_by_reference` a secret provider's reference; "" keeps what is stored. */
   api_key: string;
   /** The key field takes a reference (the hub's `launcher_secret_references`). */
@@ -130,8 +141,9 @@ export function newForm(): ProviderForm {
     name: "",
     display_name: "",
     base_url: "",
-    // gateways mostly want Bearer (ANTHROPIC_AUTH_TOKEN)
-    auth: "bearer",
+    // the check finds it (a hub without launcher_auth_auto takes Bearer, withoutAutoAuth)
+    auth: "auto",
+    auth_found: "",
     api_key: "",
     key_by_reference: false,
     models: [],
@@ -169,7 +181,14 @@ export function formModel(m: ProviderModel, checked = true): FormModel {
 }
 
 /** How a saved provider signs in: what it stores, else x-api-key (providers saved before the choice existed). */
-export const storedAuth = (v: ProviderView): ProviderForm["auth"] => v.auth ?? "api_key";
+export const storedAuth = (v: ProviderView): AuthMethod => v.auth ?? "api_key";
+
+/** A form for a hub without `launcher_auth_auto`: "Automatic" becomes Bearer, the default for a new gateway there
+ *  (gateways mostly want ANTHROPIC_AUTH_TOKEN). */
+export const withoutAutoAuth = (f: ProviderForm): ProviderForm => (f.auth === "auto" ? { ...f, auth: "bearer", auth_found: "" } : f);
+
+/** The method a probe names: the one chosen, or with "Automatic" the one the check found, else "auto" for the hub to find. */
+const authOf = (f: ProviderForm): "auto" | AuthMethod => (f.auth === "auto" ? f.auth_found || "auto" : f.auth);
 
 /** The form an existing provider opens with: its models checked, the default among them even when not listed. */
 export function formFromView(v: ProviderView): ProviderForm {
@@ -376,7 +395,8 @@ export function fallbackTitle(f: ProviderForm, autoName: boolean): string {
 
 /** Whether the Connect step checks the connection by itself (fetches the models, then tests one): a valid address and a
  *  key that looks whole (typed, or the stored one when editing). A saved provider is checked only once its address, key
- *  or sign-in method differs from what is stored, so opening it sends nothing (#4881). */
+ *  or sign-in method differs from what is stored (choosing Automatic does: it checks which one works, #5329), so opening
+ *  it sends nothing (#4881). */
 export function autoCheckable(f: ProviderForm, old: ProviderView | null): boolean {
   if (!f.base_url.trim() || gatewayProblem(f.base_url) || referencePending(f)) return false;
   const key = f.api_key.trim();
@@ -460,7 +480,8 @@ export function providerBody(f: ProviderForm, old: ProviderView | null, clearLeg
     custom_model_name: api ? "" : f.custom_model_name.trim(),
     custom_model_description: api ? "" : f.custom_model_description.trim(),
     args: api ? [] : f.args.split(/\s+/).filter(Boolean),
-    auth: openAI ? "api_key" : f.auth,
+    // never "auto": what the check found, else Bearer for a new gateway (the old default) or what is stored
+    auth: openAI ? "api_key" : f.auth === "auto" ? f.auth_found || (old ? storedAuth(old) : "bearer") : f.auth,
   };
   if (f.api_key.trim()) body[f.key_by_reference ? "api_key_reference" : "api_key"] = f.api_key.trim();
   const extra = extraFields(f);
@@ -477,9 +498,10 @@ export function providerBody(f: ProviderForm, old: ProviderView | null, clearLeg
 }
 
 /** POST /api/v1/launchers/test and /discover's body: by name when editing (the stored key and headers), what is typed over it.
- *  A reference is never sent: the probe would hand its value to the address in the request (`referencePending`). */
+ *  A reference is never sent: the probe would hand its value to the address in the request (`referencePending`).
+ *  "Automatic" asks the hub to find the method until the check found it, then sends that one. */
 export function probeBody(f: ProviderForm, stored: string | null, model?: string): Record<string, unknown> {
-  const b: Record<string, unknown> = { base_url: f.base_url.trim(), auth: f.auth, api: f.api };
+  const b: Record<string, unknown> = { base_url: f.base_url.trim(), auth: authOf(f), api: f.api };
   if (stored) b.name = stored;
   if (f.api_key.trim() && !f.key_by_reference) b.api_key = f.api_key.trim();
   if (!(f.kind === "api" && f.api === "chat") && f.headers_touched) b.headers = f.headers.trim();
@@ -501,6 +523,8 @@ export interface TestResult {
   error?: string;
   /** What the hub recognised (`region_blocked`: the provider does not serve this region, #4482); the text is `error`. */
   code?: string;
+  /** A passing test sent with `auth: "auto"`: the method the gateway took (#5329). */
+  auth?: AuthMethod;
 }
 
 export const testText = (r: TestResult) => (r.ok ? t("lib-providers.test_ok", { ms: r.ms }) : r.error || t("lib-providers.test_failed"));
