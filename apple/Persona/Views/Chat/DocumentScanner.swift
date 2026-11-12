@@ -27,20 +27,27 @@ struct DocumentScanner: UIViewControllerRepresentable {
 
     nonisolated static func delivery(pages: Int, room: Int) -> Delivery { pages <= max(room, 0) ? .photos : .pdf }
 
-    /// The scan into the composer: `add` takes a photo, `upload` a file; a PDF that can't be written says so.
-    static func deliver(_ pages: [UIImage], room: Int, model: AppModel, add: (UIImage) -> Void, upload: ([URL]) -> Void) {
+    /// The scan into the composer: `add` takes a photo, `upload` a file; a PDF that can't be written says so. The PDF is
+    /// drawn and written off the main actor (a long scan is a JPEG pass a page and a file, P1 / P8 in
+    /// docs/apple/performance.md), then uploaded.
+    static func deliver(_ pages: [UIImage], room: Int, model: AppModel, add: (UIImage) -> Void, upload: @escaping ([URL]) -> Void) {
         guard !pages.isEmpty else { return }
         switch delivery(pages: pages.count, room: room) {
         case .photos:
             pages.forEach(add)
         case .pdf:
-            if let url = pdf(pages) { upload([url]) } else { model.toast = Toast(String(localized: "Couldn't save the scan."), style: .error) }
+            let side = MessagePhotos.maxSide
+            Task {
+                let url = await Task.detached(priority: .userInitiated) { DocumentScanner.pdf(pages, maxSide: side) }.value
+                if let url { upload([url]) } else { model.toast = Toast(String(localized: "Couldn't save the scan."), style: .error) }
+            }
         }
     }
 
-    /// One PDF, a page per scanned page at its own size, in a directory of its own under tmp (`scan-<time>.pdf`). The
-    /// pages go in as JPEG, as the photos a message carries do (`MessagePhotos`), so a long document stays small.
-    static func pdf(_ pages: [UIImage]) -> URL? {
+    /// One PDF, a page per scanned page at its own size (at most `maxSide`), in a directory of its own under tmp
+    /// (`scan-<time>.pdf`). The pages go in as JPEG, as the photos a message carries do (`MessagePhotos`), so a long
+    /// document stays small. Off the main actor (`deliver`).
+    nonisolated static func pdf(_ pages: [UIImage], maxSide: CGFloat) -> URL? {
         let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         guard (try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)) != nil else { return nil }
         let stamp = DateFormatter()
@@ -48,7 +55,7 @@ struct DocumentScanner: UIViewControllerRepresentable {
         stamp.dateFormat = "yyyyMMdd-HHmmss"
         let url = dir.appending(path: "scan-\(stamp.string(from: .now)).pdf")
         let images = pages.map { page in
-            let scaled = page.scaledDown(maxSide: MessagePhotos.maxSide)
+            let scaled = page.scaledDown(maxSide: maxSide)
             return scaled.jpegData(compressionQuality: 0.75).flatMap(UIImage.init(data:)) ?? scaled
         }
         let first = CGRect(origin: .zero, size: images[0].size)

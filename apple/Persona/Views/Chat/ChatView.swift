@@ -5410,7 +5410,10 @@ struct Composer: View, Equatable {
     /// A scan's pages: the next message's photos while they fit, else one PDF uploaded as a picked file is (#3720).
     private func addScan(_ pages: [UIImage]) {
         #if os(iOS)
-        DocumentScanner.deliver(pages, room: MessagePhotos.limit - images.count, model: model, add: { add($0) }, upload: { upload($0) })
+        // A PDF goes up as the panel's Files do (`upload` is the Mac's drop).
+        DocumentScanner.deliver(pages, room: MessagePhotos.limit - images.count, model: model, add: { add($0) }) { urls in
+            uploads.start(urls, machine: key.machineRef, model: model, dest: uploadDest) { insertPath($0) }
+        }
         #endif
     }
 }
@@ -5563,7 +5566,8 @@ struct SlashMenu: View {
 }
 
 extension UIImage {
-    func scaledDown(maxSide: CGFloat) -> UIImage {
+    /// Nonisolated: a scan's PDF is drawn off the main actor (`DocumentScanner.pdf`, #3720).
+    nonisolated func scaledDown(maxSide: CGFloat) -> UIImage {
         let side = max(size.width, size.height)
         guard side > maxSide else { return self }
         let scale = maxSide / side

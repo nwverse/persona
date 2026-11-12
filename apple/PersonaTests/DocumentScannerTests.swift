@@ -24,7 +24,7 @@ import UIKit
             UIColor.white.setFill()
             ctx.fill(CGRect(x: 0, y: 0, width: 300, height: 400))
         }
-        let url = try #require(DocumentScanner.pdf([page, page, page]))
+        let url = try #require(DocumentScanner.pdf([page, page, page], maxSide: MessagePhotos.maxSide))
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         #expect(url.lastPathComponent.hasPrefix("scan-") && url.pathExtension == "pdf")
         let doc = try #require(CGPDFDocument(url as CFURL))
