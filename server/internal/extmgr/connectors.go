@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -278,9 +279,15 @@ func writeForgetErr(w http.ResponseWriter, err error) {
 }
 
 // withQR draws a QR step's code for the app (whatever the connector sent as QR is replaced: the code is always URL's).
+// A device-code step whose URL already carries its code (`user_code=` in the query, as Lark's does) gets one too, so
+// the phone can scan it instead of the code being typed (#5818); one whose page asks for the code (GitHub's) does not.
 func withQR(p *connector.Prompt) error {
 	p.QR = nil
-	if p.Kind != connector.PromptQRCode {
+	if p.Kind == connector.PromptDeviceCode {
+		if !urlCarriesCode(p.URL, p.UserCode) {
+			return nil
+		}
+	} else if p.Kind != connector.PromptQRCode {
 		return nil
 	}
 	if p.URL == "" {
@@ -292,6 +299,15 @@ func withQR(p *connector.Prompt) error {
 	}
 	p.QR = &connector.QRCode{Size: size, Rows: rows}
 	return nil
+}
+
+// urlCarriesCode: raw is an https URL whose query's user_code is code, so opening it needs nothing typed.
+func urlCarriesCode(raw, code string) bool {
+	if code == "" {
+		return false
+	}
+	u, err := url.Parse(raw)
+	return err == nil && u.Scheme == "https" && u.Host != "" && u.Query().Get("user_code") == code
 }
 
 // connectorLogin is connector id's sign-in, or writes why there is none.

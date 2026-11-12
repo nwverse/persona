@@ -208,6 +208,10 @@ def run(args):
                     needs_entry.click()
                     expect(needs_entry).to_have_attribute("aria-expanded", "true")
                     section = bar.locator("section")
+                    # the rows with something to answer are folded to a line until opened (#5569)
+                    folded = section.locator('button[data-needs-row][aria-expanded="false"]')
+                    while folded.count():
+                        folded.first.click()
                     # one row per thing: the release task with its agent's card under its name, the hand-opened Agent's
                     # question, the plan with its Start, the draft
                     expect(section.locator('[data-needs-row="task:demo-task-2"]')).to_have_count(1)

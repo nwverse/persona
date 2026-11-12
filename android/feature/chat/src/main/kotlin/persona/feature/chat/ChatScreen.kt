@@ -52,6 +52,7 @@ import persona.core.domain.rewind.Rewind
 import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.internal.GeneratedComponentManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
@@ -235,12 +236,13 @@ private fun ChatPage(
     val chromeOverlay = headerOverlay || modeOverlay || pillOverlay || composerOverlay
     // Each pending card folds on its own (iOS InteractionPanel's `collapsed`); the composer stays either way.
     val requestFolds = rememberRequestFolds()
-    // What the stack's room is read from (PendingStack.cap): the bars' and the stack's own heights.
+    // What the cards' room is read from (PendingStack.cap): the bars' heights, and those of the two places the cards sit in,
+    // Persona's task question above its entries and the stack below them.
     var topBarHeight by remember { mutableIntStateOf(0) }
     var footerHeight by remember { mutableIntStateOf(0) }
+    var taskHeight by remember { mutableIntStateOf(0) }
     var stackHeight by remember { mutableIntStateOf(0) }
     val assistantTrays = remember(key) { AssistantTrayState() }
-    var trayReview by remember(key) { mutableStateOf<String?>(null) }
     var trayApproving by remember(key) { mutableStateOf(false) }
     var traySending by remember(key) { mutableStateOf(false) }
     var trayPlan by remember(key) { mutableStateOf<persona.core.contracts.TaskPlan?>(null) }
@@ -303,15 +305,18 @@ private fun ChatPage(
     }).collectAsStateWithLifecycle()
     val requests = taps.shown(allRequests).filter { it.sessionKey == key || it.sessionKey in taskKeys }
         .sortedBy { if (it.id == chrome.requestId) 0 else 1 }
-    // The stack above the composer: an Agent's chat, every card it waits on; Persona's conversation, its own cards (#4883),
-    // its tasks' oldest question under the task's name and a card the tray's Review opened (#4339 C10).
-    val stack = if (renderStyle != ChatRenderStyle.Assistant) StackCards(requests, emptyMap())
-        else assistantStack(requests, key, taskKeys, taps.shown(allRequests).firstOrNull { it.id == trayReview }) { card ->
-            val raw = GroupKeys.rawKey(card.sessionKey)
-            taskTodos.firstOrNull { todo -> todo.activeAgents.any { it.key == raw } }?.title?.takeIf(String::isNotBlank)
-                ?: card.taskTitle?.takeIf(String::isNotBlank) ?: card.sessionTitle?.takeIf(String::isNotBlank)
-                ?: sessionList.firstOrNull { it.key == card.sessionKey }?.displayTitle
-        }
+    // The cards above the composer, as iOS's footer has them. An Agent's chat: the stack holds every card it waits on.
+    // Persona's conversation: the oldest question of its tasks is a card of its own above the Needs you / In progress
+    // entries (iOS TaskQuestions), under its task's name with "N more"; the stack below them holds the conversation's own
+    // cards alone (#4883), so its "N pending" counts only them (DESIGN_SYSTEM.md 4.8, #4339 C10).
+    val assistantChat = renderStyle == ChatRenderStyle.Assistant
+    val taskAsk = if (!assistantChat) null else taskQuestion(requests, taskKeys) { card ->
+        val raw = GroupKeys.rawKey(card.sessionKey)
+        taskTodos.firstOrNull { todo -> todo.activeAgents.any { it.key == raw } }?.title?.takeIf(String::isNotBlank)
+            ?: card.taskTitle?.takeIf(String::isNotBlank) ?: card.sessionTitle?.takeIf(String::isNotBlank)
+            ?: sessionList.firstOrNull { it.key == card.sessionKey }?.displayTitle
+    }
+    val stackCards = if (assistantChat) requests.filter { it.sessionKey == key } else requests
     val messages = chatBubbles(allMessages, key, snapshot.items)
     val composerDeliveries by (composerService?.deliveries ?: remember {
         kotlinx.coroutines.flow.MutableStateFlow(emptyMap<String, ComposerDelivery>())
@@ -374,7 +379,10 @@ private fun ChatPage(
     }
     var sending by remember { mutableStateOf(false) }
     var sendingId by remember { mutableStateOf<String?>(null) }
-    var overlay by remember { mutableStateOf(false) }
+    // A card open on its full page, in either place of cards.
+    var taskOverlay by remember { mutableStateOf(false) }
+    var stackOverlay by remember { mutableStateOf(false) }
+    val overlay = taskOverlay || stackOverlay
     var terminalHelp by remember { mutableStateOf(false) }
     var taskPageVisible by remember { mutableStateOf(false) }
     var fullText by remember { mutableStateOf<String?>(null) }
@@ -427,6 +435,8 @@ private fun ChatPage(
         }
         projectedFrom = items
     }
+    // Where the header counts "Working 22 min" from: the start of the turn that runs now (iOS `Turn.startedAt`).
+    val runningSince = remember(projection) { projection.liveTurnId?.let { id -> projection.turns.firstOrNull { it.id == id }?.start } }
     val liveWorkLines = remember(projection) { liveWorkIds(projection.lines) }
     var previousLiveWork by remember { mutableStateOf(emptySet<String>()) }
     // Fold the completed run, but keep choices made on historical lines and transfer an opened placeholder.
@@ -545,7 +555,10 @@ private fun ChatPage(
     }
     val readThrough = listOfNotNull(reportedSeen, snapshot.items.firstOrNull { it.id == snapshot.lastSeenMessageId }).maxWithOrNull(chatItemOrder)
     val context = androidx.compose.ui.platform.LocalContext.current
-    val loader = remember(context, repository, readingKey?.scope) { chatImageLoader(context.applicationContext, repository) }
+    val pairingLoader = remember(repository, key) { (repository as? ChatLocalStorage)?.imageLoader(key) }
+    val loader = remember(context, repository, pairingLoader) {
+        pairingLoader ?: chatImageLoader(context.applicationContext, repository)
+    }
     val markdownCache = remember { ChatMarkdownCache() }
     // Only fresh Agent replies preload their links (ChatLinks.toPreload): paging old history never does.
     val preloadUrls by produceState(emptyList<String>(), snapshot.items) {
@@ -556,7 +569,7 @@ private fun ChatPage(
     // list that pushes the question off the top (the newest reply is the one that keeps its place).
     var markdownReadyFor by remember { mutableStateOf<List<Item>?>(null) }
     val markdownSplit = remember { MarkdownPrewarm() }
-    DisposableEffect(loader) { onDispose { loader.shutdown() } }
+    DisposableEffect(loader, pairingLoader) { onDispose { if (pairingLoader == null) loader.shutdown() } }
     var folding by remember { mutableStateOf(emptySet<String>()) }
     var foldErrors by remember { mutableStateOf(emptyMap<String, String>()) }
     val terminal: (() -> Unit)? = if (readOnly || !canTerminal) null else onTerminal?.let { action -> { action(key) } }
@@ -607,12 +620,6 @@ private fun ChatPage(
         if (readOnly || !canSend) return false
         if (sending || submittedDraft != null) return false
         if (command == null && ((!composer.hasContent && linkContexts.isEmpty()) || !composer.ready)) return false
-        // Routed to a task ("Say to "xx""): straight to its agent, not to Persona (docs/assistant/unified-entry.md "Routing").
-        if (command == null && tasks != null && linkContexts.isEmpty() && composer.attachments.isEmpty() &&
-            tasks.sendRouted(key.sessionId, composer.value.text.trim()) { notice = operationFeedback(it).text.resolve(res) }) {
-            composer.clearIfUnchanged(composer.draft)
-            return true
-        }
         val draft = composer.draft
         val refs = if (command == null) linkContexts else emptyList()
         val wireText = command ?: linkMessage(composer.message(), refs, context.resources)
@@ -624,12 +631,18 @@ private fun ChatPage(
         followEnd()
         scope.launch {
             try {
-                // The user's own message carries out a launcher switch waiting on Glass, where the pill shows it (#5055):
-                // `apply_switch`; any other message leaves it waiting.
-                if (command == null && switchesNext(switchSession, glass && agentChat)) {
-                    sender.sendApplyingSwitch(key, wireText, id)
-                    drawnSwitch = null
-                } else sender.send(key, wireText, id, null, conversationLauncher, conversationModel)
+                // Routed to a task ("Say to "xx""): its accepted response, not launching the request, consumes the route
+                // and clears the draft below. Until then this has the same pending state as an ordinary send (#5949).
+                val routed = command == null && tasks != null && refs.isEmpty() && draft.attachments.isEmpty() &&
+                    tasks.sendRouted(key.sessionId, draft.text.trim())
+                if (!routed) {
+                    // The user's own message carries out a launcher switch waiting on Glass, where the pill shows it (#5055):
+                    // `apply_switch`; any other message leaves it waiting.
+                    if (command == null && switchesNext(switchSession, glass && agentChat)) {
+                        sender.sendApplyingSwitch(key, wireText, id)
+                        drawnSwitch = null
+                    } else sender.send(key, wireText, id, null, conversationLauncher, conversationModel)
+                }
                 if (command == null) {
                     composer.clearIfUnchanged(draft)
                     linkContexts = linkContexts.filterNot { ref -> refs.any { it.id == ref.id } }
@@ -807,7 +820,8 @@ private fun ChatPage(
             sheet = taskSheet, machines = machines.filter { GroupKeys.namespaceOf(it.id) == namespace }.map { it.copy(id = GroupKeys.raw(it.id)) },
             pending = taskCards.filter { GroupKeys.namespaceOf(it.machineId) == namespace }.map { it.copy(machineId = GroupKeys.raw(it.machineId)) },
             manager = session?.manager,
-            backgroundRecords = assistantPresentation.background, onOpenBackground = { backgroundOpen = true })
+            backgroundRecords = assistantPresentation.background, onOpenBackground = { backgroundOpen = true },
+            onOpenSetup = chrome.onOpenSetup?.let { open -> { page: persona.core.contracts.BriefSetupPage -> open(page, session?.manager) } })
     }
     fun approveTray(captured: List<Pair<Interaction, Resolution>>) {
         if (trayApproving || taps.busy || readOnly) return
@@ -855,7 +869,6 @@ private fun ChatPage(
             finally { traySending = false }
         }
     }
-    LaunchedEffect(allRequests, trayReview) { if (allRequests.none { it.id == trayReview }) trayReview = null }
     trayPlan?.let { plan -> taskHost?.let { host ->
         JSheet(onDismiss = { trayPlan = null }, title = plan.tasks.firstOrNull()?.title, scrollable = true) {
             PlanCard(plan, host)
@@ -939,12 +952,19 @@ private fun ChatPage(
         line.holds(lastUserId)
     }?.let { ChatListEntry(it.contentKey, lastLineAtTop = true) } else null
     val placed = remember(lines, messages, writtenAt) { placeFailed(lines.asReversed(), messages, writtenAt) }
-    // The list's keys from the bottom (reverse layout): the tail rows, the outbox's bubbles still on their way, then the
-    // lines, each with the failed sends written before it just above it (#2769).
-    val listKeys = remember(lines, placed, tailRows) {
+    // Persona's first message, not in the transcript yet: its day stands over it on Glass, as the transcript's will once it
+    // is there (iOS `DayLine`, #1911), so the line does not appear above it later. The day it was written, else today.
+    val pendingDay = if (glass && !agentChat && lines.isEmpty() && placed.rest.isNotEmpty())
+        placed.rest.mapNotNull { it.createdAt }.minOrNull()?.let { java.time.Instant.ofEpochMilli(it).atZone(java.time.ZoneId.systemDefault()).toLocalDate() }
+            ?: java.time.LocalDate.now()
+        else null
+    // The list's keys from the bottom (reverse layout): the tail rows, the outbox's bubbles still on their way, that day,
+    // then the lines, each with the failed sends written before it just above it (#2769).
+    val listKeys = remember(lines, placed, tailRows, pendingDay != null) {
         buildList {
             addAll(tailRows)
             placed.rest.asReversed().forEach { add("outbox-${it.clientMessageId}") }
+            if (pendingDay != null) add(PENDING_DAY_ROW)
             for (line in lines) {
                 add(line.contentKey)
                 placed.before[line.id].orEmpty().asReversed().forEach { add("outbox-${it.clientMessageId}") }
@@ -1007,13 +1027,21 @@ private fun ChatPage(
                 .map { (todo, state) -> MentionTask(todo.id, todo.title, todo.place(host, null), state.status()) }
         }
     }
-    val mentions = if (readOnly || !canSend) null else ComposerMentions(mentionFiles, session?.cwd.orEmpty(), sessionList, key, taskMentions)
+    // Its session's folder and any folder a typed path names are read from the session's computer, as iOS's `MentionSource` does.
+    val mentionFolders = remember(chrome.files, key.machineId) {
+        chrome.files?.let { files -> MentionFolders { dir, cwd -> files.directory(key.machineId, cwd, dir).entries } }
+    }
+    val mentions = if (readOnly || !canSend) null
+        else ComposerMentions(mentionFiles, session?.cwd.orEmpty(), sessionList, key, taskMentions, mentionFolders)
     // An assistant conversation's cards answer through its hub's store (docs/assistant/assistant-views.md); elsewhere they only draw.
     val cardsHost = remember(tasks, key.sessionId, readOnly, canSend) {
         tasks?.let { persona.core.domain.views.AssistantCardsHost(key.sessionId, it.cards, it.cardActions, interactive = !readOnly && canSend) }
     }
     // A task's notice jumps to the call that started it through the task bar's navigation (ChatTasks).
     val callJumps = remember(key) { ChatCallJumps() }
+    // The Macs a computer tool's `machine` is, by name (the list changes with every report, its names seldom); Glass's
+    // rows also keep some tools' words as the title with the subject under them (#4339 C1).
+    val toolNames = remember(machines.map { it.id to it.name }, key.machineId, glass) { ToolNames(machines, key.machineId, glass = glass) }
     // Whose the conversation is, for what its links open (docs/assistant/managers.md "Clients"): its session's manager, else
     // for an assistant conversation the one whose page listed it.
     val linkManager = session?.manager ?: if (renderStyle == ChatRenderStyle.Assistant)
@@ -1021,7 +1049,7 @@ private fun ChatPage(
     CompositionLocalProvider(LocalChatMarkdownCache provides markdownCache, LocalChatRowActions provides rowActions,
         LocalContentColor provides PersonaTheme.palette.ink, LocalChatPorts provides chatPorts,
         persona.core.designsystem.LocalAssistantCards provides cardsHost, LocalChatSubagents provides subagentLinks, LocalSubagentFolds provides subagentFolds, LocalChatWorkflows provides workflowCards,
-        LocalChatTaskIndex provides projection.tasks, LocalChatJumpToCall provides callJumps::jump) {
+        LocalChatTaskIndex provides projection.tasks, LocalChatJumpToCall provides callJumps::jump, LocalToolNames provides toolNames) {
         // Under the files pane or the terminal's cover: hidden from screen readers too.
         ChatLinkHost(Modifier.fillMaxSize().background(PersonaTheme.palette.background)
             .then(if (embedded) Modifier else Modifier.imePadding())
@@ -1037,23 +1065,32 @@ private fun ChatPage(
             BoxWithConstraints(Modifier.fillMaxSize().padding(bottom = linkInset)) {
                 val pageHeight = maxHeight
                 val trayMax = maxHeight * AssistantTrayTokens.maximumHeightFraction
-                // The pending cards above the composer (DESIGN_SYSTEM.md 4.8, iOS PendingCards): about half the page, never pushing
-                // the composer off it; with the keyboard up, what the conversation has above the rest of the footer. Derived:
+                // The rule a question a supervisor passed up suggests, under its card (#4929); a hub from before sends none.
+                val ruleLine: (@Composable (Interaction) -> Unit)? = if (tasks == null) null else { card ->
+                    RuleSuggestionLine("card:${card.id}", card.suggestion, tasks, { notice = operationFeedback(it).text.resolve(res) },
+                        card.manager, enabled = canApprove)
+                }
+                // The pending cards above the composer (DESIGN_SYSTEM.md 4.8, iOS PendingCards and TaskQuestions), in two places:
+                // [task] Persona's task question above its entries, else the stack. Each takes at most half the page and never so
+                // much that the composer leaves it; with the keyboard up, what the conversation has above the rest of the
+                // footer; and the two share that room (PendingStack.cap), so together they never take more than it. Derived:
                 // the bars' heights move as the header folds, the cap only now and then.
-                val pendingCards: @Composable (Boolean) -> Unit = { keyboard ->
+                val pendingCards: @Composable (cards: List<Interaction>, task: Boolean, keyboard: Boolean) -> Unit = { cards, task, keyboard ->
                     val density = LocalDensity.current
                     val above = LocalChromeInsets.current.top
-                    val cap by remember(pageHeight, keyboard, density, above) {
+                    val otherShown = if (task) stackCards.isNotEmpty() else taskAsk != null
+                    val cap by remember(pageHeight, keyboard, density, above, task, otherShown) {
                         derivedStateOf {
                             with(density) {
-                                PendingStack.cap(pageHeight, keyboard, rest = (footerHeight - stackHeight).coerceAtLeast(0).toDp(),
-                                    header = above + topBarHeight.toDp(), floor = Tokens.Space.xl)
+                                PendingStack.cap(pageHeight, keyboard, rest = (footerHeight - taskHeight - stackHeight).coerceAtLeast(0).toDp(),
+                                    header = above + topBarHeight.toDp(), floor = Tokens.Space.xl,
+                                    other = if (!otherShown) null else (if (task) stackHeight else taskHeight).toDp())
                             }
                         }
                     }
                     // In a box of its own: with no cards it is nothing, and its height reads 0 again.
-                    Box(Modifier.onSizeChanged { stackHeight = it.height }) {
-                        InteractionPanel(stack.cards, machine, cap, taps.busyId, taps.uncertain, { interaction, resolution ->
+                    Box(Modifier.onSizeChanged { if (task) taskHeight = it.height else stackHeight = it.height }) {
+                        InteractionPanel(cards, machine, cap, taps.busyId, taps.uncertain, { interaction, resolution ->
                             if (taps.canTap(interaction, allRequests, java.time.Instant.now())) {
                                 taps = taps.tapped(interaction.id)
                                 scope.launch {
@@ -1072,9 +1109,8 @@ private fun ChatPage(
                                     } finally { taps = taps.idle() }
                                 }
                             }
-                        }, terminal, { overlay = it }, linkVisible = linkVisible,
-                            // a card the tray opened goes back to the tray once folded
-                            folds = requestFolds, onFold = { interaction, folded -> if (folded && interaction.id == trayReview) trayReview = null },
+                        }, terminal, { if (task) taskOverlay = it else stackOverlay = it }, linkVisible = linkVisible,
+                            folds = requestFolds,
                             blockedReason = if (canApprove) null else approvalBlockedReason(res, session),
                             terminalHelp = canTerminal, onDiscardLocal = { interaction ->
                                 if (!taps.busy) {
@@ -1091,7 +1127,9 @@ private fun ChatPage(
                                         } finally { taps = taps.idle() }
                                     }
                                 }
-                            }, keyboard = keyboard, labels = stack.labels, first = chrome.requestId)
+                            }, keyboard = keyboard,
+                            labels = if (task) taskAsk?.let { mapOf(it.card.id to it.label) }.orEmpty() else emptyMap(),
+                            first = if (task) null else chrome.requestId, counted = !task, suggestion = ruleLine)
                     }
                 }
                 val onOpenSibling = chrome.onOpenSession
@@ -1117,7 +1155,8 @@ private fun ChatPage(
                                         statusState = status, onDetails = { statusSheet = true },
                                         onOpenTodo = chrome.onOpenTodo, agentShares = chrome.agentShares, worktrees = chrome.worktrees,
                                         onSearch = { search.open(chatList) { timeline.freeze(currentItems); timelineVersion++ } },
-                                        onTerminal = agentTerminal, onTerminalHelp = if (hasTerminal && terminal == null) ({ terminalHelp = true }) else null)
+                                        onTerminal = agentTerminal, onTerminalHelp = if (hasTerminal && terminal == null) ({ terminalHelp = true }) else null,
+                                        turnStart = runningSince)
                                     // The space's other tabs under the title (iOS SiblingTabs); not for the assistant's conversation.
                                     if (tabs && session != null && onOpenSibling != null) {
                                         ChatSiblingTabs(session, siblingSessions, onOpenSibling, trailing = activityPill)
@@ -1161,7 +1200,7 @@ private fun ChatPage(
                                     NextWaitingRow(next, { offerNext = false; openRequest?.invoke(next.request.session, next.request.requestId) })
                                 }
                             // An Agent's cards sit over the queue, the notes and the composer, as iOS's footer has them.
-                            if (!readOnly && renderStyle != ChatRenderStyle.Assistant) pendingCards(keyboard)
+                            if (!readOnly && !assistantChat) pendingCards(stackCards, false, keyboard)
                             // The latest question the assistant answered here, after the agent's own cards (iOS DelegatedCard, #4339 C9).
                             if (glass && agentChat && !readOnly)
                                 DelegatedCard(key, interactions, canSend, Modifier.padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.xs))
@@ -1193,7 +1232,7 @@ private fun ChatPage(
                                     ChatQueueStrip(session, chrome.actions, composer, { notice = it }, sessions::refresh)
                                 // A source that only lets the phone read says so where the typing would be.
                                 if (!canSend && session != null) ChatSourceNote(session)
-                                if (renderStyle == ChatRenderStyle.Assistant) taskHost?.let { host ->
+                                if (assistantChat) taskHost?.let { host ->
                                     val namespace = GroupKeys.namespaceOf(key.machineId)
                                     val owner = session?.manager ?: managerChoice.shown
                                     val trayRequests = taps.shown(allRequests).filter { request ->
@@ -1201,16 +1240,22 @@ private fun ChatPage(
                                             (request.sessionKey == key || request.sessionKey in taskKeys ||
                                                 host.sessions.any { it.key == GroupKeys.rawKey(request.sessionKey) && !it.assistant && (it.manager ?: managerChoice.defaultId) == owner })
                                     }
+                                    // What its tasks ask, at the bottom where the user is: the oldest question above the entries and the
+                                    // tray, answered there (iOS taskFooter, TaskQuestions).
+                                    taskAsk?.let { pendingCards(listOf(it.card), true, keyboard) }
                                     AssistantTrays(host, assistantTrays, trayRequests,
                                         inboxDrafts.filter { (it.manager ?: managerChoice.defaultId) == owner }, traySchedules,
                                         maximumHeight = trayMax,
                                         busy = trayApproving || traySending || taps.busy, enabled = canSend,
                                         onApprove = ::approveTray, onReview = { interaction ->
                                             assistantTrays.expanded = null
-                                            // A card already in the stack: the row closes the tray onto it (DESIGN_SYSTEM.md 4.8);
-                                            // any other comes into the stack until it is answered or folded.
-                                            if (interaction.id !in stack.ids) trayReview = interaction.id
-                                            requestFolds.open(interaction.id)
+                                            val raw = GroupKeys.rawKey(interaction.sessionKey)
+                                            // As iOS's rows do: the conversation's own card is right below the entries, so the row closes
+                                            // the tray onto it; a task's row opens that task, an Agent's its own (detailTask, detailAgent),
+                                            // where Open chat brings its page and its cards. Never into the stack: that is the conversation's.
+                                            if (interaction.sessionKey == key) requestFolds.open(interaction.id)
+                                            else taskTodos.firstOrNull { todo -> todo.activeAgents.any { it.key == raw } }
+                                                ?.let { todo -> openTask(host, todo) } ?: run { host.sheet.value = TaskSheet.Agent(raw) }
                                         }, onSend = ::sendTray, onSchedule = { traySchedule = it }, onPlan = { trayPlan = it },
                                         backgroundRecords = host.backgroundRecords.isNotEmpty(), onBackground = host.onOpenBackground,
                                         under = computerPill?.let { pill -> { pill(Modifier) } },
@@ -1218,9 +1263,9 @@ private fun ChatPage(
                                     // Where the next message goes, never only inside the In progress tray (iOS RouteChip, #4339 C15).
                                     TaskRouteChip(host)
                                 }
-                                // Persona's cards under its entries and the route chip, over its queue and the composer, as iOS's
-                                // footer has them (DESIGN_SYSTEM.md 4.8, #4339 C10).
-                                if (renderStyle == ChatRenderStyle.Assistant) pendingCards(keyboard)
+                                // The conversation's own cards under its entries and the route chip, over its queue and the composer,
+                                // as iOS's footer has them: they alone, so "N pending" counts only them (DESIGN_SYSTEM.md 4.8).
+                                if (assistantChat) pendingCards(stackCards, false, keyboard)
                                 // Persona's queue: its own messages, then those relayed from elsewhere, under its entries and right
                                 // above the composer, as iOS's footer has it (every style: it is behaviour; each draws its own strip, #4339 C6).
                                 if (renderStyle == ChatRenderStyle.Assistant && SlashCommand.suggestions(composer.value.text, clear = true).isEmpty())
@@ -1347,6 +1392,7 @@ private fun ChatPage(
                                 placed.rest.asReversed().forEach { message ->
                                     item(key = "outbox-${message.clientMessageId}", contentType = "outbox") { outboxBubble(message) }
                                 }
+                                pendingDay?.let { day -> item(key = PENDING_DAY_ROW, contentType = "day") { DayLine(day, Modifier.testTag("chat-pending-day")) } }
                                 for (line in lines) {
                                     item(key = line.contentKey, contentType = line.contentType()) {
                                         ChatSearchHighlight(search, line.contentKey) {
@@ -1483,3 +1529,5 @@ internal fun ComposerContextCards(contexts: List<ChatLinkContext>, compact: Bool
 /** The rows at the chat's newest end, under your unsent messages: a load error (Glass), then "Claude is getting ready…". */
 private const val ERROR_ROW = "load-error"
 private const val READY_ROW = "getting-ready"
+/** The day over a first message not in the transcript yet (Glass, Persona's conversation). */
+private const val PENDING_DAY_ROW = "pending-day"

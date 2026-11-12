@@ -57,8 +57,11 @@ func (h *Hub) routes() http.Handler {
 	h.nodeUpdateRelayRoutes(api)
 	api.HandleFunc("GET /api/v1/interactions", func(w http.ResponseWriter, r *http.Request) {
 		ixs := visibleInteractions(h.pendingInteractions(), h.requestHasElicitation(r))
-		if em := extensionManager(r); em != "" { // an extension's token: its manager's cards only
-			ixs = slices.DeleteFunc(ixs, func(ix proto.Interaction) bool { return cmp.Or(ix.Manager, assistantwire.AssistantID) != em })
+		if extensionToken(r) { // an extension's token: its manager's cards only, none private (extension_private.go)
+			em := extensionManager(r)
+			ixs = slices.DeleteFunc(ixs, func(ix proto.Interaction) bool {
+				return em != "" && cmp.Or(ix.Manager, assistantwire.AssistantID) != em || h.hiddenFromExtensions(ix)
+			})
 		}
 		writeJSON(w, map[string]any{"interactions": h.withMuted(ixs)})
 	})
@@ -674,7 +677,7 @@ func (h *Hub) listSessions(w http.ResponseWriter, r *http.Request) {
 		if mid != "" && m.cfg.ID != mid || em != "" && owner != em || named != "" && owner != named {
 			continue
 		}
-		lists = append(lists, stampedList{h.shown(m.cfg.ID, m.keptSessions()), owner})
+		lists = append(lists, stampedList{withoutHealthSessions(r, h.shown(m.cfg.ID, m.keptSessions())), owner})
 	}
 	writeSessionLists(w, lists)
 }
@@ -1267,7 +1270,9 @@ func (h *Hub) serveWS(w http.ResponseWriter, r *http.Request) {
 		c.mu.Unlock()
 		for k := range subs {
 			if m := h.localMachine(k[0]); m != nil {
-				m.removeWatcher(k[1])
+				// Each unwatch on its own: one node slow to answer holds up neither the others nor what follows here.
+				m.watcherLeft(k[1])
+				go m.syncUnwatch(k[1])
 			}
 		}
 		h.terminalDrop(c)
@@ -1448,9 +1453,16 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 		}
 		c.mu.Unlock()
 		if !already {
-			m.addWatcher(ctx, msg.SessionID)
+			m.watcherJoined(msg.SessionID)
 		}
-		go h.sendBacklog(ctx, c, m, msg.SessionID, msg.SinceSeq)
+		// Not in the read loop: the node may take up to watchCallTimeout to answer the watch (watcherJoined). The
+		// backlog still goes after it, so nothing falls between the two.
+		go func() {
+			if !already {
+				m.syncWatch(ctx, msg.SessionID)
+			}
+			h.sendBacklog(ctx, c, m, msg.SessionID, msg.SinceSeq)
+		}()
 	case "unsubscribe":
 		m := h.localMachine(msg.MachineID)
 		if m == nil {
@@ -1462,7 +1474,8 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 		delete(c.subs, key)
 		c.mu.Unlock()
 		if had {
-			m.removeWatcher(msg.SessionID)
+			m.watcherLeft(msg.SessionID)
+			go m.syncUnwatch(msg.SessionID)
 		}
 	case "register_phone":
 		if c.role != roleFull { // runs tools on behalf of claude: not for an answer-only device
