@@ -25,7 +25,7 @@ export default function DisplayMenu({ offered, shown, onChoose }: { offered: Scr
         title={t("screen-displays.displays")}
         data-testid="screen-displays"
         className={cx(
-          "flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-control px-2 text-[12px] font-medium text-ink-2 transition-colors hover:bg-hover hover:text-ink",
+          "touch-hit flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-control px-2 text-[12px] font-medium text-ink-2 transition-colors hover:bg-hover hover:text-ink",
           at && "bg-hover text-ink",
         )}
       >
