@@ -4,14 +4,22 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material3.Text
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.height
+import androidx.compose.ui.unit.width
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -82,5 +90,35 @@ class MachineGridLayoutTest {
         val row = rule.onNodeWithTag("last-row").getUnclippedBoundsInRoot()
         val card = rule.onNodeWithTag("last-card").getUnclippedBoundsInRoot()
         assertTrue(card.width < row.width)
+    }
+
+    @Config(sdk = [35], qualifiers = "en-w700dp-h500dp-mdpi")
+    @Test
+    fun columnChangesKeepTheFirstMachineRowAndPixelOffset() {
+        val ids = (0 until 30).map { "machine-$it" }
+        var columns by mutableIntStateOf(1)
+        lateinit var state: LazyListState
+        rule.setContent {
+            state = rememberMachineGridListState(ids, columns)
+            LazyColumn(Modifier.height(200.dp), state = state) {
+                machineGrid(ids, when (columns) {
+                    1 -> 330.dp
+                    2 -> 672.dp
+                    else -> 1014.dp
+                }) { id, modifier ->
+                    Text(id, modifier.height(40.dp))
+                }
+            }
+        }
+        rule.runOnIdle { runBlocking { state.scrollToItem(9, 7) } }
+
+        for (nextColumns in listOf(2, 3, 1)) {
+            val anchor = machineGridRows(ids, columns)[state.firstVisibleItemIndex].first()
+            rule.runOnIdle { columns = nextColumns }
+            rule.waitForIdle()
+            val row = machineGridRows(ids, nextColumns)[state.firstVisibleItemIndex]
+            assertTrue("lost row anchor $anchor at $nextColumns columns: ${state.firstVisibleItemIndex}", row.contains(anchor))
+            assertEquals(7, state.firstVisibleItemScrollOffset)
+        }
     }
 }

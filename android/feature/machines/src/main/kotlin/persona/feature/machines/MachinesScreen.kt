@@ -8,6 +8,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -109,10 +110,12 @@ internal fun MachinesScreen(
         MoveToManagerSheet(r, current, onMove = { m -> actions.moveTo(machineId, m.id, m.shownName) }, onDismiss = { choosingManager = false })
     }
     MachineGridWidth { contentWidth ->
+    val listState = rememberMachineGridListState(ids, machineGridColumns(contentWidth))
     JListPage(
         title = if (machineId == null) stringResource(R.string.machines_title) else machine?.displayName ?: stringResource(R.string.machines_title_detail),
         summary = if (machineId == null) stringResource(R.string.machines_summary_with_agents, listSummary.online, listSummary.total, listSummary.attention, listSummary.needsYou) else null,
         onBack = navigator::back, largeTitle = machineId == null,
+        state = listState,
         actions = {
             if (machineId == null && adds && canAdd) JIconButton(PhIcons.Plus, stringResource(ReadinessActionId.AddComputer.label), addComputer)
             JIconButton(PhIcons.ArrowClockwise, stringResource(R.string.machines_refresh), model::refresh)
@@ -189,7 +192,7 @@ internal fun MachinesScreen(
                     { health.recheckBrowser(machine.id) })
             }
             item("now") {
-                JSectionHeader(stringResource(R.string.machines_now),
+                JSectionHeader(stringResource(R.string.machines_now), modifier = Modifier.testTag("machine-now"),
                     trailing = uptimeText(system?.bootTime, state.now)?.takeIf { metric.online }?.let { stringResource(R.string.machines_up_for, it) })
             }
             // Keyed by the label's resource, so the list keeps its rows when the language changes.

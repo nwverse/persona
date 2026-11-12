@@ -7,13 +7,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.hasScrollToNodeAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.navigation3.runtime.NavKey
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.time.Instant
@@ -73,7 +76,7 @@ class MachineAgentPriorityTest {
                 else -> state
             }
             Session("machine", "session-$index", title = "Agent $index", state = state, status = status,
-                updatedAt = Instant.ofEpochSecond(2_000L - index).toString())
+                updatedAt = Instant.ofEpochSecond(1_793_600_000L - index).toString())
         }
         val prioritized = machineSessions(sessions.reversed(), "machine")
 
@@ -134,9 +137,9 @@ class MachineAgentPriorityUiTest {
         }
 
         rule.onAllNodesWithText("Running sessions").assertCountEquals(1)
-        rule.onAllNodesWithText("Now").assertCountEquals(1)
+        rule.onNodeWithTag("machine-now").assertIsDisplayed()
         val agentsTop = rule.onNodeWithText("Running sessions").getUnclippedBoundsInRoot().top
-        val monitoringTop = rule.onNodeWithText("Now").getUnclippedBoundsInRoot().top
+        val monitoringTop = rule.onNodeWithTag("machine-now").getUnclippedBoundsInRoot().top
         assertTrue(agentsTop < monitoringTop)
         rule.onNodeWithText("Agent 6").assertDoesNotExist()
         rule.onNodeWithText("Show all 6").performClick()
@@ -208,7 +211,8 @@ class MachineAgentPriorityUiTest {
             }
         }
 
-        rule.onNodeWithText("Machine 12").performScrollTo().performClick()
+        rule.onNode(hasScrollToNodeAction()).performScrollToNode(hasText("Machine 12"))
+        rule.onNodeWithText("Machine 12").performClick()
         rule.onNodeWithContentDescription("Back").assertIsDisplayed().performClick()
 
         rule.onNodeWithText("Machine 12").assertIsDisplayed()
