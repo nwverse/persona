@@ -58,6 +58,8 @@ const P: Record<string, React.ReactNode> = {
   folder: <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />,
   git: <g><circle cx="6" cy="6" r="2.5" /><circle cx="6" cy="18" r="2.5" /><circle cx="18" cy="8" r="2.5" /><path d="M6 8.5v7M18 10.5c0 4-6 3-10.5 6" /></g>,
   more: <g fill="currentColor" stroke="none"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></g>,
+  // a drag handle: two columns of three dots (the composer's queued messages, #5327)
+  grip: <g fill="currentColor" stroke="none"><circle cx="9" cy="5" r="1.7" /><circle cx="9" cy="12" r="1.7" /><circle cx="9" cy="19" r="1.7" /><circle cx="15" cy="5" r="1.7" /><circle cx="15" cy="12" r="1.7" /><circle cx="15" cy="19" r="1.7" /></g>,
   menu: <path d="M4 7h16M4 12h16M4 17h16" />,
   // "Start a new session" (a branch of the chat): a path that splits in two
   fork: <path d="M16 3h5v5M8 3H3v5M12 22v-8.3a4 4 0 0 0-1.17-2.87L3 3M15 9l6-6" />,

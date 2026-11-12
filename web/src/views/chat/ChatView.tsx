@@ -322,14 +322,15 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const shownPending = queued.length ? pending.filter((p) => !queued.some((q) => sameMessage(q, p.msg.text))) : pending;
   // a queued message taken back or deleted (QueueStrip) is not on its way any more: its sending bubble goes with it,
   // rather than showing again until the turn ends (#4342)
-  // the photos a Persona chat's queued message went with, when it was sent from here (its queue holds only the words)
-  const queuedPhotos = (raw: string) => pending.find((p) => sameMessage(raw, p.msg.text))?.msg.images?.length ?? 0;
-  const withdrawn = (text: string) => {
+  // the photos a Persona chat's queued message went with, when it was sent from here (its queue holds only the words).
+  // Both stay the same while `pending` does: the queue is drawn in the memoized composer.
+  const queuedPhotos = useCallback((raw: string) => pending.find((p) => sameMessage(raw, p.msg.text))?.msg.images?.length ?? 0, [pending]);
+  const withdrawn = useCallback((text: string) => {
     const gone = pending.find((p) => !p.posting && sameMessage(text, p.msg.text));
     if (!gone) return;
     forgetOutgoing(outboxKey(mid, sid), gone.id);
     setPending((ps) => ps.filter((p) => p.id !== gone.id));
-  };
+  }, [pending, mid, sid]);
   const outgoing = shownPending.length + outbox.filter((e) => e.state !== "failed").length;
   const persona = usePersona();
   const state = session ? stateOf(session) : "unknown";
@@ -1575,11 +1576,13 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const background = useMemo(() => backgroundLine(session), [session]);
   const wait = useMemo(() => (outgoing || awaiting ? null : backgroundWaitLine(session)), [outgoing, awaiting, session]);
   const running = session ? <RunningStatusBar mid={mid} sid={sid} working={state === "working" || awaiting} startedAt={runStart} clock={barClock.current} agents={waitingOn} background={background} wait={wait} subtasks={subtasks && !outgoing && !awaiting} /> : null;
-  const queue =
-    session && queued.length > 0 ? (
-      <QueueStrip session={session} draftKey={draftKey} canEdit={canCompose} compact={short} persona={assistant ? persona.name : undefined} onWithdrawn={withdrawn}
-        photosOf={assistant ? queuedPhotos : undefined} />
-    ) : null;
+  // at the top of the composer's card, as cindy's pending queue (#5327); a phone on its side keeps it to one line beside
+  // the run's status. The same element while nothing in it changes: the composer is memoized.
+  const hasQueue = queued.length > 0;
+  const queue = useMemo(
+    () => (session && hasQueue ? <QueueStrip session={session} draftKey={draftKey} canEdit={canCompose} compact={short} persona={assistant ? persona.name : undefined} onWithdrawn={withdrawn} photosOf={assistant ? queuedPhotos : undefined} /> : null),
+    [session, hasQueue, draftKey, canCompose, short, assistant, persona.name, withdrawn, queuedPhotos],
+  );
   // with the plan's pill showing, "Jump to bottom" goes beside it (over the chat, they hid each other); the pill keeps
   // one wrapper either way, so a flyout pinned open on it stays when the reader scrolls
   const jumpInDock = Boolean(planPill);
@@ -1836,7 +1839,6 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
             }}
           />
         )}
-        {!short && queue}
         {voiceState === "ended" && <VoiceEnded owner={voiceOwner} />}
         {/* the error the chat stopped on, right over the composer as cindy places it (#5313); keyed by the error, so a new
             one opens with its details folded */}
@@ -1888,6 +1890,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           footer={footer}
           trailing={trailing}
           voice={voiceEntry.offer}
+          top={short ? undefined : queue}
         />
         )}
         {!stoppedLine && session && !assistant && contextUsage(session) !== null && (
