@@ -469,6 +469,14 @@ after `formatDuration`). Two files are ported from cindy's code with changes: `w
 `packages/maker-shared/src/thinkingText.ts`) and `web/src/views/chat/ThinkingText.tsx` (from
 `apps/desktop/src/renderer/components/chat/ThinkingText.tsx`), with tests from cindy's.
 
+The handoff note an Agent session's conversation carries when it switches between Claude Code and Codex
+(`server/internal/node/engine_handoff_build.go`, read by `server/internal/node/engine_handoff.go`, with its words in
+`server/internal/prompts/agents/engine_handoff.md`, `engine_handoff_command.md` and `engine_handoff_speaker.md`) is
+ported from cindy's `apps/desktop/src/main/maker-ipc/agentHandoff.ts` with changes: the same sections, framing and
+bounds (the work ledger, the index of earlier turns, the latest turns word for word, the 16000-character cap), read
+from Persona's transcript items; the transcript files on the computer take the place of cindy's history tools, and the
+cap squeezes the data instead of cutting the text.
+
 https://github.com/makecindy/cindy
 
 Licensed under the Apache License, Version 2.0 (the "License"); you may not use these files except in compliance with
