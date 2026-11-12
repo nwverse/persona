@@ -492,6 +492,8 @@ internal class AgentsViewModel(
         preferences.grouping(group)
     }
     fun compact() = localChange { preferences.compact(!page.value.preferences.compact) }
+    /** Glass's ⋯ › Display: a row style or Compact List (iOS `AgentListDisplay`). */
+    fun display(value: AgentListDisplay) = localChange { preferences.setDisplay(value) }
     fun foldTab(tab: AgentTab) = localChange { preferences.foldTab(tab.foldKey, tab.foldKey !in page.value.preferences.foldedTabs) }
     fun pin(row: AgentSession) = change(row.session.machineId) { it.preference(pin = true, space = false, key = row.id) }
     fun mute(row: AgentSession) = change(row.session.machineId) { it.preference(pin = false, space = false, key = row.id, spaceKey = row.spacePreferenceKey) }

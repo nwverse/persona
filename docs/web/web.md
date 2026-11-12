@@ -467,6 +467,7 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
     The model is what the transcript says wrote the reply (`Item.model`: Claude Code's `message.model`, a Codex turn's `turn_context`; `../protocol/protocol.md`), never the model picker: a switch shows once the new model has answered, and only then. A reply's model is that of the exchange's latest assistant item that names one (its answer and every step, tool calls included, by `seq`), so work a fallback model did after the last words counts; a reply whose model is unknown (an older node, Claude Code's own `<synthetic>` lines such as API errors) gets no line and does not end the run, so the next known reply is compared with the last known one. Folded rounds (supervision, background) are not visible replies and are skipped; nothing is drawn inside an exchange, so a fallback halfway through a turn shows once, before that exchange's reply. Only the loaded pages are compared: the first exchange of a page after a switch gets its line once the older page is loaded.
     Names: Claude ids read as Claude Code names them (`claude-sonnet-4-5-20250929` → "Sonnet 4.5", `modelShort` capitalized), raw GPT ids as the model lists show them (`modelName`), any other id as it is. Models are compared by a canonical id: lowercase, without a gateway's vendor path (`vendor/glm-5.1`), Bedrock's region and vendor prefix and `-v1:0` suffix, Vertex's `@<date>` or a trailing `-YYYYMMDD`, so an alias, a pinned snapshot and Bedrock's or Vertex's form of one model are no change (`us.anthropic.claude-sonnet-4-5-20250929-v1:0` reads "Sonnet 4.5"); a `[1m]` suffix stays, as it names another model ("Opus 5.5 1M"). Two ids the chat names alike are one model too. Each id is worked out once (`modelIdentity`, at most 256 kept). The exchange's guessed height off screen ("Long chats") includes the divider (`MODEL_DIVIDER_HEIGHT`, 42.5 px as drawn, plus the 14 px gap). The ids are in the chip's hover text; screen readers hear "Model changed from … to …" (`role="separator"`). It is not a control. Deviation from cindy: names instead of raw ids, as Persona never shows raw model ids on primary screens.
     Mock: `MOCK_MODEL_CHANGE=1` gives the recipes agent two exchanges answered by Opus, then Sonnet.
+  - **Engine switch divider** (#5054, `lib/engine-switch.ts`, `views/chat/EngineSwitchDivider.tsx`, after cindy's agent switch card at the user's request, 2026-11-12): above the first message the conversation's other engine got (its text carries the `<persona-context kind="engine-switch">` handoff block, "Switching an Agent between Claude Code and Codex" below), a line across the chat with a centered chip `⇄ Switched from Claude Code to Codex · 5.5 · Continued from summary ›`: the same row as the model change divider (two `--line-strong` hairlines, 11 px `--ink-3`, a `--line-strong` border, `bg-page/50`, padding 10 × 4), the model the new engine runs as the chat names models (its id on hover), a badge, **session resumed** when the conversation's earlier session of that engine was resumed (the block's `resumed="1"`), else **Continued from summary**, and a chevron that turns when open. The block is never a context chip, and that exchange gets no model change line (the next one is compared with it); only a block that moves between the two known engines (`from` and `to` are `claude` and `codex`, different) draws the divider, any other stays an ordinary context chip. The chip is a button ("View handoff context") when the block has text: it opens a panel under the line (a `rounded-card` box, `--line-strong` border, `bg-inset`, 16 × 12 padding; an 11 px medium title "Handoff — the context summary sent to the new engine at switch time (not part of the chat transcript; shown only here)", then the handoff in 12 / 1.55 monospace `--tool-ink`, at most 16 rem high and scrolling, selectable), open or closed remembered per divider; a handoff the hub cut for the page (over 24 KB) offers **View full text**. Screen readers hear "Switched from Claude Code to Codex" (`role="separator"` on the line) and the chip as a button with `aria-expanded`. Under 640 px the chip reads "Claude Code → Codex · <badge>" (no model), so the badge keeps room. Its folded height (`ENGINE_DIVIDER_HEIGHT`, 42.5 px) counts in the off-screen estimate. Deviations from cindy: the model's name rather than its raw monospace id (as the model change divider), the badge always shown (cindy shows it only on a resume or a fallback), the separator role on the line rather than around the button, and the narrow form.
   - **Live status and streaming**: while an Agent works, the run status bar above the input follows cindy's `RunningStatusBar` (#5312; the owner asked on 2026-11-12 that this part of the chat follow cindy, and where this doc said otherwise, cindy wins; layout and words in `docs/design/DESIGN_SYSTEM.md` "Run status bar"). It reads the status line the node takes off Claude's pane (`live` pushes, `docs/protocol/protocol.md` "Live status") and the turn's newest steps (`lib/run-step.ts`), and never shows Claude's spinner verb ("Frosting"), which says nothing of what happens.
     - **Left, a short state.** In an Agent session cindy's words: **Thinking…** while the status line says it thinks, a thought is the newest step or nothing came yet; **Generating…** while a reply streams or its words are the newest step; **Editing files…** for a running Edit, Write, MultiEdit or NotebookEdit (Codex's file changes arrive as Edit); **Searching the web…** for WebSearch; **Spawning a subagent…** for an Agent / Task call whose subagent has said nothing yet, then **Agent running…**; **<tool> running…** for any other running call, named as a permission card names it (`toolDisplayName`: "Bash", "GitHub · Create issue"; a long name truncates); **Compacting context…** with the layers mark while Claude's verb starts with "Compact"; **Working…** after a call came back. A call is running while it has no result, or, for a subagent launched in the foreground, until its call has a terminal result (`terminalCalls`). The #5602 line "2 subagents working — …" is gone: cindy has none, and the step names the subagent call instead.
       In a Persona conversation (super rules 0 and 4) cindy's plain phases instead: **Thinking…**, **Replying…** (a reply streaming), **Reading files…**, **Updating files…**, **Searching files…**, **Searching the web…**, **Reading web pages…**, **Organizing the conversation…** (compacting), else **Working…**; no tool names.
@@ -965,6 +966,7 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
   Model providers lists all integrations (search; Managed by Persona / From ~/.zshrc / Hidden). Opening one shows a dialog: real parameters grouped by computer (`docs/integrations/launchers.md`),
   "Usage · <gateway name>" (for non-direct API integrations, #1326, `settings/LauncherQuota.tsx`, logic in `lib/quota.ts`, matching iOS `LauncherQuotaSection`: budget, each account / provider's windows and progress bars (orange at ≥ 70%, red at ≥ 90% or exhausted), collapsed by model, this Key's usage, top-right refresh with `refresh=1`, `docs/integrations/launchers.md` ("Quota")),
   availability test, function source (collapsed), edit, delete / hide. Adding first lists the hub's provider presets (built-in and extension-provided; select, paste only a Key, test automatically, `assign` on save); Custom compatible gateway comes last (launcher or direct API, Messages / Responses): its Connect step starts with a **Display name** in any language (at most 64 characters; left empty, a hub with `launcher_auto_name` names it after the address's host) and keeps the **Startup ID** under More options, where the hub makes one up when it is left empty and its format is checked only once something is typed (an older hub still needs the ID, shown under the display name). The gateway's sign-in method (Bearer or x-api-key) is found by the step's own check and named in one line of its check box; the choice sits under More options too, and editing names and tests the stored one (#5329, `docs/integrations/launchers.md` "Authentication method"). Editing renames a provider; its startup ID is read-only with the reason (#5029, `docs/integrations/launchers.md` "Display names"). Every place that names a provider leads with its display name and shows the ID as secondary text (`lib/provider-names.ts`, `docs/design/DESIGN_SYSTEM.md` "Provider display names (#5029)"). **Import** sits in the header between the search field and **Add provider** (icon only at phone width) and opens **Import from your computer's aliases** (#5024, `settings/ProviderImport.tsx`, logic in `lib/providers.ts`): pick a computer, then each provider its claude aliases in `~/.zshrc`, `~/.bashrc` and `~/.bash_aliases` add up to, under the name it will be saved as (`create_as`: an alias Persona already lists becomes `<alias>-2`), with the file each alias came from, the environment variables it carries over and the ones it leaves out by reason; a group whose aliases set more than the model differently says what differs and offers **A provider for each alias** (the default, listing what each becomes) or **One provider**. Below the list, **Hide the imported aliases in Persona** (on by default; shell files are not changed) names the aliases it hides and why each other one stays; the note that merging only adds models shows only when the picked groups, as chosen, merge into a provider that is there. With no computer the dialog explains instead of showing the picker (`docs/integrations/launchers.md` ("Adding from extensions")).
+  Import links (#5420, [launchers.md](../integrations/launchers.md) "Import links"): opening `<web address>/settings?tab=models#import=<data>` takes the fragment out of the address bar and the Back list at load, first thing in `main.tsx`, before the language catalog loads (`takeImportLink` in `lib/import-link.ts`, kept apart from the link builder `lib/provider-link.ts` so only it is on the first screen; a link on another path or tab lands on `?tab=models`, and other fragment parameters such as a sign-in `token` stay for `takeToken`). A link pasted into the address bar of a page already open fires only `hashchange`: it is taken then, through the router when the address changes. It is kept in memory only, and opens Add provider on the paste view in its link mode (`ProviderPaste.tsx`): no text box, a line that it was opened from a link and that nothing is saved until Save, **Paste something else**, and the link read at once by the parse route; its drafts, matches and notes show as a paste's do. Signing in first keeps it in memory until Settings opens; `reloadForSignIn` (a sign-in layer in front of the hub) puts a held link back in the address bar before it reloads; any other reload before Settings takes it drops it. A link arriving while the wizard, the copy dialog or the alias import is open waits until that closes (a toast says so) rather than throw away what is in it. Without the hub's `launcher_import_link` the view says the hub can't open links yet. A Persona-managed Claude Code gateway's or direct Responses / Chat Completions API's dialog has **⋯ › Copy import link** (`ProviderLinkCopy.tsx`): the link carries the name, address and models, no key unless **Put a key in the link** is on and a key is pasted there, under a warning; the hub never returns a stored key. Its strings and the ⋯ menu's are in the lazy `settings-providerlink` catalog, the link view's in `settings-providerpaste`.
   Gateway discovery and connection tests belong to the current wizard opening and connection inputs. Closing, switching providers or changing the URL, type, authentication, key or headers retires pending results and releases their busy state for retry. A late success, error or cleanup cannot alter the current form or its active request. Valid discovery merges into the latest model edits, preserving checked choices and an intentional default; changing only the test model retires its connection test without canceling discovery (#1314).
   Model configuration groups / searches the hub's real purpose catalog, edits provider, specific model, and supported thinking effort, and shows inheritance and currently effective values. Save failures preserve the draft; revision conflicts require reload (`docs/assistant/model-config.md`).
   Translation (`settings/TranslationSettings.tsx`, within Settings › General; old `?tab=translate` redirects to `?tab=general#settings-translation`): auto-translate, translation model (the default assistant's; opens the `translate` purpose in Model configuration only while the default is the current assistant, else the row says it is the default assistant's and goes nowhere), target language, translation scope (mail, selected Lark chats),
@@ -1661,8 +1663,9 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   only its default entry. While a switch waits, the panel's list starts with a warning line: "Switches on your next
   message: the Agent restarts on work and keeps this conversation", and its target is the panel's `pending` setup.
   Picking the session's own launcher drops the waiting switch first. On an older hub another launcher of the same engine
-  is listed with its rows off: "Switching providers in a running Agent isn't available yet". Another engine: "Switching
-  from Claude Code to Codex needs a new conversation" (a cross-engine handoff is #5054). A Codex thread keeps its model
+  is listed with its rows off: "Switching providers in a running Agent isn't available yet". Another engine's models are
+  pickable on a hub with `engine_switch` ("Switching an Agent between Claude Code and Codex" below); on an older hub, and
+  for a chat that can't switch engines, they are off: "Switching from Claude Code to Codex needs a new conversation". A Codex thread keeps its model
   ("Codex can't change the model of a running session"), but the model it runs still opens its flyout, where the thinking
   effort and Fast apply at once. While the Agent works or waits on you, picks are off and the panel says why. A launcher
   of the session's own that fixes its `--model` says so and takes no pick. Claude Code and Codex take a model ID typed into
@@ -1689,10 +1692,10 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   Fast) live in `localStorage` (`persona.modelPanel.<base>.agent.*`, apart from a Persona chat's). The hub has no store for
   such preferences, so they do not follow you to another browser: a choice for this step.
 - **Deviations from Cindy**: provider marks are letter tiles (Persona has no vendor logos); quota and price are drawn only
-  where the existing launcher answer / exact catalog entry supplies them; ↑↓ also move between rows; another engine is listed
-  but off until a cross-engine handoff (#5054), so there is no "Switch Agent?" dialog; a pending switch's pill names the
-  launcher it moves to rather than the engine (it stays Claude Code), and its warning line speaks of a restart on that
-  launcher rather than a handoff summary (the conversation is resumed as it is); a failed list shows Persona's warning
+  where the existing launcher answer / exact catalog entry supplies them; ↑↓ also move between rows; a pending switch to
+  another launcher of the same engine names that launcher rather than the engine (it stays Claude Code), and its warning
+  line speaks of a restart on that launcher rather than a handoff summary (the conversation is resumed as it is); a
+  pending switch to the other engine names the engine, as Cindy does; a failed list shows Persona's warning
   triangle rather than a circled alert. The note that newer Claude Code also saves the chosen model as the default for new
   sessions (under the composer bullets above) is no longer repeated in the panel.
 - **Persona chats** (#5033, `AssistantModelPill`; `lib/assistant-models.ts` for what the pill says, `lib/assistant-panel.ts`
@@ -1728,7 +1731,9 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   send refusals are the switch's), `lib/assistant-panel.test.ts` (a Persona chat's setup and where it comes from, its pill,
   its providers with the ones that can't run there, what a pick keeps), `lib/quota.test.ts` (weekly-window selection and thresholds),
   `ui/model-panel/ModelPanel.test.tsx` (rail bars, price tiers and flyout details), `views/chat/ModelPill.test.tsx` and
-  `ModelPill.en.test.tsx` (states, widths, cached-quota wiring, a switch picked, shown and dropped), `views/chat/AssistantModelPill.test.tsx` (a Persona chat's PUT,
+  `ModelPill.en.test.tsx` (states, widths, cached-quota wiring, a switch picked, shown and dropped), `views/chat/EngineSwitchDialog.test.tsx`
+  and `lib/engine-switch-ask.test.ts` (the other engine's pick and its question, "Switching an Agent between Claude Code and
+  Codex" below), `views/chat/AssistantModelPill.test.tsx` (a Persona chat's PUT,
   DELETE, refusal, older hub, new-chat page, Fast), `ChatView.test.tsx`
   (the footer and context row), `ChatView.awaiting.test.tsx` (a refused switch keeps the words in the box), `ChatView.chrome-renders.test.tsx` (the
   pill on both composers),
@@ -1736,6 +1741,88 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   scenario supplies synthetic weekly windows without reading a real account; `MOCK_LAUNCHER_SWITCH=1` supplies a second
   Claude Code launcher, `work`, on every computer (`=pending` has the PR review waiting to switch to it; `=refuse` refuses
   the message that carries a switch out); a Persona chat's: `MOCK_MODEL_PICK=1` (`=picked`: the second chat has a pick of its own).
+
+## Switching an Agent between Claude Code and Codex (#5054)
+
+Who it serves: people working with coding Agents in the **Agents** chats who want the other engine to go on with the
+conversation (Codex for a task Claude Code is stuck on, or back). The user asked (2026-11-12) for this to match Cindy's
+"Switch Agent?" flow, handoff summary and switch divider; where Persona's earlier rules differ, Cindy's wins, built from
+Persona's tokens and components. Server side: [protocol.md](../protocol/protocol.md) "Switching a running Agent to
+another engine"; the node quits the agent and starts the other engine in the same terminal with a handoff summary, or
+resumes the conversation's earlier session of it.
+
+- **Who can switch** (`engineSwitchable` in `lib/session-models.ts`): on a hub with the `engine_switch` feature, an Agent
+  chat whose Claude Code can switch its model here (the same rule as a switch to another launcher, #5035) or a Codex Agent
+  in a terminal (a listed row of its own, a pane, not a Persona chat, not offline). Its model panel then offers the other
+  engine's launchers like other launchers (a launcher that fixes its own model offers its default only; a typed model ID
+  where the launcher takes one); a Codex Agent's pill, a label before, opens the panel. Everything else keeps the other
+  engine's rows off with "Switching from Claude Code to Codex needs a new conversation".
+- **"Switch Agent?"** (`views/chat/EngineSwitchDialog.tsx`, which picks ask: `lib/engine-switch-ask.ts`): a pick of a model
+  whose engine is neither the one the Agent runs nor the one a waiting switch moves it to asks first, as Cindy's
+  `ChatInput.tsx` does (its rule, `model-selector-unified.md` 1.6: a second pick inside the engine just accepted only
+  changes the model, a pick of the engine it runs never asks; Persona has two engines, so only the first cross-engine pick
+  after none waits asks). The dialog: "Switch Agent?", "The new Agent engine continues through a handoff summary, so
+  reasoning and other content cannot be guaranteed to carry over perfectly; switching back still lets you continue the
+  original engine's session. Switching also interrupts the prompt cache once and may increase token usage.", a "Don't
+  remind me again" checkbox, then **Switch Agent** and **Keep Current Agent** (in that order). The panel stays open under
+  it; **Keep Current Agent**, Escape, the backdrop and Back keep everything as it was; **Switch Agent** records the pick and
+  closes the panel. "Don't remind me again" is kept in this browser only when ticked and confirmed
+  (`persona.engineSwitch.skipConfirm`; removing it brings the question back).
+- **Recording**: the same `POST …/modes {"launcher", "from", "model"?, "effort"?}` as a switch to another launcher; the node
+  works out the engine and the row's `pending_switch` names it (`agent`), drawn at once (put back with the hub's words if
+  it says no). A toast says "Switch scheduled: will change to Codex · 5.5 when your next message is sent". The pill shows
+  the clock, the target's tile, the engine's name and the model with the effort that model runs by default (Claude Code's
+  effort is not carried to Codex, nor back); its tooltip and accessible name say "Next message: Codex · 5.5". While it
+  waits, the panel's list starts with the warning line "Switching engines rebuilds context and may lose content" (it wraps
+  rather than truncating), and reopening the panel stands on the model that runs now.
+- **Cancel**: pick the model the Agent runs (its row stays pickable while a switch waits, also on a Codex Agent whose own
+  rows are otherwise off): `{"launcher": <own>, "from": <own>}` drops the switch, no question.
+- **Carrying it out**: the user's next message from this chat (`apply_switch: true`, as for #5035). The node starts the other
+  engine in the Agent's terminal with the handoff in front of the message, or refuses with nothing typed (`409`, a
+  `switch_*` code, `delivered: "none"`): the words go back into the box with the hub's reason in a toast and the switch is
+  dropped. A message with photos or files is refused for a switch (the other engine's first message carries text only).
+- **One conversation, one row**: once switched, the session running the conversation carries `engine_history`, the
+  conversation's earlier sessions (oldest first, each with its engine and when it was switched away from); the node no
+  longer lists the sessions it names. An old link to one of them (`/s/<machine>/<old id>`; links in the sidebar search,
+  the Inbox, to-dos) opens the conversation's row (`engineSwitchHome` in `lib/engine-switch.ts`, after the child-session
+  redirect in `App.tsx`). On a paging hub that lists neither row, the old link opens the old session on its own.
+- **The chat reads as one conversation** (`views/chat/useEarlierStretches.ts` on the first screen: the live stretch's
+  items, `liveStretch` in `lib/engine-switch.ts`; `views/chat/EarlierStretches.tsx` with `lib/engine-stretches.ts`, loaded
+  only for a row with `engine_history`: the stretch windows, reading, planning and drawing the earlier stretches, which
+  it hands back to the chat before paint;
+  their words and the handoff panel's, `views/chat/EngineHandoffPanel.tsx`, are in the lazy `chat-engine` namespace): above the
+  live session's messages, each earlier stretch's, oldest first, with the switch divider at the start of each later
+  stretch (its first message carries the handoff block; "Engine switch divider" under "Chat" above). Stretch i is session
+  `engine_history[i]`'s messages after the stretch before it ended and up to its own `until`; the live stretch is what
+  came after the last. A session that ran one stretch keeps all its messages (a clock a little off moves nothing); one
+  that ran several (switched away and back, A → B → A) is split by time, so B's stretch sits between A's two. Nothing is
+  fetched until the live transcript has no older page left; then, scrolling up, the newest incomplete stretch loads next
+  (its session's `GET …/items`, newest page first, then `before_seq`), and a stretch shows only once every later one is
+  whole, so nothing is inserted between messages already on screen. A failed page says so with **Retry**, and once a wait
+  of 3 s (doubling to 30 s) is over the chat asks again while its top is in view, keeping the scroll position. Earlier stretches are read-only: Copy only (no quote, edit, forward, fork or rewind);
+  their folds open from their own session. Chat search, the navigation rail's ticks and child-session cards cover the
+  live stretch only: in a conversation that went A → B → A, A's inputs from before it switched back are no ticks, and
+  paging back for the rail or the search stops at the live stretch's start. Without `engine_history` the chat is as before.
+- **Deviations from Cindy**: the dialog is Persona's `Dialog` (placed high on a computer, a sheet on a phone, no close ×,
+  initial focus on the dialog rather than its cancel button); the panel's warning wraps; the divider's deviations are under
+  "Engine switch divider"; English text uses straight apostrophes (Chrome drew Cindy's ’ from a CJK font).
+- **Tests**: `lib/session-panel.test.ts` (other-engine providers with and without the feature, Codex terminal / app
+  thread / offline / assistant, what a pick sends, the warning note, cancel), `lib/model-panel.test.ts` (the running row
+  stays pickable while a switch waits), `lib/engine-switch-ask.test.ts` (which picks ask, "don't remind me" and blocked
+  storage), `ui/model-panel/ModelPanel.test.tsx` (the panel held under the dialog), `views/chat/EngineSwitchDialog.test.tsx`
+  (the dialog end to end through the pill and panel: copy, order, confirm, keep, Escape, backdrop, "don't remind me", no
+  question for the running engine or inside the accepted one, a refused POST put back, a Codex Agent),
+  `lib/engine-switch.test.ts` (the block's attributes and escaping, stretch windows, A → B → A, lazy loading, the redirect),
+  `lib/turns.engine-switch.test.ts`, `lib/model-change.test.ts`, `views/chat/EngineSwitchDivider.test.tsx` (label, model,
+  badges, toggle, a cut handoff), `views/chat/SegmentView.estimate.test.tsx`, `views/chat/ChatView.engine-switch.test.tsx`
+  (stitched order, lazy loading, read-only earlier messages), `AppShellSessionRoute.test.tsx` (an old link). Mock:
+  `MOCK_ENGINE_SWITCH=1|pending|done|refuse` (combine with `MOCK_LAUNCHER_SWITCH=1`): `=1` advertises the feature and
+  records a pick of the other engine's launcher (the PR review is a Claude Code Agent, `/orders` a Codex Agent), and the
+  next message replaces the row with a session of the other engine whose first message carries a handoff; `=pending` has
+  the PR review waiting to switch to Codex; `=done` has "Add sign in with OAuth" (`/s/macbook/e5054000-0000-4000-8000-000000000001`),
+  which went Claude Code → Codex → back to Claude Code (both badges, the stitched chat); `=refuse` refuses the message that
+  carries a switch out with `switch_failed`. `GET /mock/engine_switch[?reset=1]` lists the requests or resets them;
+  `scripts/mock/test_engine_switch_mock.py` checks the mock.
 
 ## Claude Code ultracode (#3428)
 

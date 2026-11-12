@@ -38,6 +38,7 @@ final class AttachMenuTests: XCTestCase {
                     XCTAssertTrue(item(app, id).waitForExistence(timeout: 5), "no \(id) in the menu:\n\(app.debugDescription)")
                 }
                 XCTAssertFalse(commands(app).exists, "Quick Commands in Persona's conversation")
+                XCTAssertTrue(addContext(app).exists, "no Add as Context in Persona's menu:\n\(app.debugDescription)")
                 photosAndFiles(app)
                 shot("attach-menu-persona", scheme, style)
                 mention(app)
@@ -75,6 +76,7 @@ final class AttachMenuTests: XCTestCase {
             XCTAssertTrue(quick.waitForExistence(timeout: 5), "no Quick Commands:\n\(app.debugDescription)")
             XCTAssertTrue(item(app, "composer-menu-mention").exists, "no Mention:\n\(app.debugDescription)")
             XCTAssertTrue(item(app, "composer-menu-scan").exists, "no Scan Document:\n\(app.debugDescription)")
+            XCTAssertTrue(addContext(app).exists, "no Add as Context in an Agent's menu:\n\(app.debugDescription)")
             XCTAssertTrue(item(app, "composer-menu-voice").exists, "no Voice Chat in an Agent's menu")
             XCTAssertFalse(item(app, "composer-menu-meeting").exists, "Meeting Recording in an Agent's menu")
             XCTAssertFalse(item(app, "attach-clear").exists, "the commands are not folded")
@@ -120,6 +122,37 @@ final class AttachMenuTests: XCTestCase {
                 shot("attach-panel-more-\(name)", scheme, style)
                 app.terminate()
             }
+        }
+    }
+
+    /// Add as Context › To-do… (#3721): the picker lists the hub's to-dos; a pick goes over the box as a quote.
+    @MainActor func testAddAsContextPutsAToDoOverTheBox() throws {
+        guard !isPad else { throw XCTSkip("the iPhone's panel; the iPad's menu lists the same rows") }
+        for scheme in schemes {
+            let app = launch(Self.persona, scheme: scheme)
+            let plus = plusButton(app)
+            sleep(2)
+            plus.tap()
+            let more = app.buttons["attach-tab-more"]
+            XCTAssertTrue(more.waitForExistence(timeout: 5), "no panel:\n\(app.debugDescription)")
+            more.tap()
+            let todo = app.buttons["attach-context-todo"]
+            XCTAssertTrue(todo.waitForExistence(timeout: 5), "no To-do… in More:\n\(app.debugDescription)")
+            shot("attach-panel-more-context", scheme)
+            todo.tap()
+            let row = app.buttons["context-pick-row"].firstMatch
+            XCTAssertTrue(row.waitForExistence(timeout: 10), "the picker lists no to-dos:\n\(app.debugDescription)")
+            shot("context-picker-todo", scheme)
+            row.tap()
+            let quote = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "待办 · ")).firstMatch
+            XCTAssertTrue(quote.waitForExistence(timeout: 10), "the pick is not over the box:\n\(app.debugDescription)")
+            XCTAssertFalse(app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "引用选中的文字")).firstMatch.exists,
+                           "a to-do is quoted as a whole, not as selected text")
+            shot("context-picked-todo", scheme)
+            // The conversation keeps its quotes: the pick goes again, or the next tests' screenshots show it.
+            app.buttons["取消引用"].firstMatch.tap()
+            sleep(2) // drafts are saved a moment later
+            app.terminate()
         }
     }
 
@@ -181,6 +214,11 @@ final class AttachMenuTests: XCTestCase {
                       "composer-menu-mention": "提及文件或会话", "composer-menu-meeting": "会议录音", "attach-clear": "清空上下文"]
         let title = titles[id] ?? (id.hasPrefix("attach-command-") ? String(id.dropFirst("attach-command-".count)) : id)
         return app.descendants(matching: .any).matching(NSPredicate(format: "identifier == %@ OR label BEGINSWITH %@", id, title)).firstMatch
+    }
+
+    /// The Add as Context submenu (#3721), by its title.
+    @MainActor private func addContext(_ app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "作为上下文")).firstMatch
     }
 
     /// The Quick Commands submenu: by its title too, as a submenu may not carry its identifier through UIKit's menu.

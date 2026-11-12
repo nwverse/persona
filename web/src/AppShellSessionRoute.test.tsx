@@ -59,6 +59,8 @@ const sessions: Session[] = [
   // a herdr tab's lead and its worker (#5180): the worker is in the lead's Team panel, never a page of its own
   row("lead", { space_id: "ts", slot_id: "tt", pane_index: 0, children: { total: 1, workers: 1, needs_you: 1 } }),
   row("mate", { space_id: "ts", slot_id: "tt", pane_index: 1, folded_under: "lead", folded_as: "worker", state: "needs_you", status: "needs_you" }),
+  // a conversation that moved from Claude Code to Codex (#5054): its Claude session is not listed, the Codex one runs it
+  row("conv", { agent: "codex", engine_history: [{ session_id: "conv-claude", agent: "claude", until: "2026-11-12T09:00:00Z" }] }),
 ];
 const answers: Record<string, unknown> = { "/api/v1/sessions": { sessions }, "/api/v1/machines": { machines } };
 
@@ -196,6 +198,12 @@ describe("the shell's session links", () => {
     expect(drawn.chatSid).toBe("lead");
     expect(asked).toBeUndefined();
     act(() => probe.unmount());
+  });
+
+  it("opens an earlier engine's session of a conversation as the conversation's chat", async () => {
+    await open("/s/mac/conv-claude");
+    expect(location.pathname).toBe("/s/mac/conv");
+    expect(drawn.chatSid).toBe("conv");
   });
 
   it("opens the pane a /t route names, not the tab's most urgent one", async () => {

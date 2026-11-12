@@ -147,6 +147,14 @@
     <!-- An Agents row's third line on Glass (#4338 A9): the to-do chip and the muted bell, for TalkBack -->
     <string name="designsystem_row_todo">To-do: %1$s</string>
     <string name="designsystem_row_muted">Notifications muted</string>
+    <string name="designsystem_row_style_avatar">Avatar</string>
+    <string name="designsystem_row_style_two_lines">Two lines</string>
+    <string name="designsystem_row_style_cards">State cards</string>
+    <string name="designsystem_row_style_list">Compact list</string>
+    <string name="designsystem_row_style_avatar_summary">The agent\'s avatar, its title and time, a line of what it last said, and where it runs.</string>
+    <string name="designsystem_row_style_two_lines_summary">Two lines per agent: its title and time, then one line of what it last said.</string>
+    <string name="designsystem_row_style_cards_summary">A card per agent, its state\'s color down the side; the one waiting for you is tinted.</string>
+    <string name="designsystem_row_style_list_summary">One line per agent: its state, title and time.</string>
     <plurals name="designsystem_tab_agents">
         <item quantity="one">%1$d agent</item>
         <item quantity="other">%1$d agents</item>
