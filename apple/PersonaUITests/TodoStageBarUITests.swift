@@ -45,12 +45,20 @@ final class TodoStageBarUITests: XCTestCase {
                         first = false
 
                         let bar = app.descendants(matching: .any)["todo.stage"].firstMatch
-                        XCTAssertTrue(bar.waitForExistence(timeout: 30), "\(name): no stage bar:\n\(app.debugDescription)")
-                        sleep(2) // the page settles
                         let window = app.windows.firstMatch.frame
-                        // The bar into view, whichever side of the screen it is past.
-                        for _ in 0..<4 where !window.contains(bar.frame) {
-                            if bar.frame.minY < window.midY { app.swipeDown() } else { app.swipeUp() }
+                        // At the largest size the to-do detail's stage row is far below the screen, and the list makes
+                        // its rows only as they come near: scrolled down to until it exists.
+                        var found = bar.waitForExistence(timeout: 10)
+                        for _ in 0..<12 where !found {
+                            scroll(app, by: window.height * 0.35)
+                            found = bar.waitForExistence(timeout: 2)
+                        }
+                        XCTAssertTrue(found, "\(name): no stage bar:\n\(app.debugDescription)")
+                        sleep(2) // the page settles
+                        // The bar into the middle of the screen, clear of the navigation bar and the buttons at the bottom.
+                        let middle = window.insetBy(dx: 0, dy: window.height * 0.15)
+                        for _ in 0..<4 where !middle.contains(bar.frame) {
+                            scroll(app, by: max(-window.height * 0.35, min(window.height * 0.35, bar.frame.midY - window.midY)))
                             sleep(1)
                         }
                         if !before {
@@ -71,6 +79,14 @@ final class TodoStageBarUITests: XCTestCase {
                 }
             }
         }
+    }
+
+    /// Scrolls the page by `dy` points (positive: the content moves up), dragged slowly and held at the end so it stops
+    /// there instead of flinging past.
+    @MainActor private func scroll(_ app: XCUIApplication, by dy: CGFloat) {
+        let center = app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        center.press(forDuration: 0.05, thenDragTo: center.withOffset(CGVector(dx: 0, dy: -dy)), withVelocity: .slow,
+                     thenHoldForDuration: 0.3)
     }
 
     /// At the default size: one element that says the stage, no dot of its own. At the largest: the six dots, each
