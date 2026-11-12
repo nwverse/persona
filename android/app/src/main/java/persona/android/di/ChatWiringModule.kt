@@ -145,6 +145,8 @@ private class RoutedAssistantManagement(
     override suspend fun config() = api().config()
     override suspend fun updateConfig(update: AssistantConfigUpdate) = api().updateConfig(update)
     override suspend fun launchers(machineId: String) = api().launchers(machineId)
+    override suspend fun assistantLaunchers(machineId: String) = api().assistantLaunchers(machineId)
+    override suspend fun launcherModels(machineId: String, launcher: String) = api().launcherModels(machineId, launcher)
     override suspend fun endConversation(session: SessionKey) = api().endConversation(session)
     override suspend fun compactConversation(session: SessionKey) = api().compactConversation(session)
     override suspend fun archiveConversation(session: SessionKey) = api().archiveConversation(session)

@@ -70,6 +70,8 @@ fun ChatComposer(
     mentions: ComposerMentions? = null,
     /** A session picked in the @ menu, as the context that goes with the next message. */
     onMention: (ChatLinkContext) -> Unit = {},
+    /** A task picked in the @ menu (Persona's conversations, [ComposerMentions.tasks]): the next message goes to it. */
+    onMentionTask: (String) -> Unit = {},
     /** /model in the "/" list, which opens the model choices instead of typing (Claude in a terminal pane). */
     onModel: (() -> Unit)? = null,
     /** /loop in the "/" list, with a line under the box saying what it will do (Claude Code only, web `hasLoop`). */
@@ -281,14 +283,21 @@ fun ChatComposer(
     val mention = if (enabled && mentions != null && suggestions.isEmpty() && selection.collapsed) mentionAt(state.value.text, selection.start) else null
     val mentionRows = remember(mentions, mention?.query) { if (mentions != null && mention != null) mentionRows(mentions, mention.query) else emptyList() }
     val usedFile = stringResource(R.string.chat_mention_used_file)
+    // With tasks in the list each group says what a pick does: iOS's "Message a Task", then the files and sessions.
+    val taskSection = stringResource(R.string.chat_tasks_mention_title)
+    val otherSection = stringResource(R.string.chat_mention).takeIf { mentionRows.any { it is MentionRow.Task } }
     val mentionItems = mentionRows.map { row ->
         when (row) {
+            is MentionRow.Task -> ComposerSuggestion(row.task.title, row.task.place, key = row.key, flexible = true,
+                section = taskSection, status = row.task.status)
             is MentionRow.File -> {
                 val relative = row.insert.removePrefix("@").trimEnd()
-                ComposerSuggestion(relative.substringAfterLast('/'), relative.substringBeforeLast('/', "").ifEmpty { usedFile }, key = row.key, flexible = true)
+                ComposerSuggestion(relative.substringAfterLast('/'), relative.substringBeforeLast('/', "").ifEmpty { usedFile }, key = row.key,
+                    flexible = true, section = otherSection)
             }
             is MentionRow.Quote -> ComposerSuggestion(row.session.displayTitle,
-                stringResource(R.string.chat_mention_session_detail, sessionMentionDetail(row.session)), key = row.key, flexible = true)
+                stringResource(R.string.chat_mention_session_detail, sessionMentionDetail(row.session)), key = row.key, flexible = true,
+                section = otherSection)
         }
     }
     fun pickMention(picked: ComposerSuggestion) {
@@ -296,6 +305,8 @@ fun ChatComposer(
         val row = mentionRows.firstOrNull { it.key == picked.key } ?: return
         state.beginEdit()
         when (row) {
+            // The @word goes; the next message goes to the task (iOS `TaskMentionList`), as its Message sets it.
+            is MentionRow.Task -> { onMentionTask(row.task.id); state.value = replaceMention(state.value, token, "") }
             is MentionRow.File -> state.value = replaceMention(state.value, token, row.insert)
             // A session goes with the message as a quote, not as text (web pickMention).
             is MentionRow.Quote -> { onMention(sessionQuote(row.session, resources)); state.value = replaceMention(state.value, token, "") }
@@ -379,7 +390,7 @@ fun ChatComposer(
             ComposerSuggestions(suggestions.map { ComposerSuggestion(it.word, it.detail, destructive = it.clear) },
                 onPick = { picked -> suggestions.firstOrNull { it.word == picked.word }?.let(::pick) },
                 modifier = Modifier.padding(vertical = Tokens.Space.xs))
-            // The @ menu: files this chat used, then other sessions; a word that matches nothing says so.
+            // The @ menu: Persona's open tasks, files this chat used, then other sessions; a word that matches nothing says so.
             ComposerSuggestions(mentionItems, onPick = ::pickMention, modifier = Modifier.padding(vertical = Tokens.Space.xs))
             if (mention != null && mentionItems.isEmpty()) Text(stringResource(R.string.chat_mention_no_match),
                 Modifier.padding(vertical = Tokens.Space.xs), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)

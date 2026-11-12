@@ -175,6 +175,7 @@ func readExtensionJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 func (h *Manager) extensionRoutes(api *http.ServeMux) {
 	h.extensionUIRoutes(api)
 	h.extensionImageRoutes(api)
+	h.extensionLogoRoutes(api)
 	h.extensionSystemRoutes(api)
 	h.marketRoutes(api)
 	h.operationRoutes(api)
