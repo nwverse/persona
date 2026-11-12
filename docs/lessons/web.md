@@ -1,5 +1,13 @@
 # Lessons: web UI and interactions
 
+## Live acceptance must distinguish a lookup POST from a mutation (#5753)
+
+The live composer driver rejected the app's normal `POST /api/v1/launchers/catalog`, although the handler is a
+built-in metadata lookup that fetches and stores nothing. Permit that exact route, not every POST, while blocking
+main-chat records and mutations. Save a private test-session record and reuse it after a slow start; check the
+synthetic prompt and side-conversation URL before typing. Capture an expanded editor only after its finite
+animations finish: a half-transparent opening frame can look like text overlaps the chat behind it.
+
 ## The live screen's later words go in a lazy component, not in a startup namespace (#5685)
 
 `main.tsx` imports `screen/ScreenView` without waiting for the rest of the catalog, so the build counts every namespace
@@ -690,6 +698,11 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 - Machine details has three monitoring cells per row; at 390 width a subtitle gets about 94 px, while "56.5 GB / 64.0 GB" takes 92 px (2026-11-06, #3637). Headless Chrome at 390 just fits and hides truncation in screenshots; 15 px narrower (desktop scrollbar), or a slightly wider font, cuts the total. Measure natural text width (`Range.getBoundingClientRect`) against cell `clientWidth`, not just 390-wide screenshots. Show a shared unit once (`usedOfTotal`, "56.5 / 64.0 GB", 74 px).
 
 ### Terminal (xterm.js)
+
+- A Linux Fontconfig preference can substitute a missing desktop family such as Menlo with a proportional face
+  (#5768). Check W and i widths through the entire computed stack. Add explicit Linux monospace faces before
+  platform fallbacks. Put the unicode-range-limited CJK face first so substituted named fonts cannot shadow its
+  size adjustment. Verify the actual xterm row spacing after asynchronous CJK loading in both terminal surfaces.
 
 - DOM-renderer Chinese gaps come from `DomRendererRowFactory`: `spacing = width * cellWidth - measured glyph width`, written as `letter-spacing`. Make Chinese glyphs measure exactly two cells to eliminate gaps. `FontFace` `size-adjust`
   scales only this fallback font; restrict `unicode-range` to CJK, leaving English cell width unchanged.

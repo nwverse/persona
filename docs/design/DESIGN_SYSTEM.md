@@ -127,7 +127,7 @@ Defined once in `apple/Shared/StatusPalette.swift:19-36` and shared by the app, 
 | Waiting in the background | working dot at 0.6 | secondary | clock mark; its soft fill the working dot at 0.08 |
 | Idle / Offline | secondary at 0.55 / 0.3 | secondary | gray |
 
-Needs you is blue on every client (`docs/design/DECISIONS.md`, 11-11). Android reads these values from the generated tokens (`spec/tokens/color.status.json`); the web still uses amber (`web/src/styles.css:233`), DS-01. Waiting in the background is `status.<mode>.backgroundWaiting` there; Android Glass draws it as iOS does (`PersonaPalette.backgroundWaiting`, picked by `PersonaPalette.status(status, waitsInBackground)` as iOS's `Session.stateTone`), and Brief and Board keep Working's colors for it.
+Needs you is blue on every client (`docs/design/DECISIONS.md`, 11-11). Android reads these values from the generated tokens (`spec/tokens/color.status.json`); the web still uses amber (`web/src/styles.css:233`), DS-01. Waiting in the background is `status.<mode>.backgroundWaiting` there; Android Glass draws it as iOS does (`PersonaPalette.backgroundWaiting`, picked by `PersonaPalette.status(status, waitsInBackground)` as iOS's `Session.stateTone`), and Brief and Board keep Working's colors for it. It is also a count of its own, on every client and in every style: the quick filters and a heading's state counts (`StateCounts`: a computer's or a space's) leave such an agent out of Working and show it with the clock.
 
 #### Fills, diff, hues, shell neutrals
 
@@ -384,7 +384,7 @@ For every component: use the design-system one, not a lookalike. Counts are appr
   active row. Empty: three 44 px pulsing rows while reading, "No matching items" for a query with nothing.
 - Web permission picker (#5324, `PermissionPicker.tsx`): the mode's symbol (14 px), its name (13 px, truncates) and a
   chevron; Full access tints the words `red`, Auto-review `mode-acts`; under a 300 px composer (a 320 px phone) only
-  the symbol. Its menu is the shared `Menu` (300 px) with each mode's symbol, name and check; descriptions are tooltips
+  the symbol. A mode not reported yet is named by no value: the raised hand and "Permission mode", no tooltip (#5756). Its menu is the shared `Menu` (300 px) with each mode's symbol, name and check; descriptions are tooltips
   (`MenuItem.tip`), except a disabled row's reason and a row asking again, which stay under the name.
 - Web under the box (#5324): the source and folder line at the left (12 px `ink-3`, a folder mark, truncating, full
   values on hover; an ⓘ menu at phone width), the context meter at the right.
@@ -639,7 +639,7 @@ The Agents list, the Inbox's Agent section, the Assistant home and history show 
 - Line 3, optional: computer · project, leaving out what the grouping already shows, then the model's short name. iOS's Avatar row and Android's Glass row (#4338 A9) draw it as the source tag, the tab (space › tab outside the tree), the computer only while the list mixes computers, the model, the to-do as an outlined chip and the muted mark; Android's words come from `rowContent` in core/domain, its model's short name from `modelShortName` (the web's `modelChipLabel`; iOS's row still shows the raw string).
 - Never in a row: raw model IDs, session IDs or engine badges. At most one count badge.
 - Answers in the row: a question's choices, and a tool approval whose full command is shown and whose action is low-risk (Deny, Allow Once). Plans, high-risk actions and Always Allow for This Session open the session, where the context is.
-- Views grouped by location draw these rows too (#3753): By Repository's computer, repository and worktree are lines of their own, each worktree's sessions in these rows under its line. The Mac's By Repository cards (frozen) keep their rows (`WorkspaceAgentRow`). On iOS and on Android's Glass style each repository is a card: its header has the folder, the bold name and the chevron, no counts, with its actions in its long press (`RepoCardHeader`, Android `AgentRepoHeader`); a worktree's line has its mark, its name, a Primary chip on the main checkout, the branch when the name is not it or Detached HEAD as a caution, "N agents" or Idle at the end, dimmed while its computer is offline (`RepoWorktreeLine`, Android `AgentWorktreeLine`, #4338 A7). A computer's repositories with nothing going on follow its busy ones under Idle Repositories with their count, one card with a row each: the folder, the name, "N agents · tab names", when it last moved and a chevron, a tap opening its agents under it (`QuietSpaceRow`, Android `AgentIdleRepoRow`). A busy worktree's idle agents fold behind one line, "2 idle · review · research", and once opened "Hide N Idle" after them folds them again (`RepoIdleLine`, Android `AgentRepoIdleLine`, #4338 A8).
+- Views grouped by location draw these rows too (#3753): By Repository's computer, repository and worktree are lines of their own, each worktree's sessions in these rows under its line. The Mac's By Repository cards (frozen) keep their rows (`WorkspaceAgentRow`). On iOS and on Android's Glass style each repository is a card: its header has the folder, the bold name and the chevron, no counts, with its actions in its long press (`RepoCardHeader`, Android `AgentRepoHeader`); a worktree's line has its mark, its name, a Primary chip on the main checkout, the branch when the name is not it or Detached HEAD as a caution, "N agents" or Idle at the end, dimmed while its computer is offline (`RepoWorktreeLine`, Android `AgentWorktreeLine`, #4338 A7). A computer's repositories with nothing going on follow its busy ones under Idle Repositories with their count, one card with a row each: the folder, the name, "N agents · tab names", when it last moved and a chevron, a tap opening its agents under it (`QuietSpaceRow`, Android `AgentIdleRepoRow`). A busy worktree's idle agents fold behind one line, "2 idle · review · research", and once opened "Hide N Idle" after them folds them again (`RepoIdleLine`, Android `AgentRepoIdleLine`, #4338 A8). By Project's spaces fold theirs behind one "N more idle" row the same way: it opens them and, once open, "Hide N Idle" follows them and folds them again (`collapseRow`, Android `AgentIdleRow`'s `open`, Glass).
 
 #### List controls
 
@@ -774,7 +774,7 @@ Agent header permission mode (#3719, `HeaderModeButton` in `apple/Persona/Views/
 capsule at the trailing end of the open Agents header's second row, under `⋯`, as tall as the tabs, with a 44 pt target that
 overhangs the row. It draws the mode menu's own symbol (one per mode) in its `ModeTone`, tinted as `ModeChip` tints a
 mode that is not the quiet one; Ask First is the quiet gray, never hidden, so the control stays in one place. A mode not
-reported yet is the plain permissions symbol, never a guessed Ask First. The words are in its menu (headed "Permission Mode: …" as on the web and Android,
+reported yet is the plain permissions symbol, never a guessed Ask First. The words are in its menu (headed "Permission Mode: …" as on the web and Android; just "Permission Mode" while no mode is reported, as the capsule says it, `SessionModes.modeHeading`, #5596;
 then the mode list, current one checked, Allow Everything disabled with its reason where the agent cannot take it), its VoiceOver label
 and the pointer tooltip. Going into Allow Everything asks first; so does leaving it when the agent cannot come back
 (`SessionModes.confirmation`), on the header and the composer's model menu alike. An agent whose mode can be neither
@@ -1196,14 +1196,21 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   any other, also while a permission holds the Agent (iOS sends it the same way). Each style keeps its own card: on
   Android, Glass a floating card inset like the composer, Brief a rounded card with a light shadow, Board a bordered card
   under its amber rule.
-  A Persona conversation's own requests (its model's tool approvals, `ask_user`) are the same: above its composer, under
-  the Needs you / In progress entries, on every client (#4883: on the web and Android they sat only in the closed Needs
-  you tray, and an owner waited minutes on an approval no screen in the chat showed). Needs you still counts them, and
-  its row for one closes the tray onto the card instead of drawing it a second time. The oldest question of the
-  conversation's tasks' Agents is answered there too (iOS `TaskQuestions`; Android in the same stack, #4339 C10), under
-  its task's name with "N more", which counts the tasks' other questions; the next comes up when it is answered. The
-  tray keeps a row with Review for every task, and Review on one whose card is not in the stack brings that card in,
-  first, until it is answered or folded.
+  A Persona conversation's own requests (its model's tool approvals, `ask_user`) are the same: the stack above its
+  composer, under the Needs you / In progress entries and the route chip, on every client (#4883: on the web and Android
+  they sat only in the closed Needs you tray, and an owner waited minutes on an approval no screen in the chat showed).
+  Needs you still counts them, and its row for one closes the tray onto the card instead of drawing it a second time.
+  The stack holds the conversation's own cards alone, so its "N pending" (shown only past half the page) counts only them.
+  What the conversation's tasks ask is a card of its own above the entries (iOS `TaskQuestions`, #4339 C10): the oldest
+  question of their Agents, under its task's name with the ask mark in the needs-you tone and, at the end of that line,
+  "N more" for the tasks' other questions; it is answered there, and the next comes up once it is. The three numbers
+  count three things and say so: "N pending" the conversation's own cards in the stack, "N more" the tasks' other
+  questions, and Needs you its rows (one for each task or Agent that asks, plus the conversation's own cards, plans and
+  drafts). A task's or an Agent's row in the tray opens that task's or Agent's detail, as iOS's rows do, where its page
+  and its cards are; it never brings a card into the stack, which is the conversation's own. On Android the two places
+  of cards share the room the footer leaves above the composer (iOS draws the question uncapped): each takes at most half
+  the page, and with both on screen each has at least half of that room, a card that needs less leaving the rest to the
+  other, so the composer stays on the page.
   A child session's request (web, #5120: `folded_under`) has its parent's page as its home: shown there with the
   parent's own, "From subagent · <title>", counted once under the parent, and every link to it opens the parent.
   A lead's worker's request (web, #5180) has the lead's page as its home too. While the Team panel shows that worker,
