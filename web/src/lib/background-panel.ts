@@ -47,3 +47,31 @@ export function latestWorkflowRun(s: Session | undefined): string | undefined {
   const pick = (list: typeof runs) => list.slice().sort((a, b) => at(b) - at(a))[0];
   return (pick(runs.filter((w) => w.running)) ?? pick(runs))?.task_id;
 }
+
+/** What only the chat page can do for its panel: stop the /loop (a message the page sends, in its outbox) and bring a
+ *  workflow's launching call into view in the chat. The page provides them while it shows the session (ChatView). */
+export interface BackgroundChat {
+  stopLoop: () => void;
+  jumpToCall?: (call: string) => void;
+}
+
+const chats = new Map<string, BackgroundChat[]>();
+const chatKey = (mid: string, sid: string) => `${mid}/${sid}`;
+
+/** The chat page showing the session provides its actions; the function returned takes them back. The same session
+ *  drawn twice (a page and an embedded copy) has two: the one that came last answers. */
+export function provideBackgroundChat(mid: string, sid: string, chat: BackgroundChat): () => void {
+  const k = chatKey(mid, sid);
+  chats.set(k, [...(chats.get(k) ?? []), chat]);
+  return () => {
+    const left = (chats.get(k) ?? []).filter((c) => c !== chat);
+    if (left.length) chats.set(k, left);
+    else chats.delete(k);
+  };
+}
+
+/** The actions of the chat page showing the session, if one does. */
+export function backgroundChat(mid: string, sid: string): BackgroundChat | undefined {
+  const list = chats.get(chatKey(mid, sid));
+  return list?.[list.length - 1];
+}
