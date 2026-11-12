@@ -68,7 +68,8 @@ def run(browser, base, token, size, theme, shots):
     for sid in (REVIEW, TESTS):
         if page.locator(f'nav a[href$="/{sid}"], [data-agents-list] a[href$="/{sid}"]').count():
             fail(f"{tag}: the worker {sid} is a row of its own")
-    expect(lead_row).to_contain_text("审一下")
+    expect(lead_row).to_contain_text("在等你批准")
+    expect(lead_row).to_contain_text("go test ./auth/")
     ok(f"{tag}: no worker is a row; the lead's row says what its waiting worker asks")
     shot("list")
 
@@ -126,6 +127,8 @@ def run(browser, base, token, size, theme, shots):
         shot("panel")
         panel.get_by_role("button", name="关闭面板").click()
         expect(panel).to_have_count(0)
+        # on a phone the panel has a history entry of its own (Back closes it): let closing step back before going on
+        page.wait_for_timeout(400)
 
     # an old link to a worker: the lead's page, the panel on that worker (at any width)
     page.goto(base + f"/s/{MID}/{TESTS}")
