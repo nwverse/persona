@@ -153,6 +153,8 @@ internal class NewAgentViewModel(
     private val now: () -> Instant = Instant::now,
     /** The subscription use of the hub a computer belongs to, for ultracode's quota line (#582); null: none drawn. */
     internal val usage: (suspend (machineId: String) -> List<persona.core.contracts.api.UsageAccount>)? = null,
+    /** The hub took an Agent this form started afresh (not a resume): the GitHub star card counts it (#5761). */
+    private val launched: () -> Unit = {},
 ) : ViewModel() {
     private val mutable = MutableStateFlow(NewAgentState())
     val state = mutable.asStateFlow()
@@ -459,6 +461,9 @@ internal class NewAgentViewModel(
                 val request = operation.folder?.let { operation.request.copy(cwd = it) } ?: operation.request
                 val session = result.session
                 try { adopt(session) } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+                // The GitHub star card's count (#5761), once the hub takes it, as on the web: only a start sent now, never
+                // a resume, and never a start checked again (it may have counted before the answer went missing).
+                if (fresh && operation.request.resumeSessionId == null) launched()
                 val first = operation.firstMessage
                 val firstId = operation.firstMessageId
                 if (first != null && firstId != null) {

@@ -17,6 +17,11 @@ type codexHistorySegment struct {
 	end *int64
 }
 
+func codexContinuationPath(path string) bool {
+	name := strings.TrimSuffix(filepath.Base(path), ".jsonl")
+	return len(name) > 37 && name[len(name)-37] == '_' && rolloutUUID(name[len(name)-36:])
+}
+
 func codexHistorySegments(home string, t codexAppThread) ([]codexHistorySegment, error) {
 	if !t.Paginated || t.RolloutPath == "" {
 		return []codexHistorySegment{{id: t.ID}}, nil

@@ -156,6 +156,14 @@ func TestCodexPaginatedHistoryKeepsThePrefixAndAnEmptyConversation(t *testing.T)
 	turns := []historyTurn{{thread: remoteRaw, id: "a", ordinal: 0, status: "completed", items: [][2]string{userItem("u", "retained prefix")}}}
 	id := paginatedCodex(t, n, home, remoteRaw, turns)
 	src, _ := n.codexSource(id)
+	segment := strings.TrimSuffix(src.path, ".jsonl") + "_" + remoteOther + ".jsonl"
+	header := fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_base":{"thread_id":%q,"end_ordinal_exclusive":1}}}`+"\n", remoteRaw, remoteRaw)
+	if err := os.WriteFile(segment, []byte(header), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeCodexApp(t, home, home, fmt.Sprintf("UPDATE threads SET rollout_path = '%s'", segment))
+	invalidateCodexPaginated(home)
+
 	// The old rollout still exists and contains an abandoned branch.
 	if err := os.WriteFile(src.path, []byte(`{"type":"session_meta","payload":{}}`+"\n"+`{"type":"event_msg","payload":{"type":"user_message","message":"abandoned raw rollout"}}`+"\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -218,5 +226,22 @@ func TestRuntimeNativeRewindCapability(t *testing.T) {
 	}
 	if _, err := n.rewind(context.Background(), s.SessionID, rewindOpts{Prompt: "example", Occurrence: 1, Restore: RestoreCodeAndConv}); err == nil || len(h.got("session.rewind")) != 1 {
 		t.Fatal("file rewind reached a conversation-only runtime")
+	}
+}
+
+func TestCodexOrdinaryPaginatedHistoryKeepsItsRollout(t *testing.T) {
+	n := remoteTestNode(t)
+	home := n.codexHome()
+	id := paginatedCodex(t, n, home, remoteRaw, []historyTurn{{thread: remoteRaw, id: "a", ordinal: 0, status: "completed", items: [][2]string{userItem("a", "Indexed input")}}})
+	src, _ := n.codexSource(id)
+	file, err := n.file(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file.Where() != src.path {
+		t.Fatalf("ordinary rollout replaced by %s", file.Where())
+	}
+	if _, err := os.Stat(n.codexAppHistoryFile(src)); !os.IsNotExist(err) {
+		t.Fatalf("ordinary history was materialized: %v", err)
 	}
 }

@@ -18,6 +18,7 @@ enum ChatStyle {
 struct ChatView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dynamicTypeSize) private var typeSize
     /// The session on screen; the sibling strip can switch it to another agent in the same space.
     @State private var key: SessionKey
     var style: ChatStyle = .dev
@@ -1460,7 +1461,7 @@ struct ChatView: View {
                     }
                     .font(Theme.Font.caption)
                     .foregroundStyle(.secondary)
-                    .padding(.leading, WorkCardSlice.contentLeading)
+                    .padding(.leading, WorkCardSlice.contentLeading(typeSize))
                     .padding(.trailing, WorkCardSlice.inset)
                     .padding(.vertical, Theme.Space.m)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -2509,6 +2510,8 @@ struct ChatView: View {
             // Needs You / In Progress in the dock's capsules, each opening its tray (#3393), on every device.
             AssistantActionBar(conversation: conversation, key: key, computer: computerActivity)
             RouteChip(conversation: conversation)
+            // Items handed to the main conversation that are still open: "Wrap up" asks it for the final write-back (#5932).
+            if model.assistantMain == key { WrapUpChips(key: key) }
         }
     }
 
@@ -4626,14 +4629,33 @@ struct StartingNote: View {
 }
 
 /// Why a session waits for the user, in its host's words (a botmux attention), with its Feishu topic one tap away.
+/// Under it, the AskUserQuestion it waits on, read-only (#5889), when no card can answer it: a dialog only its computer
+/// can answer still says here what it asks.
 struct AttentionNote: View {
     var reason: String
     var link: URL?
+    /// The chat whose open question it lists; read here, so only the note follows the chat's items (P5).
+    var key: SessionKey? = nil
+    @Environment(AppModel.self) private var model
 
     var body: some View {
+        // A question a card can answer is listed there, not here too (#5937).
+        let questions = key.flatMap {
+            model.interactions(for: $0).isEmpty ? AskUserAnswers.pending(model.chat($0).items) : nil
+        } ?? []
         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
             ThemedIcon(Theme.Icon.needsYou).font(Theme.Font.labelStrong).foregroundStyle(StatusPalette.needsYou.text)
-            Text(reason).font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(3)
+            VStack(alignment: .leading, spacing: Theme.Space.s) {
+                Text(reason).font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(3)
+                ForEach(Array(questions.enumerated()), id: \.offset) { _, q in
+                    VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                        Text(q.question).font(Theme.Font.captionMedium)
+                        ForEach(Array(q.options.enumerated()), id: \.offset) { _, label in AskUserDetail.choice(label, picked: false) }
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("chat.attention.question")
+                }
+            }
             Spacer(minLength: 0)
             if let link { FeishuLink(url: link).font(Theme.Font.secondaryStrong) }
         }
@@ -5114,7 +5136,7 @@ struct Composer: View, Equatable {
                 StartingNote(error: s.startError, agent: s.agentLabel, coded: s.startErrorCode?.isEmpty == false)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             } else if let s = model.session(key), let reason = s.attentionReason, !reason.isEmpty, s.state == .needsYou {
-                AttentionNote(reason: reason, link: s.externalLink)
+                AttentionNote(reason: reason, link: s.externalLink, key: key)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             } else if let s = model.session(key), let reason = s.failureReason, !reason.isEmpty, !status.isActive,
                       retried != reason {
@@ -6517,6 +6539,7 @@ nonisolated indirect enum WorkItem: Identifiable, Equatable, Sendable {
 struct WorkStepView: View, Equatable {
     nonisolated let item: WorkItem
     nonisolated let first: Bool
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.item == rhs.item && lhs.first == rhs.first
@@ -6542,19 +6565,19 @@ struct WorkStepView: View, Equatable {
                 ThinkingRow(item: t, compact: true) // a row like the tools', with their insets
             case .step(.thought(let t)):
                 Group { if t.kind == .notice { NoticeRow(item: t) } else { ThinkingRow(item: t, compact: !WorkCardSlice.timeline) } }
-                    .padding(.leading, WorkCardSlice.contentLeading)
+                    .padding(.leading, WorkCardSlice.contentLeading(typeSize))
                     .padding(.trailing, WorkCardSlice.inset)
                     .padding(.vertical, WorkCardSlice.timeline ? Theme.Space.s : Theme.Space.m)
             case .step(.folded(let f)):
                 FoldedWorkRow(fold: f)
-                    .padding(.leading, WorkCardSlice.contentLeading)
+                    .padding(.leading, WorkCardSlice.contentLeading(typeSize))
                     .padding(.trailing, WorkCardSlice.inset)
                     .padding(.vertical, WorkCardSlice.timeline ? Theme.Space.s : Theme.Space.m)
             case .text(let i):
                 // The agent's words between its steps: on the timeline in the quieter type, so they read as part of
                 // the process and not as its answer.
                 AssistantText(item: i, quiet: WorkCardSlice.timeline)
-                    .padding(.leading, WorkCardSlice.contentLeading)
+                    .padding(.leading, WorkCardSlice.contentLeading(typeSize))
                     .padding(.trailing, WorkCardSlice.inset)
                     .padding(.vertical, WorkCardSlice.timeline ? Theme.Space.s : Theme.Space.m)
             }
@@ -6647,20 +6670,32 @@ struct WorkStepView: View, Equatable {
 struct WorkCardSlice: View {
     var top: Bool
     var bottom: Bool
+    @Environment(\.dynamicTypeSize) private var typeSize
     /// Half the list's spacing (`LazyVStack(spacing: Theme.Space.l)`): the slices meet in the middle of each gap. It was
     /// 7 from when the spacing was 14; at 16 every seam showed a 2 pt gap (white lines across the card, the rail broken).
     static let bridge: CGFloat = Theme.Space.l / 2
     static let radius = Theme.Radius.card
-    /// The rows' side padding inside the card.
-    static let inset: CGFloat = 12
-    /// Where a tool row's words start (inset + 24 pt icon + 10): separators start there.
-    static let textColumn: CGFloat = 46
-    /// The timeline's rail runs through the middle of the tools' icons.
-    static let railX: CGFloat = inset + Theme.Size.icon / 2
+    /// Side padding inside a card. The timeline's icon column uses `iconLeading` instead.
+    static let inset: CGFloat = Theme.Space.m
+    /// Where the timeline's icons start. Flush with the assistant reply bubble, which begins at the list's content
+    /// margin. A card keeps `inset` inside its ring, so that style does not move.
+    static var iconLeading: CGFloat { timeline ? Theme.Space.flush : inset }
+    /// The card's text column, unchanged: inset + icon + 10. The hairline between card steps starts there.
+    /// The separator only draws for cards, so it reads this directly instead of a text size.
+    static let cardTextColumn: CGFloat = 46
+    /// The icon's width at this text size, the same scale `scaledFrame` gives the step icons.
+    static func iconWidth(_ typeSize: DynamicTypeSize) -> CGFloat { Theme.Size.icon * Theme.sizeScale(typeSize) }
+    /// Where a tool row's words start. On the timeline that is the scaled icon plus the header's gap, so the title,
+    /// the opened detail and Collapse share one edge. A card keeps `cardTextColumn`.
+    static func textColumn(_ typeSize: DynamicTypeSize) -> CGFloat {
+        timeline ? iconLeading + iconWidth(typeSize) + Theme.Space.m : cardTextColumn
+    }
+    /// The rail's x, through the middle of the tools' icons.
+    static func railX(_ typeSize: DynamicTypeSize) -> CGFloat { iconLeading + iconWidth(typeSize) / 2 }
 
     static var timeline: Bool { StyleSpec.current.workList == .timeline }
     /// Where a step's own content starts: the card's inset, or (timeline) right of the rail, where the tools' words are.
-    static var contentLeading: CGFloat { timeline ? textColumn : inset }
+    static func contentLeading(_ typeSize: DynamicTypeSize) -> CGFloat { timeline ? textColumn(typeSize) : inset }
 
     var body: some View {
         if Self.timeline { rail } else { card }
@@ -6673,7 +6708,7 @@ struct WorkCardSlice: View {
             Rectangle()
                 .fill(Color(uiColor: .separator))
                 .frame(width: Theme.Size.lineMedium, height: bottom ? g.size.height / 2 + (top ? 0 : Self.bridge) : g.size.height + (top ? 0 : Self.bridge) + Self.bridge)
-                .offset(x: Self.railX - Theme.Size.lineMedium / 2, y: top ? Theme.Space.m : -Self.bridge)
+                .offset(x: Self.railX(typeSize) - Theme.Size.lineMedium / 2, y: top ? Theme.Space.m : -Self.bridge)
         }
         .allowsHitTesting(false)
     }
@@ -6698,7 +6733,7 @@ struct WorkCardSlice: View {
     @ViewBuilder static var separator: some View {
         if !timeline {
             Rectangle().fill(beautiful ? Theme.cardStroke : Color(uiColor: .separator)).frame(height: beautiful ? Theme.Size.line : Theme.Size.hairline)
-                .padding(.leading, textColumn)
+                .padding(.leading, cardTextColumn)
                 .offset(y: -bridge)
                 .allowsHitTesting(false)
         }
@@ -6710,6 +6745,7 @@ struct WorkCardSlice: View {
 struct WorkEndView: View, Equatable {
     @Environment(\.openFile) private var openFile
     @Environment(\.chatPin) private var pin
+    @Environment(\.dynamicTypeSize) private var typeSize
     nonisolated let count: Int
     nonisolated let files: [ChangedFile]
     /// What the chat's pin knows the chips by: "+N files" opens the rest under them, the chips staying where they are (#3757).
@@ -6743,7 +6779,7 @@ struct WorkEndView: View, Equatable {
                 }
                 .font(Theme.Font.caption)
                 .foregroundStyle(.secondary)
-                .padding(.leading, WorkCardSlice.contentLeading)
+                .padding(.leading, WorkCardSlice.contentLeading(typeSize))
                 .padding(.trailing, WorkCardSlice.inset)
                 .padding(.vertical, Theme.Space.m)
                 .frame(maxWidth: .infinity, alignment: .leading)
