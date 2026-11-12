@@ -63,3 +63,26 @@ func TestParseMessageHTMLOnlySeparatesBlockElements(t *testing.T) {
 		t.Fatalf("Text = %q, want %q", got, want)
 	}
 }
+
+// Only a message's body is its text: the title in the head, a comment's body and what follows a ">" inside a quoted
+// attribute value are not text, however much of it the tag scanner would otherwise take for markup. An unclosed
+// comment, quoted value or title drops the rest, as an unclosed <script> or <style> does.
+func TestStripHTMLKeepsTitleCommentsAndTagInsidesOut(t *testing.T) {
+	for _, c := range []struct{ name, in, want string }{
+		{"title", "<html><head><title>Monthly newsletter</title><meta charset=utf-8></head><body>Hello Bob</body></html>", "Hello Bob"},
+		{"title in capitals", "<HEAD><TITLE>News</TITLE></HEAD>Body", "Body"},
+		{"comment with >", "<!-- preheader > hidden --><p>Hi</p>", "Hi"},
+		{"comment with a script", "<p>a</p><!-- <script>x</script> -->b", "a b"},
+		{"conditional comment", "<!--[if mso]><table><tr><td>Open in a browser<![endif]--><p>Hi</p><!--[if mso]></td></tr></table><![endif]-->", "Hi"},
+		{"> in a double-quoted value", `<p title="a > b">text</p>`, "text"},
+		{"> in a single-quoted value", `<a href='x' title='a > b'>link</a> after`, "link after"},
+		{"quote that opens no value", `<p it's fine>text</p>`, "text"},
+		{"unclosed comment", "<p>kept</p><!-- the rest is a comment", "kept"},
+		{"unclosed title", "<title>no end, <p>hidden</p>", ""},
+		{"a tag whose name starts with title", "<titled>kept</titled>", "kept"},
+	} {
+		if got := PlainText(c.in); got != c.want {
+			t.Errorf("%s: PlainText(%q) = %q, want %q", c.name, c.in, got, c.want)
+		}
+	}
+}
