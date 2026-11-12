@@ -114,10 +114,12 @@ internal fun RecapStrip(item: Item, onClose: () -> Unit) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.sm)) {
                 JIcon(RecapIcon, null, size = Tokens.Space.l, tint = palette.accent, decorative = true)
                 Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.sm)) {
+                    // The title keeps its words; the time gives way when the line is short of room.
                     Text(stringResource(R.string.chat_recap_title), style = type.caption.copy(fontWeight = FontWeight.SemiBold),
-                        color = palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                        color = palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     parseTime(item.ts)?.let {
-                        Text("· " + relativeTime(it, now, resources), style = type.caption, color = palette.ink2, maxLines = 1)
+                        Text("· " + relativeTime(it, now, resources), style = type.caption, color = palette.ink2, maxLines = 1,
+                            overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                     }
                 }
                 JIcon(PersonaIcons.close, null, size = Tokens.Space.m, tint = palette.ink3, decorative = true)

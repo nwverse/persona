@@ -4,9 +4,11 @@ import android.graphics.Bitmap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
@@ -14,6 +16,7 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.unit.Density
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertTrue
@@ -43,7 +46,7 @@ import java.time.Instant
 /**
  * The real chat page in four states of docs/plans/android-ios-alignment/chats.md C9, every style, light and dark: a
  * message whose turn has not begun ("ready"), the first page loading ("loading"), a load error ("error") and a recap at the
- * end ("recap"). The same file draws `main` for the comparison: it uses nothing new. PNGs in `build/chat-details-shots/`
+ * end ("recap"), and the Glass two at the largest text size. The same file draws `main` for the comparison: it uses nothing new. PNGs in `build/chat-details-shots/`
  * (or `-Dpersona.shots=<dir>`). Native JVM rendering: no system bars, no glass refraction, no device.
  */
 @RunWith(AndroidJUnit4::class)
@@ -53,7 +56,8 @@ class ChatDetailsShotsTest {
     @get:Rule val rule = createComposeRule()
 
     private val key = SessionKey("computer-a", "importer")
-    private val start = Instant.now().minusSeconds(3600)
+    // A fixed hour, so two runs (main and this branch) draw the same times.
+    private val start = Instant.parse("2026-11-12T01:00:00Z")
     private fun at(seq: Int) = start.plusSeconds(seq * 60L).toString()
     private val exchange = listOf(
         Item("u1", 1, role = "user", kind = "text", text = "Make the importer retry once when the hub restarts", ts = at(1)),
@@ -70,7 +74,7 @@ class ChatDetailsShotsTest {
             node.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty()
     }
 
-    private fun scene(name: String, style: AppStyle, dark: Boolean) {
+    private fun scene(name: String, style: AppStyle, dark: Boolean, large: Boolean = false) {
         val snapshot = when (name) {
             "loading" -> ChatSnapshot(loading = true)
             "error" -> ChatSnapshot(items = exchange, loading = false, error = "Couldn’t sync messages")
@@ -102,9 +106,13 @@ class ChatDetailsShotsTest {
             .getSharedPreferences("closed_recaps", android.content.Context.MODE_PRIVATE).edit().clear().commit()
         rule.mainClock.autoAdvance = false // the spinner and the typing dots never settle
         rule.setContent {
-            PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
-                Box(Modifier.fillMaxSize().background(PersonaTheme.palette.background).testTag("shot")) {
-                    ChatScreen(key, chats, sender, interactions, sessions, onBack = {})
+            // The largest text: the density's font scale, as the system's largest accessibility size gives it.
+            val density = Density(LocalDensity.current.density, if (large) 2f else 1f)
+            CompositionLocalProvider(LocalDensity provides density) {
+                PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                    Box(Modifier.fillMaxSize().background(PersonaTheme.palette.background).testTag("shot")) {
+                        ChatScreen(key, chats, sender, interactions, sessions, onBack = {})
+                    }
                 }
             }
         }
@@ -126,7 +134,7 @@ class ChatDetailsShotsTest {
         repeat(10) { rule.mainClock.advanceTimeByFrame() }
         val image = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
         val output = File(System.getProperty("persona.shots") ?: "build/chat-details-shots").also { it.mkdirs() }
-        File(output, "$name-${style.name.lowercase()}-${if (dark) "dark" else "light"}.png").outputStream()
+        File(output, "$name-${style.name.lowercase()}-${if (dark) "dark" else "light"}${if (large) "-large" else ""}.png").outputStream()
             .use { assertTrue(image.compress(Bitmap.CompressFormat.PNG, 100, it)) }
     }
 
@@ -154,4 +162,6 @@ class ChatDetailsShotsTest {
     @Test fun recapBriefDark() = scene("recap", AppStyle.Brief, true)
     @Test fun recapBoard() = scene("recap", AppStyle.Board, false)
     @Test fun recapBoardDark() = scene("recap", AppStyle.Board, true)
+    @Test fun readyGlassLarge() = scene("ready", AppStyle.Glass, false, large = true)
+    @Test fun recapGlassLarge() = scene("recap", AppStyle.Glass, false, large = true)
 }
