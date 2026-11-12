@@ -12,7 +12,10 @@ import type { Todo } from "../../lib/work-groups";
 import { emptyTaskIndex } from "../../lib/tasks";
 import { ChatContext, type ChatContextValue } from "./chat-context";
 import { forgetExpanded } from "./expanded";
-import { latestPlan, PlanCard, planCardStep, PlanPill, usePlanClosed } from "./PlanCard";
+import { planCardStep } from "../../lib/work-groups";
+import { useEscapeClose } from "../../ui/overlay";
+import { latestPlan, usePlanClosed } from "./latest-plan";
+import { PlanCard, PlanPill } from "./PlanCard";
 import { SegmentView } from "./SegmentView";
 
 const todos: Todo[] = [
@@ -51,11 +54,18 @@ const enter = (el: Element) => act(() => el.dispatchEvent(new MouseEvent("mouseo
 const leave = (el: Element) => act(() => el.dispatchEvent(new MouseEvent("mouseout", { bubbles: true, relatedTarget: document.body })));
 const press = (el: Element) => act(() => el.dispatchEvent(new Event("pointerdown", { bubbles: true })));
 const key = (k: string, at: Element = document.body) => act(() => at.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true })));
+// a Collapse finishes moving on its transition's end, or 450 ms later without one (jsdom)
+const settle = () => act(() => new Promise((r) => setTimeout(r, 500)));
+const frame = () => act(() => new Promise((r) => requestAnimationFrame(() => r(undefined))));
+/** The Collapse around `sel`: open is a 1fr row; closed, 0fr and inert. */
+const fold = (sel: string) => host.querySelector(sel)?.closest<HTMLElement>(".grid");
 
 describe("the plan card", () => {
   it("starts open: the head, then every step with its mark", async () => {
     await render(<PlanCard id="p" todos={todos} />);
     expect(head().getAttribute("aria-expanded")).toBe("true");
+    // one chevron, turned down while open (as every fold in the chat)
+    expect(head().querySelector("svg")!.style.transform).toBe("rotate(90deg)");
     expect(host.querySelector("[data-plan-count]")!.textContent).toBe("2/5");
     expect(host.querySelector("[data-plan-head]")!.textContent).toBe("补测试"); // the step in progress
     const rows = [...host.querySelectorAll("[data-plan-list] [data-todo]")];
@@ -67,16 +77,27 @@ describe("the plan card", () => {
     expect(host.querySelector("[data-plan-progress]")).toBeNull();
   });
 
-  it("closes to its head and a bar of how many are done, and opens again", async () => {
+  it("closes in place (Collapse) to its head and a bar of how many are done, and opens again", async () => {
     await render(<PlanCard id="p" todos={todos} />);
+    expect(fold("[data-plan-list]")!.style.gridTemplateRows).toBe("1fr");
     await click(head());
     expect(head().getAttribute("aria-expanded")).toBe("false");
+    expect(head().querySelector("svg")!.style.transform).toBe("none");
+    // the list folds away with the height, then goes
+    expect(fold("[data-plan-list]")!.style.gridTemplateRows).toBe("0fr");
+    await frame();
+    await settle();
     expect(host.querySelector("[data-plan-list]")).toBeNull();
     const bar = host.querySelector<HTMLElement>("[data-plan-progress] > div")!;
+    expect(bar.parentElement!.className).toContain("h-0.5");
     expect(bar.style.width).toBe("40%");
+    expect(fold("[data-plan-progress]")!.style.gridTemplateRows).toBe("1fr");
     await click(head());
     expect(head().getAttribute("aria-expanded")).toBe("true");
+    await frame();
+    await settle();
     expect(host.querySelector("[data-plan-progress]")).toBeNull();
+    expect(fold("[data-plan-list]")!.style.gridTemplateRows).toBe("1fr");
   });
 
   it("names the last step when none is in progress", async () => {
@@ -113,13 +134,6 @@ describe("the plan pill", () => {
     const c = 2 * Math.PI * 7;
     // step 3 of 5, not 2 done of 5
     expect(Number(ring.getAttribute("stroke-dashoffset"))).toBeCloseTo(c * (1 - 3 / 5));
-  });
-
-  it("says the last step with a check once all are done", async () => {
-    await render(<PlanPill todos={allDone} />);
-    expect(pill()!.textContent).toBe("第 5 / 5 步");
-    expect(pill()!.querySelector("[data-plan-ring]")).toBeNull();
-    expect(pill()!.querySelector("svg path")).not.toBeNull();
   });
 
   it("opens its flyout on hover and closes it on leaving", async () => {
@@ -159,21 +173,35 @@ describe("the plan pill", () => {
     expect(flyout()).toBeNull();
   });
 
-  it("pinned, Esc closes it and goes no further (the chat's Esc stops a running turn)", async () => {
-    const chat = vi.fn();
-    addEventListener("keydown", chat);
-    try {
-      await render(<PlanPill todos={todos} />);
-      await click(pill()!);
-      await key("Escape");
-      expect(flyout()).toBeNull();
-      expect(chat).not.toHaveBeenCalled();
-      // closed, Esc is the chat's again
-      await key("Escape");
-      expect(chat).toHaveBeenCalledTimes(1);
-    } finally {
-      removeEventListener("keydown", chat);
+  it("pinned, it is a dialog (so the chat's Esc does not stop the turn) that Esc closes", async () => {
+    await render(<PlanPill todos={todos} />);
+    await enter(pill()!);
+    // hovering it is no dialog: Esc is the chat's
+    expect(document.querySelector("[role=dialog]")).toBeNull();
+    await click(pill()!);
+    const dialog = document.querySelector("[role=dialog]");
+    expect(dialog).toBe(flyout());
+    expect(dialog!.getAttribute("aria-labelledby")).toBe(pill()!.id);
+    await key("Escape");
+    expect(flyout()).toBeNull();
+    expect(document.querySelector("[role=dialog]")).toBeNull();
+  });
+
+  it("Esc closes an overlay opened over the pinned flyout first", async () => {
+    function Over({ open, onClose }: { open: boolean; onClose: () => void }) {
+      useEscapeClose(open, onClose);
+      return open ? <div data-over /> : null;
     }
+    const closeOver = vi.fn();
+    await render(<PlanPill todos={todos} />);
+    await click(pill()!);
+    await render(<><PlanPill todos={todos} /><Over open onClose={closeOver} /></>);
+    await key("Escape");
+    expect(closeOver).toHaveBeenCalledTimes(1);
+    expect(flyout()!.dataset.planFlyout).toBe("pinned");
+    await render(<><PlanPill todos={todos} /><Over open={false} onClose={closeOver} /></>);
+    await key("Escape");
+    expect(flyout()).toBeNull();
   });
 
   it("Tab goes from the pill to Close Plan while the flyout shows", async () => {

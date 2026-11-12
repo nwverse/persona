@@ -772,21 +772,26 @@ model and effort, its status and time; opened, its prompt, latest words and last
 
 **The plan card and pill** (web, #5156; the owner asked on 2026-11-12 that the plan follow cindy's `InlinePlanCard` and
 `TodoListCard` exactly, which replaces the one-line card and the side panel's Plan). One card per exchange, where its
-latest TodoWrite of two or more items was written (`PlanCard`, `planCardStep`); earlier updates and lists of one item are ordinary rows (cindy drops them; super rule 2 keeps every call inspectable). A
-12 px rounded, 1 px `line`-bordered `surface` card; its head (14 × 10 px padding, 8 px gaps) is a 14 px chevron in
-`tool-ink`, a 16 px `todo` icon, done / total in 13 px monospace medium, a `tool-ink` dot and the step in progress (else
-the last) on one line. It starts open on the whole list (rows at least 30 px, 10 px gaps, 13/1.45 text that wraps):
+latest TodoWrite of two or more items was written (`PlanCard`; one rule, `isPlanList` / `planCardStep` in
+`lib/work-groups.ts`, for the card and the pill); earlier updates and lists of one item are ordinary rows (cindy drops
+them; super rule 2 keeps every call inspectable), and a plan update keeps its group from being titled as reading only.
+A `rounded-xl` (12 px, as `TaskCard`), 1 px `line`-bordered `surface` card; its head (`px-3.5 py-2.5`, 8 px gaps) is a
+14 px chevron in `tool-ink` that turns a quarter when open, a 16 px `todo` icon, done / total in 13 px monospace medium
+(as a tool row's counts), a `tool-ink` dot and the step in progress (else the last) on one line in
+`--chat-secondary`. It starts open on the whole list, which opens and closes with `Collapse` like every fold in the
+chat (rows at least 30 px, 10 px gaps, `--chat-secondary` at 1.45 that wraps):
 done steps an 18 px check in a circle with their text in `tool-ink`, the step in progress an arc on the same circle in
 `ink` with medium text, pending steps an empty circle in `ink`. The arc turns only while the turn runs and, unlike the
 spinners, never with reduced motion (its shape already says "in progress", as in cindy). Closed, a 2 px bar under the
 head: `line` track, `ink` fill of done / total, moving over `MOVE_MS` with `EASE`. The card stays inside the folded
 summary (super rule 2; cindy draws it in the open, #5162).
 While that card is out of view a pill sits above the composer: rounded-full, 1 px `line` border, `surface`, 14 × 6 px
-padding, a still 16 px progress ring (stroke 2, `tool-ink` at 45% under an `ink` arc of step / total; a check once all
-are done) and "Step 3 of 5". Hover shows a flyout and leaving hides it; a click pins it, and a second click, a press
-outside or Esc unpins it (one Esc closes only the flyout). The flyout is a new pattern: a 12 px rounded, bordered
+padding, a still 16 px progress ring (stroke 2, `tool-ink` at 45% under an `ink` arc of step / total) and "Step 3 of 5"
+in 13 px. Hover shows a flyout and leaving hides it; a click pins it, and a second click, a press outside or Esc unpins
+it. Pinned, it is a non-modal dialog on the overlay Escape stack (`useEscapeClose`): Esc closes only the topmost
+overlay, and the chat's Esc, which stops a running turn, leaves it be. The flyout is a new pattern: a `rounded-xl`, bordered
 `surface` panel centered on the composer column, 8 px above the pill, 220–420 px wide (and the screen less 32), its
-list scrolling past 280 px (30 px rows, the step in progress semibold), coming in with `pop-in` (160 ms, `EASE`) and
+list scrolling past 280 px (30 px rows in `--chat-secondary`, the step in progress semibold), coming in with `pop-in` (160 ms, `EASE`, as the other popovers) and
 fading out over `EXIT_MS.card`; it is drawn on the page's body so the scrolling box over the composer does not clip it,
 with a 12 px band over the pill's top so the pointer can cross the gap. Its 28 px round ✕ (**Close Plan**, `tool-hover`
 on hover) hides the pill until the plan changes. The pill also goes once every step is done or a later message of the
