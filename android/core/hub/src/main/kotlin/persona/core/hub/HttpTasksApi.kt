@@ -93,6 +93,10 @@ class HttpTasksApi internal constructor(
             done?.let { put("done", it) }
         })["todo"] ?: error("no todo in the answer")))
 
+    override suspend fun setTodoSeen(id: String, seen: Boolean): Todo =
+        stamped(JsonCodec.decodeFromJsonElement(call(path("todos", id, "seen"), if (seen) "PUT" else "DELETE",
+            if (seen) JsonObject(emptyMap()) else null)["todo"] ?: error("no todo in the answer")))
+
     override suspend fun setTodoPlan(id: String, plan: persona.core.contracts.TodoPlan): Todo =
         stamped(JsonCodec.decodeFromJsonElement(call(path("todos", id), "PATCH", todoPlanBody(plan))["todo"] ?: error("no todo in the answer")))
 
@@ -206,6 +210,13 @@ class HttpTasksApi internal constructor(
 
     override suspend fun markLaterHandled(questionId: String) {
         call(path("later", questionId, "handled"), "POST", JsonObject(emptyMap()))
+    }
+
+    override suspend fun ruleAlways(suggestionId: String): persona.core.contracts.RuleSuggestionMade =
+        JsonCodec.decodeFromJsonElement(call(path("assistant", "rule-suggestions", suggestionId, "always"), "POST", JsonObject(emptyMap())))
+
+    override suspend fun ruleNotNow(suggestionId: String) {
+        call(path("assistant", "rule-suggestions", suggestionId, "not-now"), "POST", JsonObject(emptyMap()))
     }
 
     override suspend fun removeTask(todoId: String) {

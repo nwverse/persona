@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { readTranscriptSteps } from '../lib/map.js'
+import { readTranscript, readTranscriptSteps } from '../lib/map.js'
 
 function logs(t) {
   const brain = mkdtempSync(join(tmpdir(), 'agy-transcript-'))
@@ -31,7 +31,7 @@ test('complete reads fall back to compact-only histories and unavailable full fi
   assert.equal(readTranscriptSteps(brain, true)[0].content, 'compact-only history')
 })
 
-test('cached native records refresh after same-size writes and atomic replacement', (t) => {
+test('fresh rewrites bypass the cache and settled records refresh after atomic replacement', async (t) => {
   const { brain, directory } = logs(t)
   const file = join(directory, 'transcript_full.jsonl')
   writeFileSync(file, record('first'))
@@ -39,7 +39,27 @@ test('cached native records refresh after same-size writes and atomic replacemen
   assert.equal(readTranscriptSteps(brain, true)[0].content, 'first')
   writeFileSync(file, record('other'))
   assert.equal(readTranscriptSteps(brain, true)[0].content, 'other')
+  await new Promise((resolve) => setTimeout(resolve, 1100))
+  const cached = readTranscriptSteps(brain, true)
+  assert.equal(readTranscriptSteps(brain, true), cached, 'settled files reuse parsed records')
   writeFileSync(file + '.new', record('final'))
   renameSync(file + '.new', file)
   assert.equal(readTranscriptSteps(brain, true)[0].content, 'final')
+})
+
+
+test('native replacement records discard the abandoned tail and keep a stable branch identity', (t) => {
+  const { brain, directory } = logs(t)
+  const file = join(directory, 'transcript_full.jsonl')
+  const step = (index, text, at) => JSON.stringify({ step_index: index, type: 'PLANNER_RESPONSE', content: text, created_at: at }) + '\n'
+  writeFileSync(file, step(0, 'retained', '2026-01-01') + step(1, 'abandoned', '2026-01-01') + step(2, 'abandoned tail', '2026-01-01'))
+  assert.equal(readTranscript(brain, true).branch, '')
+  appendFileSync(file, step(1, 'replacement', '2026-01-02'))
+  const rewound = readTranscript(brain, true)
+  assert.deepEqual(rewound.steps.map((step) => step.content), ['retained', 'replacement'])
+  assert.ok(rewound.branch)
+  appendFileSync(file, step(1, 'replacement updated', '2026-01-02') + step(2, 'continued', '2026-01-02'))
+  const next = readTranscript(brain, true)
+  assert.equal(next.branch, rewound.branch, 'updating the same step and continuing keep the branch')
+  assert.deepEqual(next.steps.map((step) => step.content), ['retained', 'replacement updated', 'continued'])
 })

@@ -62,7 +62,10 @@ struct SubscriptionsUITests {
         #expect(ctx["assistant"] as? String == "Claude")
         #expect(ctx["platform"] as? String == context.platform && ctx["ui_version"] as? Int == context.uiVersion)
         #expect(sent?["state"] as? String == #"{"p":"source"}"# && sent?["action"] as? String == "ask")
-        let none = try JSONSerialization.jsonObject(with: JSONEncoder().encode(SubscriptionsUI.Request(request: body, assistant: ""))) as? [String: Any]
-        #expect((none?["context"] as? [String: Any])?["assistant"] == nil)
+        // sent even without a name: the key says this app opens Set Up with …, which the pages draw only then (#5661)
+        for name in ["", nil] as [String?] {
+            let none = try JSONSerialization.jsonObject(with: JSONEncoder().encode(SubscriptionsUI.Request(request: body, assistant: name))) as? [String: Any]
+            #expect((none?["context"] as? [String: Any])?["assistant"] as? String == "")
+        }
     }
 }

@@ -53,11 +53,13 @@ import persona.core.contracts.*
 import persona.core.contracts.api.ConnectionState
 import dev.chrisbanes.haze.HazeState
 import persona.core.designsystem.*
+import persona.core.designsystem.dense
 import persona.core.designsystem.icons.PhIcons
 import androidx.compose.foundation.background
 import persona.core.domain.inbox.buildInboxList
 import persona.core.navigation.*
 import persona.feature.agents.agentsEntries
+import persona.feature.agents.machineSpacesEntries
 import persona.feature.agents.spaceEntries
 import persona.feature.agents.AgentsDependencies
 import persona.feature.agents.AgentsPreferencesSnapshot
@@ -134,6 +136,8 @@ private fun PersonaRootContent(
     val link = MainActivity.pendingPairLink.value
     // One toast slot for the window, as iOS: the newest notice replaces the one showing; the host plays its haptic.
     LaunchedEffect(shell) { shell.feedback.notices.collect { toast.show(it) } }
+    // The GitHub star toast owed since first setup finished (#5761): here, so leaving the checklist for the shell keeps it.
+    persona.feature.settings.StarPromptWelcome(toast::show)
     CompositionLocalProvider(LocalAppFeedback provides shell.feedback) {
         Surface(Modifier.fillMaxSize()) {
             Box(Modifier.fillMaxSize()) {
@@ -269,6 +273,8 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     }
     val inbox by session.inbox.snapshot.collectAsStateWithLifecycle()
     val connection by session.connection.state.collectAsStateWithLifecycle()
+    // With several hub groups paired the Persona menu's heading ends with the selected group's name, as on iOS.
+    val hubGroups by session.groups.groups.collectAsStateWithLifecycle()
     val preferences by session.preferences.snapshots.collectAsStateWithLifecycle(AgentsPreferencesSnapshot())
     val todos by (session.tasks?.todos ?: kotlinx.coroutines.flow.MutableStateFlow(emptyList())).collectAsStateWithLifecycle()
     val todosSupported by (session.tasks?.todosSupported ?: kotlinx.coroutines.flow.MutableStateFlow(false)).collectAsStateWithLifecycle()
@@ -653,12 +659,14 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                         onVoice = voiceExtension?.let { extension -> { navigator.navigate(VoiceRoute(extension.id, extension.name)) } },
                         onTodos = { sidebarDestination(persona.core.navigation.TodosRoute) },
                         todoCount = uncompletedTodosCount,
-                        showTodos = todosSupported, mentionSessions = session.sessions.sessions)
+                        showTodos = todosSupported, mentionSessions = session.sessions.sessions,
+                        hubGroup = hubGroups.takeIf { it.size > 1 }?.firstOrNull { it.selected }?.name)
                 }
             }
             agentsEntries(navigator, agents, machine, { machine = it },
                 terminalPanes = if (session.demo == null) shell.terminalPanes.available else kotlinx.coroutines.flow.flowOf(false))
             spaceEntries(navigator, agents)
+            machineSpacesEntries(navigator, agents)
             chatEntries(navigator) {
                 ShellChat(it, session, navigator, shell.feedback, onSessionClosed = navigator::sessionClosed, onOpenCard = ::openWithCard,
                     onGroupGone = navigator::groupGone, terminal = chatTerminal(it))
@@ -970,7 +978,7 @@ private fun SettingsWithTools(tools: DeveloperTools?, navigator: Navigator, cont
 
 @Composable
 internal fun UnavailablePage(message: String, navigator: Navigator) {
-    Column(Modifier.fillMaxSize().statusBarsPadding().padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(Modifier.fillMaxSize().statusBarsPadding().padding(24.dp.dense), verticalArrangement = Arrangement.spacedBy(12.dp.dense)) {
         Text(message)
         TextButton(onClick = navigator::back) { Text(stringResource(R.string.app_back), maxLines = 1) }
     }

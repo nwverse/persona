@@ -56,6 +56,19 @@ fun JStatusDot(status: Status, modifier: Modifier = Modifier, size: Dp = 8.dp, w
 }
 
 /**
+ * An agent's state dot where iOS draws `StatusDot(state:size:waiting:)` small (the chat header's second line, its slim bar):
+ * [JStatusDot], or, on Glass, the clock of one that only waits in the background ([waiting]), as wide as the ring around a
+ * working dot (1.7 times) in that state's lighter tone ([PersonaPalette.backgroundWaiting]). Brief and Board keep the dot.
+ */
+@Composable
+fun JStateDot(status: Status, size: Dp, waiting: Boolean = false, modifier: Modifier = Modifier) {
+    if (waiting && PersonaTheme.style == AppStyle.Glass) {
+        JIcon(persona.core.designsystem.icons.PersonaIcons.backgroundWaiting, null, modifier, size = size * WaitClockScale,
+            tint = PersonaTheme.palette.backgroundWaiting.dot, decorative = true)
+    } else JStatusDot(status, modifier, size)
+}
+
+/**
  * The Needs You breath, as iOS draws it (`StatusDot`, `Theme.Motion.needsYouBreath*`): every breath a ring leaves the dot
  * and grows to `1 + scale` times it as it fades, eased as a whole by iOS's curve. Null when the dot doesn't breathe; read
  * the returned progress only while drawing, so a breath redraws the canvas and nothing else.
@@ -131,7 +144,7 @@ fun JStatusMark(status: Status, modifier: Modifier = Modifier, animated: Boolean
 @Composable
 fun JStateLabel(text: String, status: Status, modifier: Modifier = Modifier, problem: Boolean = false) {
     val palette = PersonaTheme.palette
-    Row(modifier.semantics(mergeDescendants = true) {}, horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(modifier.semantics(mergeDescendants = true) {}, horizontalArrangement = Arrangement.spacedBy(6.dp.dense), verticalAlignment = Alignment.CenterVertically) {
         if (problem) JIcon(PhIcons.WarningCircle, null, size = 14.dp, tint = palette.danger.dot) else JStatusDot(status)
         Text(text, style = PersonaTheme.type.caption, color = if (problem) palette.danger.text else palette.ink2, maxLines = 1, softWrap = false,
             overflow = TextOverflow.Ellipsis)
@@ -171,11 +184,11 @@ fun PendingBadge(status: PendingStatus, modifier: Modifier = Modifier, reason: S
     val color = if (caution) palette.cautionText else palette.ink2
     val label = if (status == PendingStatus.Refused && !reason.isNullOrBlank()) stringResource(R.string.designsystem_pending_refused_reason, reason)
         else status.localizedLabel
-    val shape = RoundedCornerShape(if (PersonaTheme.style == AppStyle.Board) 4.dp else 8.dp)
+    val shape = RoundedCornerShape(if (PersonaTheme.style == AppStyle.Board) 4.dp else 8.dp.corner)
     Row(
         modifier.semantics(mergeDescendants = true) {}.clip(shape).background(palette.statusSurface)
-            .padding(horizontal = 8.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically,
+            .padding(horizontal = 8.dp.dense, vertical = 4.dp.dense),
+        horizontalArrangement = Arrangement.spacedBy(6.dp.dense), verticalAlignment = Alignment.CenterVertically,
     ) {
         if (status == PendingStatus.Sending || status == PendingStatus.Verifying) JSpinner(Modifier.size(14.dp), color = color, stroke = 1.8.dp)
         else JIcon(
@@ -272,17 +285,17 @@ fun StatusLine(
         else -> tone.text
     }
     val click = if (onClick != null && (line == null || line.actionable)) Modifier.clickable(role = Role.Button) { onClick(line?.kind ?: StatusLineKind.Waiting) } else Modifier
-    val shape = RoundedCornerShape(if (style == AppStyle.Board) 8.dp else 50.dp)
+    val shape = RoundedCornerShape(if (style == AppStyle.Board) 8.dp.corner else 50.dp)
     val frame = when (style) {
         AppStyle.Glass -> Modifier.clip(shape).background(palette.statusSurface).border(1.dp, palette.strokeBottom, shape)
         AppStyle.Brief -> Modifier.clip(shape)
         AppStyle.Board -> Modifier.clip(shape).background(palette.surface).border(1.dp, palette.line, shape)
     }
     Row(
-        modifier.fillMaxWidth().padding(horizontal = if (style == AppStyle.Brief) 6.dp else 10.dp, vertical = 4.dp).then(frame).then(click)
-            .heightIn(min = 40.dp).padding(horizontal = 12.dp, vertical = 8.dp)
+        modifier.fillMaxWidth().padding(horizontal = if (style == AppStyle.Brief) 6.dp.dense else 10.dp.dense, vertical = 4.dp.dense).then(frame).then(click)
+            .heightIn(min = 40.dp.row).padding(horizontal = 12.dp.dense, vertical = 8.dp.dense)
             .semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
-        horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp.dense), verticalAlignment = Alignment.CenterVertically,
     ) {
         if (line != null) {
             when {

@@ -304,10 +304,10 @@ private fun SettingsContent(
         "codex" -> ClaudeSettingsPage(services.sessions, services.machines.takeUnless { services.demo }, back, AgentSettingsKind.Codex,
             owns = { assistant.ownsOn(it.id, it.manager) })
         "models" -> purpose?.let { id -> ModelPurposePage(services.models.takeUnless { services.demo }, id, onBack = { purpose = null },
-                providers = services.providers.takeUnless { services.demo }, manager = purposeManager) }
+                providers = services.providers.takeUnless { services.demo }, manager = purposeManager, machines = machines) }
             ?: ModelConfigurationPage(services.models.takeUnless { services.demo }, back,
                 onPurpose = { id, owner -> onNavigate?.invoke(persona.core.navigation.ModelPurposeRoute(id, owner)) ?: run { purposeManager = owner; purpose = id } },
-                providers = services.providers.takeUnless { services.demo }, onProviders = { open(SettingsPage.Providers) })
+                providers = services.providers.takeUnless { services.demo }, onProviders = { open(SettingsPage.Providers) }, machines = machines)
         "plugins" -> extension?.let { id -> ExtensionPage(services.extensions.takeUnless { services.demo }, id, onBack = { extension = null },
                 manager = extensionManager,
                 machines = services.sessions.machines,
@@ -501,6 +501,8 @@ fun ReadinessScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val preferences = remember { context.getSharedPreferences("settings-readiness", android.content.Context.MODE_PRIVATE) }
+    // The GitHub star prompts (#5761): finish() tells them setup is done.
+    val starPrompt = persona.core.designsystem.LocalStarPrompt.current
     val readinessOn by remember(readiness) { readiness?.available ?: kotlinx.coroutines.flow.flowOf(false) }.collectAsState(false)
     var main by remember(readiness) { mutableStateOf<AssistantReadiness?>(null) }
     var probing by remember { mutableStateOf(false) }
@@ -563,6 +565,9 @@ fun ReadinessScreen(
                     withContext(kotlinx.coroutines.NonCancellable) { try { source.dismiss(true) } catch (_: Exception) { } }
                 }
             }
+            // Setup finished (Done, not Later): the GitHub star toast once per phone, which the app shell shows when it is
+            // up (StarPromptWelcome), past this page's leaving (#5761).
+            if (!later && !backgroundOnly) starPrompt?.onboarded()
         }
         onDone()
     }

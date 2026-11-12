@@ -755,14 +755,8 @@ struct ToolDetail: View {
                     #if os(macOS)
                     .textSelection(.enabled)
                     #endif
-            case "AskUserQuestion":
-                ForEach(Array((i["questions"]?.array ?? []).enumerated()), id: \.offset) { _, q in
-                    Text(q["question"]?.string ?? "").font(Theme.Font.captionMedium)
-                        #if os(macOS)
-                        .textSelection(.enabled)
-                        #endif
-                }
-            case "ask_user":
+            case "AskUserQuestion", "ask_user":
+                // Claude Code's dialog shows its options too (#5889): what it asked can be read where it can't be answered.
                 AskUserDetail(call: call)
             case SecretRun.tool:
                 SecretRunToolDetail(call: call)
@@ -941,9 +935,10 @@ nonisolated enum ToolTextMemo {
     }
 }
 
-/// What the user picked in an ask_user card, read back from the tool's result: the hub answers the model with
-/// "The user answered:\n- <question> → <answer>\n" per question (server/internal/assistant/tools.go), and with "The user did
-/// not answer …" when the card was dismissed or expired. A multi-select answer joins its labels with ", ".
+/// What the user picked in an ask_user card or a Claude Code AskUserQuestion, read back from the tool's result: the
+/// hub answers the model with "The user answered:\n- <question> → <answer>\n" per question
+/// (server/internal/assistant/tools.go), and with "The user did not answer …" when the card was dismissed or expired.
+/// A multi-select answer joins its labels with ", ".
 nonisolated enum AskUserAnswers {
     struct Question: Equatable, Sendable {
         var question: String
@@ -959,19 +954,39 @@ nonisolated enum AskUserAnswers {
         }
     }
 
-    /// Each question's answer; empty when the result says nobody answered (or is not the hub's answer at all).
+    /// Each question's answer; empty when the result says nobody answered (or is not an answer at all). Reads the
+    /// hub's ask_user result and Claude Code's AskUserQuestion one (#5937):
+    /// `User has answered your questions: "<q>"="<a>", "<q2>"="<b>". You can now continue …`.
     static func parse(_ result: String, questions: [Question]) -> [String: String] {
-        guard result.hasPrefix("The user answered:") else { return [:] }
+        let claude = result.hasPrefix("User has answered your questions:")
+        guard claude || result.hasPrefix("The user answered:") else { return [:] }
         let marks = questions.compactMap { q -> (String, Range<String.Index>)? in
-            result.range(of: "\n- \(q.question) → ").map { (q.question, $0) }
+            result.range(of: claude ? "\"\(q.question)\"=\"" : "\n- \(q.question) → ").map { (q.question, $0) }
         }.sorted { $0.1.lowerBound < $1.1.lowerBound }
         var out: [String: String] = [:]
         for (n, (question, mark)) in marks.enumerated() {
             let end = n + 1 < marks.count ? marks[n + 1].1.lowerBound : result.endIndex
-            let answer = result[mark.upperBound..<end].trimmingCharacters(in: .whitespacesAndNewlines)
-            if !answer.isEmpty { out[question] = answer }
+            var answer = result[mark.upperBound..<end]
+            // Claude's answer closes with the last quote before the next question (or the closing sentence).
+            if claude { answer = answer.lastIndex(of: "\"").map { answer[..<$0] } ?? "" }
+            let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { out[question] = trimmed }
         }
         return out
+    }
+
+    /// The AskUserQuestion the agent waits on (#5889): its newest call, while it has no result; nil otherwise.
+    static func pending(_ items: [Item]) -> [Question]? {
+        var answered: Set<String> = []
+        for item in items.reversed() {
+            if item.kind == .toolResult, let id = item.toolUseID { answered.insert(id) }
+            guard item.kind == .toolUse else { continue }
+            guard ToolNaming.tableName(item.toolName ?? "") == "AskUserQuestion", let id = item.toolUseID,
+                  !answered.contains(id) else { return nil }
+            let qs = questions(item.toolInput ?? .object([:])).filter { !$0.question.isEmpty }
+            return qs.isEmpty ? nil : qs
+        }
+        return nil
     }
 
     /// Whether an option is among what was picked.
@@ -1002,19 +1017,20 @@ struct AskUserDetail: View {
                 VStack(alignment: .leading, spacing: Theme.Space.xs) {
                     Text(q.question).font(Theme.Font.captionMedium)
                     ForEach(Array(q.options.enumerated()), id: \.offset) { _, label in
-                        choice(label, picked: AskUserAnswers.picked(label, answer: answer, multiSelect: q.multiSelect))
+                        Self.choice(label, picked: AskUserAnswers.picked(label, answer: answer, multiSelect: q.multiSelect))
                     }
-                    if let typed = AskUserAnswers.typed(q, answer: answer) { choice(typed, picked: true) }
+                    if let typed = AskUserAnswers.typed(q, answer: answer) { Self.choice(typed, picked: true) }
                 }
             }
-            if let result = call.result, result.isError != true, answers.isEmpty {
+            // Claude Code's result shows under it anyway (`ToolDetail`), so only ask_user says nobody answered.
+            if ToolNaming.tableName(call.name) == "ask_user", let result = call.result, result.isError != true, answers.isEmpty {
                 Text("No answer").font(Theme.Font.label).foregroundStyle(.secondary)
             }
         }
         .accessibilityIdentifier("ask-user-detail")
     }
 
-    private func choice(_ label: String, picked: Bool) -> some View {
+    static func choice(_ label: String, picked: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
             ThemedIcon(picked ? Theme.Icon.successFilled : Theme.Icon.unchecked)
                 .font(Theme.Font.label)

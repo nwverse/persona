@@ -317,6 +317,9 @@ type feedBatch struct {
 	soFar   bool
 	end     bool
 	room    bool // to the meeting's own room: no meeting-turn mark, and it writes nothing after it
+	// topics: the room has meeting_topics_set, so the batch shows it its topics so far (topicsSoFar) to update.
+	topics      bool
+	topicsSoFar []kb.LiveTopic
 }
 
 func (b feedBatch) empty() bool { return len(b.lines) == 0 && len(b.answers) == 0 }
@@ -375,7 +378,7 @@ func feedText(r kb.Recording, b feedBatch, lang string, loc *time.Location) stri
 		return r.StartedAt.Add(time.Duration(sec * float64(time.Second))).In(loc).Format("15:04")
 	}
 	d := prompts.MeetingFeed{Lang: lang, Title: feedMeetingName(r, loc), Role: r.AttendanceRole(), SoFar: b.soFar, LeftOut: b.leftOut,
-		Ended: b.end, Room: b.room}
+		Ended: b.end, Room: b.room, Topics: b.room && b.topics, TopicsSoFar: meetingTopics(b.topicsSoFar)}
 	for _, sg := range b.lines {
 		d.Lines = append(d.Lines, prompts.MeetingFeedLine{At: at(sg.Start), Text: sg.Text})
 	}
@@ -389,6 +392,20 @@ func feedText(r kb.Recording, b feedBatch, lang string, loc *time.Location) stri
 		d.Asks = append(d.Asks, prompts.MeetingFeedAsk{Question: a.Question, Answer: a.Answer})
 	}
 	return prompts.RenderMeetingFeed(d)
+}
+
+// meetingTopics are a meeting's topics as the prompts take them: each on one line, when it began as a time from the
+// meeting's start.
+func meetingTopics(topics []kb.LiveTopic) []prompts.MeetingTopic {
+	var out []prompts.MeetingTopic
+	for _, t := range topics {
+		mt := prompts.MeetingTopic{State: t.State, Title: oneLine(t.Title), Note: oneLine(t.Note)}
+		if t.At != nil {
+			mt.At = meetingClock(*t.At)
+		}
+		out = append(out, mt)
+	}
+	return out
 }
 
 // feedSend gives target batch b of meeting r, its turn marked a meeting turn first; when it was sent. Message source

@@ -90,6 +90,9 @@ final class RecordingCapture {
     /// session then also lets a Bluetooth headset play (A2DP is listening only, so the recording keeps its microphone);
     /// a wired headset and the loudspeaker play anyway. Off for every other recording, whose session stays as it was.
     @ObservationIgnored private(set) var playsAloud = false
+    /// A meeting Persona attends with the live view (#3862 phase 2): 15-second segments, in front and behind
+    /// (`setShortSegments`). Off for every other recording.
+    @ObservationIgnored private(set) var shortSegments = false
     @ObservationIgnored private var writer: RecordingSegmentWriter?
     @ObservationIgnored private var ticker: Task<Void, Never>?
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
@@ -210,6 +213,16 @@ final class RecordingCapture {
     }
     #endif
 
+    /// Persona started or stopped attending a meeting with the live view (#3862 phase 2,
+    /// `RecordingAttendance.shortSegments`): its segments are 15 seconds from now on, in front or not; the open one closes
+    /// as soon as it is longer. Off again, the usual 30 / 60 s.
+    func setShortSegments(_ on: Bool) {
+        guard shortSegments != on else { return }
+        shortSegments = on
+        guard !allDay, let writer else { return }
+        writer.segmentLength = chunkLength
+    }
+
     #if os(iOS)
     /// The Bluetooth HFP input appears only after the route settles, so poll for up to two seconds.
     private func bluetoothInput(_ session: AVAudioSession, token: UUID) async -> AVAudioSessionPortDescription? {
@@ -239,12 +252,13 @@ final class RecordingCapture {
     }
 
     /// `title` / `meeting`: what the recording is called and, for a meeting recording, its meeting (docs/apple/recording.md).
-    /// `playsAloud`: Persona takes part in this meeting and may answer out loud.
+    /// `playsAloud`: Persona takes part in this meeting and may answer out loud. `shortSegments`: Persona attends this
+    /// meeting with the live view (#3862 phase 2), so its segments are 15 seconds from the first (`setShortSegments`).
     /// `day`: all-day recording — goes on in the open day recording whose day is still on, or starts today's (saved
     /// before the microphone opens); the consent is the phone's and the notification permission the caller's to have
     /// asked for.
     func start(locale: String = "zh-CN", input: RecordingInput = .phone, title: String = "", meeting: RecordingMeeting? = nil, rolling: Bool = false,
-               playsAloud: Bool = false, day: Bool = false) async {
+               playsAloud: Bool = false, shortSegments: Bool = false, day: Bool = false) async {
         guard state == .idle else { return }
         generation = UUID(); let token = generation
         // One mode at a time: an all-day recording is never also a rolling one.
@@ -252,6 +266,7 @@ final class RecordingCapture {
         state = .starting; error = nil; notice = nil; self.rolling = rolling
         self.input = input
         self.playsAloud = playsAloud
+        self.shortSegments = shortSegments && !day
         let allowed = await Self.permission()
         guard generation == token, state == .starting else { return }
         guard allowed else { failStarting(String(localized: "Allow Persona to use the microphone in Settings")); return }
@@ -309,7 +324,7 @@ final class RecordingCapture {
         let writer = RecordingSegmentWriter(directory: library.folder(entry.id), allocateSeq: allocate)
         writer.compactsFiles = entry.isDay
         writer.cutsAtGaps = entry.isDay
-        writer.segmentLength = entry.isDay ? Self.dayChunkLength(reachable: linkReachable) : Self.segmentLength
+        writer.segmentLength = entry.isDay ? Self.dayChunkLength(reachable: linkReachable) : Self.segmentLength(short: shortSegments)
         return writer
     }
 
@@ -471,6 +486,7 @@ final class RecordingCapture {
             }
         }
         self.writer = nil; recordingID = nil; state = .idle; interrupted = false; notice = nil; rolling = false; playsAloud = false
+        shortSegments = false
         allDay = false; dayPlan = nil
         forgetDayPlans()
         releaseAudioSession()
@@ -1301,20 +1317,29 @@ final class RecordingCapture {
     #endif
 
     /// Chunk length now: an all-day recording's follows the phone link, every other recording's as before.
-    private var chunkLength: Double { allDay ? Self.dayChunkLength(reachable: linkReachable) : Self.segmentLength }
+    private var chunkLength: Double { allDay ? Self.dayChunkLength(reachable: linkReachable) : Self.segmentLength(short: shortSegments) }
 
     private static func dayChunkLength(reachable: Bool) -> Double {
         reachable ? RecordingDayContract.liveChunkSeconds : RecordingDayContract.backlogChunkSeconds
     }
 
-    private static var segmentLength: Double {
+    /// A recording's segment length now (not all-day's): `short` (`shortSegments`) is 15 s whether the app is in front
+    /// or not; else 30 s while someone may watch the text arrive (the phone's app in front, the watch's phone in reach)
+    /// and 60 s otherwise.
+    private static func segmentLength(short: Bool) -> Double {
         #if SHARE_EXTENSION
         RecordingAudioSpec.segmentSeconds // Share › Persona compiles Shared but never records (no UIApplication there)
         #elseif os(iOS) || os(visionOS)
-        UIApplication.shared.applicationState == .active ? RecordingAudioSpec.liveSegmentSeconds : RecordingAudioSpec.segmentSeconds
+        segmentLength(short: short, watched: UIApplication.shared.applicationState == .active)
         #else
-        WatchRecordingTransfer.shared.reachable ? RecordingAudioSpec.liveSegmentSeconds : RecordingAudioSpec.segmentSeconds
+        segmentLength(short: short, watched: WatchRecordingTransfer.shared.reachable)
         #endif
+    }
+
+    /// `segmentLength(short:)` with where the app is given (pure, for the tests).
+    nonisolated static func segmentLength(short: Bool, watched: Bool) -> Double {
+        if short { return RecordingAudioSpec.meetingLiveSegmentSeconds }
+        return watched ? RecordingAudioSpec.liveSegmentSeconds : RecordingAudioSpec.segmentSeconds
     }
 
     /// What stops a recording to protect the device.
