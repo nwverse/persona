@@ -134,12 +134,18 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * against 9d3f343d3, which came 17 B short). Then 1,939 B less for the image editor's geometry leaving the first screen
  * (#5142: ja 594,290 B at 5d97a6e77 to 592,351 B, the 15 B of room kept): the image viewer imported fitRect from
  * lib/image-edit.ts, which put that whole module, otherwise only the lazy editor's, on the first screen; fitIn and
- * fitRect now live in lib/image-zoom.ts. And 1,024 B for a launcher switch that waits (#5035 added 491 B to ja, 592,351
- * B to 592,842 B: the pill's waiting state, the Agent chat sending the switch with the user's message and keeping the
- * words in the box when it is refused; the panel's switch code and words load with the panel). Raise it on purpose, in
- * the change that needs it.
+ * fitRect now live in lib/image-zoom.ts. And 64 B for the sidebar's Recent count and its Show more (#5146 added 222 B
+ * to ja, 592,153 B at 9534ce535 to 592,375 B, 213 B of it in the room left: lib/sidebar-recent.ts, which the sidebar
+ * reads for how many to list and how far Show more opened it, and the Show more / Show less row; the setting's row and
+ * its words are in the lazy Settings page and the ui-look catalog). And 174 B more for it as merged (#5166): #5161 added
+ * 451 B to ja, not 222 B, 592,153 B at 76b9cf3b4a to 592,604 B at b73f259f71 (505 B with the file names' hashes counted
+ * as a fixed string, so not their noise), which left main 174 B over; the room is 0 B. Take it back down by as much as
+ * the sidebar's Recent code gets lighter. And 1,024 B for a launcher switch that waits (#5035 added 368 B to ja,
+ * 592,604 B to 592,972 B: the pill's waiting state, the Agent chat sending the switch with the user's message and
+ * keeping the words in the box when it is refused; the panel's switch code and words load with the panel). Raise it on
+ * purpose, in the change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 593_390;
+export const FIRST_SCREEN_BUDGET = 593_628;
 
 /** What the built-in hub sends for `files` (paths below `dir`) to a browser that takes br: each one's brotli copy, or
  *  the file itself when it has none. Build time only. */
