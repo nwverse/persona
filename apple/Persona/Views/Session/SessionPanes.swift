@@ -430,8 +430,9 @@ struct TerminalPanel: View {
     /// not being started.
     private var canResume: Bool {
         guard let s = model.session(key), !s.assistant, s.starting != true else { return false }
-        // Nothing to resume it in (#5521): the same rule as ⋯'s Resume in Terminal.
-        if s.terminalResume(on: model.machine(s.machineRef)) == .noEngine { return false }
+        // Nothing to resume it in (#5521): the same rule as ⋯'s Resume in Terminal. Its computer is read only for a
+        // session that isn't running, so a live terminal never watches the machines (P5).
+        if s.status == .offline || s.status == .unknown, s.terminalResume(on: model.machine(s.machineRef)) == .noEngine { return false }
         return s.isStopped || (s.sourceKind == "codex_history" && s.canTerminal) || (!s.hasSource && s.isClaude)
     }
 

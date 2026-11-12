@@ -3253,7 +3253,8 @@ struct ChatView: View {
                     Button { openTerminal() } label: { Label("Terminal", systemImage: Theme.Icon.terminal).lineLimit(1) }
                 }
                 #if os(iOS)
-                if let s = session { resumeMenuItem(s) }
+                // Its computer is read only for a session that isn't running: a live chat never watches the machines (P5).
+                if let s = session, s.status == .offline || s.status == .unknown { resumeMenuItem(s) }
                 #endif
                 if pane != .chat {
                     Button { withAnimation(Theme.Motion.standard) { pane = .chat } } label: { Label("Back to Chat", systemImage: SessionPane.chat.symbol) }
