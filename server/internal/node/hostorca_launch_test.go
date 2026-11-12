@@ -414,6 +414,11 @@ func TestOrcaFindsANewTerminalOrcaReKeyed(t *testing.T) {
 		t.Fatalf("Agent under the new key = %+v, %v", a, err)
 	}
 
+	// Its tab is still renamed under the slot the start was given.
+	if err := h.RenameSlot(context.Background(), created.SlotID, "renamed"); err != nil {
+		t.Errorf("RenameSlot of the re-keyed terminal: %v", err)
+	}
+
 	n.closeNewTab(context.Background(), launch, created, "")
 	if w := o.Writes(); len(w) != 2 || !w[1].Close || w[1].Handle != handle {
 		t.Errorf("the re-keyed terminal was not closed: %+v", w)
@@ -423,7 +428,7 @@ func TestOrcaFindsANewTerminalOrcaReKeyed(t *testing.T) {
 // A start whose new pane is gone says so, rather than blaming a busy machine (#5547).
 func TestOrcaStartSaysWhenItsPaneIsGone(t *testing.T) {
 	n, _, o, _, home := orcaNode(t)
-	n.claudeStart, n.claudeReady = 1500*time.Millisecond, time.Second
+	n.claudeStart, n.claudeReady = time.Minute, time.Second
 	o.SetWorktrees(orcarttest.Worktree("wt-1", mkdir(t, filepath.Join(home, "proj")), "refs/heads/main"))
 	launch, err := hostCap[host.Launcher](n)
 	if err != nil {
@@ -434,8 +439,70 @@ func TestOrcaStartSaysWhenItsPaneIsGone(t *testing.T) {
 		t.Fatalf("CreateSpace: %v", err)
 	}
 	o.SetTerminals() // closed, or Orca restarted
+	began := time.Now()
 	_, err = n.waitReady(context.Background(), created.Pane.String(), nil)
 	if err == nil || strings.Contains(err.Error(), "busy") || !strings.Contains(err.Error(), "could not be found") {
 		t.Errorf("waitReady = %v", err)
+	}
+	if took := time.Since(began); took > 10*time.Second {
+		t.Errorf("waited %s for a pane that is gone, not a few looks", took)
+	}
+}
+
+// A started terminal the user moves to another tab is still in Orca's UI: it is listed where it is now, and that tab
+// is renamed, not the one it was made in (#5547 keeps only an orphaned one under its first key).
+func TestOrcaListsAMovedTerminalWhereItIs(t *testing.T) {
+	fake := orcarttest.New(t)
+	root := t.TempDir()
+	fake.SetWorktrees(orcarttest.Worktree("wt-1", root, "refs/heads/main"))
+	h := newOrcaHost(&orcart.Client{MetaPath: fake.MetaPath})
+	h.scan = (&fakeProcs{}).scan
+	created, err := h.CreateSpace(context.Background(), root, "tab1")
+	if err != nil {
+		t.Fatalf("CreateSpace: %v", err)
+	}
+	fake.Move("term_fake_1", "tab_moved", "leaf_moved")
+	l, err := h.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(l.Panes) != 1 || l.Panes[0].PaneID != (host.PaneRef{Kind: host.Orca, ID: "tab_moved:leaf_moved"}).String() || l.Panes[0].TabID != "tab_moved" {
+		t.Errorf("panes %+v, want the moved one under tab_moved:leaf_moved (made as %s)", l.Panes, created.Pane.ID)
+	}
+	if err := h.RenameSlot(context.Background(), "tab_moved", "renamed"); err != nil {
+		t.Errorf("RenameSlot(tab_moved): %v", err)
+	}
+	if tr := fake.Trace("terminal.rename"); len(tr) != 1 || !strings.Contains(tr[0], `"terminal":"term_fake_1"`) {
+		t.Errorf("renames %v", tr)
+	}
+}
+
+// Run types only into the terminal this host made: one Orca orphaned without re-keying it is refused, and so is a
+// new handle under the same pane key (#972: Persona trusts the handle terminal.create returned).
+func TestOrcaRunRefusesAnotherTerminalUnderItsKey(t *testing.T) {
+	fake := orcarttest.New(t)
+	root := t.TempDir()
+	fake.SetWorktrees(orcarttest.Worktree("wt-1", root, "refs/heads/main"))
+	h := newOrcaHost(&orcart.Client{MetaPath: fake.MetaPath})
+	created, err := h.CreateSpace(context.Background(), root, "tab1")
+	if err != nil {
+		t.Fatalf("CreateSpace: %v", err)
+	}
+	fake.Update("term_fake_1", map[string]any{"orphaned": true})
+	if err := h.Run(context.Background(), created.Pane, "echo hi"); err == nil || !errors.Is(err, host.ErrNotDelivered) {
+		t.Errorf("Run in an orphaned terminal Orca did not re-key: %v", err)
+	}
+
+	created, err = h.CreateSpace(context.Background(), root, "tab2")
+	if err != nil {
+		t.Fatalf("CreateSpace: %v", err)
+	}
+	tab, leaf, _ := strings.Cut(created.Pane.ID, ":")
+	fake.SetTerminals(orcarttest.Terminal("term_other", tab, leaf, "wt-1", root, "refs/heads/main", "tab2", ""))
+	if err := h.Run(context.Background(), created.Pane, "echo hi"); err == nil || !errors.Is(err, host.ErrNotDelivered) {
+		t.Errorf("Run under the same pane key with another handle: %v", err)
+	}
+	if w := fake.Writes(); len(w) != 0 {
+		t.Errorf("typed %+v", w)
 	}
 }

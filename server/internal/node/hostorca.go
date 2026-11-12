@@ -80,6 +80,13 @@ func madeAs(made map[string]orcart.Terminal, t orcart.Terminal) (string, orcart.
 	return "", orcart.Terminal{}, false
 }
 
+// rekeyedKey: key is a terminal this host made that Orca orphaned and re-keyed (as of the last listing).
+func (h *orcaHost) rekeyedKey(key string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.rekeyed[key] != ""
+}
+
 // paneKeys are the keys a pane's processes and agent row may carry: the node's, then the one Orca re-keyed it to.
 func (h *orcaHost) paneKeys(key string) []string {
 	h.mu.Lock()
@@ -187,13 +194,15 @@ func (h *orcaHost) terminals(ctx context.Context) ([]orcart.Terminal, []orcart.T
 		if !t.IsLocal() {
 			continue
 		}
-		// A terminal this host made keeps the pane key it was made under, orphaned and re-keyed or not (#5547).
-		if key, m, ok := madeAs(made, t); ok {
+		// A terminal this host made that Orca orphaned and re-keyed keeps the pane key it was made under (#5547). One
+		// the user moved to another tab is still in Orca's UI: it is listed where it is now.
+		key, m, ok := madeAs(made, t)
+		if ok {
 			listed[key] = true
-			if now := t.PaneKey(); now != key {
-				rekeyed[key] = now
-				t.TabID, t.LeafID = m.TabID, m.LeafID
-			}
+		}
+		if now := t.PaneKey(); ok && t.Orphaned && now != key {
+			rekeyed[key] = now
+			t.TabID, t.LeafID = m.TabID, m.LeafID
 		} else if t.Orphaned || t.TabID == "" || t.LeafID == "" {
 			continue
 		}

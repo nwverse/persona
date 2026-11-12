@@ -231,12 +231,14 @@ func (h *orcaHost) Run(ctx context.Context, pane host.PaneRef, command string) e
 		return orcaInputErr(err)
 	}
 	// By its handle, not its pane key: Orca re-keys a terminal its UI did not adopt, orphaned, with the same handle
-	// and process (#5547), and a background terminal still runs what it is sent. A handle that changed is not ours (#972).
+	// and process (#5547), and a background terminal still runs what it is sent. Orphaned is accepted only so: the
+	// terminal this host made, re-keyed. A handle that changed is not ours (#972).
 	for _, t := range terms.Terminals {
 		if t.Handle != launch.terminal.Handle {
 			continue
 		}
-		if t.IncarnationID != launch.terminal.IncarnationID || !t.IsLocal() || !t.Writable || t.AgentIdentity != "" {
+		if t.IncarnationID != launch.terminal.IncarnationID || !t.IsLocal() || !t.Writable || t.AgentIdentity != "" ||
+			t.Orphaned && t.PaneKey() == launch.terminal.PaneKey() {
 			break
 		}
 		return orcaInputErr(h.c.Send(ctx, launch.terminal.Target(), "cd -- "+shellQuote(launch.cwd)+" && "+command+"\r"))
