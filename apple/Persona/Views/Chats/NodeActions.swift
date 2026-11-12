@@ -254,11 +254,11 @@ nonisolated enum NodeMenu {
         return tab.isEmpty ? detail : "\(tab) · \(detail)"
     }
 
-    /// Claude Code, and Codex where the computer starts it in a pane the user picked and keeps that pane when the start
-    /// fails (`runHere`, #5504). An older computer's failed Codex start closes its pane, here the user's own shell
-    /// (#5275): there Codex starts from New Session in a tab of its own.
+    /// Claude Code, and a launcher the computer says it starts in a pane the user picked, keeping that pane when the
+    /// start fails (`runHere`: its Codex launchers, #5504), as the web's `launchableHere`. An older computer's failed
+    /// Codex start closes its pane, here the user's own shell (#5275): there Codex starts from New Session in a tab of its own.
     static func launchableHere(_ l: Launcher) -> Bool {
-        (l.agent ?? "").isEmpty || l.agent == "claude" || (l.isCodex && l.runHere == true)
+        l.runHere == true || (l.agent ?? "").isEmpty || l.agent == "claude"
     }
 
     /// Run Agent Here's footer: the agent starts in the picked shell; where the computer has a Codex launcher it doesn't

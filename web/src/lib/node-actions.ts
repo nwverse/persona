@@ -96,13 +96,10 @@ export const canChangeHost = (host: string | undefined) => !host || host === "he
 /** Renaming a workspace or a tab is herdr's and Tern's (the capability table in docs/integrations/engines.md). */
 export const canRenameIn = (host: string | undefined) => canChangeHost(host) || host === "tern";
 
-/** Claude Code, and Codex where the computer says it starts Codex in a pane the user picked and keeps that pane when
- *  the start fails (`run_here`, #5504). An older computer's failed Codex start closes its pane, here the user's own
- *  shell (#5275): there Codex starts from "New agent" in a tab of its own. */
-export const launchableHere = (l: Launcher) => {
-  const agent = l.agent_type || l.agent || "claude";
-  return agent === "claude" || (agent === "codex" && l.run_here === true);
-};
+/** Claude Code, and a launcher the computer says it starts in a pane the user picked, keeping that pane when the start
+ *  fails (`run_here`: its Codex launchers, #5504). An older computer's failed Codex start closes its pane, here the
+ *  user's own shell (#5275): there Codex starts from "New agent" in a tab of its own. */
+export const launchableHere = (l: Launcher) => l.run_here || (l.agent_type || l.agent || "claude") === "claude";
 
 export const GIT_OPS = [
   { op: "pull", label: t("lib-node-actions.git_pull"), accel: "p", done: "lib-node-actions.git_pull_done" },
