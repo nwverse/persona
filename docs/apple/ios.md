@@ -1429,11 +1429,26 @@ and can wait and in progress when there are any.
   question opens the chat it came from (`machine_id` / `session_id`, which the hub adds from #2320). From an older hub, a
   waiting card the app still has among its pending cards opens its chat, and otherwise the row has no Open. Failed rows open
   nothing, as on the web.
+- **Recommended setup** (#5804; `docs/assistant/assistant.md` ("Recommended setup")): the first briefing of a week may
+  carry `setup`, the hub's computed lines about mechanisms that are off. `BriefBody.setup` keeps the lines that have an
+  id and words, each mechanism once, and the card draws them last, under a heading and the web's one sentence that
+  nothing was changed. Each line is the hub's `text` as it came; the app adds no number and turns nothing on.
+  **Open Settings** is on a line only when the app has the page its mechanism is turned on at (`BriefBody.Setup.page`):
+
+  | `id` | Opens |
+  | --- | --- |
+  | `triage_decide`, `triage_auto_continue`, `triage_wake` | Settings › Session Triage (`SettingsPage.triage`) |
+  | `supervisor_tier` | Settings › Models › the background supervisor's use (`ModelPurposeRoute`) |
+  | `task_trust` | Auto-Start Tasks (`TaskTrustView`), in a sheet over the chat: it has no place in Settings |
+  | `standing_authorizations`, `leaders`, `review_sample`, `delegate`, `independent_review`, a newer one | no button: the app has no page for it, and the line itself says where it is turned on |
+
+  The hub's `link` is the web app's page and is not used. A hub from before sends no `setup` and the card is as it was.
 - **Not drawn**: the watch reads only assistant view cards from the feed, so it gets nothing.
 - **Tests**: `BriefCardTests` (the first, the current and a newer body; a feed with unreadable bodies; opening; every answer
-  the buttons can get, with `FakeHub`) and `BriefCardUITests` against the mock's `brief` item (`MOCK_TASKS=1
-  MOCK_TASKS_NO_ASKS=1`; `TEST_RUNNER_PERSONA_SHOTS` / `TEST_RUNNER_PERSONA_SHOTS_APPEARANCE` save it folded, unfolded and
-  answered).
+  the buttons can get, with `FakeHub`; the setup lines, their pages and a briefing with them as one feed line) and
+  `BriefCardUITests` against the mock's `brief` item (`MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1`; `TEST_RUNNER_PERSONA_SHOTS` /
+  `TEST_RUNNER_PERSONA_SHOTS_APPEARANCE` save it folded, unfolded and answered). `MOCK_BRIEF_SETUP=1` adds the setup
+  lines to the mock's briefing.
 
 ## Quiet supervision rounds (#2092)
 
@@ -1502,17 +1517,77 @@ Mac and Vision Pro. Nothing here shows on a hub from before it.
   Persona hands out. It is read and written through `AppModel.assistantConfig` (`setMainSupervisesOwnTasks`: shown at
   once, put back when the hub refuses), as the two switches above it. A hub that omits the field has no switch.
 - **Its model**: Settings › Models lists the use `assistant.supervise` after the categories and the other uses set
-  apart. A hub before #5806 leaves it out of its catalog, so `ModelConfigurationModel.load` asks for it by its id
-  beside the catalog (`listing`); a hub without it answers 404 and the list has no such row, and one that lists it in
-  the catalog (#5806 on) gets the catalog's row only. Its page says "Follow Main Chat" where Lark
-  /agent says "Follow Agents", and saves to the use's own record.
+  apart. A hub since #5806 lists it in its catalog: the list reads it there, where the catalog puts it, and sends no
+  request by its id (`ModelConfigurationModel.asksApart`). A hub before #5806 leaves it out, so `load` asks for it by
+  its id once the catalog is in and appends it (`listing`); a hub without it answers 404 and the list has no such row.
+  Its page says "Follow Main Chat" where Lark /agent says "Follow Agents", and saves to the use's own record.
+- **What each use is for** (#5806): a use's `description` (the manager's sentence in the request's language, #5086) is
+  drawn under its name in the list, above the model (`ModelPurpose.purposeNote`). A use without one, and every use
+  of a hub from before #5086, has the row it had.
 - **Its reviews in the main chat**: a review is the feed kind `review` in the conversation that planned the task,
   whoever reviewed, so `ChatLines.mergeFeed` places it and `ReviewFeedLine` draws it as one line that opens the task.
   Nothing marks the reviewer in the feed item, and the line does not name one.
 
 Mock hub: `MOCK_BACKGROUND_SUPERVISOR=1` adds the conversation (with `MOCK_ORIGINS=1` for the other sources); the
-switch and the model use are there without it, and `MOCK_LEGACY_HUB=1` has none of the three. Tests:
-`BackgroundSupervisorTests`, and `AssistantSettingsModelTests.testMainSupervisesOwnTasksSwitch` against the mock hub.
+switch and the model use are there without it, and `MOCK_LEGACY_HUB=1` has none of the three.
+`MOCK_SUPERVISE_LISTED=1` is a hub since #5806: the catalog lists the use and every built-in use has a description.
+Tests: `BackgroundSupervisorTests`, and `AssistantSettingsModelTests.testMainSupervisesOwnTasksSwitch` against the mock hub.
+
+## Suggested standing rule and held decisions (#5802, #5803)
+
+The Apple part of two follow-ups of `docs/design/proposals/main-chat-availability.md`, on iPhone, iPad, Mac and Vision
+Pro through the shared views. Neither shows against a hub that does not send the field.
+
+**A rule after the same answer three times** (`docs/assistant/unified-entry.md`, the section of that name). The hub
+attaches `suggestion` (`RuleSuggestion`, `Shared/RuleSuggestion.swift`) to an open plan, to a to-do's decision and to a
+question a supervisor passed up. `RuleSuggestionLine` draws it as one quiet line under the card:
+
+| Card | Where the line is | Whose manager answers |
+| --- | --- | --- |
+| Open plan (`PlanCard`, in the chat and the action tray) | Under the card's surface | The plan's conversation's (`AppModel.feedManager`) |
+| A to-do's decision (`BriefAcceptRow`: the task card, the task board, the action tray) | Under the row's buttons | The to-do's own (`TodoStore.named`) |
+| A question card (`InteractionPanel`) | Under the form, inside the panel; the form's cap leaves it room | The one that reported the card (`Interaction.manager`) |
+
+- **What it says**: the hub's `text` (what was noticed), then a sentence the app words from the fields, saying exactly
+  what Always creates and for what (`RuleSuggestion.createsText`): the entry in Auto-Start Tasks for that directory and
+  computer; a standing authorization for the action, directory and computer, with its conditions and the words it
+  would keep as the owner's (`scope.quote`); or, for `delegate`, that nothing is stored and which setting is named.
+  A condition or an action the build does not know is shown as the hub's word.
+- **Two buttons**, single-line: **Not Now** and **Always**
+  (`POST /api/v1/assistant/rule-suggestions/{id}/not-now` / `always`). While one is out, neither takes a tap.
+- **After Always** the line becomes what was made and where it is listed and removed: Auto-Start Tasks in the
+  assistant's profile; for a standing authorization, the web app's settings for Persona (the Apple apps have no list
+  of them); for `delegate`, that nothing was stored and the key to set in the assistant's configuration file. The
+  result is kept by card (`RuleSuggestions.made`), so it stays when the hub sends the card again without the line.
+- **Answered or stale**: Not Now takes the line away. A 404 (the answers no longer earn it, or it was answered on
+  another device) clears it without a message. An answered suggestion is also hidden on every other card that still
+  carries it, for an hour (`RuleSuggestions.quietFor`): a plan and a card keep the copy they were read with until
+  they are read again, and the hub itself keeps it quiet for 30 days. After an answer the to-dos or the plan's feed
+  are read again. A 409 (the standing authorizations changed meanwhile) and any other failure (403 for a device
+  without full access, 503) say so in a toast and leave the line.
+- **Not offered**: a suggestion without an id or words, or whose `creates` this build does not know. It cannot say
+  what the tap would make, so it draws nothing and the card is as before; the card itself is never dropped
+  (`RuleSuggestion` decodes without failing).
+- **Not drawn**: the watch, the notifications' quick actions and the card previews in lists show the card without
+  the line (`SessionlessCardSheet` draws the panel, so it has it). A plan's line follows the plan as the app last
+  got it: the `task_plan` event of a new plan and every read of its feed carry the suggestion.
+
+**A decision held for the briefing** (`docs/assistant/todos.md`, "Decisions that can wait"). A to-do's `ask` with
+`for_briefing: true` was not pushed and comes with the next briefing. `TodoAsk.forBriefing` reads it and
+`BriefAcceptRow` says "Comes with your next briefing" under the row's meta line, wherever a to-do's decision is drawn
+(the task card, the board, the action tray). It is answered as any decision, and Needs You counts it as before. The
+briefing's own rows never carry the mark.
+
+Mock hub: `MOCK_RULE_SUGGESTIONS=1` (with `MOCK_TODO_ASKS=1` the PR check's decision, the network tests' question card,
+and with `MOCK_TASKS=1` the open plan; the two routes answer once, then 404) and `MOCK_ASK_HELD=1` (with
+`MOCK_TODO_ASKS=1`, the PR check's decision is held); `python3 -I scripts/mock/test_availability_followups_mock.py`
+checks them. Tests: `RuleSuggestionTests` (reading from each card, a hub from before, odd shapes, the wording, and every
+answer the two buttons can get with `FakeHub`) and `TodoDecisionCompletionTests.aDecisionHeldForTheBriefingSaysSo`.
+Not built for iOS, watchOS or the Mac app: this change was written on a machine without Xcode. With the command-line
+Swift 6.4 toolchain, for macOS and against stand-ins for the rest of the app, `Shared/`, `RuleSuggestions`,
+`BriefActions`, `BriefCard` and `ModelConfigurationModel` type-check and the unit tests named here pass, except the
+feed-line test (`ChatLines` needs the app). No simulator build, UI test or light / dark screenshot exists yet, and
+Swift 6.2 is not verified (#5807).
 
 ## Source mentions in the assistant conversation (#2130)
 

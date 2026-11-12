@@ -4,7 +4,9 @@ Status: built (#4757). The owner took decisions 1 to 5 of section 7 as recommend
 recommended. Every step of section 6 is merged: M1 (#4924), F1 (#4925), F2 (#4926), B1 (#4927), Q1 (#4928), R1 (#4929),
 R2 (#4930), B2 on the web, the Apple apps and Android (#5082, #5083, #5084), R3 (#5085) and K1 (#5086). Follow-ups:
 the clients' part of R1 (#5802), R2 (#5803) and R3 (#5804), the tier-down suggestion (#5805, built), purpose descriptions in
-Model Settings (#5806), and verification on real builds and a live install (#5807). Covers the assistant
+Model Settings (#5806), and verification on real builds and a live install (#5807). The Apple apps' part of #5802 to
+#5804 and of #5806 is written (`docs/apple/ios.md` "Suggested standing rule and held decisions", "Briefing card",
+"Background supervisor") and waits for #5807: it has not been built or run. Covers the assistant
 manager and its prompts; the clients change only where a step says so.
 
 ## 1. Goal
