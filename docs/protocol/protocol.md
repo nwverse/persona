@@ -4334,6 +4334,18 @@ An unchanged creation intent retains one receipt UUID, body, connection owner an
 
 `POST /api/v1/machines/{mid}/worktree/delete` previews with `{workspace_id,kind:"orca",preview:true,locale?}` and returns `{workspace_id,kind,host_id:"local",instance_id,path,branch,dirty,folder,preview_token}`. Confirm with `{workspace_id,kind:"orca",preview_token,force?:true,delete_branch?:true,locale?}`. A token binds the exact node, local runtime instance, repository, branch, path, workspace kind, parent, checkout and Git-directory filesystem identity, HEAD and reviewed dirty content. Confirmation expires after ten minutes. Main or unknown-main workspaces, Git main checkouts, parents with children, ambiguous/missing/nonlocal identities and incomplete catalogs are refused. Confirmation re-resolves the target and rereads dirty state; changed content requires another preview even when `force` is true. Branches are kept unless explicitly requested otherwise. Raw `force` never waives archive-hook failure or unverified terminal-stop safety.
 
+For `kind:"herdr"`, the same preview-confirm-reconcile route accepts `close_only:true` for workspace closure.
+The preview returns `kind:"herdr"`, `host_id:"local"`, an empty `instance_id`, and `close_only:true` with `folder:true`.
+Every confirmation and reconciliation repeats the same `close_only` flag. Closing keeps the checkout, files and
+branches and accepts main checkouts and missing directories. A close token cannot authorize checkout deletion.
+Omitting `close_only` removes a verified linked checkout through native `worktree.remove`. Its preview binds the
+native workspace, socket instance, pane membership, checkout/Git-directory identity, branch, HEAD and reviewed dirty
+contents. `force:true` acknowledges the previewed uncommitted files. `delete_branch:true` requests safe merged-branch
+cleanup after observed checkout removal. The native catalog and checkout disappearance establish completion.
+A dispatched token supports read-only reconciliation and retains the ten-minute confirmation and 24-hour reconciliation
+windows. The web checks `worktree/status` before offering herdr checkout deletion. Closing remains available for a main
+checkout.
+
 Removal requires runtime `worktree.remove-branch-policy.v1` and `worktree.archive-failure-blocking.v1`; folder unregister also requires `folder-workspace.unique-id-mutation.v1`. Folder workspace keys use `folderWorkspace.delete` with `requireUniqueId:true`; folder-project children use host-qualified `worktree.rm`. Neither recursively deletes the user's folder. Git removal sends `runHooks:true`, `waitForBackgroundRemoval:true` and explicit branch policy without hook/PTY waivers.
 
 Deletion returns `{workspace_id,removed,state,branch_deleted?}`. Only `removed:true,state:"removed"` is completion: the runtime result must agree with catalog absence and checkout disappearance (folder unregister checks catalog absence). Background acceptance returns `removing`; transport uncertainty returns `unknown`; reconciliation may return `present`. Use `{workspace_id,kind:"orca",preview_token,reconcile:true}` on the same route for read-only reconciliation; it never repeats removal. A dispatched token is consumed for mutation and retained for reconciliation for up to 24 hours. Node restart invalidates tokens; refresh the authoritative inventory and review the outcome before a fresh deletion attempt. Runtime refusals, including archive failures, remain errors. Orca does not currently accept an expected workspace instance or dirty fingerprint in `worktree.rm`, so checks protect stale confirmations but do not form an atomic transaction with concurrent external filesystem/runtime changes.
