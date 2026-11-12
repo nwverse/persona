@@ -408,7 +408,8 @@ private fun ChatPage(
     // (#5045, DESIGN_SYSTEM.md 4.7 "Task cards"); Brief and Board do not.
     val subagentCards = PersonaTheme.style == AppStyle.Glass
     val nestedSubagents = if (subagentCards) session?.subagents.orEmpty() else emptyList()
-    val lines = remember(assistantPresentation, search.selected, jumpItem, feed, tasks, taskPlans, taskTodos, taskCardProjection, renderStyle, inlineRecords, nestedSubagents) {
+    val viewedStrips = PersonaTheme.style == AppStyle.Glass
+    val lines = remember(assistantPresentation, search.selected, jumpItem, feed, tasks, taskPlans, taskTodos, taskCardProjection, renderStyle, inlineRecords, nestedSubagents, viewedStrips) {
         searchVisibleLines(assistantPresentation.foreground, search.selected?.itemId ?: jumpItem)
             .let {
                 when {
@@ -418,7 +419,9 @@ private fun ChatPage(
                     else -> persona.core.domain.tasks.AssistantLines.lines(it,
                         persona.core.domain.tasks.SentToAgents.shown(feed))
                 }
-            }.let { persona.core.domain.lines.Subagents.withNested(it, nestedSubagents) }.asReversed()
+            }.let { persona.core.domain.lines.Subagents.withNested(it, nestedSubagents) }
+            // The strip of what a turn's work looked at is Glass's, as iOS draws it (#4339 C9); Brief and Board keep their lines.
+            .let { if (viewedStrips) it else it.filterNot { line -> line is ChatLine.Viewed } }.asReversed()
     }
     val searchableItems by produceState(emptyList<Item>(), snapshot.items, timelineVersion, search.visible) {
         if (search.visible) value = withContext(Dispatchers.Default) { timeline.searchItems(snapshot.items) }
@@ -451,8 +454,11 @@ private fun ChatPage(
     val errorLine = snapshot.error?.takeIf { glass && agentChat }
     val readyLine = if (readOnly || !agentChat) null else gettingReady(res, session, messages, liveWork = liveWorkLines.isNotEmpty())
     val tailRows = listOfNotNull(ERROR_ROW.takeIf { errorLine != null }, READY_ROW.takeIf { readyLine != null })
-    // Rows before the lines in the list: the tail rows and the unsent messages.
-    val currentLeadRows by rememberUpdatedState(tailRows.size + messages.size)
+    // On Glass an unsent message that did not go keeps its place among the messages sent after it (iOS `placeFailed`);
+    // the others, and every one in Brief and Board, stay at the newest end.
+    val outbox = remember(lines, messages, glass) { if (glass) placeFailed(lines.asReversed(), messages) else PlacedOutbox(emptyMap(), messages) }
+    // Rows before the lines in the list: the tail rows and the unsent messages at the newest end.
+    val currentLeadRows by rememberUpdatedState(tailRows.size + outbox.rest.size)
     // The newest "while you were away" recap open as the last line until tapped or typing starts (Glass, an Agent's chat).
     val recapContext = LocalContext.current
     val closedRecaps = remember(recapContext) { ClosedRecaps(recapContext) }
@@ -681,7 +687,7 @@ private fun ChatPage(
             thumbnails = chrome.files?.let { files ->
                 val cwd = session?.cwd.orEmpty().ifBlank { "~" }
                 ({ path -> "${key.machineId}\n$cwd\n$path" to { pixels: Int -> files.thumbnail(key.machineId, cwd, path, pixels) } })
-            })
+            }, viewerImage = { item, description -> chatViewerImage(key, item, repository, description) })
     }
     LaunchedEffect(snapshot.items) {
         // Replies render each text part under "<item id>/<part index>" (MessageContent), so prewarm those keys, each with
@@ -833,7 +839,7 @@ private fun ChatPage(
     val unreadEntry = if (session?.agentState == AgentState.Unread) lines.firstOrNull { line ->
         line.holds(lastUserId)
     }?.let { ChatListEntry(it.contentKey, lastLineAtTop = true) } else null
-    ChatListEffects(chatList, tailRows + messages.asReversed().map { "outbox-${it.clientMessageId}" } + lines.map { it.contentKey },
+    ChatListEffects(chatList, tailRows + outbox.rest.asReversed().map { "outbox-${it.clientMessageId}" } + lines.map { it.contentKey },
         ready = !snapshot.loading && (snapshot.items.isEmpty() || lines.isNotEmpty() ||
             (renderStyle.compactToolSummary && projectedFrom === snapshot.items && assistantPresentation.foreground.isEmpty())) &&
             (unreadEntry == null || markdownReadyFor == snapshot.items), entry = unreadEntry,
@@ -1104,25 +1110,34 @@ private fun ChatPage(
                             )) {
                                 errorLine?.let { error -> item(key = ERROR_ROW, contentType = ERROR_ROW) { ChatSystemLine(error, failed = true) } }
                                 readyLine?.let { words -> item(key = READY_ROW, contentType = READY_ROW) { TypingLine(words) } }
-                                items(messages.asReversed(), key = { "outbox-${it.clientMessageId}" }, contentType = { "outbox" }) { message ->
+                                @Composable fun Unsent(message: OutboxMessage) {
                                     val delivery = composerDeliveries[message.clientMessageId]
                                     val deliveryState = if (message.state in setOf(DeliveryState.Refused, DeliveryState.Rejected))
                                         delivery?.state ?: message.state else message.state
+                                    val busy = message.clientMessageId in deliveryActions.busyIds
+                                    val onAction: ((DeliveryAction) -> Unit)? = if (readOnly) null else { action -> deliveryAction(message, action) }
+                                    val failed = deliveryState == DeliveryState.Rejected || deliveryState == DeliveryState.Refused
                                     Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-                                        UserBubble(composerMessagePreview(message.text), message.clientMessageId, deliveryState)
-                                        OutboxStatus(message.copy(state = deliveryState,
-                                            error = delivery?.refusal?.code ?: message.error),
-                                            busy = message.clientMessageId in deliveryActions.busyIds,
-                                            onAction = if (readOnly) null else { action -> deliveryAction(message, action) },
-                                            onDetails = { statusSheet = true })
-                                        if (!readOnly && (deliveryState == DeliveryState.Rejected || deliveryState == DeliveryState.Refused)) {
+                                        // Glass: iOS's bubble, its mark and small menu in place of the status line, which still says why
+                                        // one did not go; a delivery to check keeps the status line.
+                                        if (glass && drawsAsPendingBubble(deliveryState)) {
+                                            OutboxBubble(composerMessagePreview(message.text), message.clientMessageId, deliveryState, busy, onAction)
+                                            if (failed) PendingBadge(PendingStatus.Refused, Modifier.align(Alignment.End),
+                                                reason = message.copy(error = delivery?.refusal?.code ?: message.error).refusalReason())
+                                        } else {
+                                            UserBubble(composerMessagePreview(message.text), message.clientMessageId, deliveryState)
+                                            OutboxStatus(message.copy(state = deliveryState,
+                                                error = delivery?.refusal?.code ?: message.error),
+                                                busy = busy, onAction = onAction, onDetails = { statusSheet = true })
+                                        }
+                                        if (!readOnly && failed) {
                                             // Edit puts the words back in the box and drops the refused bubble (nothing reached the computer).
                                             ComposerRefusalActions(message, composerService, delivery, terminal,
                                                 edit = { deliveryAction(message, DeliveryAction.Edit) }, notice = { notice = it })
                                         }
                                     }
                                 }
-                                items(lines, key = { it.contentKey }, contentType = { it.contentType() }) { line ->
+                                @Composable fun Line(line: ChatLine) {
                                     ChatSearchHighlight(search, line.contentKey) {
                                         androidx.compose.runtime.CompositionLocalProvider(LocalAssistantTaskHost provides taskHost,
                                             LocalTurnErrorFixAction provides fixModel, LocalOpenRecap provides openRecap) {
@@ -1152,13 +1167,22 @@ private fun ChatPage(
                                         }
                                     }
                                 }
+                                items(outbox.rest.asReversed(), key = { "outbox-${it.clientMessageId}" }, contentType = { "outbox" }) { Unsent(it) }
+                                items(lines, key = { it.contentKey }, contentType = { it.contentType() }) { line ->
+                                    // A message that did not go, written before this one (Glass): above it, where it was written.
+                                    val placed = outbox.before[line.id]
+                                    if (placed == null) Line(line) else Column(Modifier.fillMaxWidth()) {
+                                        placed.forEach { Unsent(it) }
+                                        Line(line)
+                                    }
+                                }
                                 if (snapshot.loadingOlder) item(key = "loading-older", contentType = "loading") { JLoading() }
                                 if (snapshot.hasOlder && !snapshot.loadingOlder) item(key = "older", contentType = "older") {
                                     JTextButton(stringResource(R.string.chat_screen_load_older), { scope.launch { try { repository.loadOlder(key) } catch (e: CancellationException) { throw e } catch (e: Exception) { if (feedback?.failure(e) != true) notice = operationFeedback(e).text.resolve(res) } } })
                                 }
                             }
                             // Under the top bar: in glass the list (and this box) runs under it, up to the status bar.
-                            WorkCollapseOverlay(lines, list, tailRows.size + messages.size, ::toggle, Modifier.align(Alignment.TopStart)
+                            WorkCollapseOverlay(lines, list, tailRows.size + outbox.rest.size, ::toggle, Modifier.align(Alignment.TopStart)
                                 .padding(start = horizontalPadding, top = padding.calculateTopPadding() + Tokens.Space.s))
                             val settling = snapshot.loading || projectedFrom == null || (snapshot.items.isNotEmpty() && projectedFrom !== snapshot.items)
                             if (settling && lines.isEmpty() && messages.isEmpty()) {

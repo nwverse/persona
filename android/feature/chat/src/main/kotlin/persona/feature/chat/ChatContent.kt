@@ -326,6 +326,7 @@ internal fun ChatLineContent(
                 ?: ChatSystemLine(line.row.item?.text.orEmpty(), line.row.item?.task?.failed == true)
         }
         is ChatLine.Recaps -> RecapLine(line.items.map { it.item })
+        is ChatLine.Viewed -> ViewedImagesRow(line.images, session, loader)
         is ChatLine.Extra -> {
             val round = line.payload as? persona.core.domain.tasks.BackgroundRound
             if (round != null) BackgroundRoundLine(round, onToggle) else AssistantExtraLine(line.payload, LocalAssistantTaskHost.current)
@@ -519,8 +520,10 @@ private fun userPictures(images: List<Item>, session: SessionKey, loader: ImageL
  * press opens the menu for a message not sent ("Copy", "Select", "Share", "Delete"), without one none.
  */
 @Composable
-internal fun UserBubble(text: String, id: String = "pending", pending: persona.core.contracts.api.DeliveryState? = null) {
-    MergedUserBubble(listOf(Item(id, role = "user", kind = "text", text = text)), menu = pending != null, pending = pending)
+internal fun UserBubble(text: String, id: String = "pending", pending: persona.core.contracts.api.DeliveryState? = null,
+    faded: Boolean = false, leading: (@Composable () -> Unit)? = null) {
+    MergedUserBubble(listOf(Item(id, role = "user", kind = "text", text = text)), menu = pending != null, pending = pending,
+        faded = faded, leading = leading)
 }
 
 @Composable

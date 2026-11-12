@@ -525,6 +525,10 @@
       "sf": "play.fill",
       "phosphor": "play"
     },
+    "safari": {
+      "sf": "safari",
+      "phosphor": "globe-simple"
+    },
     "screen": {
       "sf": "display",
       "phosphor": "monitor"

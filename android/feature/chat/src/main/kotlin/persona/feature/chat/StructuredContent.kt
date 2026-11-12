@@ -125,7 +125,9 @@ internal fun userBubbleTime(ts: String, locale: java.util.Locale, zone: java.tim
 internal fun MergedUserBubble(items: List<Item>, updates: Map<String, ChatTextUpdate> = emptyMap(),
     onLastLine: ((Int) -> Unit)? = null, images: (@Composable () -> Unit)? = null, menu: Boolean = true,
     /** A message only in the outbox, in this state: its menu offers what fits one not sent ([MessageTarget.pending]). */
-    pending: persona.core.contracts.api.DeliveryState? = null) {
+    pending: persona.core.contracts.api.DeliveryState? = null,
+    /** An unsent message's look on Glass ([OutboxBubble]): its bubble faded, its state's mark before it. */
+    faded: Boolean = false, leading: (@Composable () -> Unit)? = null) {
     // Keyed on this bubble's own texts: [updates] is the whole chat's, and changes with every streamed chunk of a reply.
     val texts = bubbleTexts(items, updates)
     val models = remember(items, texts) { items.mapIndexed { index, item -> messageModel(texts[index], item.from, user = true) } }
@@ -166,7 +168,7 @@ internal fun MergedUserBubble(items: List<Item>, updates: Map<String, ChatTextUp
         AttachedFileCards(attached)
         if (fromCard) Text(stringResource(R.string.chat_from_card), Modifier.align(Alignment.End).padding(bottom = Tokens.Space.xs),
             style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2, maxLines = 1)
-        if (bubble) UserBubbleFrame(Modifier.messageMenu(target.takeIf { menu }), footer = footer, own = own) {
+        if (bubble) UserBubbleFrame(Modifier.messageMenu(target.takeIf { menu }), footer = footer, own = own, faded = faded, leading = leading) {
             images?.invoke()
             if (photos.isNotEmpty()) {
                 AttachedPhotoRow(photos)

@@ -15,6 +15,8 @@ data class OutboxMessage(
     val state: DeliveryState,
     val error: String? = null,
     val mainTarget: Boolean = false,
+    /** When this phone wrote it (epoch milliseconds), for where a failed one sits among the messages sent after it; null: unknown. */
+    val createdAt: Long? = null,
 )
 
 interface MessageSender {
@@ -26,6 +28,10 @@ interface MessageSender {
      * shows (and a queued or waiting one goes out) again. Nothing once it is no longer cancelled.
      */
     fun restore(message: OutboxMessage) = Unit
+    /**
+     * Sends a refused message, or one whose delivery is to be confirmed, again; one still on its way (queued, waiting for
+     * the network) is tried at once.
+     */
     suspend fun retry(clientMessageId: String): Boolean = false
     /** Drops a message whose delivery is unknown: off the list and the queue, never retried or reconciled. */
     suspend fun discard(clientMessageId: String): Boolean = false

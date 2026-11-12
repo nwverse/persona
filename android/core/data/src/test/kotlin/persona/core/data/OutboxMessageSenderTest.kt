@@ -19,6 +19,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.awaitCancellation
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -736,6 +737,39 @@ class OutboxMessageSenderTest {
             assertEquals(c.label, c.error, store.entries.value.single().error)
             sender.close()
         }
+    }
+
+    /**
+     * Retry now on a message still on its way (iOS's Retry Now on a waiting one): the queue looks again at once rather than at
+     * its next wake; with the link down it stays waiting. The outbox says when each was written, for where a failed one sits.
+     */
+    @Test fun retryNowOnAWaitingMessageTriesAtOnce() = runTest {
+        val restarting = MessageTransportResult.HubError("assistant_offline", "none", retryable = true)
+        val store = MemoryOutboxStore()
+        val transport = FakeTransport(online = true)
+        val sender = OutboxMessageSender(scope, store, transport, backgroundScope) { 1_700_000_000_000L }
+        runCurrent()
+        transport.answers += listOf(restarting, MessageTransportResult.Accepted)
+        sender.send(session, "written while the assistant restarts", "restart")
+        runCurrent()
+        assertEquals(OutboxState.WaitingForNetwork, store.state("restart"))
+        assertEquals(1_700_000_000_000L, sender.outbox.value.single().createdAt)
+        assertTrue(sender.retry("restart"))
+        runCurrent()
+        assertEquals(OutboxState.Sent, store.state("restart"))
+        assertEquals(2, transport.requests.size)
+
+        transport.readyToSend.value = false
+        sender.send(session, "written offline", "offline")
+        runCurrent()
+        assertTrue(sender.retry("offline"))
+        runCurrent()
+        assertEquals(OutboxState.WaitingForNetwork, store.state("offline"))
+        assertEquals(2, transport.requests.size)
+        // One already delivered is past retrying.
+        assertFalse(sender.retry("restart"))
+        assertEquals(OutboxState.Sent, store.state("restart"))
+        sender.close()
     }
 
     /** A main conversation that cannot start gets a minute on a link that is up; the link dropping starts it again. */
