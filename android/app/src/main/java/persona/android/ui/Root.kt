@@ -270,6 +270,8 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     }
     val inbox by session.inbox.snapshot.collectAsStateWithLifecycle()
     val connection by session.connection.state.collectAsStateWithLifecycle()
+    // With several hub groups paired the Persona menu's heading ends with the selected group's name, as on iOS.
+    val hubGroups by session.groups.groups.collectAsStateWithLifecycle()
     val preferences by session.preferences.snapshots.collectAsStateWithLifecycle(AgentsPreferencesSnapshot())
     val todos by (session.tasks?.todos ?: kotlinx.coroutines.flow.MutableStateFlow(emptyList())).collectAsStateWithLifecycle()
     val todosSupported by (session.tasks?.todosSupported ?: kotlinx.coroutines.flow.MutableStateFlow(false)).collectAsStateWithLifecycle()
@@ -654,7 +656,8 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                         onVoice = voiceExtension?.let { extension -> { navigator.navigate(VoiceRoute(extension.id, extension.name)) } },
                         onTodos = { sidebarDestination(persona.core.navigation.TodosRoute) },
                         todoCount = uncompletedTodosCount,
-                        showTodos = todosSupported, mentionSessions = session.sessions.sessions)
+                        showTodos = todosSupported, mentionSessions = session.sessions.sessions,
+                        hubGroup = hubGroups.takeIf { it.size > 1 }?.firstOrNull { it.selected }?.name)
                 }
             }
             agentsEntries(navigator, agents, machine, { machine = it },

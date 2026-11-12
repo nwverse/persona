@@ -56,6 +56,7 @@ import persona.core.contracts.SessionKey
 import persona.core.contracts.TaskPlan
 import persona.core.contracts.Todo
 import persona.core.contracts.draftPlaceholder
+import persona.core.designsystem.DayLine
 import persona.core.designsystem.JButton
 import persona.core.designsystem.JButtonKind
 import persona.core.designsystem.JButtonSize
@@ -173,8 +174,7 @@ internal fun openTask(host: AssistantTaskHost, todo: Todo) {
 internal fun AssistantExtraLine(payload: Any, host: AssistantTaskHost?) {
     if (host == null) return
     when (payload) {
-        is AssistantExtra.Day -> Text(AssistantLines.dayLabel(payload.date).text(), Modifier.fillMaxWidth().padding(vertical = Tokens.Space.xs),
-            style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+        is AssistantExtra.Day -> DayLine(payload.date)
         is AssistantExtra.Quick -> QuickResultCard(payload.result)
         is AssistantExtra.Feed -> FeedLine(payload.item, host)
         is persona.core.domain.tasks.DispatchHint -> DispatchLine(payload, host)

@@ -12,16 +12,19 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import persona.core.contracts.Machine
+import persona.core.contracts.ModelPick
 import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.*
 import persona.core.designsystem.*
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.navigation.AppTab
 import persona.core.navigation.Navigator
 import persona.feature.assistant.AssistantMenuItem.*
@@ -95,6 +98,58 @@ class AssistantMenuTest {
         """.trimIndent(), copy.info(res))
     }
 
+    @Test fun theHeadingNamesTheConversationAndWhatItRunsOn() {
+        val res = ApplicationProvider.getApplicationContext<android.content.Context>().resources
+        val config = AssistantConfig(machineId = "mac", launcher = "glm", cwd = "~/assistant")
+        fun title(session: Session?, key: SessionKey?, main: Boolean, group: String? = null) =
+            AssistantCopyText(session, key, main, config, assistantMachine = "", machines = emptyList()).menuTitle(res, "Persona", group)
+        // The main conversation follows the settings' launcher and shows the model it runs, a provider path cut to its last part.
+        val mainRow = Session(machineId = "mac", sessionId = "main", title = "Whatever", launcher = "claude", model = "anthropic/opus")
+        assertEquals("Main chat · glm · opus", title(mainRow, main, main = true))
+        // A stored pick (#5055) names the launcher and the model its next message runs on, before either.
+        val picked = mainRow.copy(modelPick = ModelPick("work", "work/deepseek-v4-flash", "high"))
+        assertEquals("Main chat · work · deepseek-v4-flash", title(picked, main, main = true))
+        // A pick of the launcher's default model keeps the model it runs now.
+        assertEquals("Main chat · work · opus", title(mainRow.copy(modelPick = ModelPick("work")), main, main = true))
+        // Another conversation is named by its title and keeps its own launcher; with no title of its own it takes the persona's name.
+        val side = Session(machineId = "mac", sessionId = "side", title = "Trip plan", launcher = "claude")
+        assertEquals("Trip plan · claude", title(side, this.side, main = false))
+        assertEquals("Persona · claude", title(side.copy(title = "Claude Code"), this.side, main = false))
+        assertEquals("Persona · claude", title(side.copy(title = ""), this.side, main = false))
+        // The blank page: a conversation that would start on the settings' launcher.
+        assertEquals("New chat · glm", title(null, null, main = false))
+        // With several hub groups the selected one's name ends it.
+        assertEquals("Main chat · glm · opus · Office", title(mainRow, main, main = true, group = "Office"))
+        assertEquals("New chat · glm · Office", title(null, null, main = false, group = "Office"))
+    }
+
+    @Test fun theHeadingIsTranslated() {
+        val base = ApplicationProvider.getApplicationContext<android.content.Context>()
+        for ((tag, words) in mapOf("zh" to ("主对话" to "新对话"), "ja" to ("メインチャット" to "新しいチャット"))) {
+            val localized = android.content.res.Configuration(base.resources.configuration).apply { setLocale(java.util.Locale.forLanguageTag(tag)) }
+            val res = base.createConfigurationContext(localized).resources
+            val session = Session(machineId = "mac", sessionId = "main", launcher = "claude", model = "opus")
+            assertEquals("${words.first} · claude · opus", AssistantCopyText(session, main, main = true, config = null, assistantMachine = "", machines = emptyList()).menuTitle(res, "Persona"))
+            assertEquals("${words.second} · claude", AssistantCopyText(null, null, main = false, config = null, assistantMachine = "", machines = emptyList()).menuTitle(res, "Persona"))
+        }
+    }
+
+    @Test fun everyItemHasIosIconForItsMeaning() {
+        // iOS `AssistantTopBar.menuItems`: Theme.Icon.offline / knowledge / person / home / folder / copy / id / diagnostics /
+        // compactContext / newConversation / info / interrupt; Android's Voice chat takes the voice-chat icon.
+        val expected = mapOf(
+            ConnectionDetails to PersonaIcons.offline, Knowledge to PersonaIcons.knowledge, Details to PersonaIcons.person,
+            Voice to PersonaIcons.voiceChannel, BackToMain to PersonaIcons.home, CopyDirectory to PersonaIcons.folder,
+            CopyInfo to PersonaIcons.copy, CopySessionId to PersonaIcons.id, CopyDiagnostics to PersonaIcons.diagnostics,
+            Compact to PersonaIcons.compactContext, NewMain to PersonaIcons.newConversation, SessionInfo to PersonaIcons.info,
+            Interrupt to PersonaIcons.interrupt,
+        )
+        assertEquals(AssistantMenuItem.entries.toSet(), expected.keys)
+        for ((item, icon) in expected) assertSame(item.toString(), icon, item.icon)
+        // One meaning, one glyph: no two items borrow each other's.
+        assertEquals(expected.size, expected.values.map { it.name }.toSet().size)
+    }
+
     private inner class Hub : AssistantRepository, MessageSender, MainConversationSender {
         override val assistant = MutableStateFlow(AssistantSnapshot(mainSession = main, conversations = listOf(
             Session(machineId = "mac", sessionId = "main", title = "Main", assistant = true),
@@ -133,6 +188,8 @@ class AssistantMenuTest {
         rule.waitForIdle()
         fun menu() { rule.onNodeWithText("Persona").performClick(); rule.waitForIdle() }
         menu()
+        // iOS's heading: the conversation's title and the launcher it runs on
+        rule.onNodeWithText("Trip plan · claude").assertExists()
         for (item in listOf("Connection details", "Knowledge", "Details", "Back to main chat", "Copy directory", "Copy info",
             "Copy session ID", "Copy diagnostics", "Session info", "Interrupt")) rule.onNodeWithText(item).assertExists()
         rule.onAllNodesWithText("Assistant settings").assertCountEquals(0)

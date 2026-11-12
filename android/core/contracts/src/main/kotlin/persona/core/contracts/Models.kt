@@ -691,6 +691,23 @@ data class ModelPick(
 object ModelPickSerializer : WireSerializer<ModelPick>(ModelPick.generatedSerializer())
 
 /**
+ * What POST …/queue answers (docs/protocol/protocol.md, `spec/fixtures/wire/queue.json`): the messages that were queued before
+ * the edit, in order ([queue]) and, in a Persona conversation, each one's photos for the composer ([images]: entry i is
+ * message i's, null for a message without photos; empty when no message had any).
+ */
+@KeepGeneratedSerializer
+@Serializable(with = QueueEditSerializer::class)
+data class QueueEdit(
+    val queue: List<String> = emptyList(),
+    val images: List<List<ImagePayload>?> = emptyList(),
+) {
+    /** The photos of the message at [index]; none when it had none. */
+    fun imagesOf(index: Int): List<ImagePayload> = images.getOrNull(index).orEmpty()
+}
+
+object QueueEditSerializer : WireSerializer<QueueEdit>(QueueEdit.generatedSerializer())
+
+/**
  * A launcher switch waiting for the user's next message (server proto.PendingSwitch): the launcher, the model and effort
  * picked (null: the launcher's default model, the effort it runs with now), the engine when the switch moves the
  * conversation to the other one ([agent], `claude` / `codex`), and when it was picked.

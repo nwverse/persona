@@ -1,6 +1,7 @@
 package persona.core.contracts.api
 
 import persona.core.contracts.CoreText
+import persona.core.contracts.QueueEdit
 import persona.core.contracts.Session
 import persona.core.contracts.SessionInfo
 
@@ -41,10 +42,11 @@ interface ChatActions {
 
     /**
      * Pull everything queued while the agent works back out and re-queue the indexes in [keep], in order
-     * (POST …/queue, the node's session.queue.edit); returns what was queued before the edit. Not idempotent and
-     * not deduplicated by the hub: a failure is reported, never retried.
+     * (POST …/queue, the node's session.queue.edit); returns what was queued before the edit and, in a Persona conversation,
+     * the photos each message carried ([QueueEdit.images]). Not idempotent and not deduplicated by the hub: a failure is
+     * reported, never retried.
      */
-    suspend fun editQueue(session: Session, keep: List<Int>): List<String> =
+    suspend fun editQueue(session: Session, keep: List<Int>): QueueEdit =
         throw UnsupportedOperationException("Queued message management unavailable")
 
     /**

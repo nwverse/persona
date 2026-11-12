@@ -89,6 +89,10 @@
       "sf": "arrow.up.right.and.arrow.down.left",
       "phosphor": "arrows-in-simple"
     },
+    "compactContext": {
+      "sf": "arrow.down.and.line.horizontal.and.arrow.up",
+      "phosphor": "arrows-in-line-vertical"
+    },
     "compose": {
       "sf": "square.and.pencil",
       "phosphor": "note-pencil"
@@ -325,6 +329,10 @@
       "sf": "keyboard",
       "phosphor": "keyboard"
     },
+    "knowledge": {
+      "sf": "books.vertical",
+      "phosphor": "book-open"
+    },
     "laptop": {
       "sf": "laptopcomputer",
       "phosphor": "laptop"
@@ -392,6 +400,10 @@
     "music": {
       "sf": "music.note",
       "phosphor": "music-note"
+    },
+    "newConversation": {
+      "sf": "plus.bubble",
+      "phosphor": "chat-circle-dots"
     },
     "notChecked": {
       "sf": "minus",
@@ -660,6 +672,10 @@
     "view": {
       "sf": "eye",
       "phosphor": "eye"
+    },
+    "voiceChannel": {
+      "sf": "waveform.and.mic",
+      "phosphor": "waveform"
     },
     "voiceConnecting": {
       "sf": "antenna.radiowaves.left.and.right",

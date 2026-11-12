@@ -534,6 +534,14 @@ type ModelPick struct {
 	Effort   string `json:"effort,omitempty"`
 }
 
+// QueueEdit is the answer to POST /api/v1/sessions/{mid}/{sid}/queue in a Persona conversation (node session.queue.edit,
+// docs/protocol/protocol.md): the messages that were queued before the edit, in order, and their photos for the composer
+// when any carried some. Images[i] is message i's photos, null when it had none; the key is left out when no message did.
+type QueueEdit struct {
+	Queue  []string  `json:"queue"`
+	Images [][]Image `json:"images,omitempty"`
+}
+
 // ServiceTier is a speed advertised by the native Codex model catalog.
 type ServiceTier struct {
 	ID          string `json:"id"`

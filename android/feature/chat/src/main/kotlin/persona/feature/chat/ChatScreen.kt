@@ -52,6 +52,7 @@ import persona.core.domain.rewind.Rewind
 import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.internal.GeneratedComponentManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
@@ -939,12 +940,19 @@ private fun ChatPage(
         line.holds(lastUserId)
     }?.let { ChatListEntry(it.contentKey, lastLineAtTop = true) } else null
     val placed = remember(lines, messages, writtenAt) { placeFailed(lines.asReversed(), messages, writtenAt) }
-    // The list's keys from the bottom (reverse layout): the tail rows, the outbox's bubbles still on their way, then the
-    // lines, each with the failed sends written before it just above it (#2769).
-    val listKeys = remember(lines, placed, tailRows) {
+    // Persona's first message, not in the transcript yet: its day stands over it on Glass, as the transcript's will once it
+    // is there (iOS `DayLine`, #1911), so the line does not appear above it later. The day it was written, else today.
+    val pendingDay = if (glass && !agentChat && lines.isEmpty() && placed.rest.isNotEmpty())
+        placed.rest.mapNotNull { it.createdAt }.minOrNull()?.let { java.time.Instant.ofEpochMilli(it).atZone(java.time.ZoneId.systemDefault()).toLocalDate() }
+            ?: java.time.LocalDate.now()
+        else null
+    // The list's keys from the bottom (reverse layout): the tail rows, the outbox's bubbles still on their way, that day,
+    // then the lines, each with the failed sends written before it just above it (#2769).
+    val listKeys = remember(lines, placed, tailRows, pendingDay != null) {
         buildList {
             addAll(tailRows)
             placed.rest.asReversed().forEach { add("outbox-${it.clientMessageId}") }
+            if (pendingDay != null) add(PENDING_DAY_ROW)
             for (line in lines) {
                 add(line.contentKey)
                 placed.before[line.id].orEmpty().asReversed().forEach { add("outbox-${it.clientMessageId}") }
@@ -1347,6 +1355,7 @@ private fun ChatPage(
                                 placed.rest.asReversed().forEach { message ->
                                     item(key = "outbox-${message.clientMessageId}", contentType = "outbox") { outboxBubble(message) }
                                 }
+                                pendingDay?.let { day -> item(key = PENDING_DAY_ROW, contentType = "day") { DayLine(day, Modifier.testTag("chat-pending-day")) } }
                                 for (line in lines) {
                                     item(key = line.contentKey, contentType = line.contentType()) {
                                         ChatSearchHighlight(search, line.contentKey) {
@@ -1483,3 +1492,5 @@ internal fun ComposerContextCards(contexts: List<ChatLinkContext>, compact: Bool
 /** The rows at the chat's newest end, under your unsent messages: a load error (Glass), then "Claude is getting ready…". */
 private const val ERROR_ROW = "load-error"
 private const val READY_ROW = "getting-ready"
+/** The day over a first message not in the transcript yet (Glass, Persona's conversation). */
+private const val PENDING_DAY_ROW = "pending-day"

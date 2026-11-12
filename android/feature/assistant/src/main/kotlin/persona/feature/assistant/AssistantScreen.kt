@@ -164,6 +164,8 @@ fun AssistantScreen(
     mentionSessions: StateFlow<List<Session>>? = null,
     /** Reads the assistant's computer's folders for a path typed after @ on New chat's page; null: sessions only. */
     mentionFiles: persona.core.contracts.api.SessionFiles? = assistantSessionFiles(),
+    /** The selected hub group's name while several are paired, which ends the title menu's heading as on iOS; null with one. */
+    hubGroup: String? = null,
 ) = PersonaTheme {
     val receivedSnapshot by repository.assistant.collectAsStateWithLifecycle()
     val conversationsOf = repository as? persona.core.contracts.api.AssistantConversations
@@ -1046,36 +1048,36 @@ fun AssistantScreen(
         val sections = assistantMenu(offline = connection != null && connection != persona.core.contracts.api.ConnectionState.Online,
             voice = onVoice != null, main = snapshot.mainSession, active = active, compact = onMain && mainActions.compact,
             newMain = onMain && mainActions.newMain, working = interrupt != null && persona.core.domain.lines.isLiveStatus(shown?.status))
-        fun action(item: AssistantMenuItem, separator: Boolean): JAction = when (item) {
-            AssistantMenuItem.ConnectionDetails -> JAction(resources.getString(R.string.assistant_connection_details), separatorBefore = separator,
+        fun rawAction(item: AssistantMenuItem, separator: Boolean): JAction = when (item) {
+            AssistantMenuItem.ConnectionDetails -> JAction(resources.getString(item.label), separatorBefore = separator,
                 onClick = openConnectionDetails)
-            AssistantMenuItem.Knowledge -> JAction(resources.getString(R.string.assistant_info_knowledge), separatorBefore = separator, onClick = {
+            AssistantMenuItem.Knowledge -> JAction(resources.getString(item.label), separatorBefore = separator, onClick = {
                 if (onKnowledge != null) onKnowledge() else info = AssistantInfo.Knowledge
             })
             // iOS's Details opens Persona's profile: here the assistant's own page, its settings.
-            AssistantMenuItem.Details -> JAction(resources.getString(R.string.assistant_details), separatorBefore = separator, onClick = {
+            AssistantMenuItem.Details -> JAction(resources.getString(item.label), separatorBefore = separator, onClick = {
                 if (pageManagement != null) settingsOpen = true else info = AssistantInfo.Settings
             })
-            AssistantMenuItem.Voice -> JAction(resources.getString(R.string.assistant_voice_chat), separatorBefore = separator,
+            AssistantMenuItem.Voice -> JAction(resources.getString(item.label), separatorBefore = separator,
                 onClick = { onVoice?.invoke() })
             // In place of the home page's Home (#4339 C11), as iOS's menu has it: off the main conversation only.
-            AssistantMenuItem.BackToMain -> JAction(resources.getString(R.string.assistant_back_to_main), PhIcons.House,
+            AssistantMenuItem.BackToMain -> JAction(resources.getString(item.label), PhIcons.House,
                 separatorBefore = separator, onClick = { snapshot.mainSession?.let(::openConversation) })
-            AssistantMenuItem.CopyDirectory -> JAction(resources.getString(R.string.assistant_copy_directory), separatorBefore = separator,
+            AssistantMenuItem.CopyDirectory -> JAction(resources.getString(item.label), separatorBefore = separator,
                 onClick = { copy(copyText.cwd, resources.getString(R.string.assistant_directory_copied)) })
-            AssistantMenuItem.CopyInfo -> JAction(resources.getString(R.string.assistant_copy_info), separatorBefore = separator,
+            AssistantMenuItem.CopyInfo -> JAction(resources.getString(item.label), separatorBefore = separator,
                 onClick = { copy(copyText.info(resources), resources.getString(R.string.assistant_info_copied)) })
-            AssistantMenuItem.CopySessionId -> JAction(resources.getString(R.string.assistant_copy_session_id), separatorBefore = separator,
+            AssistantMenuItem.CopySessionId -> JAction(resources.getString(item.label), separatorBefore = separator,
                 onClick = { active?.let(::copyId) })
-            AssistantMenuItem.CopyDiagnostics -> JAction(resources.getString(R.string.assistant_copy_diagnostics), separatorBefore = separator,
+            AssistantMenuItem.CopyDiagnostics -> JAction(resources.getString(item.label), separatorBefore = separator,
                 onClick = { active?.let { key -> copyDiagnostics(shown ?: Session(machineId = key.machineId, sessionId = key.sessionId)) } })
-            AssistantMenuItem.Compact -> JAction(resources.getString(R.string.assistant_compact), separatorBefore = separator,
+            AssistantMenuItem.Compact -> JAction(resources.getString(item.label), separatorBefore = separator,
                 enabled = !compacting && compaction.line != CompactionLine.Running, onClick = ::compactMain)
-            AssistantMenuItem.NewMain -> JAction(resources.getString(R.string.assistant_new_main), separatorBefore = separator,
+            AssistantMenuItem.NewMain -> JAction(resources.getString(item.label), separatorBefore = separator,
                 enabled = !newMainBusy, onClick = { newMainOpen = true })
-            AssistantMenuItem.SessionInfo -> JAction(resources.getString(R.string.assistant_info_session), separatorBefore = separator,
+            AssistantMenuItem.SessionInfo -> JAction(resources.getString(item.label), separatorBefore = separator,
                 onClick = { info = AssistantInfo.Session })
-            AssistantMenuItem.Interrupt -> JAction(resources.getString(R.string.assistant_interrupt), separatorBefore = separator, onClick = {
+            AssistantMenuItem.Interrupt -> JAction(resources.getString(item.label), separatorBefore = separator, onClick = {
                 val key = active
                 if (interrupt != null && key != null) scope.launch {
                     try { interrupt.interrupt(key); say(resources.getString(persona.feature.chat.R.string.chat_composer_interrupt_requested)) }
@@ -1084,7 +1086,12 @@ fun AssistantScreen(
                 }
             })
         }
-        JActionSheet(title = LocalPersonaName.current, onDismiss = { menu = false },
+        // iOS's icon on every item: Glass draws them; Brief and Board keep their words (Back to main chat has had its house all along).
+        val glassIcons = PersonaTheme.style == AppStyle.Glass
+        fun action(item: AssistantMenuItem, separator: Boolean): JAction = rawAction(item, separator)
+            .copy(icon = item.icon.takeIf { glassIcons || item == AssistantMenuItem.BackToMain })
+        // iOS's heading: which conversation and what it runs on ("Main chat · claude · opus").
+        JActionSheet(title = copyText.menuTitle(resources, LocalPersonaName.current, hubGroup), onDismiss = { menu = false },
             actions = sections.flatMapIndexed { index, items -> items.mapIndexed { i, item -> action(item, separator = index > 0 && i == 0) } })
     }
     if (newMainOpen) {

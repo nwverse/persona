@@ -285,6 +285,9 @@
     <string name="designsystem_queue_actions">排队消息的操作</string>
     <string name="designsystem_queue_item">第 %1$d 条：%2$s</string>
     <string name="designsystem_queue_item_note">第 %1$d 条：%2$s。%3$s</string>
+    <plurals name="designsystem_queue_photos">
+        <item quantity="other">%1$d 张图片</item>
+    </plurals>
     <string name="designsystem_draft_ready">Persona 拟好了回复</string>
     <!-- Connection details (the title's sheet while the hub is out of reach) -->
     <string name="designsystem_connection_online">已连上 hub</string>

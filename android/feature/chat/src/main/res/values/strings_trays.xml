@@ -24,7 +24,7 @@
     <string name="chat_tray_waiting">Waiting</string>
     <string name="chat_tray_background_tasks_running">Background tasks running: %1$d</string>
     <string name="chat_tray_subagents_running">Subagents running: %1$d</string>
-    <string name="chat_tray_background_running">Background work is running</string>
+    <string name="chat_tray_background_running">Working (Background)</string>
     <string name="chat_tray_background_workflow">Background workflow</string>
     <string name="chat_tray_workflow_more">%1$d more</string>
     <string name="chat_tray_expanded">Expanded</string>

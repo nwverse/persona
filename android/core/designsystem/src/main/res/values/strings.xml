@@ -325,6 +325,10 @@
     <string name="designsystem_queue_actions">Queued message actions</string>
     <string name="designsystem_queue_item">Item %1$d: %2$s</string>
     <string name="designsystem_queue_item_note">Item %1$d: %2$s. %3$s</string>
+    <plurals name="designsystem_queue_photos">
+        <item quantity="one">%1$d image</item>
+        <item quantity="other">%1$d images</item>
+    </plurals>
     <string name="designsystem_draft_ready">Persona drafted a reply</string>
     <!-- Connection details (the title's sheet while the hub is out of reach) -->
     <string name="designsystem_connection_online">Connected to the hub</string>
