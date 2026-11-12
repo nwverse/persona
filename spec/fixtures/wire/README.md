@@ -51,6 +51,7 @@
 | 屏幕对话框携带选项和 rev，密码提示使用 secret 且不记录密码输入。 | `server/internal/screen/dialog.go`：`ParseDialog`；`secret.go`：`SecretPrompt`；`apple/Shared/Models.swift`：`ScreenDialog`、`Interaction` | `interaction_screen`、`interaction_secret` |
 | elicitation 交互携带 MCP 服务名和 form（requested_schema）或 url 载荷，只发给声明 elicitation 能力的连接，旧 iOS 收不到。 | `server/internal/hub/http.go`：`Hub.broadcast`、`broadcastTo`；`proto.Elicitation`；`android/core/contracts/src/main/kotlin/persona/core/contracts/Elicitation.kt` | `interaction_elicitation_form`、`interaction_elicitation_url` |
 | interaction_resolved 按 id 撤回交互。 | `server/internal/hub/hub.go`：`resolve`；`ServerEvent.decode` | `interaction_resolved` |
+| 助手代答的问题撤回时另带 answered_by、reason 和按问题文字的 answers；改答事件 interaction_reanswered 只带改了的问题，放在 resolution.answers。 | `server/internal/hub/fleet_link.go`：`EventFleetResolved`；`server/internal/assistant/fleet_delegate.go`：`reanswer`；`Hub.relayBroadcastFrom`；`ServerEvent.decode`；`docs/protocol/protocol.md`「WebSocket `/api/v1/ws`」 | `interaction_resolved_assistant`、`interaction_reanswered` |
 | Fleet 保留驼峰键名，时间使用 Unix 秒数字。 | `server/internal/hub/liveactivity.go`：`FleetState`、`buildFleet`；`apple/Shared/FleetState.swift` | `fleet_snapshot`、`fleet_event` |
 | 收件箱列表统一承载飞书和邮件，移除 context 等内部字段并保留草拟回复。 | `server/internal/assistant/inbox.go`：`InboxItem.listed`；`apple/Shared/InboxModels.swift`：`InboxItem` | `inbox_list` |
 | 回答记录保留一行摘要，`items` 成对保存完整问答并保留换行；旧记录没有 `items`。 | `server/internal/assistant/answered.go`：`answeredBody`、`answeredItems`；`apple/Shared/Tasks.swift`：`FeedItem` | `feed_answered_items` |
@@ -111,7 +112,7 @@ go test -count=1 -p 1 ./internal/hub -run '^TestWireSamples$' -update
 
 ## iOS 只读对照
 
-本次全部 47 个用例已由临时 Swift 程序读取 input，调用上表中的真实解码实现并逐项核对 expected；没有只凭单测断言而未执行对照的用例。未修改 `ios/`，也没有启动 App 或联网。
+本次全部 47 个用例已由临时 Swift 程序读取 input，调用上表中的真实解码实现并逐项核对 expected；没有只凭单测断言而未执行对照的用例。未修改 `ios/`，也没有启动 App 或联网。之后加入的 `interaction_resolved_assistant`、`interaction_reanswered` 两例没有经过临时程序，期望按 `apple/PersonaTests/DelegateTests.swift` 的 `theResolvedEventCarriesTheAssistantsAnswer` 填写（同样的键和形状）。
 
 完整编译 `ChatStore.swift`、`LiveConnection.swift` 时，当前沙箱不允许 Observation 宏插件启动。临时程序因此直接引用四个纯模型文件，并把其他文件中需要的完整声明按边界原样摘取到 `/tmp/wire-swift/Referenced.swift`；没有修改声明内的解码逻辑。摘取范围是：
 

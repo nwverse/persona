@@ -224,7 +224,9 @@ private fun ChatPage(
     val canApprove = session?.canApprove ?: true
     val canTerminal = session?.canTerminal ?: true
     val connection = chrome.connection?.state?.collectAsStateWithLifecycle()?.value
-    val controls = remember(key, chrome.actions, renamer) { ChatChromeState(res, chrome.actions, scope, sessions::refresh, onBack, renamer) }
+    val controls = remember(key, chrome.actions, renamer, interactions) {
+        ChatChromeState(res, chrome.actions, scope, sessions::refresh, onBack, renamer, interactions)
+    }
     var headerOverlay by remember { mutableStateOf(false) }
     var modeOverlay by remember { mutableStateOf(false) }
     var pillOverlay by remember { mutableStateOf(false) }
@@ -1128,6 +1130,9 @@ private fun ChatPage(
                                         }
                                     }
                                 })
+                            // The latest question the assistant answered here, after the agent's own cards (iOS DelegatedCard, #4339 C9).
+                            if (glass && agentChat && !readOnly && composerShown(panel, requestCollapsed))
+                                DelegatedCard(key, interactions, canSend, Modifier.padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.xs))
                             val composerError = snapshot.error.takeIf { errorLine == null }
                             (if (feedback == null) notice ?: composerError else composerError)?.let {
                                 Text(it, Modifier.padding(horizontal = Tokens.Space.m), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
@@ -1181,8 +1186,8 @@ private fun ChatPage(
                                     if (composerShown(panel, requestCollapsed)) TaskRouteChip(host)
                                 }
                                 // Persona's queue: its own messages, then those relayed from elsewhere, under its entries and right
-                                // above the composer, as iOS's footer has it (Glass, #4339 C6).
-                                if (renderStyle == ChatRenderStyle.Assistant && glass && composerShown(panel, requestCollapsed) &&
+                                // above the composer, as iOS's footer has it (every style: it is behaviour; each draws its own strip, #4339 C6).
+                                if (renderStyle == ChatRenderStyle.Assistant && composerShown(panel, requestCollapsed) &&
                                     SlashCommand.suggestions(composer.value.text, clear = true).isEmpty())
                                     ChatQueueStrip(session, chrome.actions, composer, { notice = it }, sessions::refresh)
                                 val claudeCommands = session?.canTypeClaudeCommands == true
