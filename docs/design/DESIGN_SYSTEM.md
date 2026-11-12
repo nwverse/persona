@@ -573,13 +573,19 @@ in #5033.
   300–460 px wide, a 428 px body (a 48 px rail of Recent, Favorites, All and one cell per provider beside the model list),
   search on top, "Configure models" at the bottom; two-line rows with hover-revealed Favorite and Customize; the model that
   runs has a static selected fill, no check. Customize opens a 264 px flyout to the panel's left: the effort slider, Fast,
-  the engine, and a footer that says whether the setup is the recommended one, customized or saved.
+  the engine, an exact catalog reference-price line where known, and a footer that says whether the setup is the
+  recommended one, customized or saved. A provider rail cell adds a 22 × 3 px weekly-remaining bar only when the existing
+  launcher quota answer supplies a weekly ratio; its tooltip names the window and reset time.
+- Usage placement (#5056): the Agent's context meter is a separate, right-aligned row below the composer card, not part of
+  the header or the model-pill container. Unknown context mounts no row. Quota bars use the established accent / orange /
+  red quota tones (≤ 30% left warning, ≤ 10% or exhausted critical); price marks use neutral `ink-2`, one to three `$` by
+  standard output price, and the flyout's values use tabular numerals. Unknown data never creates placeholder marks.
 - Tokens: the effort levels have one colour each in both themes (`--effort-low` / `--effort-minimal` #2AAE5B,
   `--effort-medium` #14B8A6, `--effort-high` #3B82F6, `--effort-xhigh` #4F46E5, `--effort-max` #8B5CF6, Codex's ultra on
   max) and `--fast` (#3B9EFF), used inside the flyout only: the pill never colours its effort or its bolt.
-- Deviations from Cindy: letter tiles instead of vendor logos; no price or quota data; ↑↓ also move between rows; providers
-  and engines that can't be switched to yet are listed with their rows off and the reason; a pending switch names the
-  launcher rather than the engine.
+- Deviations from Cindy: letter tiles instead of vendor logos; price and quota appear only where the catalog / launcher
+  answer supplies them; ↑↓ also move between rows; providers and engines that can't be switched to yet are listed with
+  their rows off and the reason; a pending switch names the launcher rather than the engine.
 
 ### 3.9 Empty states
 
@@ -742,7 +748,8 @@ before it to the words after it, the live one "Working…" with its clock. Witho
 rows directly. Inner summaries open together with the outer one and then keep their own open / closed state, so
 opening a summary shows every tool call. A thought with words is one row in the tool rows' chrome (16 px status slot
 with the sparkle, italic `thinking-ink` words on one line, the 18 px chevron slot), opening in place only when it does
-not fit or has a line break; a thought without words has no row. The live "Thinking" line with dots and a clock ends
+not fit or has a line break, its opened words selectable; a thought without words is no step, so it neither makes a
+summary of its own nor splits a run of rows. The live "Thinking" line with dots and a clock ends
 the innermost live summary, once. Durations read `6s`, `1m 5s`, `2m` in every language and, from an hour, the
 language's form that always keeps the minutes (`1h 0m`, `1 小时 0 分`, `1時間0分`). Copy follows cindy's catalog
 ("Work details" without times, "Searched once", "Listed files once"). A diff count reads `+12 -3`; the in-place
