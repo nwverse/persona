@@ -126,6 +126,8 @@ object PersonaIcons {
     val forward: PhIcon get() = PhIcons.CaretRight
     /** SF Symbol `arrow.triangle.branch`. */
     val gitBranch: PhIcon get() = PhIcons.GitBranch
+    /** SF Symbol `star`. */
+    val gitHubStar: PhIcon get() = PhIcons.Star
     /** SF Symbol `cloud`. */
     val gitUpstream: PhIcon get() = PhIcons.Cloud
     /** SF Symbol `target`. */
@@ -316,6 +318,8 @@ object PersonaIcons {
     val success: PhIcon get() = PhIcons.CheckCircle
     /** SF Symbol `checkmark.circle.fill`. */
     val successFilled: PhIcon get() = PhIcons.CheckCircle
+    /** SF Symbol `list.clipboard`. */
+    val taskPlan: PhIcon get() = PhIcons.ListChecks
     /** SF Symbol `terminal`. */
     val terminal: PhIcon get() = PhIcons.TerminalWindow
     /** SF Symbol `terminal.fill`. */

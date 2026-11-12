@@ -241,6 +241,10 @@
       "sf": "arrow.triangle.branch",
       "phosphor": "git-branch"
     },
+    "gitHubStar": {
+      "sf": "star",
+      "phosphor": "star"
+    },
     "gitUpstream": {
       "sf": "cloud",
       "phosphor": "cloud"
@@ -620,6 +624,10 @@
     "successFilled": {
       "sf": "checkmark.circle.fill",
       "phosphor": "check-circle"
+    },
+    "taskPlan": {
+      "sf": "list.clipboard",
+      "phosphor": "list-checks"
     },
     "terminal": {
       "sf": "terminal",
