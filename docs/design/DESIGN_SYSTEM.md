@@ -382,7 +382,7 @@ For every component: use the design-system one, not a lookalike. Counts are appr
   active row. Empty: three 44 px pulsing rows while reading, "No matching items" for a query with nothing.
 - Web permission picker (#5324, `PermissionPicker.tsx`): the mode's symbol (14 px), its name (13 px, truncates) and a
   chevron; Full access tints the words `red`, Auto-review `mode-acts`; under a 300 px composer (a 320 px phone) only
-  the symbol. Its menu is the shared `Menu` (300 px) with each mode's symbol, name and check; descriptions are tooltips
+  the symbol. A mode not reported yet is named by no value: the raised hand and "Permission mode", no tooltip (#5756). Its menu is the shared `Menu` (300 px) with each mode's symbol, name and check; descriptions are tooltips
   (`MenuItem.tip`), except a disabled row's reason and a row asking again, which stay under the name.
 - Web under the box (#5324): the source and folder line at the left (12 px `ink-3`, a folder mark, truncating, full
   values on hover; an ⓘ menu at phone width), the context meter at the right.
