@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"go/scanner"
 	"go/token"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -12,7 +13,7 @@ import (
 
 // normalizeLarkCommand removes inert here-documents and resolves immediately preceding
 // literal command assignments solely for classification. It never executes the input.
-func normalizeLarkCommand(cmd string) string {
+func normalizeLarkCommand(cmd, cwd string) string {
 	tree, err := syntax.NewParser().Parse(strings.NewReader(cmd), "")
 	if err != nil {
 		return cmd
@@ -49,6 +50,7 @@ func normalizeLarkCommand(cmd string) string {
 			words[i], _ = executionWord(word)
 		}
 		suffix, ok := unwrapCommand(words)
+		resolvedAbsolute := false
 		if ok && len(suffix) > 0 {
 			index := len(words) - len(suffix)
 			word := call.Args[index]
@@ -56,6 +58,7 @@ func normalizeLarkCommand(cmd string) string {
 				if p, ok := word.Parts[0].(*syntax.ParamExp); ok && p.Param != nil && !p.Excl && !p.Length && !p.Width && p.Index == nil && p.Slice == nil && p.Repl == nil && p.Exp == nil && p.Names == 0 {
 					if value, ok := vars[p.Param.Value]; ok {
 						word.Parts = []syntax.WordPart{&syntax.Lit{Value: value}}
+						resolvedAbsolute = filepath.IsAbs(value) && (index == 0 || filepath.Base(words[0]) == "timeout")
 						changed = true
 					}
 				}
@@ -64,7 +67,7 @@ func normalizeLarkCommand(cmd string) string {
 		// Preserve assignments only across simple commands known not to change
 		// shell state. Expansions can themselves assign variables.
 		name := words[0]
-		unchanged := map[string]bool{"echo": true, ":": true, "true": true, "false": true, "ls": true, "git": true, "go": true, "pwd": true, "date": true, "sleep": true, "cat": true, "head": true, "grep": true, "jq": true}[name]
+		unchanged := resolvedAbsolute || map[string]bool{"echo": true, ":": true, "true": true, "false": true, "ls": true, "git": true, "go": true, "pwd": true, "date": true, "sleep": true, "cat": true, "head": true, "grep": true, "jq": true}[name]
 		for _, arg := range call.Args {
 			_, dynamic := executionWord(arg)
 			if dynamic {
@@ -103,13 +106,14 @@ func normalizeLarkCommand(cmd string) string {
 		}
 		for _, arg := range call.Args[1:] {
 			value, expanded := executionWord(arg)
-			if expanded || strings.HasPrefix(value, "-exec") || strings.HasPrefix(value, "-toolexec") {
+			option, _, _ := strings.Cut(strings.TrimLeft(value, "-"), "=")
+			if expanded || strings.HasPrefix(value, "-") && (option == "exec" || option == "toolexec") {
 				safe = false
 			}
 		}
 		for _, redir := range stmt.Redirs {
 			if redir.Hdoc == nil {
-				if redir.Word == nil || redir.Word.Lit() == "" {
+				if (redir.Op != syntax.RdrOut && redir.Op != syntax.AppOut) || redir.Word == nil || !safeHeredocTarget(redir.Word.Lit(), cwd) {
 					safe = false
 				}
 				continue
@@ -123,7 +127,7 @@ func normalizeLarkCommand(cmd string) string {
 			if base == "cat" {
 				output := false
 				for _, other := range stmt.Redirs {
-					if (other.Op == syntax.RdrOut || other.Op == syntax.AppOut) && other.Word != nil && other.Word.Lit() != "" {
+					if (other.Op == syntax.RdrOut || other.Op == syntax.AppOut) && other.Word != nil && safeHeredocTarget(other.Word.Lit(), cwd) {
 						output = true
 					}
 				}
@@ -137,7 +141,7 @@ func normalizeLarkCommand(cmd string) string {
 					if value == "-a" || value == "--append" {
 						continue
 					}
-					if value == "" || strings.HasPrefix(value, "-") {
+					if value == "" || strings.HasPrefix(value, "-") || !safeHeredocTarget(value, cwd) {
 						safe = false
 					}
 					files++
@@ -182,6 +186,37 @@ func normalizeLarkCommand(cmd string) string {
 		return cmd
 	}
 	return out.String()
+}
+
+// Special files, symlinks and virtual filesystems can forward the heredoc to
+// a running process. An unknown target is not proof of an ordinary file.
+func safeHeredocTarget(name, cwd string) bool {
+	if !safeLiteralCommand(name) {
+		return false
+	}
+	if !filepath.IsAbs(name) {
+		if !filepath.IsAbs(cwd) {
+			return false
+		}
+		name = filepath.Join(cwd, name)
+	}
+	name = filepath.Clean(name)
+	parent, err := filepath.EvalSymlinks(filepath.Dir(name))
+	if err != nil {
+		return false
+	}
+	for _, path := range []string{name, filepath.Join(parent, filepath.Base(name))} {
+		for _, prefix := range []string{"/dev", "/proc", "/sys"} {
+			if path == prefix || strings.HasPrefix(path, prefix+"/") {
+				return false
+			}
+		}
+	}
+	info, err := os.Lstat(name)
+	if os.IsNotExist(err) {
+		return true
+	}
+	return err == nil && info.Mode().IsRegular()
 }
 
 // go test can execute generated tests and package initializers. Only a document

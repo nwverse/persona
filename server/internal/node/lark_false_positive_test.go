@@ -3,6 +3,7 @@ package node
 import (
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/proto"
@@ -90,6 +91,11 @@ func TestLarkLiteralCommandVariable(t *testing.T) {
 		{"braced literal", `A=/usr/bin/ab; timeout 30 ${A} scroll`, 0},
 		{"literal after harmless command", `A=/usr/bin/ab; echo ok; timeout 30 $A scroll`, 0},
 		{"literal after external command", `A=/usr/bin/ab; ls /tmp; timeout 30 $A scroll`, 0},
+		{"repeated literal command", `A=/usr/bin/ab; $A status; timeout 30 $A scroll`, 0},
+		{"repeated wrapped literal command", `A=/usr/bin/ab; timeout 30 $A status; timeout 30 $A scroll`, 0},
+		{"unset after literal command", `A=/usr/bin/ab; $A status; unset A; timeout 30 $A scroll`, 1},
+		{"dynamic argument after literal command", `A=/usr/bin/ab; $A "$ARG"; timeout 30 $A scroll`, 1},
+
 		{"dynamic argument can assign", `A=/usr/bin/ab; echo ${A:=/x/lark-cli}; timeout 30 $A scroll`, 1},
 		{"unset value", `A=/usr/bin/ab; unset A; timeout 30 $A scroll`, 1},
 		{"substitution", `A=$(which x); $A`, 1},
@@ -98,5 +104,31 @@ func TestLarkLiteralCommandVariable(t *testing.T) {
 		{"lark send", `A=/x/lark-cli; $A im +messages-send --text hi`, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) { assertAssistantBypassClassification(t, tc.command, tc.cards) })
+	}
+}
+
+func TestLarkHeredocUnsafeTargets(t *testing.T) {
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "pipe")
+	if err := syscall.Mkfifo(fifo, 0600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink("/dev/null", link); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ name, command string }{
+		{"device", "cat > /dev/null <<'EOF'\n lark-cli im +messages-send\nEOF"},
+		{"proc fd", "cat > /proc/self/fd/1 <<'EOF'\n lark-cli im +messages-send\nEOF"},
+		{"tee fd", "tee /dev/fd/1 <<'EOF'\n lark-cli im +messages-send\nEOF"},
+		{"multiple output redirections", "cat > /tmp/a.go > /dev/fd/1 <<'EOF'\n lark-cli im +messages-send\nEOF"},
+		{"tee stdout redirect", "tee /tmp/a.go > /dev/fd/1 <<'EOF'\n lark-cli im +messages-send\nEOF"},
+
+		{"fifo", "cat > " + fifo + " <<'EOF'\n lark-cli im +messages-send\nEOF"},
+		{"symbolic link", "cat > " + link + " <<'EOF'\n lark-cli im +messages-send\nEOF"},
+		{"long exec option", "cat > /tmp/a.go <<'EOF'\n// lark-cli im +messages-send\nEOF\ngo test --exec sh ./..."},
+		{"long toolexec option", "cat > /tmp/a.go <<'EOF'\n// lark-cli im +messages-send\nEOF\ngo test --toolexec sh ./..."},
+	} {
+		t.Run(tc.name, func(t *testing.T) { assertAssistantBypassClassification(t, tc.command, 1) })
 	}
 }
