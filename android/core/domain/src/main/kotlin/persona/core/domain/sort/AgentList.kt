@@ -100,6 +100,8 @@ data class AgentListGroup(
     val worktree: WorktreeLine? = null,
     /** Server membership for this exact group; null means its rows/counts describe the loaded window. */
     val totalCount: Int? = null,
+    /** "By repository": the idle agents a busy working tree folds behind its quiet line (#4338 A8); null for none. */
+    val idleFold: IdleFold? = null,
 )
 
 data class AgentListResult(
@@ -233,8 +235,11 @@ fun buildFlatAgentList(
                     isQuiet || quick || showIdle(id) -> rows
                     else -> rows.filter(::stays)
                 }
+                // Its idle agents behind one line, as iOS's `agentRows`; a search shows them with no line.
+                val idle = if (isQuiet || quick || settings.query.isNotEmpty()) emptyList() else rows.filterNot(::stays)
                 return AgentListGroup(id, title, rows, visible, folded, if (isQuiet) "quiet" else null, stateCounts(rows), repo = level, under = under,
-                    worktree = tree?.let { worktreeLine(it, isQuiet, rows.count { row -> !row.isNestedSubtask }, online) })
+                    worktree = tree?.let { worktreeLine(it, isQuiet, rows.count { row -> !row.isNestedSubtask }, online) },
+                    idleFold = idle.takeIf { it.isNotEmpty() }?.let { IdleFold(it, open = id in settings.expandedIdle) })
             }
             val known = machines + live.map { it.session.machineId }.distinct()
                 .filter { id -> machines.none { it.id == id } }.map { Machine(it, "") }

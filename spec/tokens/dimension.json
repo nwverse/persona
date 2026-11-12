@@ -288,6 +288,14 @@
       },
       "$description": "Theme.Size.dotXL"
     },
+    "markXS": {
+      "$type": "dimension",
+      "$value": {
+        "value": 12,
+        "unit": "px"
+      },
+      "$description": "Theme.Size.markXS"
+    },
     "markS": {
       "$type": "dimension",
       "$value": {
@@ -295,6 +303,14 @@
         "unit": "px"
       },
       "$description": "Theme.Size.markS"
+    },
+    "wellXS": {
+      "$type": "dimension",
+      "$value": {
+        "value": 28,
+        "unit": "px"
+      },
+      "$description": "Theme.Size.wellXS"
     },
     "hairline": {
       "$type": "dimension",
@@ -328,6 +344,30 @@
       },
       "$description": "Theme.Size.bar: the accent bar beside a quote-like card"
     },
+    "box64": {
+      "$type": "dimension",
+      "$value": {
+        "value": 64,
+        "unit": "px"
+      },
+      "$description": "Theme.Size.box64: the height of a card and of the viewed-images strip's thumbnails"
+    },
+    "box80": {
+      "$type": "dimension",
+      "$value": {
+        "value": 80,
+        "unit": "px"
+      },
+      "$description": "Theme.Size.box80: a viewed image alone"
+    },
+    "box120": {
+      "$type": "dimension",
+      "$value": {
+        "value": 120,
+        "unit": "px"
+      },
+      "$description": "Theme.Size.box120: the widest a tool argument's label column gets"
+    },
     "box150": {
       "$type": "dimension",
       "$value": {
@@ -335,6 +375,14 @@
         "unit": "px"
       },
       "$description": "Theme.Size.box150"
+    },
+    "slimBar": {
+      "$type": "dimension",
+      "$value": {
+        "value": 40,
+        "unit": "px"
+      },
+      "$description": "ChatChrome.compactHeight: an Agent chat's header folded into its slim bar"
     }
   }
 }

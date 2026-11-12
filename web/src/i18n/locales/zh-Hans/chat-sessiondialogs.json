@@ -24,6 +24,7 @@
   "copy_resume_command": "拷贝恢复命令",
   "renamed": "已重命名",
   "change_failed": "没改成：{error}",
+  "change_unconfirmed": "95 秒内没有收到切换结果。改动可能已经生效，请检查当前设置后再试。",
   "rename": "重命名",
   "tab_name": "标签名（herdr tab）",
   "session_name": "会话名",
@@ -63,8 +64,6 @@
   "speed_standard": "标准",
   "speed_fast": "Fast 加速",
   "header_mode": "权限模式：{mode}",
-  "mode_unknown": "未知",
   "leave_bypass_confirm": "切到 {mode}",
-  "leave_bypass_detail": "这个 Agent 不是以完全访问启动的，切走后在这里切不回来。",
-  "modes_locked": "没在运行：运行中才能改模式"
+  "leave_bypass_detail": "这个 Agent 不是以完全访问启动的，切走后在这里切不回来。"
 }

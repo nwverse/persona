@@ -298,8 +298,12 @@ struct InboxPage: View {
         tier != .working && (groups.count > 1 || (agents > 0 && !groups.isEmpty))
     }
 
-    /// How long the list keeps done items (the hub's inboxKeepDone): Done's groups within it are complete without a page.
-    private static let listDoneSpan: TimeInterval = 3 * 86_400
+    /// Whether a Done group is complete: a page of its own reached its start, or (unfiltered) as many are loaded as the
+    /// hub counts. The list's done rows are not a group being complete: after #5549 it carries only the newest 200 of them.
+    static func doneGroupComplete(_ key: String, _ n: Int, groupComplete: Set<String>, counts: [String: Int], filtered: Bool) -> Bool {
+        if groupComplete.contains(key) { return true }
+        return !filtered && n >= counts[key, default: 0]
+    }
 
     /// Done's groups (#2969). With the hub's day counts (#2967; the default manager's, as the history is) every group they
     /// name is listed with its count, loaded or not, and loads its own items when it opens; filtered or searched, the
@@ -317,12 +321,10 @@ struct InboxPage: View {
         let filtered = !source.isEmpty || !kind.isEmpty || !query.isEmpty
         let counts = InboxGroups.dayCounts(days, now: now, just: filtered ? 0 : loaded.first { $0.key == "just" }?.items.count ?? 0)
         let byKey = Dictionary(loaded.map { ($0.key, $0.items) }, uniquingKeysWith: +)
-        // complete: a page of its own reached its start, or the list holds it (its last days' done items), or (unfiltered)
-        // as many are loaded as the hub counts
+        // complete: a page of its own reached its start, or (unfiltered) as many are loaded as the hub counts. The
+        // list's done rows are not a group being complete: after #5549 it carries only the newest 200 of them.
         func complete(_ key: String, _ n: Int) -> Bool {
-            if store.groupComplete.contains(key) { return true }
-            if let start = InboxGroups.timeRange(key, now: now).start, start >= now.addingTimeInterval(-Self.listDoneSpan) { return true }
-            return !filtered && n >= counts[key, default: 0]
+            Self.doneGroupComplete(key, n, groupComplete: store.groupComplete, counts: counts, filtered: filtered)
         }
         func group(_ key: String) -> DoneGroup {
             let items = byKey[key] ?? []

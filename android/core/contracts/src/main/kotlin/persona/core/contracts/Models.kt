@@ -498,6 +498,21 @@ data class Session(
      * `background_waiting`, #6045): set only with `state` working. False from older hubs.
      */
     @SerialName("background_waiting") val backgroundWaiting: Boolean = false,
+    /**
+     * How Persona reaches a Codex in a terminal (docs/integrations/codex.md, "Sessions on the daemon"): `app_server` (joined on
+     * its shared app-server) or `terminal` (its screen and session record); [codexRouteNote] says why it is the terminal.
+     */
+    @SerialName("codex_route") val codexRoute: String? = null,
+    @SerialName("codex_route_note") val codexRouteNote: String? = null,
+    /**
+     * What the model saw in the agent's latest reply, and the model's window (docs/protocol/protocol.md, context usage): null
+     * while the node can't tell (no reply yet, a window it does not know, an older node).
+     */
+    @SerialName("context_tokens") val contextTokens: Long? = null,
+    @SerialName("context_window") val contextWindow: Long? = null,
+    /** An assistant conversation set to run on the Agent SDK: `agentsdk` while it does; [runtimeFallback] why the node ran the CLI instead. */
+    @SerialName("runtime") val runtime: String? = null,
+    @SerialName("runtime_fallback") val runtimeFallback: String? = null,
 ) {
     val key: SessionKey get() = SessionKey(machineId, sessionId)
     /** A chat of the health space ([space]), which the assistant's own lists leave out. */
@@ -889,9 +904,24 @@ data class Resolution(
     @SerialName("values") val values: Map<String, String>? = null,
     /** Who answered when it was not the user in the app (`assistant`); only in a resolution the hub hands back. */
     @SerialName("answered_by") val answeredBy: String? = null,
+    /** Why the assistant answered so, beside [answeredBy]; only in a resolution the hub hands back. */
+    @SerialName("reason") val reason: String? = null,
     val action: String? = null,
     val content: kotlinx.serialization.json.JsonObject? = null,
 )
+
+/** A row of GET /api/v1/interactions/history (iOS `InteractionRecord`): a session's card, how it ended, its answer and when. */
+@KeepGeneratedSerializer
+@Serializable(with = InteractionRecordSerializer::class)
+data class InteractionRecord(
+    val interaction: Interaction,
+    /** pending, resolved, expired, cancelled or dismissed. */
+    val status: String = "",
+    val resolution: Resolution? = null,
+    @WireTime @SerialName("resolved_at") val resolvedAt: String? = null,
+)
+
+object InteractionRecordSerializer : WireSerializer<InteractionRecord>(InteractionRecord.generatedSerializer())
 
 @Serializable
 data class Launcher(@SerialName("name") val name: String, @SerialName("base_url") val baseUrl: String? = null, @SerialName("model") val model: String? = null)

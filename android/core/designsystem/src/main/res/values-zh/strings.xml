@@ -128,6 +128,14 @@
     <!-- An Agents row's third line on Glass (#4338 A9): the to-do chip and the muted bell, for TalkBack -->
     <string name="designsystem_row_todo">待办：%1$s</string>
     <string name="designsystem_row_muted">已屏蔽通知</string>
+    <string name="designsystem_row_style_avatar">头像</string>
+    <string name="designsystem_row_style_two_lines">紧凑两行</string>
+    <string name="designsystem_row_style_cards">色条卡片</string>
+    <string name="designsystem_row_style_list">细列表</string>
+    <string name="designsystem_row_style_avatar_summary">头像、标题和时间，一行最新的话，再一行写它在哪儿跑。</string>
+    <string name="designsystem_row_style_two_lines_summary">每个 Agent 两行：标题和时间，再一行最新的话。</string>
+    <string name="designsystem_row_style_cards_summary">每个 Agent 一张卡片，左边一条状态色；等你处理的那张整张淡蓝底。</string>
+    <string name="designsystem_row_style_list_summary">每个 Agent 一行：状态、标题和时间。</string>
     <plurals name="designsystem_tab_agents">
         <item quantity="other">%1$d 个 Agent</item>
     </plurals>
@@ -154,6 +162,15 @@
     <string name="designsystem_collapse_named">折叠%1$s</string>
     <plurals name="designsystem_idle_more">
         <item quantity="other">还有 %1$d 个空闲</item>
+    </plurals>
+    <plurals name="designsystem_idle_count">
+        <item quantity="other">%1$d 个空闲</item>
+    </plurals>
+    <plurals name="designsystem_idle_hide">
+        <item quantity="other">收起空闲的 %1$d 个</item>
+    </plurals>
+    <plurals name="designsystem_idle_show">
+        <item quantity="other">展开 %1$d 个空闲的 Agent</item>
     </plurals>
     <string name="designsystem_folded">已折叠</string>
     <string name="designsystem_attachment_uploading">正在上传</string>

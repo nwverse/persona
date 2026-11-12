@@ -682,6 +682,8 @@ SESSIONS = [
                     + ([{"id": "wdemo1", "kind": "workflow", "description": "widget-audit", "run_id": "wf_demo1", "started_at": ago(minutes=14)}]
                        if os.environ.get("MOCK_WORKFLOWS") in ("1", "legacy") else []),
          **({"workflows": MOCK_WORKFLOW_RUNS} if os.environ.get("MOCK_WORKFLOWS") == "1" else {}),
+         # MOCK_BRANCH=1: the git branch its folder is on (#5421: the chat's top bar shows it on a wide screen)
+         **({"branch": "feat/hourly-widget"} if os.environ.get("MOCK_BRANCH") else {}),
          # MOCK_QUEUE=1: input typed while it works and not taken yet (POST …/queue edits it)
          **({"queued": ["顺便把 README 里的截图也换成新的小组件", "改完以后跑一遍 UI 测试，把失败的截图发给我"]}
             if os.environ.get("MOCK_QUEUE") else {})),
@@ -708,6 +710,13 @@ SESSIONS = [
     sess("macbook", RECIPE, "菜谱网站加搜索", "/Users/me/code/recipes", "offline", "offline", "", 0, "", 0, 60 * 26,
          "搜索做好了，支持按食材和用时筛选。", space_kind=None, space_id=None, space_name=None, slot_id=None, slot_name=None),
 ]
+
+if os.environ.get("MOCK_NEXT_SUGGESTIONS") == "1":  # see NEXT_SUGGESTIONS
+    for _s in SESSIONS:
+        if _s["session_id"] == ORDERS:
+            _s.update(status="idle", state="idle", activity=None, suggestion="好，改完跑一遍压测对比一下")
+        elif _s["session_id"] == REVIEW:
+            _s["suggestion"] = "按这两条建议改一下命名"
 
 # #2430 agent-details: what the node reads off a transcript for the "Show details on agent rows" line and the usage row
 # below the composer (#5056) — the model id as Claude Code records it, the latest reply's input tokens, the model's window.
@@ -1716,9 +1725,18 @@ if os.environ.get("MOCK_PERSONA_QUEUE") == "1":
     ASSISTANT[0].update({"state": "working", "status": "working", "queued_relayed": 1,
                          "queued": list(PERSONA_QUEUE_MESSAGES)})
 
+# MOCK_NEXT_SUGGESTIONS=1 (#4644, docs/assistant/assistant.md "Next-message suggestions"): the switch is on and sessions carry
+# the suggestion as the manager lists them: the main Persona chat and the Codex session (stopped) the suggest.next model's,
+# the PR review agent (Claude Code in a terminal) Claude Code's own, and the morning briefing chat a risky one
+# (suggestion_risky: filled in, no one-tap send).
+NEXT_SUGGESTIONS = os.environ.get("MOCK_NEXT_SUGGESTIONS") == "1"
+if NEXT_SUGGESTIONS:
+    ASSISTANT[0]["suggestion"] = "先处理第一件，其余两件下午再说"
+    ASSISTANT[1].update(suggestion="把会议纪要发给参会的人", suggestion_risky=True)
+
 # MOCK_ORIGINS=1 (#3264, docs/protocol/protocol.md "Origin of assistant chats"): conversations the hub opened by itself — the inbox's AI twin,
 # scheduled tasks, a Feishu /agent, one another conversation started — next to the user's own; one of them runs, one
-# waits for the user. The sidebar keeps them out of "Recent" under "Automatic conversations".
+# waits for the user. The sidebar's Recent lists them with the user's own, each with its origin's mark (#5195).
 if os.environ.get("MOCK_ORIGINS") == "1":
     ASSISTANT[1]["origin"], ASSISTANT[1]["origin_ref"] = "task", "morning"
     ASSISTANT[1]["title"] = "1106 | 定时 | 早报"
@@ -1842,7 +1860,7 @@ if os.environ.get("MOCK_ASSISTANT_SIDEBAR") == "1":
 # MOCK_AUTO_CONVERSATIONS=1 (#3264, docs/protocol/protocol.md "Origin of assistant chats"): the hub says who opened each assistant
 # conversation (`origin`, feature conversation_origin): the user's own say "user", and ten more were opened by Persona
 # itself: Inbox's AI twin (one waits for the user, one works), scheduled tasks, Lark /agent and one conversation another
-# started. The sidebar keeps those in "Automatic conversations"; the list of conversations filters them by source.
+# started. The sidebar's Recent lists them with the user's own, each with its source's mark (#5195); All Chats filters them by source.
 if os.environ.get("MOCK_AUTO_CONVERSATIONS") == "1":
     for _s in ASSISTANT:
         _s.setdefault("origin", "user")
@@ -2143,6 +2161,8 @@ ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "A
                     # supervised task reach its supervisor (#4293), off by default; closed sessions archive themselves
                     # after this many idle days (#3618), 0 is never. Left out with MOCK_LEGACY_HUB.
                     "agent_tasks": False, "inbox_signals": False, "archive_closed_days": 3,
+                    # The manager's next-message suggestions (#4644), off by default; MOCK_NEXT_SUGGESTIONS=1 starts on.
+                    "next_suggestions": os.environ.get("MOCK_NEXT_SUGGESTIONS") == "1",
                     # The main chat follows up its own tasks instead of the background supervisor (#4927), off by
                     # default. Left out with MOCK_LEGACY_HUB.
                     "main_supervises_own_tasks": False,
@@ -2175,7 +2195,7 @@ def assistant_state(space="", archived=False):
     if not os.environ.get("MOCK_LEGACY_HUB"):
         out.update(agent_tasks=cfg["agent_tasks"], inbox_signals=cfg["inbox_signals"], archive_closed_days=cfg["archive_closed_days"],
                    idle_close_hours=cfg["idle_close_hours"], kb_topics=cfg["kb_topics"],
-                   main_supervises_own_tasks=cfg["main_supervises_own_tasks"])
+                   main_supervises_own_tasks=cfg["main_supervises_own_tasks"], next_suggestions=cfg["next_suggestions"])
         if BACKGROUND_SUPERVISOR and not space:  # once the hub has made it (#4927)
             out.update(background_supervisor=BACKGROUND_SUPERVISOR, background_supervisor_machine_id=cfg["machine_id"])
     if cfg["notes"] is not None:
@@ -7150,6 +7170,35 @@ if os.environ.get("MOCK_SCREEN_DIALOG"):
                         {"key": "2", "label": "Yes, and don't ask again for git push commands in /Users/me/code/weather", "keys": ["2"]},
                         {"key": "3", "label": "No, and tell Claude what to do differently (esc)", "keys": ["3"]}]}})
 
+# MOCK_SCREEN_DANGER=before|after: Claude Code 2.1.322's safety check on a command (bypass mode, #5265 / #5266) with
+# its countdown, on the review agent. "before": as a hub before #5265 read it at a narrow width (the command missing,
+# the wrapped countdown in detail); "after": as a hub reads it now (command, description, the warning and what it is
+# about, the countdown and when it runs out, 1:44 from the mock's start).
+if os.environ.get("MOCK_SCREEN_DANGER") in ("before", "after"):
+    _danger_cmd = ('cd ./dist && F=(${(f)"$(grep -oE \'(src|href)="\\./assets/[^"]+\\.js"\' index.html | sed -E '
+                   '\'s/.*="\\.\\///; s/"$//\' | sort -u)"}); echo "${#F[@]} files"; for k in alpha_name beta_name gamma_name; '
+                   'do echo "$k: $(cat "${F[@]}" | grep -o "$k" | wc -l | xargs)"; done')
+    _danger_desc = "Count the example names in first-screen chunks"
+    _danger_warning = "Dangerous rm operation not ruled out — the shell may read this command differently than it was parsed"
+    _danger_deadline = "Claude Code will automatically block this request in 1:44, to avoid holding up an unattended session"
+    _danger = {"question": "Do you want to proceed?", "rev": "7c2e9a41d0b3", "options": [
+        {"key": "1", "label": "Yes", "keys": ["1"]}, {"key": "2", "label": "No", "keys": ["2"]}]}
+    if os.environ["MOCK_SCREEN_DANGER"] == "before":
+        _danger.update(detail="Bash command\n" + _danger_desc + "\n⚠ Claude Code will automatically block this request in\n"
+                       "1:44, to avoid holding up an unattended session",
+                       warning=_danger_cmd + " " + _danger_warning)
+    else:
+        _danger.update(detail="Bash command\n" + _danger_desc + "\n" + _danger_cmd, warning=_danger_warning,
+                       deadline=_danger_deadline, command=_danger_cmd, description=_danger_desc, risk="delete",
+                       deadline_action="deny",
+                       deadline_at=(datetime.now(timezone.utc) + timedelta(seconds=104)).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    INTERACTIONS.append(
+        {"id": "scr_macbook_review_7c2e9a41d0b3", "machine_id": "macbook", "session_id": REVIEW, "session_title": "检查 PR #42 的改动",
+         "cwd": "/Users/me/code/weather", "kind": "screen", "created_at": ago(minutes=1), "expires_at": later(hours=24),
+         "screen": " Bash command\n " + _danger_desc + "\n │ " + _danger_cmd + "\n │ " + _danger_warning + "\n ⚠ " + _danger_deadline
+                   + "\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n\n Esc to cancel · Tab to amend",
+         "dialog": _danger})
+
 # MOCK_SCREEN_MULTI=1: a multi-select AskUserQuestion read off the terminal (Claude Code 2.1.316), the second of
 # three questions: two boxes already ticked at the computer, a few words in its free-text field, "Next" to send it.
 # /mock/reset puts it back unanswered (MultiSelectCardTests: each case starts from the card).
@@ -8837,7 +8886,10 @@ if os.environ.get("MOCK_GITHUB") == "guide":  # a status with the steps to fix i
                         "capabilities": ["status", "hosts"], "hosts": ["github.com"]}
 # Feishu and mail as connectors (GET /api/v1/connectors?all=1, migration M6): the app draws them as their own rows.
 LEGACY_CONNECTORS = [{"id": "lark", "name": "飞书", "status": "ok", "capabilities": ["tools", "inbox", "archive"], "enabled": True},
-                     {"id": "mail", "name": "邮件", "status": "ok", "capabilities": ["tools", "actions", "inbox", "archive"], "enabled": True}]
+                     {"id": "mail", "name": "邮件", "status": "ok", "capabilities": ["tools", "actions", "archive"], "enabled": True,
+                      "archive": True, "inbox": True}]  # mail's Add to Inbox (#5307): MOCK_MAIL_INBOX=off starts it off
+if os.environ.get("MOCK_MAIL_INBOX") == "off":
+    LEGACY_CONNECTORS[1]["inbox"] = False
 
 # Telegram (the Telegram extension, #1704; docs/archive/extensions/plan-telegram.md): the user's own account, signed in from Settings › Connectors › Telegram a step at a time.
 # All made up: api_id 1234567 (a hash of 32 zeros is refused), any phone starting with +, the code 12345, the 2FA
@@ -10912,6 +10964,9 @@ LAUNCHER_PRESETS = [
 # provider out of a group of several), and POST /api/v1/launchers/import/parse (also in every mode) reads pasted text into
 # provider drafts with the hub's rules (parse_paste): shell aliases / exports / K=V lines, settings.json, a curl command,
 # cindy's custom providers. A draft on gw_full's address matches it, with the same key when it carries sk-example-gw.
+# With the feature launcher_auth_auto (#5329): a typed-in gateway's test and model list take `auth` "auto" (Bearer, then
+# x-api-key) and the test says which one worked; the methods the fake gateway takes come from its address (_gateway_takes).
+# With the feature launcher_import_link (#5420): the parse route also reads provider import links (_paste_link).
 MOCK_PROVIDERS = os.environ.get("MOCK_PROVIDERS") == "1"
 PROVIDER_LOG = {"post": None, "put": None, "test": [], "discover": [], "catalog": [], "import": None, "parse": []}
 PROVIDER_FIELDS = ("kind", "api", "base_url", "model", "small_model", "subagent_model", "custom_model", "custom_model_name",
@@ -10988,7 +11043,7 @@ if MOCK_PROVIDERS:
     _features_without_providers = features
 
     def features():
-        return _features_without_providers() + ["launcher_auto_name", "launcher_import_parse"]
+        return _features_without_providers() + ["launcher_auto_name", "launcher_import_parse", "launcher_auth_auto", "launcher_import_link"]
 
 
 # The hub's names for providers it names itself (server/internal/assistant/models_presets.go): the slug rule, the
@@ -11031,6 +11086,8 @@ def machine_launchers(mid=""):
     if os.environ.get("MOCK_MODEL_PANEL_USAGE"):
         out += [{"name": "cc_main", "model": "opus"}, {"name": "cc_team", "model": "example-pro"}]
     if NEW_AGENT_PANEL and mid == "studio":
+        out = [l for l in out if l["name"] != "codex"]
+    if mid and mid in os.environ.get("MOCK_NO_CODEX", "").split(","):  # computers without a Codex launcher (#5275)
         out = [l for l in out if l["name"] != "codex"]
     if MOCK_PROVIDERS:
         out += [{k: l[k] for k in ("name", "display_name", "base_url", "model", "source") if l.get(k)}
@@ -11488,10 +11545,244 @@ def _paste_cindy(data):
         models = [m for m in map(_cindy_model, ep.get("models") or c.get("models") or []) if m]
         p = {"kind": "launcher" if api == "messages" else "api", "agent": "claude" if api == "messages" else "", "api": api,
              "display_name": c.get("name"), "base_url": _messages_base(base) if api == "messages" else base,
-             "auth": "api_key" if api == "messages" else "bearer", "model": models[0]["id"] if models else "", "models": models}
+             # a gateway's header is the wizard's check to find (#5329): v1 does not say it; no sign-in, none
+             "auth": "" if api == "messages" or none else "bearer", "model": models[0]["id"] if models else "", "models": models}
         p["headers"], skipped = _paste_headers(ep["headers"].items() if isinstance(ep.get("headers"), dict) else [], True, api != "messages")
         key = "" if none else str(ep.get("apiKey") or auth.get("apiKey") or "")
-        drafts.append(_draft(p, key, ([_note("cindy_auth", name="none")] if none else []) + others, label=c.get("name"), skipped_headers=skipped))
+        # the endpoint's own request path, never named: the draft calls the API's usual one
+        path = [_note("cindy_request_path")] if isinstance(ep.get("requestPath"), str) and ep["requestPath"].strip() else []
+        drafts.append(_draft(p, key, path + ([_note("cindy_auth", name="none")] if none else []) + others, label=c.get("name"),
+                             skipped_headers=skipped))
+    return drafts, notes
+
+
+# Provider import links (#5420, the hub's models_import_link.go): cindy's cindy://provider/import?v=1&data=… and the web's
+# …#import=…[&v=1] carry one provider in cindy's v1 JSON, base64url-encoded. A link is checked as the hub checks it (the
+# parameters, the version, canonical base64url, UTF-8, the sizes, v1's fields and values) and read as a cindy paste;
+# a refused one answers one note naming at most a field's path, never a value.
+LINK_MOST, LINK_JSON_MOST = 32 << 10, 24 << 10
+LINK_FIELDS = {"builtin": ("kind", "provider", "apiKey"), "preset": ("kind", "preset", "apiKey"),
+               "custom": ("kind", "id", "name", "auth", "endpoints")}
+LINK_ANY_FIELDS = ("kind", "provider", "preset", "apiKey", "id", "name", "auth", "endpoints")
+LINK_AUTH_FIELDS = {"apiKey": ("method", "apiKey"), "none": ("method",),
+                    "authorization-code": ("method", "flow", "authorizeUrl", "tokenUrl", "clientId", "scopes", "modelsDiscoveryUrl",
+                                           "redirectPort", "extraAuthParams"),
+                    "device-code": ("method", "flow", "deviceAuthorizationUrl", "tokenUrl", "clientId", "scopes", "modelsDiscoveryUrl",
+                                    "extraDeviceParams")}
+LINK_ENDPOINT_FIELDS = ("protocol", "baseUrl", "targets", "models", "modelsUrl", "requestPath", "headers", "apiKey")
+LINK_MODEL_FIELDS = ("id", "name", "nativeApi", "mode", "modalities", "officialDocs", "description", "group", "contextWindow",
+                     "contextWindowMax", "maxOutputTokens", "efforts", "defaultEffort", "supportsFastMode", "supportsImageInput",
+                     "supportsToolCalls", "reasoningRequired", "defaultEnabled", "reasoning", "reasoningEfforts",
+                     "reasoningDefaultEffort", "discoveredMetadata")
+LINK_PROTOCOLS = ("anthropic-messages", "openai-responses", "openai-chat", "google-generative-ai")
+LINK_AGENTS, LINK_EFFORTS = ("claude-code", "codex", "pi"), ("minimal", "low", "medium", "high", "xhigh", "max")
+# how well a protocol serves an agent (any other: 10); two endpoints equally good for one agent leave it unsaid
+LINK_PRIORITY = {"claude-code": {"anthropic-messages": 100, "google-generative-ai": 30, "openai-chat": 20, "openai-responses": 10},
+                 "codex": {"openai-responses": 30, "openai-chat": 20}, "pi": {"openai-chat": 30, "openai-responses": 20}}
+LINK_KEY_PREFIXES = ("sk-", "ghp_", "gho_", "ghs_", "github_pat_", "xox", "AKIA", "AIza", "glpat-")  # never named
+LINK_CONTROL = re.compile(r"[\x00-\x08\x0a-\x1f\x7f]")  # what a header line can't hold (a tab it can)
+
+
+class LinkRefused(Exception):
+    """A link failing a check; args[0] is its one note."""
+
+
+def _link_bad(path=None, code="link_invalid"):
+    raise LinkRefused(_note(code, name=path))
+
+
+def _link_query(q):
+    """q read as URLSearchParams reads it ({name: [values]}), and whether a %-escape in it is broken (that breaks a link)."""
+    return parse_qs(q, keep_blank_values=True), bool(re.search(r"%(?![0-9A-Fa-f]{2})", q))
+
+
+def _link_data(q, key, need_v):
+    """A link's data: key once, v once (or, unless need_v, never) and nothing else, v being 1."""
+    params, broken = _link_query(q)
+    v = params.get("v", [])
+    if broken or len(params.get(key, [])) != 1 or len(v) > 1 or (need_v and not v) or set(params) - {key, "v"}: _link_bad()
+    if v and v[0] != "1": _link_bad(v[0] if re.fullmatch(r"[0-9]{1,4}", v[0]) else None, "link_version")
+    return params[key][0]
+
+
+def _js_len(s): return len(s.encode("utf-16-le")) // 2
+
+
+def _link_text(v, most):
+    """cindy's boundedString: a string, not blank, at most `most` long as JavaScript counts; trimmed (None when not)."""
+    return v.strip() if isinstance(v, str) and v.strip() and _js_len(v) <= most else None
+
+
+def _link_key(v, most):
+    s = _link_text(v, most)
+    return s is not None and not LINK_CONTROL.search(s)
+
+
+def _link_fields(obj, path, allowed):
+    """link_field on obj's first field (in key order) not allowed: named only when its key is a plain word, not a key."""
+    for k in sorted(obj):
+        if k not in allowed:
+            plain = re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]{0,63}", k) and not k.startswith(LINK_KEY_PREFIXES)
+            _link_bad((path + "." + k if path else k) if plain else None, "link_field")
+
+
+def _link_url(v):
+    """An endpoint's address as (scheme, host, port): absolute http(s), no user, query or fragment; None when not."""
+    raw = _link_text(v, 2048)
+    if raw is None or re.search(r"[?#]", raw) or _url_user(raw): return None
+    u = urlparse(raw)
+    try: port = u.port
+    except ValueError: return None
+    if u.scheme not in ("http", "https") or not u.hostname: return None
+    return u.scheme, u.hostname, port or {"http": 80, "https": 443}[u.scheme]
+
+
+def _link_loopback(origin):
+    return origin[1] in ("localhost", "::1") or bool(re.fullmatch(r"127(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}", origin[1]))
+
+
+def _link_model(m, path):
+    """One model's checks; its id."""
+    if isinstance(m, str):
+        if _link_text(m, 256) is None: _link_bad(path)
+        return m.strip()
+    if not isinstance(m, dict): _link_bad(path)
+    _link_fields(m, path, LINK_MODEL_FIELDS)
+    if _link_text(m.get("id"), 256) is None: _link_bad(path + ".id")
+    if "name" in m and _link_text(m["name"], 256) is None: _link_bad(path + ".name")
+    w = m.get("contextWindow")
+    if "contextWindow" in m and (isinstance(w, bool) or not isinstance(w, (int, float)) or not math.isfinite(w) or w <= 0 or w != int(w)):
+        _link_bad(path + ".contextWindow")
+    for f in ("defaultEnabled", "supportsImageInput", "reasoning"):
+        if f in m and not isinstance(m[f], bool): _link_bad(path + "." + f)
+    if m.get("reasoning") is not True:  # thinking levels belong to a model that thinks
+        for f in ("reasoningEfforts", "reasoningDefaultEffort"):
+            if f in m: _link_bad(path + "." + f)
+        return m["id"].strip()
+    efforts = m.get("reasoningEfforts", [])
+    if not isinstance(efforts, list) or any(e not in LINK_EFFORTS for e in efforts) or len(set(efforts)) != len(efforts):
+        _link_bad(path + ".reasoningEfforts")
+    if "reasoningDefaultEffort" in m and m["reasoningDefaultEffort"] not in efforts: _link_bad(path + ".reasoningDefaultEffort")
+    return m["id"].strip()
+
+
+def _link_endpoint(e, path):
+    """One endpoint's checks, in cindy's order; what the provider's checks need of it."""
+    if not isinstance(e, dict): _link_bad(path)
+    _link_fields(e, path, LINK_ENDPOINT_FIELDS)
+    if e.get("protocol") not in LINK_PROTOCOLS: _link_bad(path + ".protocol")
+    t = e.get("targets")
+    if "targets" in e and (not isinstance(t, list) or not t or any(x not in LINK_AGENTS for x in t) or len(set(t)) != len(t)):
+        _link_bad(path + ".targets")
+    models = e.get("models")
+    if models is not None:
+        if not isinstance(models, list) or len(models) > 256: _link_bad(path + ".models")
+        ids = [_link_model(m, "%s.models[%d]" % (path, i)) for i, m in enumerate(models)]
+        if len(set(ids)) != len(ids): _link_bad(path + ".models")
+    p = _link_text(e.get("requestPath"), 256)
+    if "requestPath" in e and (p is None or not p.startswith("/") or p.startswith("//") or re.search(r"[?#\s]", p)):
+        _link_bad(path + ".requestPath")
+    if "apiKey" in e and not _link_key(e["apiKey"], 4096): _link_bad(path + ".apiKey")
+    base = _link_url(e.get("baseUrl"))
+    if base is None: _link_bad(path + ".baseUrl")
+    if "modelsUrl" in e and _link_url(e["modelsUrl"]) != base: _link_bad(path + ".modelsUrl")  # the same origin
+    h = e.get("headers")
+    if "headers" in e and (not isinstance(h, dict) or not 0 < len(h) <= 24 or any(
+            not re.fullmatch(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]{1,128}", k) or not isinstance(v, str) or _js_len(v) > 2048 or LINK_CONTROL.search(v)
+            for k, v in h.items())):
+        _link_bad(path + ".headers")
+    return {"protocol": e["protocol"], "targets": t, "base": base, "apiKey": "apiKey" in e, "headers": "headers" in e}
+
+
+def _link_serves(e, method):
+    """The agents an endpoint serves: its targets, else its protocol's (with OAuth, pi none)."""
+    if e["targets"]: return e["targets"]
+    agents = LINK_AGENTS if e["protocol"] in ("anthropic-messages", "google-generative-ai") else ("codex", "pi")
+    return [a for a in agents if method != "oauth" or a != "pi"]
+
+
+def _link_custom(c):
+    if _link_text(c.get("name"), 60) is None: _link_bad("name")
+    if "id" in c and not re.fullmatch(r"[a-z0-9_-]{1,40}", _link_text(c["id"], 40) or ""): _link_bad("id")
+    method = "apiKey"
+    if "auth" in c:
+        auth = c["auth"]
+        if not isinstance(auth, dict): _link_bad("auth")
+        method = auth.get("method")
+        if method not in ("apiKey", "none", "oauth"): _link_bad("auth.method")
+        fields = method
+        if method == "oauth":
+            fields = "authorization-code" if auth.get("flow") is None else auth["flow"]
+            if fields not in ("authorization-code", "device-code"): _link_bad("auth.flow")
+        _link_fields(auth, "auth", LINK_AUTH_FIELDS[fields])
+        if "apiKey" in auth and not _link_key(auth["apiKey"], 4096): _link_bad("auth.apiKey")
+    eps = c.get("endpoints")
+    if not isinstance(eps, list) or not 0 < len(eps) <= 8: _link_bad("endpoints")
+    eps = [_link_endpoint(e, "endpoints[%d]" % i) for i, e in enumerate(eps)]
+    # with no key, a link could send the prompts anywhere (a modelsUrl is on its baseUrl's host)
+    if method == "none" and any(not _link_loopback(e["base"]) for e in eps): _link_bad("auth")
+    for i, e in enumerate(eps):
+        for f in ("apiKey", "headers"):
+            if method != "apiKey" and e[f]: _link_bad("endpoints[%d].%s" % (i, f))
+    for i, e in enumerate(eps):
+        if method == "oauth" and "pi" in (e["targets"] or ()): _link_bad("endpoints[%d].targets" % i)
+    for agent in LINK_AGENTS:
+        ranks = sorted((LINK_PRIORITY[agent].get(e["protocol"], 10) for e in eps if agent in _link_serves(e, method)), reverse=True)
+        if len(ranks) > 1 and ranks[0] == ranks[1]: _link_bad("endpoints")
+
+
+def _link_check(obj):
+    """v1's rules for a link's JSON object (the first failure raises LinkRefused)."""
+    kind = obj.get("kind") if isinstance(obj.get("kind"), str) else None
+    _link_fields(obj, "", LINK_FIELDS.get(kind, LINK_ANY_FIELDS))
+    if kind == "builtin":
+        if obj.get("provider") not in ("gemini", "openai-images"): _link_bad("provider")
+        if not _link_key(obj.get("apiKey"), 1024): _link_bad("apiKey")
+    elif kind == "preset":
+        if _link_text(obj.get("preset"), 128) is None: _link_bad("preset")
+        if not _link_key(obj.get("apiKey"), 4096): _link_bad("apiKey")
+    elif kind == "custom": _link_custom(obj)
+    else: _link_bad("kind")
+
+
+def _link_payload(data):
+    """A link's data decoded (canonical base64url of UTF-8 JSON) and checked: the JSON object."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", data) or len(data) % 4 == 1: _link_bad()
+    b = base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))
+    if base64.urlsafe_b64encode(b).decode().rstrip("=") != data: _link_bad()  # stray bits
+    if len(b) > LINK_JSON_MOST: _link_bad(code="link_too_long")
+    try: obj = json.loads(b.decode("utf-8"))
+    except ValueError: _link_bad()  # UnicodeDecodeError is a ValueError
+    if not isinstance(obj, dict): _link_bad()
+    _link_check(obj)
+    return obj
+
+
+def _paste_link(t):
+    """(drafts, notes) of an import link (t trimmed), None when t is no link: one word, cindy:// or an http(s) address
+    whose fragment has import. A link going on after a blank is one a chat app broke: refused whole."""
+    word = re.split(r"\s", t, maxsplit=1)[0]
+    head = word[:8].lower()
+    if not head.startswith(("cindy://", "http://", "https://")): return None
+    cindy = head.startswith("cindy://")
+    part = word[len("cindy://"):] if cindy else word.partition("#")[2]  # what follows cindy://, a web link's fragment
+    if not cindy and "import" not in _link_query(part)[0]: return None
+    try:
+        if word != t: _link_bad()  # which part of a broken link is its data is unknown
+        if len(part.encode()) > LINK_MOST: _link_bad(code="link_too_long")
+        if cindy:
+            path, sep, q = part.partition("?")
+            if not sep or path != "provider/import" or "#" in part: _link_bad()
+            data = _link_data(q, "data", True)
+        else:
+            data = _link_data(part, "import", False)
+        obj = _link_payload(data)
+    except LinkRefused as refused:
+        return [], [refused.args[0]]
+    drafts, notes = _paste_cindy(obj)
+    eps = obj.get("endpoints") if isinstance(obj.get("endpoints"), list) else []
+    if "apiKey" not in (obj.get("auth") or {}) and not any("apiKey" in e for e in eps):  # the usual link: whoever opens it types a key
+        for d in drafts: d["notes"] = [n for n in d["notes"] if n["code"] != "no_key"]
     return drafts, notes
 
 
@@ -11509,7 +11800,9 @@ def _paste_lines(text):
 
 
 def _paste_read(text):
-    """(format, drafts, notes): JSON as cindy's or settings.json, a curl command, else shell lines."""
+    """(format, drafts, notes): an import link, JSON as cindy's or settings.json, a curl command, else shell lines."""
+    link = _paste_link(text.strip())
+    if link is not None: return ("link", *link)
     if text.strip().startswith(("{", "[")):
         try: data = json.loads(text)
         except ValueError: return "", [], [_note("invalid_json")]
@@ -11593,6 +11886,50 @@ def _catalog_route(h, body):
     h.send_json({"models": out})
 
 
+# A probe's `auth` (#5329): "" (what is stored for `name`, else both headers as older clients get), a method, or "auto".
+PROBE_AUTHS = ("", "api_key", "bearer", "auto")
+
+
+def _gateway_takes(base_url):
+    """The sign-in methods the fake gateway at this address takes: only x-api-key with "xapikey" in it, only Bearer with
+    "bearer-only", else both."""
+    u = base_url or ""
+    if "xapikey" in u: return ("api_key",)
+    if "bearer-only" in u: return ("bearer",)
+    return ("bearer", "api_key")
+
+
+def _probe_signed_in(b):
+    """Whether the fake gateway takes a typed-in gateway's probe, and the method "auto" found: the hub's probeTarget picks
+    the headers (Responses and Chat Completions Bearer only; a method as asked; "" what `name` stores, else both), and
+    "auto" sends Bearer, then x-api-key once that is refused. (ok, method or None)."""
+    auth = b.get("auth") or ""
+    takes = _gateway_takes(b.get("base_url"))
+    stored = next((x for x in LAUNCHERS if b.get("name") and x["name"] == b.get("name")), None)
+    # the stored key goes only to the stored address (the hub's probeTarget)
+    keyed = b.get("api_key") or (stored and stored.get("has_key") and
+                                 (b.get("base_url") or "").rstrip("/") in ("", (stored.get("base_url") or "").rstrip("/")))
+    if b.get("api") in ("responses", "chat"):
+        sent = ("bearer",)
+    elif auth == "auto" and keyed:  # no key, no header: nothing to find
+        found = next((m for m in ("bearer", "api_key") if m in takes), None)
+        return bool(found), found
+    elif auth and auth != "auto":
+        sent = (auth,)
+    elif stored and not auth:
+        sent = ("bearer",) if stored.get("auth") == "bearer" else ("api_key",)
+    else:
+        sent = ("bearer", "api_key")
+    return any(m in takes for m in sent), None
+
+
+def _hub_text(h, key):
+    """The hub's text for key in the request's language (its own catalogs, server/internal/i18n)."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import readiness_mock
+    return readiness_mock.t(readiness_mock.lang_of(h.headers.get("Accept-Language", "")), key)
+
+
 def providers_route(h, method, p, q, body):
     """The provider endpoints under MOCK_PROVIDERS; True when it answered. The import (import_route, parse_route) and the
     catalog lookup (_catalog_route) answer with or without MOCK_PROVIDERS, and so do a typed-in gateway's "Test connection"
@@ -11618,6 +11955,8 @@ def providers_route(h, method, p, q, body):
         if not isinstance(b, dict) or b.get("preset"): return False
     if p == "/api/v1/launchers/test" and method == "POST":
         PROVIDER_LOG["test"].append(_provider_redacted(b))
+        if (b.get("auth") or "") not in PROBE_AUTHS:
+            h.send_json({"ok": False, "ms": 0, "model": b.get("model", ""), "error": _hub_text(h, "assistant-models_launchers.err_auth")}); return True
         stored = next((x for x in LAUNCHERS if x["name"] == b.get("name")), None)
         if not b.get("api_key") and not (stored and stored.get("has_key")):
             h.send_json({"ok": False, "ms": 0, "model": b.get("model", ""), "error": "要填 API Key"}); return True
@@ -11626,11 +11965,20 @@ def providers_route(h, method, p, q, body):
         if BUILTIN_PRESETS and "region" in (b.get("api_key") or ""):  # Anthropic refusing the network's region (#4482), in the hub's words
             msg, code = readiness_mock.region_blocked(readiness_mock.lang_of(h.headers.get("Accept-Language", "")))
             h.send_json({"ok": False, "ms": 180, "model": b.get("model", ""), "error": msg, "code": code}); return True
-        h.send_json({"ok": True, "ms": 412, "model": b.get("model", "")}); return True
+        signed_in, found = _probe_signed_in(b)
+        if not signed_in:
+            h.send_json({"ok": False, "ms": 233, "model": b.get("model", ""), "error": _hub_text(h, "assistant-models_probe.status_401"), "code": "auth"}); return True
+        out = {"ok": True, "ms": 412, "model": b.get("model", "")}
+        if found: out["auth"] = found
+        h.send_json(out); return True
     if p == "/api/v1/launchers/discover" and method == "POST":
         PROVIDER_LOG["discover"].append(_provider_redacted(b))
+        if (b.get("auth") or "") not in PROBE_AUTHS:
+            h.send_json({"models": [], "error": _hub_text(h, "assistant-models_launchers.err_auth")}); return True
         if "bad" in (b.get("base_url") or ""):
             h.send_json({"models": [], "error": "网关没有 /v1/models", "code": "not_found"}); return True
+        if not _probe_signed_in(b)[0]:  # no method named back: only the test says what a launch needs
+            h.send_json({"models": [], "error": _hub_text(h, "assistant-models_probe.status_401"), "code": "auth"}); return True
         h.send_json({"models": PROVIDER_DISCOVERED}); return True
     if p == "/api/v1/launchers" and method == "POST" and not b.get("preset"):
         PROVIDER_LOG["post"] = _provider_redacted(b)
@@ -13330,6 +13678,10 @@ for attempt in 0..<3 {{
         _seq[0] += 1
         _x.update(seq=_seq[0], id=f"{uuid.UUID(int=_seq[0])}#0")
 
+# MOCK_FOLD_DELAY=<seconds>: opening a fold (its steps fetched by from_seq / through_seq) answers that late, as the hub
+# does over a phone's network: what the steps push in comes a moment after the tap, not in the same frame (#3757).
+FOLD_DELAY = float(os.environ.get("MOCK_FOLD_DELAY", "0"))
+
 # MOCK_RICH=1: a reply with a link in Chinese prose (full-width brackets right after it), a three-column table whose
 # last column is long Chinese text, and a seven-column table that cannot fit (RichReplyTests).
 RICH = "a1f3c2d4-0000-4000-8000-00000000000a"
@@ -13742,6 +14094,21 @@ def fold_changes(run):
     return out
 
 
+def fold_usage(run):
+    """transcript.FoldWork's Fold.Usage (#5426): the folded items' tokens summed per model and speed; a subagent's report
+    (an entry with an id) kept as it is, so the web still counts it once."""
+    sums, out = {}, []
+    for x in run:
+        for u in x.get("usage") or []:
+            if u.get("id"):
+                out.append(dict(u)); continue
+            key = (u.get("model", ""), bool(u.get("fast")))
+            have = sums.setdefault(key, {k: v for k, v in (("model", key[0]), ("fast", True if key[1] else None)) if v})
+            for k in ("in", "out", "cache_read", "cache_write", "cache_write_1h"):
+                if u.get(k): have[k] = have.get(k, 0) + u[k]
+    return list(sums.values()) + out
+
+
 def fold_work(items):
     """transcript.FoldWork: each run of tool calls (with their results) and thoughts becomes one fold item."""
     uses = {x.get("tool_use_id") for x in items if x["kind"] == "tool_use"}
@@ -13774,12 +14141,13 @@ def fold_work(items):
                     preview["full_size"] = max(latest.get("full_size", 0), len(preview["text"].encode()))
                     preview["text"] = preview["text"][:511] + "…"
                 narration["latest_thinking"] = preview
+            usage = fold_usage(run)
             out.append({"id": "fold:" + run[0]["id"], "seq": run[0]["seq"], "ts": run[0]["ts"], "role": "assistant", "kind": "fold",
                         "fold": {"items": len(run), "tools": sum(x["kind"] == "tool_use" for x in run),
                                  "thoughts": sum(x["kind"] == "thinking" and bool((x.get("text") or "").strip()) for x in run),
                                  "until": run[-1]["ts"], "through_seq": run[-1]["seq"], "through_id": run[-1]["id"],
                                  **({"tasks": tasks} if tasks else {}), **({"images": images} if images else {}), **narration,
-                                 "changes": fold_changes(run)}})
+                                 "changes": fold_changes(run), **({"usage": usage} if usage else {})}})
         i = j
     return out
 
@@ -17165,7 +17533,8 @@ def agent_live(step, n):
 
 
 # MOCK_TOOL_TURN=1 (#3005): an agent in the middle of a turn of shell calls with long outputs, a message of the user's
-# queued behind it, history above it. GET /mock/tool_turn?step=… moves it on one push at a time, as the hub pushes them:
+# queued behind it, twelve finished exchanges above it (each with a work line). GET /mock/tool_turn?step=… moves it on one
+# push at a time, as the hub pushes them:
 #   call     a new call starts (its tool_use alone: running)
 #   result   the running call's result lands
 #   answer   the agent's answer lands and the turn is over (the agent idle)
@@ -17211,11 +17580,16 @@ if TOOL_TURN:
                          "subs", 1, 0, "Find the PR that closed it", state_since=ago(minutes=7),
                          queued=["顺便看一下静音开关那条还缺什么"]))
     _earlier = []
-    for _q, _a in (("把收件箱的折叠改一下", "收件箱的折叠改好了：已处理的分组默认收起，网页和 iOS 都在里面。"),
-                   ("网页那边部署了吗", "部署了，网页已经是新版本，iOS 跟下次 TestFlight 走。")):
-        _earlier += [it("user", "text", 30, text=_q)] + tool("Bash", {"command": "git log --oneline -3", "description": "Recent commits"},
-                                                              "abc1234 fix(web): fold handled groups\nbcd2345 docs: inbox folds", 30) \
-            + [it("assistant", "text", 29, text=_a + "\n\n" + "\n".join("- 第 %d 项：已经核对过，没有遗留问题。" % _k for _k in range(1, 9)))]
+    # Ten older exchanges first, each with a work line of its own: work lines all the way back, to open one in the middle
+    # of the chat and at its oldest end (KeepTappedRowTests).
+    _asks = [("第 %d 处改动：顺便看一下这一块的写法有没有问题？" % _k, "看过了，第 %d 处没有问题，两处重复的判断已经合并。" % _k, 240 - _k * 20)
+             for _k in range(1, 11)]
+    _asks += [("把收件箱的折叠改一下", "收件箱的折叠改好了：已处理的分组默认收起，网页和 iOS 都在里面。", 30),
+              ("网页那边部署了吗", "部署了，网页已经是新版本，iOS 跟下次 TestFlight 走。", 30)]
+    for _q, _a, _m in _asks:
+        _earlier += [it("user", "text", _m, text=_q)] + tool("Bash", {"command": "git log --oneline -3", "description": "Recent commits"},
+                                                              "abc1234 fix(web): fold handled groups\nbcd2345 docs: inbox folds", _m) \
+            + [it("assistant", "text", _m - 1, text=_a + "\n\n" + "\n".join("- 第 %d 项：已经核对过，没有遗留问题。" % _k for _k in range(1, 9)))]
     ITEMS[TOOL_TURN_SID] = _earlier + [it("user", "text", 7, text="来源订阅的需求推进情况如何")]
     for _n in range(3):
         ITEMS[TOOL_TURN_SID] += list(tool_turn_call(_n))
@@ -19362,6 +19736,7 @@ VOICE_VOICES = {
 }
 # What --help lists after the options.
 MOCK_HELP = [
+    "MOCK_TURN_USAGE=1|multi|unpriced  What a finished exchange cost, after the reply's time: \"菜谱搜索按用时排序\" on Opus 5.5 (1), with a Sonnet 5.5 subagent (multi), or on Haiku 5.5 without a price (unpriced: its tokens); the main conversation's last exchange the same (#5426)",
     "MOCK_CF_ACCESS=<client id>:<client secret>  The hub behind Cloudflare Access: /api/ requests without those two CF-Access-Client-* headers get a 302 to an Access login (no token) or Access's 403 page (wrong token) (#3502)",
     "MOCK_KB_TOPICS=1  Knowledge base: five topics of knowledge points from the example projects and chats (Topics tab, a topic's page, the knowledge map)",
     "MOCK_KB_SELECTION=missing|future|fail  Settings › Knowledge selection: a hub from before it (404) / a document with a field clients don't know / a save the hub refuses (503)",
@@ -20569,6 +20944,7 @@ class H(BaseHTTPRequestHandler):
                 LOG.write("  items after_seq=%d\n" % a); LOG.flush()
                 return self.send_json({"items": lazy_images([x for x in items if x["seq"] > a]), "more_after": False, **span(items, a, max(a, last))})
             if "through_seq" in q:  # opening a fold
+                if FOLD_DELAY: time.sleep(FOLD_DELAY)
                 frm, thru = int(q.get("from_seq", ["0"])[0]), int(q["through_seq"][0])
                 inside = [x for x in items if frm <= x["seq"] <= thru]
                 out = {"items": lazy_images(inside[:1000]), "more": len(inside) > 1000}
@@ -21213,6 +21589,15 @@ class H(BaseHTTPRequestHandler):
             port = int(p.split("/")[6])
             if not port_listening(port): return self.send_json({"error": "nothing is listening on port %d" % port}, 404)
             return self.send_json({"port": port, "listening": True, "http": True})
+        if self.command == "PUT" and p == "/api/v1/connectors/mail/settings":  # mail's Add to Inbox (#5307)
+            body = json.loads(self.last_body or b"{}")
+            mail_c = LEGACY_CONNECTORS[1]
+            for feed in ("inbox", "archive"):
+                if feed in body:
+                    if not isinstance(body[feed], bool):
+                        return self.send_json({"error": feed + ": true or false"}, 400)
+                    mail_c[feed] = body[feed]
+            return self.send_json(mail_c)
         if self.command == "PUT" and p == "/api/v1/connectors/github/settings":  # GitHub's inbox options
             body = json.loads(self.last_body or b"{}")
             if "inbox" in body:  # "Send to inbox" (MOCK_GITHUB_EXTENSION), from the connector's page or the extension's
@@ -21984,6 +22369,8 @@ class H(BaseHTTPRequestHandler):
                 ASSISTANT_CONFIG["main_supervises_own_tasks"] = body["main_supervises_own_tasks"]
             if isinstance(body.get("kb_topics"), bool):
                 ASSISTANT_CONFIG["kb_topics"] = body["kb_topics"]
+            if isinstance(body.get("next_suggestions"), bool):
+                ASSISTANT_CONFIG["next_suggestions"] = body["next_suggestions"]
             if body.get("machine_id"):
                 if not any(m["id"] == body["machine_id"] for m in MACHINES):
                     return self.send_json({"error": "unknown machine"}, 400)
@@ -22922,7 +23309,7 @@ MOCK_HELP.append("MOCK_CHANNELS=1  设置 › 插件 › 渠道：App、飞书�
 MOCK_HELP.append("MOCK_EXCHANGES=1  主对话新布局的素材（#1666）：Persona 发给任务的长消息、任务带链接和证据的长汇报、督办消息")
 MOCK_HELP.append("MOCK_MARKDOWN=1  任务往来和回执里带 **粗体**、`代码`、标题的原话（#2363）：应渲染成 Markdown，不露标记")
 MOCK_HELP.append("MOCK_TASK_RENAMED=1  整理发布说明这个任务在回执写好后改了名：回执应显示新名字「写本周发布说明」（#3036）")
-MOCK_HELP.append("MOCK_AUTO_CONVERSATIONS=1  助手对话带来源 origin（feature conversation_origin）：另有 10 段自动对话（收件箱 6、定时任务 2、飞书 /agent、对话派生），侧边栏收进「自动对话」（#3264）")
+MOCK_HELP.append("MOCK_AUTO_CONVERSATIONS=1  助手对话带来源 origin（feature conversation_origin）：另有 10 段自动对话（收件箱 6、定时任务 2、飞书 /agent、对话派生），侧边栏「最近」和用户自己的一起列、带来源标记，「全部对话」按来源筛（#3264、#5195）")
 MOCK_HELP.append("MOCK_EXTERNAL=1  和 MOCK_AUTO_CONVERSATIONS=1 一起用：飞书 /agent 那段带上请求和上下文，另加一段别的扩展开的（origin extension），两段都是外部的（#3758）")
 MOCK_HELP.append("MOCK_BACKGROUND_SUPERVISOR=1  The hub's built-in background supervisor conversation exists (#4927): origin task with no origin_ref, "
                  "named by GET /api/v1/assistant as background_supervisor, and archiving it is refused. Without it the setting "
@@ -23262,7 +23649,12 @@ MOCK_HELP.append("MOCK_INBOX_ITEM_UI=1  （和 MOCK_EXTENSIONS=1 一起）收件
 # run of `live` pushes for it, one per MOCK_LIVE_STATUS_TICK seconds (default 1): thinking, "thought for 3s", tokens
 # growing, the verb changing, the count holding still for a tick; then `live: null` and the session goes idle (the
 # turn is over). Subscribing again once it is over starts another run (the session working again).
-LIVE_STATUS = os.environ.get("MOCK_LIVE_STATUS") == "1"
+# MOCK_LIVE_STATUS=steady (#5312): a long run instead (MOCK_LIVE_STATUS_TICKS, default 150) writing 40 to 60 tokens a
+# tick, counted to the hundred from 1k as Claude's line does, the count holding for six ticks in every thirty (a tool
+# running): the running bar's speed, its history card and the tokens while it pauses. Its time counts from the turn's
+# start (every run is the same turn) and its `at` is in whole seconds, as the node writes them.
+LIVE_STATUS_MODE = os.environ.get("MOCK_LIVE_STATUS", "")
+LIVE_STATUS = LIVE_STATUS_MODE in ("1", "steady")
 LIVE_STATUS_STATE = {"running": set(), "senders": set()}
 LIVE_STATUS_STEPS = [
     {"verb": "Frosting", "elapsed_s": 1, "thinking": True},
@@ -23275,6 +23667,17 @@ LIVE_STATUS_STEPS = [
     {"verb": "Moonwalking", "elapsed_s": 8, "tokens_down": 4800},
     {"verb": "Moonwalking", "elapsed_s": 9, "tokens_down": 22800},
 ]
+
+
+def live_status_steady(ticks):
+    """MOCK_LIVE_STATUS=steady: thinking for two ticks, then a steady count with a pause every thirty ticks."""
+    steps, tokens = [], 0
+    for i in range(1, ticks + 1):
+        if i > 2 and i % 30 not in range(20, 26):
+            tokens += 40 + (i * 37) % 21
+        shown = tokens if tokens < 1000 else int(round(tokens, -2))
+        steps.append({"verb": "Frosting", "elapsed_s": i, **({"tokens_down": shown} if shown else {}), **({"thinking": True} if i <= 2 else {})})
+    return steps
 
 
 def live_status_subscribe(send, mid, sid):
@@ -23296,11 +23699,22 @@ def live_status_subscribe(send, mid, sid):
     def run():
         import time
         tick = float(os.environ.get("MOCK_LIVE_STATUS_TICK", "1"))
-        s.update(status="working", state="working", state_since=utc_now(), updated_at=utc_now())
+        steady = LIVE_STATUS_MODE == "steady"
+        # steady: every run is the turn the session was in when the mock started, and the line counts from its start as
+        # Claude's does; its `at` is in whole seconds, as the node writes it
+        starts = LIVE_STATUS_STATE.setdefault("start", {})
+        if steady and sid not in starts:
+            since = s.get("state_since") if s.get("state") == "working" else None
+            starts[sid] = datetime.fromisoformat(since.replace("Z", "+00:00")).timestamp() if since else time.time()
+        since = datetime.fromtimestamp(starts[sid], timezone.utc).isoformat().replace("+00:00", "Z") if steady else utc_now()
+        s.update(status="working", state="working", state_since=since, updated_at=utc_now())
         push_machine(mid)
-        for step in LIVE_STATUS_STEPS:
+        steps = live_status_steady(int(os.environ.get("MOCK_LIVE_STATUS_TICKS", "150"))) if steady else LIVE_STATUS_STEPS
+        for step in steps:
             time.sleep(tick)
-            push({**step, "at": utc_now()})
+            if steady:
+                step = {**step, "elapsed_s": int(time.time() - starts[sid]), "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+            push({"at": utc_now(), **step})
         time.sleep(tick)
         push(None)
         s.update(status="idle", state="idle", state_since=utc_now(), updated_at=utc_now())
@@ -23309,12 +23723,13 @@ def live_status_subscribe(send, mid, sid):
     threading.Thread(target=run, daemon=True).start()
 
 
-MOCK_HELP.append("MOCK_LIVE_STATUS=1  Claude 会话的实时状态行（session_live，#1963）：声明了 session_live 的连接订阅后按 MOCK_LIVE_STATUS_TICK 秒（默认 1）一条推 live（思考中、thought for、token 增长、动词变化），最后推 null、会话变空闲；结束后再订阅会重来一轮")
+MOCK_HELP.append("MOCK_LIVE_STATUS=1|steady  Claude 会话的实时状态行（session_live，#1963）：声明了 session_live 的连接订阅后按 MOCK_LIVE_STATUS_TICK 秒（默认 1）一条推 live（思考中、thought for、token 增长、动词变化），最后推 null、会话变空闲；结束后再订阅会重来一轮。steady（#5312）：一轮更长（MOCK_LIVE_STATUS_TICKS 条，默认 150），每条多 40–60 个 token（过 1k 按百计，同 Claude 的显示），每 30 条停 6 条（像在跑工具），给运行状态栏的速度和速度历史截图；同时开着 MOCK_WORK_TIMELINE 时它的「思考中」推送不再发")
 
 
 def work_timeline_live(send, mid, sid):
-    """MOCK_WORK_TIMELINE: the two live sessions say they are thinking, every 5 s for 10 minutes or until the page goes."""
-    if sid not in (WORKTL, ASK1):
+    """MOCK_WORK_TIMELINE: the two live sessions say they are thinking, every 5 s for 10 minutes or until the page goes
+    (not with MOCK_LIVE_STATUS=steady, whose own run tells the weather Agent's state, #5312)."""
+    if sid not in (WORKTL, ASK1) or LIVE_STATUS_MODE == "steady":
         return
 
     def run():
@@ -23406,6 +23821,7 @@ if os.environ.get("MOCK_AGENT_PLANS") == "1":
         if _s["session_id"] == TESTS:
             _s["plan"] = {"done": 1, "total": 4, "at": ago(minutes=10)}
     MOCK_HELP.append("MOCK_AGENT_PLANS=1  小组件的 Agent 计划 3/5（在复现崩溃），网络层测试的 Agent 1/4（#5302）")
+MOCK_HELP.append("MOCK_BRANCH=1  macbook 上「给天气 App 加主屏幕小组件」的文件夹在 git 分支 feat/hourly-widget 上，聊天顶栏宽屏时显示它（#5421）")
 MOCK_HELP.append("MOCK_GOAL=1|stopped  macbook 上「给天气 App 加主屏幕小组件」有一个进行中的 goal（带最近一次检查的理由），「检查 PR #42 的改动」的 goal 已达成；stopped 时小组件那个 goal 用完了 token 预算（#2420）")
 
 # ---------- MOCK_EXTENSIONS: a hub from #1844 on (docs/extensions/extensions.md "Naming and compatibility") ----------
@@ -24569,6 +24985,238 @@ MOCK_HELP.append("MOCK_LAUNCHER_SWITCH=1|pending|refuse|pending,refuse  运行�
                  "sonnetcc 带模型回 409 switch_model_locked），换回自己的就清掉；下一条消息执行切换。pending：检查 PR 那个一开始就有待切换；"
                  "refuse：带切换的消息回 409 switch_busy。GET /mock/launcher_switch 看请求，?reset=1 复原")
 
+# Moving a running Agent between Claude Code and Codex (#5054, docs/protocol/protocol.md "Switching a running Agent to
+# another engine"): MOCK_ENGINE_SWITCH=1 advertises `engine_switch` and takes POST …/modes {launcher, from, model?,
+# effort?} with a launcher of the other engine (codex for the PR review, a Claude Code Agent; claude or sonnetcc for the
+# /orders one, a Codex Agent in a terminal, its launcher codex here): `pending_switch` with `agent` on the row, nothing
+# typed; the session's own launcher drops it; any other pick goes on to MOCK_LAUNCHER_SWITCH (combine both for a hub
+# that does both). The next message carrying it (`apply_switch`) moves the conversation: a new session of the target
+# engine (switching back: the earlier one, resumed) replaces the row, `engine_history` naming the stretches before it,
+# and its items get the handoff block (docs/protocol/protocol.md, the node's format) with the message, then a short
+# reply; the old session's items stay served (the chat stitches them). =pending: the PR review waits with a switch to
+# Codex; =done: "Add sign in with OAuth" went Claude Code -> Codex -> Claude Code (its live row the Claude session
+# resumed, the Codex stretch's items under ENGINE_DONE_CODEX); =refuse: a message carrying a switch is refused (409
+# switch_failed, delivered none) and the switch dropped. GET /mock/engine_switch: the picks and switches; ?reset=1
+# puts every row and its items back.
+ENGINE_SWITCH_MODE = os.environ.get("MOCK_ENGINE_SWITCH", "")
+ENGINE_SWITCH_LOG = []
+ENGINE_DONE_CLAUDE = "e5054000-0000-4000-8000-000000000001"
+ENGINE_DONE_CODEX = "019a5054-0000-7000-8000-000000000002"
+ENGINE_NAMES = {"claude": "Claude Code", "codex": "Codex"}
+ENGINE_ORIGINALS = []  # (index, row) as they were, for ?reset=1
+ENGINE_ITEMS = {}  # session -> its items as they were (None: it had none)
+
+
+def engine_now(ms=0):
+    """The time now (ago() counts from the mock's start): a switch's `until` and the items after it."""
+    return (datetime.now(timezone.utc) + timedelta(milliseconds=ms)).isoformat().replace("+00:00", "Z")
+
+
+def engine_esc(v):
+    return str(v).replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def engine_handoff_block(text, frm, to, model, resumed):
+    """The node's handoff block in front of the user's message (proto handoffBlock)."""
+    attrs = 'kind="engine-switch" title="Handoff" from="%s" to="%s"' % (engine_esc(frm), engine_esc(to))
+    if model: attrs += ' model="%s"' % engine_esc(model)
+    if resumed: attrs += ' resumed="1"'
+    return '<persona-context %s>\n%s\n</persona-context>\n\n' % (attrs, text)
+
+
+def engine_handoff_text(items, frm, to, delta):
+    """A handoff note shaped like the node's (prompts/agents/engine_handoff.md), from the stretch's items: the files it
+    changed and commands it ran, then its last words."""
+    a, b = ENGINE_NAMES.get(frm, frm), ENGINE_NAMES.get(to, to)
+    out = ["[Session handoff · internal context]",
+           ("You (%s) worked on this conversation before; it was handed over to the %s engine for a while, and now it is "
+            "switching back to you. Below is a record of what happened while you were away." % (b, a)) if delta else
+           ("This conversation was previously driven by the %s engine; from here on you (%s) continue it. Below is the "
+            "prior record of this conversation; continue naturally in the first person." % (a, b))]
+    files = [x["tool_input"]["file_path"] for x in items if x.get("kind") == "tool_use" and x.get("tool_name") in ("Edit", "Write") and (x.get("tool_input") or {}).get("file_path")]
+    commands = [x["tool_input"]["command"] for x in items if x.get("kind") == "tool_use" and x.get("tool_name") == "Bash" and (x.get("tool_input") or {}).get("command")]
+    if files or commands:
+        out += ["", "== Work ledger (auto-extracted) =="]
+        if files: out += ["Files changed:"] + ["- " + f for f in dict.fromkeys(files)]
+        if commands: out += ["Commands (most recent):"] + ["- " + c for c in commands[-3:]]
+    said = [x for x in items if x.get("kind") == "text" and x.get("role") in ("user", "assistant") and x.get("text")]
+    if said:
+        out += ["", "== Conversation while you were away ==" if delta else "== Recent conversation =="]
+        for x in said[-3:]:
+            text = re.sub(r"(?s)<persona-context .*?</persona-context>\s*", "", x["text"]).strip()
+            out += ["[User]" if x["role"] == "user" else "[Assistant]", text[:400]]
+    out += ["", "== End of handoff note; the user's new message follows =="]
+    return "\n".join(out)
+
+
+def engine_of_launcher(mid, name):
+    """The engine a launcher of the computer runs ("" when it has no such launcher)."""
+    listed = LAUNCHER_SWITCH_ALL if LAUNCHER_SWITCH_MODE else machine_launchers(mid)
+    l = next((x for x in listed if x["name"] == name), None)
+    if l is None: return ""
+    return l.get("agent") or LAUNCHER_MODELS.get(name, {}).get("agent") or "claude"
+
+
+def engine_default_model(launcher):
+    models = LAUNCHER_MODELS.get(launcher, {}).get("models") or [{}]
+    first = next((m for m in models if m.get("default")), models[0])
+    return first.get("resolved") or first.get("id") or ""
+
+
+def engine_row_for(s, sid, to, launcher, model, effort, history):
+    """`s` moved to engine `to`: the same conversation (title, place, terminal), the other engine's session."""
+    row = {k: v for k, v in s.items() if k not in ("pending_switch", "permission_mode", "can_fork", "effort", "context_tokens", "context_window",
+                                                   "codex_route", "codex_route_note", "activity", "activity_at", "efforts", "service_tiers")}
+    row.update(session_id=sid, agent=to, launcher=launcher, model=model, engine_history=history, status="idle", state="idle",
+               updated_at=engine_now(2), rev=(s.get("rev") or 0) + 1)
+    if effort: row["effort"] = effort
+    if to == "claude":
+        row.update(permission_mode="default", can_fork=True)
+        row.setdefault("effort", "high")
+    return row
+
+
+def engine_switch_carry(s, ps, text):
+    """The message carrying `ps` moves the conversation to ps.agent: the row replaced, the handoff in the new items."""
+    old, frm, to = s["session_id"], s.get("agent") or "claude", ps["agent"]
+    now = engine_now()
+    before = list(s.get("engine_history") or [])
+    history = before + [{"session_id": old, "agent": frm, "until": now}]
+    # the conversation ran on that engine before: its latest session of it is resumed with what happened meanwhile
+    earlier = next((l["session_id"] for l in reversed(before) if l["agent"] == to and l["session_id"] != old), None)
+    sid = earlier or str(uuid.uuid4())
+    since = next((l["until"] for l in reversed(before) if l["session_id"] == earlier), None) if earlier else None
+    stretch = [x for x in ITEMS.get(old, []) if not since or x["ts"] > since]
+    model = ps.get("model") or engine_default_model(ps["launcher"])
+    handoff = engine_handoff_text(stretch, frm, to, bool(earlier))
+    ENGINE_ITEMS.setdefault(sid, copy.deepcopy(ITEMS.get(sid)))
+    reply = ("Picking this up where we left off. I checked the workspace first and it matches, so I'll go on from there."
+             if not earlier else "Back on it. I read what changed while I was away and the workspace agrees, so I'll continue from there.")
+    # after `until`: the new stretch's window starts there
+    ITEMS[sid] = (ITEMS.get(sid, []) if earlier else []) + [
+        it("user", "text", 0, text=engine_handoff_block(handoff, frm, to, model, bool(earlier)) + (text or ""), ts=engine_now(1)),
+        it("assistant", "text", 0, text=reply, ts=engine_now(2))]
+    row = engine_row_for(s, sid, to, ps["launcher"], model, ps.get("effort"), history)
+    SESSIONS[SESSIONS.index(s)] = row
+    ENGINE_SWITCH_LOG.append({"switched": old, "to": sid, "agent": to, "resumed": bool(earlier)})
+    push_machine(s["machine_id"])
+
+
+def engine_switch_reset():
+    """Every row and its items as they were (the rows a switch made go)."""
+    ids = {row["session_id"] for _, row in ENGINE_ORIGINALS} | {e["to"] for e in ENGINE_SWITCH_LOG if "to" in e}
+    SESSIONS[:] = [x for x in SESSIONS if x["session_id"] not in ids]
+    for i, row in ENGINE_ORIGINALS:
+        SESSIONS.insert(min(i, len(SESSIONS)), copy.deepcopy(row))
+    for sid, items in ENGINE_ITEMS.items():
+        if items is None: ITEMS.pop(sid, None)
+        else: ITEMS[sid] = copy.deepcopy(items)
+    ENGINE_ITEMS.clear()
+    ENGINE_SWITCH_LOG.clear()
+
+
+def engine_switch_setup():
+    for i, x in enumerate(SESSIONS):
+        if x["session_id"] == ORDERS:
+            x["launcher"] = "codex"  # a Codex Agent started from the codex launcher
+        if x["session_id"] == REVIEW and "pending" in ENGINE_SWITCH_MODE:
+            x["pending_switch"] = {"launcher": "codex", "agent": "codex", "at": ago(minutes=2)}
+    if "done" in ENGINE_SWITCH_MODE:
+        t1, t2 = ago(minutes=50), ago(minutes=20)
+        first = ([it("user", "text", 70, text="Add sign in with OAuth to the weather app: GitHub first, keep the token in the keychain.")]
+                 + tool("Read", {"file_path": "/Users/me/code/weather/Sources/Weather/Auth/Session.swift"}, "struct Session { var token: String? }", 68)
+                 + tool("Edit", {"file_path": "/Users/me/code/weather/Sources/Weather/Auth/OAuth.swift", "old_string": "", "new_string": "enum OAuth { … }"}, "ok", 62)
+                 + [it("assistant", "text", 56, text="Sign in with GitHub works: the app opens the browser, takes the code back and keeps the token in the keychain.")])
+        handoff1 = engine_handoff_text(first, "claude", "codex", False)
+        middle = ([it("user", "text", 49, text=engine_handoff_block(handoff1, "claude", "codex", "gpt-5.5", False)
+                      + "Let's have Codex do the token refresh: an expired token should refresh without asking the user again.")]
+                  + tool("Bash", {"command": "rg -n refresh Sources/Weather/Auth"}, "Sources/Weather/Auth/OAuth.swift:41: // TODO refresh", 46)
+                  + tool("Edit", {"file_path": "/Users/me/code/weather/Sources/Weather/Auth/OAuth.swift", "old_string": "// TODO refresh", "new_string": "try await refresh()"}, "ok", 40)
+                  + tool("Bash", {"command": "swift test --filter OAuthTests"}, "Executed 6 tests, with 0 failures", 30)
+                  + [it("assistant", "text", 25, text="Expired tokens now refresh on their own before a request goes out; a refresh that fails signs the user out. The six OAuth tests pass.")])
+        handoff2 = engine_handoff_text(middle, "codex", "claude", True)
+        last = ([it("user", "text", 19, text=engine_handoff_block(handoff2, "codex", "claude", "opus", True)
+                    + "Looks good. Now add a Sign out button to Settings.")]
+                + tool("Edit", {"file_path": "/Users/me/code/weather/Sources/Weather/Settings/SettingsView.swift", "old_string": "Section {", "new_string": "Section {\n  Button(\"Sign Out\", role: .destructive) { session.signOut() }"}, "ok", 16)
+                + [it("assistant", "text", 14, text="Settings has a Sign Out button now; it clears the keychain token and goes back to the sign-in screen.")])
+        ITEMS[ENGINE_DONE_CLAUDE] = first + last
+        ITEMS[ENGINE_DONE_CODEX] = middle
+        SESSIONS.append(sess("macbook", ENGINE_DONE_CLAUDE, "Add sign in with OAuth", "/Users/me/code/weather", "idle", "idle", "weather", 1,
+                             "oauth", 5, 14, "Settings has a Sign Out button now; it clears the keychain token and goes back to the sign-in screen.",
+                             model="claude-opus-5-5", engine_history=[{"session_id": ENGINE_DONE_CLAUDE, "agent": "claude", "until": t1},
+                                                                     {"session_id": ENGINE_DONE_CODEX, "agent": "codex", "until": t2}]))
+    ENGINE_ORIGINALS[:] = [(i, copy.deepcopy(x)) for i, x in enumerate(SESSIONS) if x["session_id"] in (REVIEW, ORDERS, ENGINE_DONE_CLAUDE)]
+
+
+def engine_switch_route(handler, p, body):
+    """MOCK_ENGINE_SWITCH: a pick of the other engine's launcher, a message carrying it. False otherwise."""
+    if not ENGINE_SWITCH_MODE: return False
+    if p == "/mock/engine_switch":
+        if "reset=1" in (handler.path.split("?", 1) + [""])[1]:
+            engine_switch_reset()
+            for m in MACHINES: push_machine(m["id"])
+        return handler.send_json({"requests": ENGINE_SWITCH_LOG}) or True
+    m = re.fullmatch(r"/api/v1/sessions/([^/]+)/([^/]+)/(modes|messages)", p)
+    if not m or handler.command != "POST": return False
+    s = next((x for x in SESSIONS if x["machine_id"] == m.group(1) and x["session_id"] == m.group(2)), None)
+    if s is None: return False
+    req = json.loads(body or b"{}")
+    frm = s.get("agent") or "claude"
+    if m.group(3) == "messages":
+        ps = s.get("pending_switch")
+        if not ps or not ps.get("agent") or ps["agent"] == frm: return False
+        if "refuse" in ENGINE_SWITCH_MODE:
+            s.pop("pending_switch", None)
+            push_machine(s["machine_id"])
+            return handler.send_json({"error": "%s didn't come up in the Agent's terminal, so %s is back and your message wasn't sent"
+                                               % (ENGINE_NAMES.get(ps["agent"], ps["agent"]), ENGINE_NAMES.get(frm, frm)),
+                                      "code": "switch_failed", "delivered": "none"}, 409) or True
+        engine_switch_carry(s, ps, req.get("text") or "")
+        return False  # the message goes on as any other
+    launcher = req.get("launcher") or ""
+    if not launcher: return False
+    own = s.get("launcher") or "claude"
+    if req.get("from") and req["from"] != own:
+        return handler.send_json({"error": "The Agent runs on %s now, not %s: pick again" % (own, req["from"]), "code": "switch_stale"}, 409) or True
+    if launcher == own:
+        if (s.get("pending_switch") or {}).get("agent"):
+            ENGINE_SWITCH_LOG.append({"session_id": s["session_id"], "launcher": launcher})
+            s.pop("pending_switch", None)
+            push_machine(s["machine_id"])
+            return handler.send_json({}) or True
+        return False
+    to = engine_of_launcher(s["machine_id"], launcher)
+    if not to or to == frm: return False  # another launcher of its engine: MOCK_LAUNCHER_SWITCH's
+    ENGINE_SWITCH_LOG.append({"session_id": s["session_id"], **{k: req[k] for k in ("launcher", "from", "model", "effort") if k in req}})
+    s["pending_switch"] = {"launcher": launcher, **{k: req[k] for k in ("model", "effort") if req.get(k)}, "agent": to, "at": engine_now()}
+    push_machine(s["machine_id"])
+    return handler.send_json({}) or True
+
+
+if ENGINE_SWITCH_MODE:
+    engine_switch_setup()
+
+_plugins_route_without_engine_switch = plugins_route
+
+
+def plugins_route(handler, p, body):
+    return engine_switch_route(handler, p, body) or _plugins_route_without_engine_switch(handler, p, body)
+
+
+_features_without_engine_switch = features
+
+
+def features():
+    return _features_without_engine_switch() + (["engine_switch"] if ENGINE_SWITCH_MODE else [])
+
+
+MOCK_HELP.append("MOCK_ENGINE_SWITCH=1|pending|done|refuse  A running Agent moves between Claude Code and Codex (#5054): features list engine_switch; "
+                 "POST …/modes {launcher} with the other engine's launcher (codex for the PR review, claude for the /orders Codex Agent) records "
+                 "pending_switch with agent, the session's own launcher drops it; the next message replaces the row with the other engine's session "
+                 "(engine_history, a handoff block in its first item). pending: the PR review waits with a switch to Codex; done: \"Add sign in with "
+                 "OAuth\" went Claude Code -> Codex -> Claude Code; refuse: the message is refused (409 switch_failed). Combine with "
+                 "MOCK_LAUNCHER_SWITCH=1 for a hub that also switches launchers. GET /mock/engine_switch shows the requests, ?reset=1 restores")
+
 # Agent session archives (docs/protocol/protocol.md "Agent session archives"; web "Archived agents"): MOCK_AGENT_ARCHIVES=1
 # advertises archives and "Archive and close" (=archive: archives only, as behind an older manager), with two agents
 # already archived. Busy agents are refused (409 agent_busy) as the manager does; ?close=1 closes an open Claude agent
@@ -24742,6 +25390,65 @@ if MODEL_FALLBACK:
             if _s["session_id"] == _sid:
                 _s.update(model_fallback=dict(_refusal), turn_error=_error, turn_error_code="model_fallback_unavailable",
                           status="done", state="idle", last_text=_error, updated_at=ago(minutes=1.8))
+
+
+# MOCK_TURN_USAGE=1|multi|unpriced (#5426): what a finished exchange's model requests used (Item.usage as the node
+# attaches it: a Claude Code request's on the first item it wrote, a finished subagent's on its result with an `id`), so
+# the reply bar says what the exchange cost after the time. "菜谱搜索按用时排序" is an Agent session whose last exchange
+# ran on Opus 5.5 (1: "Worth $…" and its card), with a subagent on Sonnet 5.5 too (multi: the card lists each model's
+# cost), or on Haiku 5.5, which the catalog has no price for (unpriced: "… tokens" and the tooltip). Its run of work
+# folds, so fold_work sums those items' usage into fold.usage. The main conversation's last exchange ran on the same
+# models: "≈ $…" (1, multi with each model's share), nothing at all on Haiku (unpriced). A cost needs the catalog's
+# cache_write prices (server/internal/assistant/models_catalog.json); without them a turn that wrote to the cache
+# shows its tokens.
+MOCK_TURN_USAGE = os.environ.get("MOCK_TURN_USAGE", "")
+TURN_USAGE = "a1f3c2d4-0000-4000-8000-000000005426"
+
+
+def _usage(model, i, o, read, write=0, write1h=0, **kw):
+    u = {"model": model, "in": i, "out": o, "cache_read": read}
+    if write: u["cache_write"] = write
+    if write1h: u["cache_write_1h"] = write1h
+    return [dict(u, **kw)]
+
+
+def mock_turn_usage(mode):
+    model = "claude-haiku-5-5" if mode == "unpriced" else "claude-opus-5-5"
+    w = "/Users/me/code/recipes"
+    r = [it("user", "text", 31, text="搜索功能做好了吗？"), it("assistant", "text", 30.8, text="做好了，支持按食材和用时筛选。",
+                                                           usage=_usage(model, 4, 96, 0, 15_400, 15_400))]
+    r.append(it("user", "text", 28, text="结果再按用时从短到长排一下"))
+    r.append(it("assistant", "thinking", 27.9, text="先看看搜索结果是在哪里排序的。", usage=_usage(model, 3, 412, 18_240, 6_120)))
+    r += tool("Grep", {"pattern": "sort", "path": w + "/src"}, "src/search.ts:31:  return hits", 27.8)
+    r[-2]["usage"] = _usage(model, 1, 96, 24_360, 310)
+    r += tool("Read", {"file_path": w + "/src/search.ts"}, "export function search(q: Query) { … return hits }", 27.6)
+    r[-2]["usage"] = _usage(model, 1, 88, 24_670, 1_920)
+    r += tool("Edit", {"file_path": w + "/src/search.ts", "old_string": "return hits", "new_string": "return hits.sort(byTime)"}, "ok", 27.3)
+    r[-2]["usage"] = _usage(model, 1, 1_380, 26_590, 2_050)
+    if mode == "multi":
+        r += tool("Agent", {"description": "检查排序的边界情况", "subagent_type": "general-purpose",
+                            "prompt": "看看用时相同、缺少用时的菜谱排在哪里"},
+                  "用时相同的按收藏数排；缺少用时的排在最后。\nagentId: usagesort (use SendMessage with to: 'usagesort' to continue this agent)", 27)
+        r[-2]["usage"] = _usage(model, 1, 160, 28_640, 380)
+        r[-1].update(task={"kind": "agent", "status": "completed", "task_id": "usagesort", "tool_use_id": r[-2]["tool_use_id"]},
+                     usage=_usage("claude-sonnet-5-5", 14, 2_840, 61_200, 9_800, id="agent:usagesort"))
+    r.append(it("assistant", "text", 26.5, text="排好了：用时短的菜谱排在前面，同样用时的按收藏数，缺少用时的排在最后。",
+                usage=_usage(model, 1, 214, 28_960, 1_400)))
+    ITEMS[TURN_USAGE] = r
+    SESSIONS.append(sess("macbook", TURN_USAGE, "菜谱搜索按用时排序", w, "done", "read", "", 0, "", 0, 26.5, r[-1]["text"],
+                         space_kind=None, space_id=None, space_name=None, slot_id=None, slot_name=None))
+    # the main conversation's last exchange: each of its model requests on its first item, its subagent with multi
+    main = ITEMS.get(ASK1, [])
+    last = max((i for i, x in enumerate(main) if x["role"] == "user" and x["kind"] == "text"), default=-1)
+    replies = [x for x in main[last + 1:] if x["role"] == "assistant"]
+    for k, x in enumerate(replies):
+        x["usage"] = _usage(model, 2, 180 + 60 * k, 21_000 + 1_800 * k, 2_400 if k == 0 else 600)
+    if mode == "multi" and replies:
+        replies[-1]["usage"] = replies[-1]["usage"] + _usage("claude-sonnet-5-5", 9, 1_260, 30_400, 5_200, id="agent:mainhelper")
+
+
+if MOCK_TURN_USAGE in ("1", "multi", "unpriced"):
+    mock_turn_usage(MOCK_TURN_USAGE)
 
 
 if __name__ == "__main__":

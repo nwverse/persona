@@ -17,11 +17,12 @@ import (
 )
 
 // Reading a pasted provider configuration (#5193, docs/assistant/model-config.md): the provider wizard sends what the
-// user pasted, the manager reads it as shell lines, a Claude Code settings.json, a curl command or a cindy provider
-// import (models_import_formats.go), and answers drafts of POST /api/v1/launchers bodies with what each leaves out
-// and why, and the stored providers each would meet. Nothing is stored. The env is mapped as importing an alias maps
-// it (newImportGroup, importEnv). The text holds keys: it is never logged, and the answer carries none of its
-// secrets but the key itself (the user pasted it into the form it stays in).
+// user pasted, the manager reads it as shell lines, a Claude Code settings.json, a curl command, a cindy provider
+// import (models_import_formats.go) or a provider import link (models_import_link.go), and answers drafts of
+// POST /api/v1/launchers bodies with what each leaves out and why, and the stored providers each would meet. Nothing
+// is stored. The env is mapped as importing an alias maps it (newImportGroup, importEnv). The text holds keys: it is
+// never logged, and the answer carries none of its secrets but the key itself (the user pasted it into the form it
+// stays in).
 
 // What one paste answers at most: drafts (too_many beyond), notes in all (the top-level ones and every draft's),
 // variables and headers one draft names as left out; and what it reads at most: shell lines' claude launches and
@@ -37,25 +38,30 @@ const (
 // The codes of a paste's notes (clients localize them): a note carries names (an alias, a variable, a header, an
 // option, a protocol), never a value of the text.
 const (
-	noteUnrecognized  = "unrecognized"      // nothing in the text looks like a provider configuration
-	noteInvalidJSON   = "invalid_json"      // it starts like JSON but does not parse
-	noteLineUnused    = "line_unused"       // a shell line that is no comment, alias, export, assignment or claude command
-	noteNotClaude     = "not_claude"        // an alias or command that does not start Claude Code
-	noteNoGateway     = "no_gateway"        // Claude Code without ANTHROPIC_BASE_URL: its own sign-in, nothing to add
-	noteURLShell      = "url_shell"         // the address is a shell expansion: no draft
-	noteURLUser       = "url_user"          // the address carries a user name or password: no draft
-	noteURLQuery      = "url_query"         // the address carries a query or fragment (it may hold a key): no draft
-	noteKeyShell      = "key_shell"         // the key is a shell expansion: left out
-	noteNoKey         = "no_key"            // no key found: it is typed
-	noteKeyHelper     = "key_helper"        // settings.json's apiKeyHelper runs a command for the key
-	noteCurlOption    = "curl_option"       // a curl option not used
-	noteCurlPath      = "curl_path"         // a curl URL's path is no endpoint Persona knows
-	noteCindyKind     = "cindy_kind"        // a cindy preset or builtin provider
-	noteCindyAuth     = "cindy_auth"        // a cindy provider signing in with oauth (no draft) or none (no key)
-	noteCindyEndpoint = "cindy_endpoint"    // a cindy endpoint not imported
-	noteArgsLeftOut   = "args_left_out"     // the arguments look like they hold a secret or a setting's text: none kept
-	noteHeaderUnread  = "header_unreadable" // a header whose name is no plain token: left out, unnamed
-	noteTooMany       = "too_many"          // more than pasteMost drafts: the rest left out
+	noteUnrecognized  = "unrecognized"       // nothing in the text looks like a provider configuration
+	noteInvalidJSON   = "invalid_json"       // it starts like JSON but does not parse
+	noteLineUnused    = "line_unused"        // a shell line that is no comment, alias, export, assignment or claude command
+	noteNotClaude     = "not_claude"         // an alias or command that does not start Claude Code
+	noteNoGateway     = "no_gateway"         // Claude Code without ANTHROPIC_BASE_URL: its own sign-in, nothing to add
+	noteURLShell      = "url_shell"          // the address is a shell expansion: no draft
+	noteURLUser       = "url_user"           // the address carries a user name or password: no draft
+	noteURLQuery      = "url_query"          // the address carries a query or fragment (it may hold a key): no draft
+	noteKeyShell      = "key_shell"          // the key is a shell expansion: left out
+	noteNoKey         = "no_key"             // no key found: it is typed
+	noteKeyHelper     = "key_helper"         // settings.json's apiKeyHelper runs a command for the key
+	noteCurlOption    = "curl_option"        // a curl option not used
+	noteCurlPath      = "curl_path"          // a curl URL's path is no endpoint Persona knows
+	noteCindyKind     = "cindy_kind"         // a cindy preset or builtin provider
+	noteCindyAuth     = "cindy_auth"         // a cindy provider signing in with oauth (no draft) or none (no key)
+	noteCindyEndpoint = "cindy_endpoint"     // a cindy endpoint not imported
+	noteCindyPath     = "cindy_request_path" // a cindy endpoint's own request path: the draft calls the API's usual one
+	noteArgsLeftOut   = "args_left_out"      // the arguments look like they hold a secret or a setting's text: none kept
+	noteHeaderUnread  = "header_unreadable"  // a header whose name is no plain token: left out, unnamed
+	noteTooMany       = "too_many"           // more than pasteMost drafts: the rest left out
+	noteLinkInvalid   = "link_invalid"       // an import link damaged or breaking a v1 rule: nothing used (the field's path)
+	noteLinkVersion   = "link_version"       // an import link of another format version (named when a number)
+	noteLinkTooLong   = "link_too_long"      // an import link, or the JSON it carries, longer than cindy takes
+	noteLinkField     = "link_field"         // an import link with a field v1 does not define: nothing used (its path)
 )
 
 // pasteNote is something said about the pasted text or one draft: Line is 1-based, of the text with CRLF made LF.
@@ -165,12 +171,15 @@ func (res *pasteResult) note(code string, line int, name string) {
 	addNote(&res.Notes, pasteNote{Code: code, Line: line, Name: name})
 }
 
-// parsePaste reads text as what it looks like: JSON (starting with { or [) is a cindy import or a settings.json;
-// else a curl command when the first command line runs curl; else shell lines.
+// parsePaste reads text as what it looks like: an import link (models_import_link.go); JSON (starting with { or [),
+// a cindy import or a settings.json; else a curl command when the first command line runs curl; else shell lines.
 func parsePaste(text string) pasteResult {
 	text = strings.ReplaceAll(strings.TrimPrefix(text, "\uFEFF"), "\r\n", "\n")
 	var res pasteResult
-	if t := strings.TrimSpace(text); strings.HasPrefix(t, "{") || strings.HasPrefix(t, "[") {
+	t := strings.TrimSpace(text)
+	if link, ok := parseLink(t); ok {
+		res = link
+	} else if strings.HasPrefix(t, "{") || strings.HasPrefix(t, "[") {
 		res = parsePasteJSON([]byte(t))
 	} else {
 		lines := shellcmd.Lines(text)

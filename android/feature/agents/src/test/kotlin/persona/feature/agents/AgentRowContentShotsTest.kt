@@ -87,7 +87,7 @@ class AgentRowContentShotsTest {
         assertEquals("Needs you", row("Approve the migration").getOrNull(SemanticsProperties.StateDescription))
         val working = said("Fix the login bug")
         assertTrue(working.toString(), "To-do: Ship 1.2" in working)
-        assertTrue(working.toString(), "claude-sonnet-4-5" in working)
+        assertTrue(working.toString(), "Sonnet 4.5" in working)
         assertTrue(working.toString(), "app › login · MacBook" in working)
         assertTrue(working.toString(), "Terminal" in working)
         assertTrue("Notifications muted" in said("Side experiment"))
