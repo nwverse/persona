@@ -215,7 +215,7 @@ engine: the same pick, the same message that carries it out, the same time bound
 - **Picking**: `session.modes` with a launcher whose engine (`launcherModelsAgent`, after the checks that keep a word that
   is no launcher from being run) is the other one than the agent's is a switch to it (`planEngineSwitch`), kept as the
   pending switch with `agent` naming the engine. Checked: a Claude Code or Codex Agent in a terminal Persona drives
-  (`switchSessionOf` with Codex allowed: still not an assistant conversation, a runtime's or botmux's session, a Codex
+  (`switchSession` with `engine` set: still not an assistant conversation, a runtime's or botmux's session, a Codex
   thread an app-server or another program runs, an agent in a terminal only); its own launcher known, since a failed
   switch brings it back there (Claude Code: as above; Codex: its record's, which must still run Codex); its conversation's
   folder (Claude Code: `switchCwd`; Codex: its record's, else its rollout's `session_meta`); the launcher on the
@@ -235,12 +235,12 @@ engine: the same pick, the same message that carries it out, the same time bound
   (`switch_unsupported`) and the switch waits, since only text goes over; then the usual draft and dialog checks, the
   plan again, both handoffs (the whole conversation, and for a parked session only the stretches after its last one plus
   the current), a last look, the session listed as starting, Ctrl+C (`quitAgent`), and a wait for the shell
-  (`shellAfterQuitFor`: for a Codex, until no Codex CLI holds its rollout; an app-server keeping the thread loaded does
+  (`shellAfterQuit` for the engine: for a Codex, until no Codex CLI holds its rollout; an app-server keeping the thread loaded does
   not count). Then the to-do link of the pane (`persona_todo_ref`) is written as its `persona_from`, so the new session
   joins the same to-do, and the other engine starts in that shell (`startEngine`, the pane adopted as "Run Agent Here"
   does): the parked session resumed (`--resume <id>` and the message; `codex resume <id> -- <message>` through
   codex-start in its folder), else a fresh one (`--session-id`, the prompt typed once it is ready, `cd` first when the
-  shell is elsewhere; codex-start with `dir`). The start's prompt is `handoffBlock(...)` and the user's words; nothing is
+  shell is elsewhere; codex-start with `dir`). The start's prompt is the handoff block and the user's words (`handoffMessage`, template `prompts/agents/engine_handoff_message.md`); nothing is
   typed again. The permission mode goes where the other engine has it: plan both ways, bypassPermissions to Codex as
   its bypass flags, the rest is the launcher's.
 - **Records**: the start writes the new session's record with the conversation's history (`withEngineHistory`: the
@@ -264,6 +264,12 @@ engine: the same pick, the same message that carries it out, the same time bound
   hub's 7-minute wait for a message with `apply_switch`.
 - **Not carried over**: the reasoning, tool results and everything the handoff leaves out; the prompt cache (once); the
   ultracode switch, "allow for this session" rules, background work (it holds the switch back), photos.
+- **Known limits**: a Codex effort of `minimal` or `ultra` is refused when picked (a start takes Claude Code's levels and
+  `auto` only); the block names a model only when the pick or the launcher's list names one (the list's placeholder for a
+  launcher that names none is not shown); a switch whose connection goes away and then fails rolls its records back on
+  the old connection's Node only (`switchShare.keep` hands on what the switch wrote, not the rollback), which leaves a
+  started session that never came up with the history: it is not listed (no transcript), so nothing is hidden by it; on
+  a node without `engine_switch`, a pick of a launcher of any other agent reads "Update the node" (`hub/ultracode.go`).
 
 ## Session IDs and transcripts
 

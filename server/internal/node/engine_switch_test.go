@@ -569,3 +569,28 @@ func TestSwitchShareKeepsTheRecordOfTheSessionAnEngineSwitchStarts(t *testing.T)
 		t.Fatalf("the next Node has %+v (%v)", st, ok)
 	}
 }
+
+// The model a launcher names for itself goes into the handoff block for the apps to show: the list's placeholder for a
+// launcher that names none is not a model, so the block names none then.
+func TestLauncherDefaultModelSkipsThePlaceholder(t *testing.T) {
+	n, _ := testNode(t)
+	launcherCache.Lock()
+	oldAt, oldList := launcherCache.at, launcherCache.list
+	launcherCache.at = time.Now()
+	launcherCache.list = []proto.Launcher{{Name: "codex", Model: "默认", Agent: "codex"}, {Name: "cx", Model: "gpt-6", Agent: "codex"}} // i18n-ignore: the node's own placeholder
+	launcherCache.Unlock()
+	t.Cleanup(func() {
+		launcherCache.Lock()
+		launcherCache.at, launcherCache.list = oldAt, oldList
+		launcherCache.Unlock()
+	})
+	if got := n.launcherDefaultModel("codex"); got != "" {
+		t.Errorf("the placeholder came back as a model: %q", got)
+	}
+	if got := n.launcherDefaultModel("cx"); got != "gpt-6" {
+		t.Errorf("cx's own model = %q, want gpt-6", got)
+	}
+	if got := n.launcherDefaultModel("missing"); got != "" {
+		t.Errorf("a launcher not in the list named %q", got)
+	}
+}

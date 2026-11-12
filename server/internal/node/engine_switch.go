@@ -252,17 +252,23 @@ func (n *Node) checkEngineLauncher(ctx context.Context, launcher, to, model stri
 
 // launcherDefaultModel is the model launcher names for itself, as its list says ("" when it names none).
 func (n *Node) launcherDefaultModel(launcher string) string {
+	model := ""
 	if l, ok := n.managedLauncher(launcher); ok {
-		return l.Model
-	}
-	launcherCache.Lock()
-	defer launcherCache.Unlock()
-	for _, l := range launcherCache.list {
-		if l.Name == launcher {
-			return l.Model
+		model = l.Model
+	} else {
+		launcherCache.Lock()
+		for _, l := range launcherCache.list {
+			if l.Name == launcher {
+				model = l.Model
+				break
+			}
 		}
+		launcherCache.Unlock()
 	}
-	return ""
+	if !proto.ValidModelID(model) {
+		return "" // the list's placeholder for a launcher that names no model (launchers.go), not one to show
+	}
+	return model
 }
 
 // claudeParked says whether Claude Code session id, the conversation's earlier stretch, can be resumed through the
