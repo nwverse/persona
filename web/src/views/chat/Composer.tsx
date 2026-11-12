@@ -224,9 +224,9 @@ export const Composer = memo(function Composer({
   useEffect(() => { lastEscape.current = null; }, [draftKey, working, disabled, onEditLastMessage]);
   const box = useRef<HTMLDivElement>(null);
   // The box grows to six lines, then scrolls; the dock's CSS cap protects exceptionally short viewports.
-  // `grow` holds measured typography and overflow, shared by both widths; phones also offer Expand.
+  // Cache only the measured height cap and overflow, shared by both widths; phones also offer Expand.
   const compact = useMedia(COMPACT_COMPOSER);
-  const [grow, setGrow] = useState({ line: 0, pad: 0, over: false });
+  const [grow, setGrow] = useState({ cap: 0, over: false });
   const [expanded, setExpanded] = useState(false);
   // the caret to put back in the box when the full editor closes
   const collapsedSel = useRef<[number, number] | null>(null);
@@ -412,8 +412,9 @@ export const Composer = memo(function Composer({
     const css = getComputedStyle(el);
     const line = parseFloat(css.lineHeight) || 24;
     const pad = (parseFloat(css.paddingTop) || 0) + (parseFloat(css.paddingBottom) || 0);
+    const cap = COMPOSER_LINES * line + pad;
     const over = offersExpand(lineCount(h - pad, line), COMPOSER_LINES);
-    setGrow((g) => (g.line === line && g.pad === pad && g.over === over ? g : { line, pad, over }));
+    setGrow((g) => (g.cap === cap && g.over === over ? g : { cap, over }));
   }, [draft, compact, grow.over]);
   const showExpand = compact && grow.over && !disabled;
   useEffect(() => {
@@ -963,7 +964,7 @@ export const Composer = memo(function Composer({
           placeholder={pill && hasFinePointer() ? t("chat-composer.suggestion", { suggestion: pill }) : placeholder}
           aria-label={t("chat-composer.message")}
           title={hasFinePointer() ? (onEditLastMessage ? t("composer.history_hint_edit") : t("composer.history_hint")) : undefined}
-          style={{ maxHeight: `min(${COMPOSER_LINES * grow.line + grow.pad}px, ${INPUT_MAX})` }}
+          style={{ maxHeight: grow.cap ? `min(${grow.cap}px, ${INPUT_MAX})` : INPUT_MAX }}
           className={cx("min-h-6 w-full resize-none overflow-y-auto bg-transparent px-2 pt-1.5 text-[14px] leading-[21px] text-ink outline-none [@media(pointer:coarse)]:text-[16px] [@media(pointer:coarse)]:leading-[24px] [overflow-wrap:anywhere] placeholder:text-ink-3 disabled:opacity-50", showExpand && "pr-8")}
         />
         {showExpand && (
