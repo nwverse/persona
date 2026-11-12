@@ -337,6 +337,15 @@ For every component: use the design-system one, not a lookalike. Counts are appr
   sits in the composer's `trailing` slot, right before voice / Stop / Send, in an Agent chat and in a Persona chat
   (#5033; the new-chat page too), where the permission chip is the only chip on the left. The card is the `composer`
   container whose width sets the pill's modes ("Model pill and unified model panel" in 3.8).
+- Web `/` palette (#5325, `web/src/views/chat/SlashPalette.tsx`; cindy's slash command palette, followed at the owner's
+  request, 2026-11-12): a 320 px panel anchored at the composer's left edge above it (`rounded-xl`, `bg-surface`,
+  `shadow-overlay`, 6 px padding, at most 400 px or half the visible height, scrolling), 36 px rows (44 on touch) with
+  the command in 14 px `ink` (medium on the focused row, under the gliding `bg-hover` highlight) and its source in 12 px
+  `ink-3` on the right (none for Persona's own, the agent's name, an extension's name). The focused command's description
+  is a 280 px card (`rounded-xl`, `shadow-overlay`, 14 px padding; title 14 px medium, text 13 px / 1.5 `ink-2`, what it
+  types in `ink-3`) 8 px beside the panel, right or left, or a line under the rows when neither side has room. Empty:
+  **No matching commands**, 40 px, centered, `ink-3`. No key hint line. Ranking, keys and deviations: `docs/web/web.md`
+  ("Input (Prompt Bar)").
 - Editing state (web, #4503): editing the last message puts its words and quotes back into the box under a one-line bar at the box's top, above the context chips and quote bars. The bar has an accent pencil, **Editing last message** (`ink-2`, medium), a truncating hint (`ink-3`, precise pointers only) and a × with the quote bar's 24 px look. It is the only sign of the state, and the text field stays the same field. The irreversible step (the rewind) waits for an explicit send, which the bar's hint names. Esc or × leaves with nothing changed (`docs/web/web.md` "Pages", **Edit last message**).
 - Duplicates: four composer implementations exist (DS-19).
 
