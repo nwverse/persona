@@ -13,7 +13,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
@@ -156,8 +158,10 @@ class TaskRouteShotsTest {
         val composer = ChatComposerState()
         var style by mutableStateOf(AppStyle.Glass)
         var dark by mutableStateOf(false)
+        var focus: FocusManager? = null
         rule.mainClock.autoAdvance = false
         rule.setContent {
+            focus = LocalFocusManager.current
             val configuration = Configuration(LocalConfiguration.current).apply {
                 uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
                     if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
@@ -177,6 +181,8 @@ class TaskRouteShotsTest {
         for (s in AppStyle.entries) for (d in listOf(false, true)) {
             style = s; dark = d
             val suffix = "${s.name.lowercase()}-${if (d) "dark" else "light"}"
+            // Each pass starts with the composer at rest: the last pass's pick put the cursor back in it.
+            settle(); rule.runOnIdle { focus?.clearFocus(force = true) }
             // A task's Message set the route: the chip says so above the composer, the tray closed.
             tasks.setRoute("main", "task-release"); composer.value = TextFieldValue(); settle()
             shot("route-$suffix")
