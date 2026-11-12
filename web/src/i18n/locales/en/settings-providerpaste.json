@@ -1,6 +1,6 @@
 {
   "label": "Paste a configuration",
-  "hint": "A shell alias or export lines, a .env file, Claude Code's settings.json, a curl command or a provider's JSON. It's read when you stop typing, and nothing is saved until you press Save.",
+  "hint": "A shell alias or export lines, a .env file, Claude Code's settings.json, a curl command, a provider's JSON or an import link. It's read when you stop typing, and nothing is saved until you press Save.",
   "reading": "Reading…",
   "hub_old": "Couldn't read the text: the hub needs an update first. What you pasted is kept.",
   "read_failed": "Couldn't read the text: {error}. What you pasted is kept.",

@@ -1,6 +1,6 @@
 {
   "label": "粘贴配置",
-  "hint": "shell 里的 alias 或 export 行、.env 文件、Claude Code 的 settings.json、curl 命令或供应商的 JSON。停止输入后自动识别，点「保存」之前不会保存任何内容。",
+  "hint": "shell 里的 alias 或 export 行、.env 文件、Claude Code 的 settings.json、curl 命令、供应商的 JSON 或导入链接。停止输入后自动识别，点「保存」之前不会保存任何内容。",
   "reading": "正在识别…",
   "hub_old": "没能识别：hub 需要先更新。粘贴的内容已保留。",
   "read_failed": "没能识别：{error}。粘贴的内容已保留。",

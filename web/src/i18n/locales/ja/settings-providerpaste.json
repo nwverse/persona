@@ -1,6 +1,6 @@
 {
   "label": "設定を貼り付け",
-  "hint": "シェルのaliasやexportの行、.envファイル、Claude Codeのsettings.json、curlコマンド、プロバイダーのJSON。入力が止まると読み取ります。保存を押すまで何も保存されません。",
+  "hint": "シェルのaliasやexportの行、.envファイル、Claude Codeのsettings.json、curlコマンド、プロバイダーのJSON、インポートリンク。入力が止まると読み取ります。保存を押すまで何も保存されません。",
   "reading": "読み取り中…",
   "hub_old": "読み取れませんでした。先にハブを更新する必要があります。貼り付けた内容はそのままです。",
   "read_failed": "読み取れませんでした：{error}。貼り付けた内容はそのままです。",
