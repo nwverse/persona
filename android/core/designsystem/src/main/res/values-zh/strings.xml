@@ -8,6 +8,8 @@
     <string name="designsystem_status_unknown">未知</string>
     <string name="designsystem_status_waiting">待唤醒</string>
     <string name="designsystem_status_muted">已屏蔽</string>
+    <string name="designsystem_density_standard">标准</string>
+    <string name="designsystem_density_compact">紧凑</string>
     <string name="designsystem_style_glass">玻璃</string>
     <string name="designsystem_style_glass_summary">磨砂玻璃浮在状态光上，有事等你时泛起琥珀色</string>
     <string name="designsystem_style_brief">晨报</string>
@@ -74,6 +76,8 @@
         <item quantity="other">电脑离线，状态可能过时（%1$d 分钟前）</item>
     </plurals>
     <string name="designsystem_line_answering">正在回传你的选择…</string>
+    <string name="designsystem_message_sending">发送中</string>
+    <string name="designsystem_message_processing">处理中</string>
     <string name="designsystem_line_sending">正在发送…</string>
     <string name="designsystem_line_unconfirmed">上次操作结果待确认</string>
     <plurals name="designsystem_line_needs_you_count">

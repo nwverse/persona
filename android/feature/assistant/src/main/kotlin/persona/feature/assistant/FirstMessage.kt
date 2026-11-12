@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -62,7 +63,8 @@ internal fun FirstMessagePending(message: FirstMessage, contentPadding: PaddingV
             .testTag(if (message.failed) "assistant-first-failed" else "assistant-first-sending"),
             verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
             Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-                UserBubble(message.text)
+                // Sessions picked with @ go in front of the words as tags; the bubble shows the words.
+                UserBubble(remember(message.text) { persona.feature.chat.messageWords(message.text) })
                 if (message.failed) {
                     PendingBadge(PendingStatus.Refused, reason = message.reason)
                     Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {

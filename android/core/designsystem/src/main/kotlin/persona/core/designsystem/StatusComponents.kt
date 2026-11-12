@@ -131,7 +131,7 @@ fun JStatusMark(status: Status, modifier: Modifier = Modifier, animated: Boolean
 @Composable
 fun JStateLabel(text: String, status: Status, modifier: Modifier = Modifier, problem: Boolean = false) {
     val palette = PersonaTheme.palette
-    Row(modifier.semantics(mergeDescendants = true) {}, horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(modifier.semantics(mergeDescendants = true) {}, horizontalArrangement = Arrangement.spacedBy(6.dp.dense), verticalAlignment = Alignment.CenterVertically) {
         if (problem) JIcon(PhIcons.WarningCircle, null, size = 14.dp, tint = palette.danger.dot) else JStatusDot(status)
         Text(text, style = PersonaTheme.type.caption, color = if (problem) palette.danger.text else palette.ink2, maxLines = 1, softWrap = false,
             overflow = TextOverflow.Ellipsis)
@@ -171,11 +171,11 @@ fun PendingBadge(status: PendingStatus, modifier: Modifier = Modifier, reason: S
     val color = if (caution) palette.cautionText else palette.ink2
     val label = if (status == PendingStatus.Refused && !reason.isNullOrBlank()) stringResource(R.string.designsystem_pending_refused_reason, reason)
         else status.localizedLabel
-    val shape = RoundedCornerShape(if (PersonaTheme.style == AppStyle.Board) 4.dp else 8.dp)
+    val shape = RoundedCornerShape(if (PersonaTheme.style == AppStyle.Board) 4.dp else 8.dp.corner)
     Row(
         modifier.semantics(mergeDescendants = true) {}.clip(shape).background(palette.statusSurface)
-            .padding(horizontal = 8.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically,
+            .padding(horizontal = 8.dp.dense, vertical = 4.dp.dense),
+        horizontalArrangement = Arrangement.spacedBy(6.dp.dense), verticalAlignment = Alignment.CenterVertically,
     ) {
         if (status == PendingStatus.Sending || status == PendingStatus.Verifying) JSpinner(Modifier.size(14.dp), color = color, stroke = 1.8.dp)
         else JIcon(
@@ -186,7 +186,7 @@ fun PendingBadge(status: PendingStatus, modifier: Modifier = Modifier, reason: S
     }
 }
 
-enum class StatusLineKind { Ended, MachineOffline, Submitting, Unconfirmed, NeedsYou, Stopping, Working, Waiting }
+enum class StatusLineKind { Ended, MachineOffline, Submitting, Unconfirmed, NeedsYou, Stopping, Working, Waiting, Processing }
 
 data class StatusLineState(
     val ended: Boolean = false,
@@ -204,6 +204,8 @@ data class StatusLineState(
     val workDetail: String? = null,
     val waiting: Boolean = false,
     val waitingDetail: String? = null,
+    /** Hub receipt only: does not imply that a model or tool has started. */
+    val processing: Boolean = false,
 )
 
 /** Pages show [message] (`message.text()`, or [localizedText]) in their own language. */
@@ -223,7 +225,7 @@ fun resolveStatusLine(state: StatusLineState): StatusLineContent? = with(state) 
         ended || replaced -> line(StatusLineKind.Ended, Status.Offline, if (replaced) R.string.designsystem_line_replaced else R.string.designsystem_line_ended)
         machineOffline -> StatusLineContent(StatusLineKind.MachineOffline, Status.Offline,
             minutes?.let { UiText.Plural(R.plurals.designsystem_line_machine_offline_since, it) } ?: UiText.Res(R.string.designsystem_line_machine_offline))
-        submitting || answering -> line(StatusLineKind.Submitting, Status.Idle, if (answering) R.string.designsystem_line_answering else R.string.designsystem_line_sending)
+        submitting || answering -> line(StatusLineKind.Submitting, Status.Idle, if (answering) R.string.designsystem_line_answering else R.string.designsystem_message_sending)
         unconfirmed -> line(StatusLineKind.Unconfirmed, Status.Unknown, R.string.designsystem_line_unconfirmed)
         pendingRequests > 0 || blocked -> when {
             pendingRequests > 1 -> StatusLineContent(StatusLineKind.NeedsYou, Status.NeedsYou,
@@ -232,6 +234,7 @@ fun resolveStatusLine(state: StatusLineState): StatusLineContent? = with(state) 
             else -> line(StatusLineKind.NeedsYou, Status.NeedsYou, R.string.designsystem_line_needs_you)
         }
         stopping -> line(StatusLineKind.Stopping, Status.Working, R.string.designsystem_line_stopping)
+        processing -> line(StatusLineKind.Processing, Status.Idle, R.string.designsystem_message_processing)
         working -> if (detail != null) line(StatusLineKind.Working, Status.Working, R.string.designsystem_line_working_on, detail) else line(StatusLineKind.Working, Status.Working, R.string.designsystem_line_working)
         waiting -> waitingDetail?.takeIf { it.isNotBlank() }?.let { StatusLineContent(StatusLineKind.Waiting, Status.Waiting, UiText.Plain(it)) }
             ?: line(StatusLineKind.Waiting, Status.Waiting, R.string.designsystem_line_waiting)
@@ -269,23 +272,24 @@ fun StatusLine(
         else -> tone.text
     }
     val click = if (onClick != null && (line == null || line.actionable)) Modifier.clickable(role = Role.Button) { onClick(line?.kind ?: StatusLineKind.Waiting) } else Modifier
-    val shape = RoundedCornerShape(if (style == AppStyle.Board) 8.dp else 50.dp)
+    val shape = RoundedCornerShape(if (style == AppStyle.Board) 8.dp.corner else 50.dp)
     val frame = when (style) {
         AppStyle.Glass -> Modifier.clip(shape).background(palette.statusSurface).border(1.dp, palette.strokeBottom, shape)
         AppStyle.Brief -> Modifier.clip(shape)
         AppStyle.Board -> Modifier.clip(shape).background(palette.surface).border(1.dp, palette.line, shape)
     }
     Row(
-        modifier.fillMaxWidth().padding(horizontal = if (style == AppStyle.Brief) 6.dp else 10.dp, vertical = 4.dp).then(frame).then(click)
-            .heightIn(min = 40.dp).padding(horizontal = 12.dp, vertical = 8.dp)
+        modifier.fillMaxWidth().padding(horizontal = if (style == AppStyle.Brief) 6.dp.dense else 10.dp.dense, vertical = 4.dp.dense).then(frame).then(click)
+            .heightIn(min = 40.dp.row).padding(horizontal = 12.dp.dense, vertical = 8.dp.dense)
             .semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
-        horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp.dense), verticalAlignment = Alignment.CenterVertically,
     ) {
         if (line != null) {
             when {
                 caution -> JIcon(PhIcons.HourglassMedium, null, size = 16.dp, tint = color)
                 style == AppStyle.Brief && line.kind == StatusLineKind.NeedsYou -> Box(Modifier.size(10.dp).clip(CircleShape).background(palette.marker).border(1.5.dp, palette.ink, CircleShape))
-                style == AppStyle.Brief && (line.kind == StatusLineKind.Working || line.kind == StatusLineKind.Stopping) -> JSpinner(Modifier.size(14.dp), stroke = 1.8.dp)
+                line.kind in setOf(StatusLineKind.Submitting, StatusLineKind.Processing) ||
+                    (style == AppStyle.Brief && (line.kind == StatusLineKind.Working || line.kind == StatusLineKind.Stopping)) -> JSpinner(Modifier.size(14.dp), stroke = 1.8.dp)
                 style == AppStyle.Board -> JStatusMark(status, animated = line.kind == StatusLineKind.Working)
                 else -> JStatusDot(status, size = 8.dp)
             }

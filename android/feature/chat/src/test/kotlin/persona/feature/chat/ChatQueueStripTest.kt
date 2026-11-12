@@ -171,13 +171,16 @@ class ChatQueueStripTest {
         val context = "<persona-context kind=\"context\" title=\"Notes\">Keep [Image #9] literally</persona-context>"
         val words = "Check these screens $video\n$context"
         state.restoreQueued("[Image #1] [Image #2]\n\n\n$words\n<attached_images>\npath: /tmp/first.jpg\n/tmp/first.jpg\npath: /tmp/second screen.jpg\nnot a path\n</attached_images>")
-        assertEquals("Keep this draft\n$words", state.value.text)
+        // Its video comes back as a video already on the machine (iOS `VideoAttachments.restore`), not as its tag.
+        assertEquals("Keep this draft\nCheck these screens\n$context", state.value.text)
         assertEquals(state.value.text.length, state.value.selection.end)
         assertEquals(existing, state.attachments.first())
-        assertEquals(listOf("/tmp/original.jpg", "/tmp/first.jpg", "/tmp/second screen.jpg"), state.attachments.map { it.path })
+        assertEquals(listOf("/tmp/original.jpg", "/tmp/first.jpg", "/tmp/second screen.jpg", "/tmp/take 1.mov"), state.attachments.map { it.path })
+        assertTrue(state.attachments.last().video)
         assertTrue(state.attachments.all { it.uploadState == DraftUploadState.Uploaded })
         assertTrue(state.ready)
-        assertEquals("Keep this draft\n$words\n\n<attached_images>\n/tmp/original.jpg\n/tmp/first.jpg\n/tmp/second screen.jpg\n</attached_images>", state.message())
+        assertEquals("Keep this draft\nCheck these screens\n$context\n\n<persona-file kind=\"video\" path=\"/tmp/take 1.mov\" name=\"take 1.mov\" size=\"0\"/>" +
+            "\n\n<attached_images>\n/tmp/original.jpg\n/tmp/first.jpg\n/tmp/second screen.jpg\n</attached_images>", state.message())
     }
 
     @Test fun photoOnlyQueueStandInsAreNotRestoredAsUserWords() {

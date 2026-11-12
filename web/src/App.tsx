@@ -5,7 +5,7 @@ import { useCloseOnBack } from "./lib/back-close";
 import { SCRIM_FADE, useLingers } from "./lib/lingers";
 import { PageBoundary } from "./views/PageBoundary";
 import { PerAssistant } from "./views/PerAssistant";
-import { OverlayBoundary, useOpened } from "./views/LazyOverlay";
+import { lazyDialog, OverlayBoundary, useOpened } from "./views/LazyOverlay";
 import { navigationCrumb } from "./lib/error-reports";
 import { lazyPage, preloadPages } from "./lib/lazy-page";
 import { drawerA11y, focusBack, useDrawerDrag } from "./lib/drawer";
@@ -47,7 +47,7 @@ import type { WorkspaceTarget } from "./lib/workspace-target";
 import { ForwardHost } from "./views/chat/ForwardHost";
 import { onOpenNewAgent, type NewAgentPreset } from "./lib/new-agent";
 import { StartingAgent } from "./views/StartingAgent";
-import { ShortcutHelp } from "./views/ShortcutHelp";
+import { closeHelp, useHelpOpen } from "./lib/shortcut-help";
 import { closePalette, openPalette, usePalette } from "./lib/palette";
 import { sidebarRail, sidebarShown, useLayout } from "./lib/layout";
 import { SIDEBAR_LABEL, useShortcuts } from "./lib/use-shortcuts";
@@ -83,6 +83,11 @@ const TodosView = lazyPage(() => import("./views/Todos").then((m) => m.TodosView
 // Keep the shortcut palette warm. The new-agent dialog loads only when opened.
 const Palette = lazyPage(() => import("./views/Palette").then((m) => m.Palette), { idle: true });
 const NewAgent = lazyPage(() => import("./views/NewAgent").then((m) => m.NewAgent));
+const ShortcutHelpDialog = lazyDialog(() => import("./views/ShortcutHelp").then((m) => m.ShortcutHelp));
+// The keyboard opener stays in the eager shell even before this dialog's first load.
+function ShortcutHelp() {
+  return <ShortcutHelpDialog open={useHelpOpen()} onClose={closeHelp} />;
+}
 
 // A link with the hub's token (`?token=…` or `#token=…`) signs in without the form. The token leaves the address bar
 // before anything else runs (history, bookmarks, a copied link), and is traded for this browser's own one.
