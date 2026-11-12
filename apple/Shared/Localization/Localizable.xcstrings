@@ -69229,6 +69229,121 @@
         }
       }
     },
+    "The hub keeps only the reference and fetches the key from its provider when it's needed.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The hub keeps only the reference and fetches the key from its provider when it's needed."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ハブは参照だけを保存し、キーが必要になったときに提供元から取得します。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "hub 只保存引用，需要 Key 时再从它的提供方取。"
+          }
+        }
+      }
+    },
+    "The hub keeps only the reference and fetches the key from its provider when it's needed. The key is handed to the computer only at launch and never sent back to apps.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The hub keeps only the reference and fetches the key from its provider when it's needed. The key is handed to the computer only at launch and never sent back to apps."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ハブは参照だけを保存し、キーが必要になったときに提供元から取得します。キーは起動時にのみそのコンピューターへ渡され、クライアントには返されません。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "hub 只保存引用，需要 Key 时再从它的提供方取；启动时才交给那台电脑，不会返回到客户端。"
+          }
+        }
+      }
+    },
+    "Choose Bearer if the gateway only accepts Authorization: Bearer (ANTHROPIC_AUTH_TOKEN). The hub keeps only the reference and fetches the key from its provider when it's needed.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose Bearer if the gateway only accepts Authorization: Bearer (ANTHROPIC_AUTH_TOKEN). The hub keeps only the reference and fetches the key from its provider when it's needed."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ゲートウェイがAuthorization: Bearer（ANTHROPIC_AUTH_TOKEN）のみ受け付ける場合はBearerを選びます。ハブは参照だけを保存し、キーが必要になったときに提供元から取得します。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "网关只认 Authorization: Bearer（ANTHROPIC_AUTH_TOKEN）时选 Bearer。hub 只保存引用，需要 Key 时再从它的提供方取。"
+          }
+        }
+      }
+    },
+    "Enter an address compatible with the selected protocol. The hub keeps only the reference and fetches the key from its provider when it's needed.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter an address compatible with the selected protocol. The hub keeps only the reference and fetches the key from its provider when it's needed."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "選択したプロトコルに対応するアドレスを入力してください。ハブは参照だけを保存し、キーが必要になったときに提供元から取得します。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "填写所选协议兼容的地址。hub 只保存引用，需要 Key 时再从它的提供方取。"
+          }
+        }
+      }
+    },
+    "Enter an address compatible with the selected protocol. The hub keeps only the reference and fetches the key from its provider when it's needed. Choose Bearer if the gateway only accepts Authorization: Bearer (ANTHROPIC_AUTH_TOKEN).": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter an address compatible with the selected protocol. The hub keeps only the reference and fetches the key from its provider when it's needed. Choose Bearer if the gateway only accepts Authorization: Bearer (ANTHROPIC_AUTH_TOKEN)."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "選択したプロトコルに対応するアドレスを入力してください。ハブは参照だけを保存し、キーが必要になったときに提供元から取得します。ゲートウェイがAuthorization: Bearer（ANTHROPIC_AUTH_TOKEN）のみ受け付ける場合はBearerを選択してください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "填写所选协议兼容的地址。hub 只保存引用，需要 Key 时再从它的提供方取。网关只认 Authorization: Bearer（ANTHROPIC_AUTH_TOKEN）时选 Bearer。"
+          }
+        }
+      }
+    },
     "Its provider gives the value whenever this extension needs it. Persona keeps only the reference.": {
       "extractionState": "manual",
       "localizations": {
