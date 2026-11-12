@@ -131,7 +131,9 @@ private struct AnswerPartWords: View {
 /// before, as the chat stacks them (so it looks as the answer did whole, `AnswerPartsLookTests`), the pressed part
 /// marked for the lift to put it where it was (`MessageLift.part`). Lifted, it is a lazy stack: only the parts near the
 /// screen are laid out, the others as the copy scrolls to them (laying out all of a long report at once is the cost
-/// #4970 took out of the chat). To select its words it lays out all of them
+/// #4970 took out of the chat). Its first frame has the pressed part alone, the parts under it come in the next one
+/// (it is marked then, for the lift to place it): a frame lays out about one part, as lifting a part did. To select its
+/// words it lays out all of them
 /// (`MessageMenu.liftWhole`): the text view over them, laid out from the whole answer's text, follows every line.
 struct AnswerPartsLift: View {
     var item: Item
@@ -139,6 +141,8 @@ struct AnswerPartsLift: View {
     var message: String
     var pressed: Int
     @Environment(\.liftWhole) private var whole
+    /// The parts under the pressed one are there (from the frame after the first).
+    @State private var grown = false
 
     var body: some View {
         let parts = AnswerPartMemo.parts(item.text ?? "")
@@ -150,6 +154,7 @@ struct AnswerPartsLift: View {
             LazyVStack(alignment: .leading, spacing: 0) { rows(parts, whole: false) }
                 .scrollTargetLayout()
                 .markdownSoftBreakMode(.lineBreak)
+                .task { grown = true }
         }
     }
 
@@ -159,11 +164,13 @@ struct AnswerPartsLift: View {
                 .liftPressedPart(true, whole: true)
         }
         ForEach(parts.indices, id: \.self) { n in
-            let key = AnswerPartMemo.key(message, n)
-            let text = RowMemo.assistant(key) { _ in AssistantRowText(parts[n].text) }
-            AnswerPartWords(text: text, key: key, message: message)
-                .liftPressedPart(n == pressed, whole: whole)
-                .padding(.top, n == 0 ? 0 : parts[n].gap)
+            if whole || grown || n <= pressed { // those above it are out of sight above it: never laid out until scrolled to
+                let key = AnswerPartMemo.key(message, n)
+                let text = RowMemo.assistant(key) { _ in AssistantRowText(parts[n].text) }
+                AnswerPartWords(text: text, key: key, message: message)
+                    .liftPressedPart(n == pressed && (whole || grown), whole: whole)
+                    .padding(.top, n == 0 ? 0 : parts[n].gap)
+            }
         }
     }
 }

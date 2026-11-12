@@ -571,8 +571,11 @@ final class MessageLiftUITests: XCTestCase {
         let words = app.textViews["lift-text"]
         XCTAssertTrue(words.waitForExistence(timeout: 5), "a second long press did not select in place")
         XCTAssertTrue(menuItem("拷贝").waitForExistence(timeout: 3), "no edit menu:\n\(app.debugDescription)")
-        let after = lifted.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", Self.splitMiddle)).firstMatch.frame
-        XCTAssertLessThanOrEqual(abs(after.minY - before.minY), 2, "the words stayed where they were (\(before.minY) → \(after.minY))")
+        // Selecting, the copy's words are the text view's: its paragraph with the pressed line, where that line was.
+        let paragraph = words.textViews.matching(NSPredicate(format: "label BEGINSWITH %@", Self.splitMiddle)).firstMatch
+        XCTAssertTrue(paragraph.exists, "no paragraph with the pressed line:\n\(words.debugDescription)")
+        XCTAssertLessThanOrEqual(abs(paragraph.frame.minY - before.minY), 4,
+                                 "the words stayed where they were (\(before.minY) → \(paragraph.frame.minY))")
         XCTAssertTrue(isTheWholeSplitAnswer(words.value as? String ?? "", markdown: false), "the text view holds the whole answer")
         sleep(1)
         shot("split-second-press")
@@ -651,19 +654,24 @@ final class MessageLiftUITests: XCTestCase {
             a.lifetime = .keepAlways
             add(a)
         }
+        // Nothing is asked of the app's accessibility while frames are recorded: a snapshot of it is a test's own cost
+        // (the text view's table pictures were made PNGs for it, seconds on the main thread).
+        let f = text(near).frame
+        let at = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: f.midX, dy: f.midY))
         let lift = frames(reportHub, "report-lift") {
-            let e = text(near)
-            let f = e.frame
-            app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: f.midX, dy: f.midY)).press(forDuration: 0.8)
-            XCTAssertTrue(app.buttons["选择文本"].firstMatch.waitForExistence(timeout: 10), "no bar")
+            at.press(forDuration: 0.8)
+            sleep(2)
         }
         line("lift", lift)
+        XCTAssertTrue(app.buttons["选择文本"].firstMatch.waitForExistence(timeout: 10), "no bar")
         shot("report-lifted")
+        let selectText = app.buttons["选择文本"].firstMatch.frame
         let select = frames(reportHub, "report-select") {
-            app.buttons["选择文本"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85)).tap()
-            XCTAssertTrue(app.textViews["lift-text"].waitForExistence(timeout: 20), "选择文本 did not select in place")
+            app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: selectText.midX, dy: selectText.midY)).tap()
+            sleep(5)
         }
         line("select", select)
+        XCTAssertTrue(app.textViews["lift-text"].waitForExistence(timeout: 20), "选择文本 did not select in place")
         shot("report-selected")
         XCTAssertFalse(lift.isEmpty || select.isEmpty, "the app sent no frames")
     }

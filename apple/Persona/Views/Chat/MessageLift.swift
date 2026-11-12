@@ -57,6 +57,9 @@ struct MessageLift {
     /// (`liftPressedPart`), and the lift puts it where that part is. The copy lays out only the parts near the screen
     /// until its words are selected (`MessageMenu.liftWhole`, `AnswerPartsLift`).
     var part: Int? = nil
+
+    /// Which lift this is: another message, or another part of it, is lifted afresh.
+    var key: String { bar.id + "#" + (part.map(String.init) ?? "") }
 }
 
 /// Where the pressed part starts in the lifted copy of a message drawn in parts (`MessageLift.part`), and whether
@@ -529,6 +532,7 @@ struct MessageLiftLayer: View {
         if let lift = menu.lift {
             GeometryReader { geo in
                 LiftedMessage(lift: lift, menu: menu, space: geo.frame(in: .global))
+                    .id(lift.key) // a lift of its own: its measures and scroll start again
             }
             .ignoresSafeArea()
             .transition(.opacity)
