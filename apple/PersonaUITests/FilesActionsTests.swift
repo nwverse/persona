@@ -80,7 +80,9 @@ final class FilesActionsTests: XCTestCase {
         button(app, "新建文本文件", "＋ menu")
         shot(app, "new-menu-\(scheme)")
         app.buttons["新建文本文件"].firstMatch.tap()
-        let field = element(app, "files.new.field", "the name field")
+        // An alert's text field is the system's: found through the alert, not by an identifier set in SwiftUI.
+        let field = app.alerts.firstMatch.textFields.firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 8), "the name field:\n\(app.debugDescription)")
         field.tap()
         field.typeText(XCUIKeyboardKey.delete.rawValue)
         shot(app, "new-text-\(scheme)")
