@@ -452,6 +452,6 @@
     <string name="designsystem_core_always_scope_commands">この会話内のすべてのコマンド</string>
     <string name="designsystem_core_always_scope_read_directory">この会話中、このディレクトリ内のすべての読み取り</string>
     <string name="designsystem_core_always_scope_edit_directory">この会話中、このディレクトリ内のすべてのファイル編集</string>
-    <string name="designsystem_core_always_scope_tool">この会話内でのこのツールのすべての呼び出し</string>
+    <string name="designsystem_core_always_scope_tool">この会話のすべての「%1$s」呼び出し</string>
     <string name="designsystem_core_always_scope_approved">許可した範囲はこの会話中、引き続き許可されます</string>
 </resources>

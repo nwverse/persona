@@ -25,6 +25,7 @@
   "time": "Time",
   "copy_raw": "Copy raw text",
   "retry": "Retry",
+  "retry_title": "Continue the current task",
   "copy_field": "Copy {label}",
   "fix_it": "Fix it",
   "background_done": "Background round",

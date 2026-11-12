@@ -21,6 +21,7 @@
   "time": "時刻",
   "copy_raw": "原文をコピー",
   "retry": "再試行",
+  "retry_title": "現在のタスクを続行",
   "copy_field": "{label}をコピー",
   "fix_it": "直す",
   "background_done": "バックグラウンドのラウンド",

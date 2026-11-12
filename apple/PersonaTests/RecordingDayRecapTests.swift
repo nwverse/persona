@@ -226,7 +226,7 @@ private func listing(_ parts: [(UUID, String?)], final finalParts: Set<UUID> = [
         #expect(!content.isFinal)
         #expect(content.shareText == "# 2026-11-11\n…")
 
-        let spread = recap(entries: [(3 * 3600, "late morning"), (6 * 3600, "lunch"), (11 * 3600, "dinner")])
+        let spread = recap(entries: [(3.0 * 3600, "late morning"), (6.0 * 3600, "lunch"), (11.0 * 3600, "dinner")])
         let periods = RecordingDayRecapContent(parts: [.init(recap: spread, startedAt: dayStart)], zone: shanghai).sections
         // 11:02 is the morning, 14:02 the afternoon, 19:02 the evening.
         #expect(periods.map(\.period) == [.morning, .afternoon, .evening])
@@ -243,8 +243,8 @@ private func listing(_ parts: [(UUID, String?)], final finalParts: Set<UUID> = [
     }
 
     @Test func partsJoinOnTheWallClock() throws {
-        var first = recap(entries: [(11 * 3600, "first part")], summary: "Morning.", isFinal: true)
-        first.actions = [.init(id: "a1", what: "Send the notes.", at: 11 * 3600, todoID: "t-9"), .init(id: "a2", what: "  ")]
+        var first = recap(entries: [(11.0 * 3600, "first part")], summary: "Morning.", isFinal: true)
+        first.actions = [.init(id: "a1", what: "Send the notes.", at: 11.0 * 3600, todoID: "t-9"), .init(id: "a2", what: "  ")]
         first.markdown = "# part 1"
         var second = recap(entries: [(600, "second part")], summary: "Evening.", isFinal: false)
         second.actions = [.init(id: "a1", what: "Book the room.", at: 60)]

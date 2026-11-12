@@ -54,7 +54,7 @@ data class CoreText(val key: Key, val args: List<Any> = emptyList()) {
         AlwaysScopeCommands("All commands in this conversation"),
         AlwaysScopeReadDirectory("All reads in this directory in this conversation"),
         AlwaysScopeEditDirectory("All file edits in this directory in this conversation"),
-        AlwaysScopeTool("All uses of this tool in this conversation"),
+        AlwaysScopeTool("All %1\$s calls in this conversation"),
         AlwaysScopeApproved("The approved scope remains allowed in this conversation"),
         FieldRequired("Fill this in"),
         FieldInvalid("Check what you entered and its format"),
