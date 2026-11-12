@@ -144,7 +144,8 @@ final class ForwardSeveralTests: XCTestCase {
                           "the forward is not over the target's box")
             XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "2 条消息")).firstMatch.exists,
                           "the bar does not say two messages")
-            XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "转发自")).firstMatch.exists,
+            // One route line, so one bar: the chat above may hold earlier forwards' bubbles (ForwardMessageTests).
+            XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "composer.forwardRoute").count, 1,
                            "a bar of its own for one of them")
             let note = scheme == "dark" ? "两条一起看 dark" : "两条一起看"
             type(note, in: app)
