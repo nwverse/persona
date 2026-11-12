@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -43,12 +44,18 @@ type Options struct {
 	// ID is the manager this assistant is ("" and assistantwire.AssistantID: the built-in one). Its directories on a
 	// computer are named after it (identity.AssistantDirName, docs/assistant/managers.md "Directories on a computer").
 	ID string
+	// RepositoryConfig is this manager's operator configuration file. Only its
+	// explicit repository_trusted_targets can opt private destinations in.
+	RepositoryConfig string
 }
 
 // Service is the assistant. It implements Handler.
 type Service struct {
 	// id is Options.ID: the manager this assistant is.
-	id string
+	id               string
+	repositoriesMu   sync.Mutex
+	repositoryConfig string
+	repositoryCheck  func(context.Context, repository.Identity) error // tests only; production uses the guarded checker
 	// build is Options.Build.
 	build string
 	// northStarOn: the north star's recording start is saved (north_star.go).
@@ -220,7 +227,7 @@ var _ Handler = (*Service)(nil)
 // New makes the assistant; nothing runs until the hub calls it.
 func New(o Options) *Service {
 	s := &Service{hub: o.Hub, store: o.Store, logf: o.Logf, mux: http.NewServeMux(), epoch: randomHex(8), tasks: newTasksState(),
-		devs: o.Devices, trustSrc: o.Trust, id: o.ID, build: o.Build}
+		devs: o.Devices, trustSrc: o.Trust, id: o.ID, build: o.Build, repositoryConfig: o.RepositoryConfig}
 	s.inbox.lang = func() i18n.Lang { return s.lang(context.Background()) }
 	if s.store == nil {
 		s.store = func() Store { return nil }
@@ -251,6 +258,7 @@ func New(o Options) *Service {
 	s.workoutRoutes()
 	s.scheduleRoutes()
 	s.placeRoutes()
+	s.repositoryRoutes()
 	s.taskRoutes()
 	s.viewActionRoutes()
 	s.todayRoutes()

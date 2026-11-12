@@ -181,14 +181,16 @@ private fun AskUserChoice(label: String, picked: Boolean) {
 }
 
 /**
- * "View sub-agent" under a Task / Agent step (iOS `WorkStepView`): its sub-agent's read-only conversation, running or
- * done; nothing when the session does not list a sub-agent for the call.
+ * "View sub-agent" under a Task / Agent step in Brief and Board (Glass draws the task card instead): its sub-agent's
+ * read-only conversation, running or done; nothing when the session does not list a sub-agent for the call or it cannot
+ * be opened here.
  */
 @Composable
 internal fun SubagentEntry(toolUseId: String?) {
     val links = LocalChatSubagents.current ?: return
+    val open = links.open ?: return
     val target = toolUseId?.let { links.keys[it] } ?: return
-    JTextButton(stringResource(R.string.chat_tool_open_subagent), { links.open(target) }, icon = PhIcons.ArrowSquareOut)
+    JTextButton(stringResource(R.string.chat_tool_open_subagent), { open(target) }, icon = PhIcons.ArrowSquareOut)
 }
 
 /** What a sub-agent was asked to do: its brief, the first lines of it, all of it in the reader. */

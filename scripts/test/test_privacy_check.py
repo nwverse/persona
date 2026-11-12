@@ -776,14 +776,16 @@ class PrivacyCheckIntegrationTests(unittest.TestCase):
         (self.repo / "README.md").write_text(
             (self.repo / "README.md").read_text() +
             "Private privacy host: https://privacy.notexample.com; private hub: hub.notexample.com.\n")
-        (self.repo / "README.md.notexample.com").write_text("plain\n")
+        # A name that only starts with an allowed doc does not share its allowance (and carries no value itself, so
+        # the report can name it without disclosing anything).
+        (self.repo / "README.md.bak").write_text("Install from https://public-site.notexample.com.\n")
         self.git("add", ".")
         result = self.scan()
         self.assertNotEqual(result.returncode, 0)
         output = result.stdout + result.stderr
         self.assertIn("notes.md:1: private value", output)
         self.assertIn("README.md:2: private value", output)
-        self.assertIn("README.md.notexample.com:path: private value", output)
+        self.assertIn("README.md.bak:1: private value", output)
         for path in pc.PUBLIC_SITE_DOCS | {"site/public/index.html"}:
             self.assertNotIn(path + ":1:", output)
         self.assertNotIn("notexample", output)

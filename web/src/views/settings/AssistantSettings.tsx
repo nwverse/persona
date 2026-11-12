@@ -30,6 +30,7 @@ import { TaskTrust } from "./TaskTrust";
 import { PageBoundary } from "../PageBoundary";
 
 const StandingAuthorizations = lazyPage(() => import("./StandingAuthorizations").then((m) => m.StandingAuthorizations));
+const Repositories = lazyPage(() => import("./Repositories").then((m) => m.Repositories));
 
 interface AssistantState extends AgentAutoNamingState {
   manager?: string;
@@ -422,6 +423,12 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
           </button>
         )}
       </Group>
+
+      <PageBoundary page="repositories">
+        <Suspense fallback={<Group title={t("settings-repositories.title")}><Loading /></Group>}>
+          <Repositories manager={manager} owner={owner} />
+        </Suspense>
+      </PageBoundary>
 
       <SkillsGroup manager={manager} />
 
