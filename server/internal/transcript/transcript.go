@@ -151,6 +151,7 @@ type Meta struct {
 	usage      RequestUsage
 	codexTotal int64
 	codexUsage proto.TokenUsage
+	sawUser    bool // a user line was read: a subagent's own work began (a fork's copied context comes before it)
 	// Queue holds input typed while Claude works and not yet taken (queue-operation lines:
 	// enqueue / dequeue / remove / popAll — popAll is "up arrow pulls them back into the input").
 	Queue []string
@@ -473,6 +474,9 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 	}
 	meta.tree = treeLine{uuid: e.UUID, parent: e.ParentUUID, sidechain: e.IsSidechain, assistant: e.Type == "assistant",
 		system: e.Type == "system", turnEnd: e.Type == "system" && e.Subtype == "turn_duration"}
+	if e.Type == "user" {
+		meta.sawUser = true
+	}
 	if e.Cwd != "" {
 		meta.Cwd = e.Cwd
 	}
