@@ -609,6 +609,10 @@ func TestSDKPrepareAndCommandWithNVMClaude(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("PATH", t.TempDir()) // restricted service PATH missing nvm
+	// Not the machine's own Homebrew or /usr/local claude, which agentExecutable would find before nvm's (#5449).
+	systemDirs := agentSystemDirs
+	agentSystemDirs = []string{t.TempDir()}
+	t.Cleanup(func() { agentSystemDirs = systemDirs })
 
 	nvmBin := filepath.Join(home, ".nvm", "versions", "node", "v22.5.0", "bin")
 	if err := os.MkdirAll(nvmBin, 0o755); err != nil {

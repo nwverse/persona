@@ -36,17 +36,20 @@ func TestCodexStartRejectsInvalidPurposeEffort(t *testing.T) {
 func TestCodexStartLeavesOutAnEffortCodexAlreadyRuns(t *testing.T) {
 	for _, tc := range []struct {
 		effort string
+		model  string
 		want   []string
 	}{
-		{"high", []string{"codex"}},
-		{"max", []string{"codex", "-c", "model_reasoning_effort=max"}},
+		{"high", "", []string{"codex"}},
+		{"max", "", []string{"codex", "-c", "model_reasoning_effort=max"}},
+		{"high", "gpt-6", []string{"codex", "--model", "gpt-6"}},
+		{"max", "gpt-6", []string{"codex", "--model", "gpt-6", "-c", "model_reasoning_effort=max"}},
 	} {
-		t.Run(tc.effort, func(t *testing.T) {
+		t.Run(tc.effort+"/"+tc.model, func(t *testing.T) {
 			withCodexLaunchers(t, map[string][]string{"codex": {"codex"}})
 			n, _, cwd, _ := codexStartHerdr(t, 0)
 			writeFile(t, filepath.Join(cwd, ".git", "HEAD"), "ref: refs/heads/main\n")
 			writeFile(t, filepath.Join(n.codexHome(), "config.toml"), "model = \"gpt-6\"\nmodel_reasoning_effort = \"high\"\n\n[features]\nhooks = true\n")
-			_, err := request(t, n, "session.start", map[string]any{"cwd": "~/proj", "launcher": "codex", "prompt": "hello", "effort": tc.effort})
+			_, err := request(t, n, "session.start", map[string]any{"cwd": "~/proj", "launcher": "codex", "prompt": "hello", "effort": tc.effort, "model": tc.model})
 			if err != nil {
 				t.Fatal(err)
 			}

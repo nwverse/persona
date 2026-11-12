@@ -88,7 +88,6 @@ todos.write          DELETE /api/v1/todos/{id}/agents/{mid}/{sid}
 todos.write          DELETE /api/v1/todos/{id}/spaces/{mid}/{space...}
 -                    DELETE /api/v1/todos/{id}/thread
 -                    DELETE {base}/markets/{mid}
--                    GET /api/v1/admin/assistant
 -                    GET /api/v1/admin/devices
 -                    GET /api/v1/admin/devices/{credential_id}/owner
 -                    GET /api/v1/admin/extensions
@@ -162,6 +161,7 @@ assistant.ask        GET /api/v1/assistant/reporters
 -                    GET /api/v1/endpoints
 -                    GET /api/v1/extensions
 -                    GET /api/v1/extensions/-/audit
+-                    GET /api/v1/extensions/-/catalog/{mid}/{id}/icon
 -                    GET /api/v1/extensions/-/operations
 -                    GET /api/v1/extensions/-/operations/{op}
 -                    GET /api/v1/extensions/-/prompts
@@ -173,6 +173,7 @@ assistant.ask        GET /api/v1/assistant/reporters
 -                    GET /api/v1/extensions/-/widgets
 -                    GET /api/v1/extensions/{id}/-/auth
 -                    GET /api/v1/extensions/{id}/-/dev/logs
+-                    GET /api/v1/extensions/{id}/-/icon
 -                    GET /api/v1/extensions/{id}/-/image/{token}
 -                    GET /api/v1/extensions/{id}/-/storage/retained
 -                    GET /api/v1/extensions/{id}/-/{$}
@@ -549,7 +550,6 @@ todos.write          POST /api/v1/todos/{id}/decisions
 -                    POST {base}/markets/{mid}/refresh
 -                    POST {bus.JoinPath}
 -                    POST {peerPairPath}
--                    PUT /api/v1/admin/assistant
 -                    PUT /api/v1/admin/devices/{credential_id}/owner
 -                    PUT /api/v1/admin/extensions/{id}/enabled
 -                    PUT /api/v1/admin/extensions/{id}/sandbox

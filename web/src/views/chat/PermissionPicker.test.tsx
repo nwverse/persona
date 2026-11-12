@@ -139,7 +139,7 @@ describe("its menu (#5584, #5324)", () => {
     const key = (k: string) => act(() => void window.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true })));
     key("ArrowDown");
     await act(async () => void window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
-    expect(api).toHaveBeenCalledWith(expect.stringContaining("/modes"), { method: "POST", json: { permission_mode: "default" } });
+    expect(api).toHaveBeenCalledWith(expect.stringContaining("/modes"), { method: "POST", timeout: 95_000, json: { permission_mode: "default" } });
     expect(document.querySelector('[role="menu"]')).toBeNull();
   });
 });
@@ -172,7 +172,7 @@ describe("Full access on a running agent (#1379)", () => {
     expect(panel().textContent).toContain(t("chat-sessiondialogs.bypass_confirm"));
     expect(panel().textContent).toContain(t("lib-session-actions.bypass_warning"));
     await act(async () => bypassRow()!.click());
-    expect(api).toHaveBeenCalledWith(expect.stringContaining("/modes"), { method: "POST", json: { permission_mode: "bypassPermissions" } });
+    expect(api).toHaveBeenCalledWith(expect.stringContaining("/modes"), { method: "POST", timeout: 95_000, json: { permission_mode: "bypassPermissions" } });
   });
 
   it("is the checked row, in red, while the agent runs in it, so it can be switched away and back", () => {
@@ -204,20 +204,20 @@ describe("Plan mode, the + panel's check row (#5324)", () => {
   it("goes into Plan mode, and back to the mode this page saw before it", async () => {
     probe(agent({ permission_mode: "auto" }));
     await act(async () => plan!.toggle());
-    expect(api).toHaveBeenLastCalledWith(expect.stringContaining("/modes"), { method: "POST", json: { permission_mode: "plan" } });
+    expect(api).toHaveBeenLastCalledWith(expect.stringContaining("/modes"), { method: "POST", timeout: 95_000, json: { permission_mode: "plan" } });
     probe(agent({ permission_mode: "plan" }));
     await act(async () => plan!.toggle());
-    expect(api).toHaveBeenLastCalledWith(expect.stringContaining("/modes"), { method: "POST", json: { permission_mode: "auto" } });
+    expect(api).toHaveBeenLastCalledWith(expect.stringContaining("/modes"), { method: "POST", timeout: 95_000, json: { permission_mode: "auto" } });
   });
 
   it("goes back to Default permissions when it never saw another mode, and never into Full access", async () => {
     probe(agent({ session_id: "p2", permission_mode: "plan" }));
     await act(async () => plan!.toggle());
-    expect(api).toHaveBeenLastCalledWith(expect.stringContaining("/modes"), { method: "POST", json: { permission_mode: "default" } });
+    expect(api).toHaveBeenLastCalledWith(expect.stringContaining("/modes"), { method: "POST", timeout: 95_000, json: { permission_mode: "default" } });
     probe(agent({ session_id: "p3", permission_mode: "bypassPermissions", bypass_available: true }));
     probe(agent({ session_id: "p3", permission_mode: "plan", bypass_available: true }));
     await act(async () => plan!.toggle());
-    expect(api).toHaveBeenLastCalledWith(expect.stringContaining("/modes"), { method: "POST", json: { permission_mode: "default" } });
+    expect(api).toHaveBeenLastCalledWith(expect.stringContaining("/modes"), { method: "POST", timeout: 95_000, json: { permission_mode: "default" } });
   });
 
   it("asks first when it leaves a Full access the agent can't come back to", async () => {

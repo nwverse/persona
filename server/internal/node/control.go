@@ -156,15 +156,11 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		if resume != "" { // a Codex thread is resumed above: this id is not one
 			return nil, refusal(codexResumeRefused, "找不到这个 Codex 会话的记录，没法接着它：请在电脑上恢复（codex resume）。", nil)
 		}
-		if execution.Model != "" {
-			argv = append(withoutModelArgs(argv), "--model", execution.Model)
+		if execution.Effort != "" && n.codexEffortInherited(argv, cwd, execution.Effort) {
+			// An inherited effort needs no override, which would leave the shared app-server.
+			execution.Effort = ""
 		}
-		if execution.Effort != "" && !n.codexEffortInherited(argv, cwd, execution.Effort) {
-			// The purpose's explicit effort takes precedence over launcher defaults. One Codex already runs at is left
-			// out: the flag would only take the start off the shared app-server (codex_start_effort.go).
-			argv = append(argv, "-c", "model_reasoning_effort="+execution.Effort)
-		}
-		return n.startCodex(ctx, launch, cwd, launcher, argv, prompt, ws, tabName, mode)
+		return n.startCodex(ctx, launch, cwd, launcher, codexExecutionArgs(argv, execution), prompt, ws, tabName, mode)
 	}
 	if kind != "claude" { // start_agent.go
 		if mode != "" || effort != "" {
@@ -224,6 +220,11 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		// A switch to another launcher still waits for the next message (launcher_switch.go): a Resume on the launcher
 		// the agent ran on keeps it; the switch's own start leaves it for the switch to clear.
 		st.PendingSwitch = prev.PendingSwitch
+		st.EngineHistory = prev.EngineHistory   // the conversation's earlier stretches (engine_switch.go)
+		st.PendingHandoff = prev.PendingHandoff // a handoff still waiting for a message to go in front of (send.go)
+	}
+	if legs, ok := engineHistoryOf(ctx); ok { // a switch from the other engine starts this one (engine_switch.go)
+		st.EngineHistory = legs
 	}
 	n.state.put(id, st)
 	n.noteModes(id, mode, effort) // shown before the first prompt writes them down
@@ -273,6 +274,9 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		// Checked against the transcript and typed again when it was dropped; one that never goes in leaves the
 		// session needing the user, with why, not idle (firstprompt.go).
 		if err := n.firstPrompt(ctx, pane, id, prompt, a); err != nil {
+			if adoptedPane(ctx) != nil && !errors.Is(err, host.ErrNotDelivered) && !errors.Is(err, host.ErrNoAgent) {
+				return nil, unconfirmedStart(err) // a switch's message (engine_switch.go) may be in the claude
+			}
 			return nil, err
 		}
 	}
