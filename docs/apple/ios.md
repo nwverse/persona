@@ -478,7 +478,7 @@ Chat page:
   Other answer… first number for Type something then text+Enter (`Resolution.preKeys`), Chat instead sends Chat about this number; raw terminal,
   keys/input under View terminal; unparseable dialog shows terminal directly. DEBUG `-showSampleScreen YES`.
   A command's permission prompt (the hub's `dialog.command`, #5266) reads as a tool approval instead: "Claude Wants to Run a Command", the agent's words,
-  the command (`ScreenCommandAskBody`, four rows until Show All), the warning in plain words (Show Original: Claude Code's own), the countdown running
+  the command (`ScreenCommandAskBody`, three rows until Show All, two in Beautiful UI), the warning in plain words (Show Original: Claude Code's own), the countdown running
   (`ScreenCountdown`), Deny / Allow for its No / Yes (`ScreenParser.Dialog.allowDeny`). Mock: `MOCK_SCREEN_DANGER=before|after`.
 - Interaction panel above input: questions (`QuestionForm`, iOS grouped list, question + rounded choice group, terminal-style numbered circles become checks, "(Recommended)" shown as Recommended badge but original sent; Other answer… last row becomes input on tap; single-question single-choice submits immediately, multiple title "Heading · 1/2", small Previous / Next / Submit below, auto-next after single choice; `-showSampleQuestion YES`), plans (Markdown + full screen, Approve and run automatically /
   Approve and auto-accept edits / Request changes with feedback), permissions (Allow / Deny / Always allow this session), terminal (screen + parsed choices + keys + text).
@@ -1247,6 +1247,7 @@ iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and
 - Phone tools: hub pushes `tool_call` → `PhoneToolRegistry.call` (writes require confirmation first) → `tool_result`. On connection, `register_phone` declares tools (`docs/apple/phone-tools.md`).
 - Push: after pairing, request notification permission and register APNs, `POST /api/v1/devices`; when the hub has `apns.json`, it pushes new interactions and Agent completion (completion waits 1 minute, is skipped if seen on a computer or in the App, and waits for background tasks to finish; push policy in `docs/server/server.md`), with "Title" (no ✅; interrupted or failed is "⚠️ Title"),
   subtitle "Machine · Space › Tab", and the last reply as the body. No banner when the App is foregrounded and showing that session. Simulator automation (`-pairURL`) neither requests notification permission nor registers as a phone.
+  Notifications allowed in Settings after a denial take effect when the App comes back to the front (`PushRegistrar.foreground`, #1861): it registers then, without a relaunch, and never shows the prompt itself; it waits for a launch or pairing request still open, so one answer registers once.
   Interaction pushes carry buttons (`NotificationActions`, category is the hub's `INTERACTION_<KIND>`): permissions "Allow / Deny", plans "Approve / Request changes" (changes can include typed feedback). Completion category `SESSION_DONE` supports direct "Reply" (#3449): unlock first, then send a normal message to that session in the background (new `client_msg_id`); failure produces a local notification explaining why. When a session appears on screen (`AppModel.show`), its old notifications (same `thread-id` and `machine_id`) are removed from Notification Center.
   Affirmative buttons require unlocking (`.authenticationRequired`); Deny does not. Plan approval from a notification uses `acceptEdits` (the whole plan has not been viewed, so commands still need individual approval),
   and "Approve and run automatically" is App-only. Buttons call resolve directly in the background without opening the App; failure (already handled, cannot reach hub) produces a local notification explaining why. Questions and terminal interactions have no buttons; tap to handle them.
@@ -1804,7 +1805,8 @@ roster, none of this draws and the pages are as before.
 
 The rest of [managers.md](../assistant/managers.md) "Clients" on iOS and the Mac. `AppModel.managerRosters` keeps each group's roster
 (`AppModel+Managers.swift`), read on its hub's hello, on each `{"type":"managers"}` and on a refresh; `managerRoster` is the hub-level
-group's. With one installed manager, or a hub without a roster, nothing below shows.
+group's. With one installed manager, or a hub without a roster, nothing below shows. What the pages list of several managers' things
+(the current assistant's alone) is in "The pages show the current assistant" below.
 
 - **Inbox items are their id and their manager** (`InboxItem.key`): the store, the bulk arithmetic (`InboxBulk`), the reply and status
   spinners, the Mac's selection, item windows and Quick Open use it. An answer about one item is put back with the manager asked
@@ -1819,18 +1821,17 @@ group's. With one installed manager, or a hub without a roster, nothing below sh
   its outbox draft opens under, `LarkOutboxAccounts`; the default's under the names they had) and the clients of what opens
   inside it (thread, composer, profile, cards: `AppModel.larkAPI`, through the chat's group, `larkGroup`). A Moments post
   pushed from an item sets its manager on its page. Tests `LarkChatManagerTests`, `LarkDraftsTests`, `LarkOutboxStoreTests`.
-- **Rules and Muted per manager**: both lists read every installed manager's at once, each one named
-  (`ManagerRoster.readEach`), and show each one's under its name (`ManagerHeading`), the default first, a manager with none
-  left out; one that can't be read says so in its place (offline: that they show once it is back). Each entry is stamped
-  with the manager it came from (`InboxPolicy.manager`, `InboxMute.manager`), so Edit, Remove and Unmute go to it
-  (`InboxRulesModel`, `InboxMutesModel`; tests `InboxManagerListsTests`).
+- **Rules and Muted per manager**: both lists are the current assistant's, read with it named, the default too (the
+  device's idea of the default may be stale); an offline one says in the list's place that they show once it is back.
+  Each entry is stamped with the manager it came from (`InboxPolicy.manager`, `InboxMute.manager`), so Edit, Remove and
+  Unmute go to it. Another assistant becoming current starts the list over (`readKey`), and a read for the one before
+  doesn't land (`InboxRulesModel`, `InboxMutesModel`; tests `InboxManagerListsTests`).
 - **Bulk actions per manager**: Done on several, a section's Clear all and Clean up all send one request per manager
   (`InboxBulk.byManager`). One that fails puts back only its own items and the toast says how many weren't changed and why
   (`InboxBulk.partly`); only when every one fails is it the old error. Undo after one manager's clean-up sends that manager's `undo`;
   after several managers' it brings back what moved with the Done request.
-- **Grouped inbox**: with several managers the list (iPhone `InboxPage`, Mac `MacInboxState.sections`) is one group per manager
-  (`InboxShare`: a `ManagerHeading`, then its Needs You with its waiting agents first, In Progress, FYI, Collapsed and its own Done).
-  Agents go by their card's `manager`. Each group folds its sections apart (`InboxFolds`, starting as before).
+- **The inbox's list**: the current assistant's items and waiting agents, with no manager headings ("The pages show the
+  current assistant" below).
 - **Push switch per manager**: a manager's page (`ManagerDetailView`) has this device's Notifications switch
   (`ManagerPushViews.swift`): `muted_managers` sent alone (`APIClient.setMutedManagers`), shown only when the prefs answer has the
   field, put back if the hub says no. The Mac's own banners (`MacAttention.managerMuted`) skip a muted manager's agents and cards
@@ -1851,6 +1852,91 @@ group's. With one installed manager, or a hub without a roster, nothing below sh
   `.aPushIsThePagesOwnUnlessAnotherManagerSentIt`,
   `ExtensionOperationsTests.anotherManagersOperationIsKeptApart`, `MacAttentionTests.aManagerSwitchedOffHereRingsNoBanner`.
 
+## The pages show the current assistant
+
+[managers.md](../assistant/managers.md) "The current assistant" ("Pages", "Counts") on iOS and the Mac: with several installed
+managers every page lists the current assistant's things, with no manager headings. One rule says whose a thing is
+(`AssistantScope`, `App/AssistantScope.swift`; `AppModel.assistantScope`, nil where nothing is filtered): its `manager`, and
+the default's for none or for one the roster doesn't have installed. Only the hub-level group has a scope; another group's
+computers, agents and cards are on every assistant's pages, as before (each hub has its own managers). Until the roster is
+read after a launch, the kept pick counts by itself (the snapshot usually has the roster; without one only what names the pick
+is listed), and a hub that answers it has no roster filters nothing (`AppModel.managerRosterUnsupported`).
+
+- **The lists stay whole**: `AppModel.machines`, `allSessions`, `interactions`, `InboxStore.items` and `TodoStore.todos` keep
+  every manager's, so a notification or a link opens another assistant's item as itself and what its page looks up (its
+  session, its computer) is found. The pages read `scopedMachines()`, `scopedInteractions`, `scoped(_:)`,
+  `InboxStore.scopedItems` and `TodoStore.scopedTodos`.
+- **Agents** (`ChatsView`): the list is paged by the hub, so a hub whose hello has `sessions_manager` is asked for the
+  current assistant's sessions (`SessionListQuery.manager`, set per group in `RuntimeSessionLists.managed`; its counts and
+  its sections' pages name it too). The manager is part of the query, so another assistant is another list read from its
+  first page (`rescope`, also on a hello: the feature may come with it). A hub with bounded lists but without the filter
+  is read as a complete copy instead (the `legacy` query: every row once, then what changed since) and filtered by each
+  row's `manager`, as a hub from before bounded lists is: its pages, totals and counts would be every manager's. A
+  complete copy is never asked with a manager (it is the app's rows of that hub). The list's partition carries the scope (`AgentListProjectionCache.Partition`), so a
+  switch starts the list over at once, with nothing held back. The computer menu offers the current assistant's
+  (`MachineChoice.manager`), New Session its computers, and a switch clears a computer filter that is not its own and
+  pops what was pushed from the list.
+- **Computers** (`MachinesView`): the current assistant's.
+- **Inbox**: the page's snapshot holds the current assistant's items and source chips (`InboxProjection.Filter.scope`), the
+  agents waiting are its own, and Done's history and day counts are read from it (`InboxStore.historyOwner`; the history is
+  one manager's). They start over when another assistant becomes current, and a page of the one before doesn't land
+  (`InboxStore.scopeChanged`). Pull to refresh asks the current assistant to collect. The Mac's list is the same
+  (`MacInboxState.sections`). The mailbox filters and New Email are the current assistant's mail accounts
+  (`InboxMailAccounts`, kept per assistant). A switch drops the selection, an item's page, the Muted and Rules sheets
+  and a source filter (a mailbox or a connector of the one before would leave the list empty); a mail being written
+  stays, with the manager and the accounts it was started with (`ComposeDraft.manager`), and is sent through that one.
+  A collection that fails on pull to refresh says so, as the default's does.
+- **To-dos**: `TodoItem.manager` decodes the merged list's stamp; the list, the calendar and the count are the current
+  assistant's, a new to-do names it, and a change to one names the to-do's own manager whichever is current
+  (`TodoStore.named`; its decisions and a briefing's Accept too). The list is always read merged. Link to To-Do on an
+  agent or a project offers the to-dos of the assistant whose computer it is on, and makes a new one for that
+  assistant (`TodoStore.openTodos(of:)`, `Owner.of`), whichever is current.
+- **Knowledge**: the page asks through a client for the current assistant (`APIClient.currentAssistantSettings`,
+  `KnowledgeView`'s `scopedAPI`), reads again when it changes, and an entry's page keeps the client it was first read
+  with (`capturedAPI`), so its editor writes to the assistant it was opened for. Recordings are this device's own and
+  are synced to the default assistant whichever is current, so their part of the knowledge base
+  (`/api/v1/kb/recordings…`: a recording's minutes on its page, on the knowledge page and on the watch, the Mac's list
+  of recordings) names no manager whichever client asks (`APIClient.recordingsRoute`).
+- **Scheduled tasks**: the page keeps the client it first read with (`AssistantRoutinesModel`): pushed on the Persona page
+  it closes with a switch, and where it stays (Settings) it starts over on the one current now (`restart`).
+- **Offline**: the hub's merged lists leave an offline manager's items out, so in place of their empty page the inbox
+  and the to-dos of an offline current assistant say "<name> Is Offline" with when it last synced and that the page
+  updates once it is back, under its avatar with the offline mark (`AssistantOfflineNotice`). Its computers and sessions stay listed, offline, as the hub keeps
+  them.
+- **A conversation's feed and what it offers** (the feed's read, a reply draft's Send and Do Not Handle, a plan's Start
+  or Don't Start, a briefing question's Handled) name the conversation's own manager (`AppModel.feedManager`), whichever
+  assistant is current: some of those routes name no conversation, so the hub would take them to the default. The
+  default's conversations name none, and with one installed manager or no roster nothing is named.
+- **Counts**: the tab badges, the sidebar's Inbox and To-dos counts, the home page's Needs You and the main conversation's
+  dock count the current assistant's (`AppModel.countBadges`, `InboxStore.actionCount`, `TodoStore.badgeCount`). The
+  switcher shows beside every other assistant what waits there (`AssistantBadges`, `AppModel.assistantBadges`): its agents
+  waiting (a session with a pending card or in Needs You once, quiet and muted ones left out, a card on no session by
+  itself; Persona's own conversations by their cards only) plus `inbox_needs_you`. The header's face carries a mark while
+  another assistant has something waiting (`AssistantWaitingDot`; beside the name where the face isn't drawn), and VoiceOver
+  says both. With several assistants the name beside the Persona face elsewhere (the sidebar's foot, the Mac's status
+  line) is the current assistant's, and a voice call's captions name the assistant of the conversation they are said in
+  (`AppModel.assistantShownName`); with one assistant these keep the persona's name (#4712). The inbox counts are kept beside the rosters (`AppModel.inboxNeedsYou`; a `ManagerRoster` carries none), so a
+  count that moves writes no roster and draws nothing that reads one. On a hub with bounded lists the app holds only the
+  pages it showed, so the sessions in Needs You are read for the counts (`AppModel.readNeedsYou`: one request for every
+  manager's, at most every two seconds while the hub's `sessions_list` hints come); not while its list is a complete
+  copy (a grouping, pins or mutes, a hub without the manager filter), which has every assistant's sessions already.
+- **A switch** is the current assistant itself changing (`AppModel.assistantSwitches`: a pick in the switcher, or its
+  manager leaving the roster), which is what closes pages and clears what was chosen. The default moving onto or off
+  the current assistant is none: what a request names changes, who is shown doesn't. Until the hub answers its roster
+  after a launch, a kept pick, and the roster the snapshot kept (`AppModel.rostersKept`), hold the rows to themselves,
+  but nothing this section adds is asked by them (`AppModel.rosterAsked`, `AssistantScope.asked`): the Agents list is
+  asked without a manager, the sessions in Needs You are not read, and Done's history, Rules, Muted and a new to-do
+  name none. The hub may have one manager by now, where no request names one; the list is asked again once it answers.
+- **Unchanged**: the watch, widgets, Live Activities, Siri and Shortcuts, the Health page and notifications go by the
+  default assistant or the item's own manager. The Mac's menu bar and Dock menu, Quick Open and Apple Vision Pro's shell
+  still list every manager's.
+- **Tests**: `AssistantScopeTests` (whose a thing is, the kept pick, the model's lists, the tab badges and the dock, the
+  Agents list's query on a hub that filters and on one that doesn't, the inbox, the to-dos and what a change names, the
+  knowledge base, scheduled tasks), `AssistantBadgesTests` (the counts, the roster's count kept apart, a push while the
+  roster is read), `InboxManagerListsTests`, `AssistantSwitcherTests`. UI suite `AssistantSwitchPagesUITests` (iPad
+  only, against the mock hub as `AssistantSwitcherUITests`): with an inbox item or the scheduled tasks of one assistant
+  open, another is picked in the sidebar, and the item is gone and the page is the new assistant's.
+
 ## The Persona page's manager (#2664)
 
 [managers.md](../assistant/managers.md) "Clients": the interface calls a manager an **assistant**, and one of them is the
@@ -1861,7 +1947,8 @@ It opens a popover (`AssistantSwitcherList`): one row per manager, the installed
 then those still installing, each with its first letter on a disc in its color (`AssistantSwitcherText.hue`: the default's is
 `Theme.ai`, any other's the sum of its id's UTF-8 bytes modulo five over blue, green, orange, pink, indigo, the same on every
 client; the letter in the panel's color) and the state's dot at the disc's foot, its state line, a Default chip and a check on
-the current one, on a solid panel (`Theme.card`); an offline row is dimmed as a whole (`Theme.Fade.offline`) and can still be
+the current one or, beside any other with something waiting, its count ("The pages show the current assistant" above), on a
+solid panel (`Theme.card`); an offline row is dimmed as a whole (`Theme.Fade.offline`) and can still be
 picked. The dot (`AssistantStateDot`) is green online, gray offline and orange while installing, ringed in the color it sits on;
 Settings › Assistants keeps its dot beside the words. Under them **New Assistant** (asks for a
 name, then the install code sheet of Settings › Assistants) and **Manage Assistants…** (Settings › Assistants). A row still

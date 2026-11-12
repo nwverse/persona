@@ -263,11 +263,10 @@ struct ChatView: View {
     private var linkManager: String? {
         model.linkManager(session?.manager ?? itemManager ?? (style == .assistant ? model.assistantManagerID : nil), group: key.group)
     }
-    /// A listed default-manager session has a nil owner; it must not inherit the page's current selection.
-    private var feedManager: String? {
-        if let session { return session.manager ?? model.managerRosters[key.group]?.defaultID }
-        return linkManager ?? model.managerRosters[key.group]?.defaultID
-    }
+    /// The manager this conversation's feed is read from and its cards answer to (`AppModel.feedManager`): its own,
+    /// whichever assistant the page shows. nil for the default's and with one manager: that client names none (and
+    /// drops the page's current selection, `APIClient.manager`).
+    private var feedManager: String? { model.feedManager(listed: session, opened: itemManager, group: key.group) }
     nonisolated private struct FeedScope: Hashable {
         var key: SessionKey
         var manager: String?
@@ -6937,7 +6936,7 @@ private struct ChatStreamFollow: ViewModifier {
 /// read only by `ChromeHeader`, so following the finger redraws the header and nothing else.
 @Observable
 final class ChatChrome {
-    static let compactHeight: CGFloat = 40
+    static let compactHeight: CGFloat = Theme.Size.slimBar
     /// Whether the header folds at all. Not on the Mac (#1337, the user's call): a window is tall enough, and each fold
     /// and unfold while scrolling cost frames (about 30 ms of hitches a second scrolling up and down; 6–11 open).
     #if os(macOS)

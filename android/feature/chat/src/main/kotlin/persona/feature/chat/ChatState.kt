@@ -192,6 +192,7 @@ internal fun ChatLine.contentType(): String = when (this) {
     is ChatLine.Wakes -> "wakes"
     is ChatLine.ApiError -> "api_error"
     is ChatLine.Recaps -> "recaps"
+    is ChatLine.Viewed -> "viewed"
     is ChatLine.Extra -> "extra"
 }
 
