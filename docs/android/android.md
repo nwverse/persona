@@ -124,7 +124,8 @@ as above. Tests: `TaskRecordsTest`, `SupervisionRecordTest` (core/domain), `Task
 A plan nobody started is a line of the Glass conversation too, at the end of the exchange it happened in: an open plan is iOS's
 `PlanCard` (`GlassPlanCard` in `feature/chat/PlanCardGlass.kt`: the plan's mark and **Start like this**, or **Split into N tasks,
 started like this**; each task with its number when there are several, where it would run as chips that wrap, and why; **Start
-these directly**; then **Start** / **Start N tasks**, **Edit** and **Don't start**), a dismissed one reads **Not started · N
+these directly**; then **Start** / **Start N tasks**, **Edit** and **Don't start**, in one row while Start's whole label fits and
+stacked (Start above the other two) when it would be cut), a dismissed one reads **Not started · N
 tasks**. A started plan is the dispatched line in the card's place, and the card follows the store's latest plan, so a sheet that
 kept the plan it was opened with (the tray's Review) says **✓ Started N tasks** instead of offering Start again. Tests:
 `TaskRecordsTest` (core/domain), `PlanCardConversationTest`, `PlanCardFailureReasonTest`.

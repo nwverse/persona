@@ -55,9 +55,13 @@ class ChatHeaderWordsShotsTest {
     /** A chat's session and when its newest turn began. */
     private class Scene(val session: Session, val turnStart: Instant?)
 
+    // Both turns began a while ago: the header counts from the turn's start ([Scene.turnStart]); `state_since` is what it counted
+    // from before, kept equal here so the same scenes draw the same minutes on both sides of a before / after.
+    private val running = now.minusSeconds(22 * 60 + 10)
+    private val long = now.minusSeconds(65 * 60 + 5)
     private val scenes = listOf(
-        Scene(base.copy(status = "working", state = "working"), now.minusSeconds(22 * 60 + 10)),
-        Scene(base.copy(sessionId = "s2", title = "Migrate the database", status = "working", state = "working"), now.minusSeconds(65 * 60 + 5)),
+        Scene(base.copy(status = "working", state = "working", stateSince = running.toString()), running),
+        Scene(base.copy(sessionId = "s2", title = "Migrate the database", status = "working", state = "working", stateSince = long.toString()), long),
         Scene(base.copy(sessionId = "s3", title = "Audit the parity checks", status = "idle", state = "working", backgroundWorking = true,
             workflows = listOf(workflow), background = listOf(command.copy(kind = "workflow", runId = "wf_1"))), null),
         Scene(base.copy(sessionId = "s4", title = "Watch the deploy", status = "idle", state = "working", backgroundWorking = true,

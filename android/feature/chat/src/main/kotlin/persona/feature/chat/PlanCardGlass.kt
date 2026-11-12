@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.selection.toggleable
@@ -15,12 +16,14 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import persona.core.contracts.PlanTask
 import persona.core.contracts.TaskPlan
 import persona.core.designsystem.JButton
@@ -64,15 +67,64 @@ internal fun GlassPlanCard(
                 GlassPlanTask(n + 1, task, numbered = plan.tasks.size > 1, host)
             }
             StartDirectly(directly, enabled = !busy, onDirectly)
-            Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                JButton(if (plan.tasks.size > 1) pluralStringResource(R.plurals.chat_tasks_plan_start_count, plan.tasks.size, plan.tasks.size)
-                    else stringResource(R.string.chat_tasks_plan_start),
-                    { host.tasks.startPlan(plan, directly, host.onError, manager = host.manager) },
-                    Modifier.weight(1f).testTag("plan-start-${plan.id}"), size = JButtonSize.Medium, loading = busy)
-                JButton(stringResource(R.string.chat_plan_edit), onEdit, Modifier.testTag("plan-edit-${plan.id}"),
-                    kind = JButtonKind.Secondary, size = JButtonSize.Medium, enabled = !busy)
-                JButton(stringResource(R.string.chat_tasks_plan_dismiss), { host.tasks.dismissPlan(plan, host.onError, host.manager) },
-                    Modifier.testTag("plan-dismiss-${plan.id}"), kind = JButtonKind.Secondary, size = JButtonSize.Medium, enabled = !busy)
+            PlanActions(
+                start = {
+                    JButton(if (plan.tasks.size > 1) pluralStringResource(R.plurals.chat_tasks_plan_start_count, plan.tasks.size, plan.tasks.size)
+                        else stringResource(R.string.chat_tasks_plan_start),
+                        { host.tasks.startPlan(plan, directly, host.onError, manager = host.manager) },
+                        Modifier.fillMaxWidth().testTag("plan-start-${plan.id}"), size = JButtonSize.Medium, loading = busy)
+                },
+                edit = {
+                    JButton(stringResource(R.string.chat_plan_edit), onEdit, Modifier.fillMaxWidth().testTag("plan-edit-${plan.id}"),
+                        kind = JButtonKind.Secondary, size = JButtonSize.Medium, enabled = !busy)
+                },
+                dismiss = {
+                    JButton(stringResource(R.string.chat_tasks_plan_dismiss), { host.tasks.dismissPlan(plan, host.onError, host.manager) },
+                        Modifier.fillMaxWidth().testTag("plan-dismiss-${plan.id}"), kind = JButtonKind.Secondary, size = JButtonSize.Medium,
+                        enabled = !busy)
+                },
+            )
+        }
+    }
+}
+
+/**
+ * Start, Edit and Don't start in iOS's order: one row, Start taking what the other two leave, while Start's whole label fits
+ * beside them; else Start has a row of its own and the other two share the one under it. A label is never cut: iOS's
+ * `MessageCard` stacks its buttons the same way (`ViewThatFits`), and a phone 360 dp wide or a longer label (ja, "Start 12
+ * tasks") needs it. Each is measured once, the choice made from their widths without cutting.
+ */
+@Composable
+private fun PlanActions(start: @Composable () -> Unit, edit: @Composable () -> Unit, dismiss: @Composable () -> Unit) {
+    val gap = Tokens.Space.s
+    Layout(content = { start(); edit(); dismiss() }, modifier = Modifier.fillMaxWidth()) { measurables, constraints ->
+        val (startItem, editItem, dismissItem) = measurables
+        val space = gap.roundToPx()
+        val width = constraints.maxWidth
+        val unbounded = Constraints.Infinity
+        val startWants = startItem.maxIntrinsicWidth(unbounded)
+        val editWants = editItem.maxIntrinsicWidth(unbounded)
+        val dismissWants = dismissItem.maxIntrinsicWidth(unbounded)
+        if (startWants + editWants + dismissWants + 2 * space <= width) {
+            val startPlaceable = startItem.measure(Constraints.fixedWidth(width - editWants - dismissWants - 2 * space))
+            val editPlaceable = editItem.measure(Constraints.fixedWidth(editWants))
+            val dismissPlaceable = dismissItem.measure(Constraints.fixedWidth(dismissWants))
+            val height = maxOf(startPlaceable.height, editPlaceable.height, dismissPlaceable.height)
+            layout(width, height) {
+                startPlaceable.placeRelative(0, (height - startPlaceable.height) / 2)
+                editPlaceable.placeRelative(startPlaceable.width + space, (height - editPlaceable.height) / 2)
+                dismissPlaceable.placeRelative(startPlaceable.width + editPlaceable.width + 2 * space, (height - dismissPlaceable.height) / 2)
+            }
+        } else {
+            val half = (width - space) / 2
+            val startPlaceable = startItem.measure(Constraints.fixedWidth(width))
+            val editPlaceable = editItem.measure(Constraints.fixedWidth(half))
+            val dismissPlaceable = dismissItem.measure(Constraints.fixedWidth(width - space - half))
+            val second = maxOf(editPlaceable.height, dismissPlaceable.height)
+            layout(width, startPlaceable.height + space + second) {
+                startPlaceable.placeRelative(0, 0)
+                editPlaceable.placeRelative(0, startPlaceable.height + space + (second - editPlaceable.height) / 2)
+                dismissPlaceable.placeRelative(half + space, startPlaceable.height + space + (second - dismissPlaceable.height) / 2)
             }
         }
     }

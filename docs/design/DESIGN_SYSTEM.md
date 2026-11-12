@@ -1211,7 +1211,9 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   "N more" for the tasks' other questions; it is answered there, and the next comes up once it is. The three numbers
   count three things and say so: "N pending" the conversation's own cards in the stack, "N more" the tasks' other
   questions, and Needs you its rows (one for each task or Agent that asks, plus the conversation's own cards, plans and
-  drafts). A task's or an Agent's row in the tray opens that task's or Agent's detail, as iOS's rows do, where its page
+  drafts). An open plan is also a card among the conversation's lines (iOS `FeedLine`, Android on Glass `GlassPlanCard`), at the
+  end of the exchange it happened in: its tasks, where each would run, "Start these directly", then Start, Edit and Don't start;
+  once started the dispatched line takes its place, and a dismissed one reads "Not started · N tasks". A task's or an Agent's row in the tray opens that task's or Agent's detail, as iOS's rows do, where its page
   and its cards are; it never brings a card into the stack, which is the conversation's own. On Android the two places
   of cards share the room the footer leaves above the composer (iOS draws the question uncapped): each takes at most half
   the page, and with both on screen each has at least half of that room, a card that needs less leaving the rest to the

@@ -219,6 +219,39 @@ class PlanCardConversationTest {
         assertNull(api.started)
     }
 
+    private fun bounds(tag: String) = rule.onNodeWithTag(tag).getBoundsInRoot()
+
+    @Test fun theThreeActionsShareARowWhileStartsWholeLabelFits() {
+        show(AppStyle.Glass)
+        val start = bounds("plan-start-plan"); val edit = bounds("plan-edit-plan"); val dismiss = bounds("plan-dismiss-plan")
+        assertTrue("in iOS's order, side by side", start.right <= edit.left && edit.right <= dismiss.left)
+        assertEquals("one row", start.top.value, edit.top.value, 1f)
+        assertEquals("one row", start.top.value, dismiss.top.value, 1f)
+    }
+
+    @Config(qualifiers = "ja-w400dp-h1200dp-xhdpi")
+    @Test fun startHasARowOfItsOwnWhenItsLabelWouldBeCutBesideTheOthers() {
+        // "2件のタスクを開始" does not fit beside "編集" and "開始しない" in a 400 dp card: stacked, never cut (iOS stacks its message card the same way)
+        show(AppStyle.Glass)
+        val start = bounds("plan-start-plan"); val edit = bounds("plan-edit-plan"); val dismiss = bounds("plan-dismiss-plan")
+        assertTrue("Start above the other two", edit.top >= start.bottom && dismiss.top >= start.bottom)
+        assertEquals("the other two share a row", edit.top.value, dismiss.top.value, 1f)
+        assertTrue("in order", edit.right <= dismiss.left)
+        assertEquals("Start is the card's whole width", (start.right - start.left).value, (dismiss.right - edit.left).value, 1f)
+        capture("plan-glass-ja-stacked")
+    }
+
+    @Config(qualifiers = "en-w320dp-h1200dp-xhdpi")
+    @Test fun aNarrowPhoneKeepsEveryLabelWhole() {
+        show(AppStyle.Glass)
+        val start = bounds("plan-start-plan"); val edit = bounds("plan-edit-plan"); val dismiss = bounds("plan-dismiss-plan")
+        // wherever they sit, none overlaps another and all stay inside the card
+        assertTrue("Start and Edit do not overlap", start.right <= edit.left || start.bottom <= edit.top)
+        assertTrue("Edit and Don't start do not overlap", edit.right <= dismiss.left || edit.bottom <= dismiss.top)
+        assertTrue(dismiss.right.value <= 320f)
+        capture("plan-glass-320")
+    }
+
     private fun keepsThePlanBehindTheTrays(style: AppStyle) {
         show(style)
         rule.onAllNodesWithTag("plan-card-plan").assertCountEquals(0)
@@ -232,18 +265,19 @@ class PlanCardConversationTest {
     @Test fun briefKeepsThePlanBehindTheTrays() = keepsThePlanBehindTheTrays(AppStyle.Brief)
     @Test fun boardKeepsThePlanBehindTheTrays() = keepsThePlanBehindTheTrays(AppStyle.Board)
 
-    private fun words(heading: String, start: String, edit: String, dismiss: String, directly: String) {
+    private fun words(language: String, heading: String, start: String, edit: String, dismiss: String, directly: String) {
         show(AppStyle.Glass)
         rule.onNodeWithTag("plan-heading").assertTextEquals(heading)
         rule.onNodeWithTag("plan-start-plan").assertTextEquals(start)
         rule.onNodeWithTag("plan-edit-plan").assertTextEquals(edit)
         rule.onNodeWithTag("plan-dismiss-plan").assertTextEquals(dismiss)
         rule.onNodeWithText(directly).assertIsDisplayed()
+        capture("plan-glass-$language")
     }
 
     @Config(qualifiers = "zh-w400dp-h1200dp-xhdpi")
-    @Test fun simplifiedChinese() = words("拆成 2 件事，这样开", "开始 2 个任务", "改一下", "不开", "这类以后直接开")
+    @Test fun simplifiedChinese() = words("zh", "拆成 2 件事，这样开", "开始 2 个任务", "改一下", "不开", "这类以后直接开")
 
     @Config(qualifiers = "ja-w400dp-h1200dp-xhdpi")
-    @Test fun japanese() = words("2件に分けて、この内容で開始", "2件のタスクを開始", "編集", "開始しない", "今後はすぐに開始")
+    @Test fun japanese() = words("ja", "2件に分けて、この内容で開始", "2件のタスクを開始", "編集", "開始しない", "今後はすぐに開始")
 }
