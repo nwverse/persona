@@ -36,7 +36,9 @@ func TestTodoSeenRequests(t *testing.T) {
 		if got == nil || got.SeenAt == nil || got.SeenAt.Before(*before.DoneAt) {
 			t.Fatalf("after Got it: %+v", got)
 		}
-		if !got.UpdatedAt.Equal(before.UpdatedAt) {
+		// the store keeps microseconds: the same moment, read back from it
+		sameMoment := func(a, b time.Time) bool { return a.Truncate(time.Microsecond).Equal(b.Truncate(time.Microsecond)) }
+		if !sameMoment(got.UpdatedAt, before.UpdatedAt) {
 			t.Fatalf("Got it counted as activity: updated_at %v, was %v", got.UpdatedAt, before.UpdatedAt)
 		}
 		if todosEvents(e) == events {
@@ -48,7 +50,7 @@ func TestTodoSeenRequests(t *testing.T) {
 		}
 
 		e.must("DELETE", "/api/v1/todos/"+id+"/seen", "")
-		if got := e.get(id); got == nil || got.SeenAt != nil || !got.UpdatedAt.Equal(before.UpdatedAt) {
+		if got := e.get(id); got == nil || got.SeenAt != nil || !sameMoment(got.UpdatedAt, before.UpdatedAt) {
 			t.Fatalf("after Undo: %+v", got)
 		}
 	})
