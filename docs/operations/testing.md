@@ -164,7 +164,7 @@ Path mapping:
 | `integrations/<pkg>/**` | Package `node --test test/*.test.{js,mjs}` (skip packages without tests) |
 | `site/**` | `node --test site/worker.test.mjs` |
 | `sdk/ts/**` | `bun test` (skip with reason if bun absent) |
-| `sdk/ts/src/**` | In addition to the `sdk/ts/**` check, `go test ./internal/extension/denohost/...`: the trusted Deno adapter `server/internal/extension/denohost/adapter.mjs` bundles these sources, and `TestTrustedAdapterMatchesOfficialSDK` fails while the committed one is stale (#4221; regenerate it with `scripts/gen/deno_adapter.sh` and the Bun version `.github/workflows/server-test.yml` pins). Skipped with a reason when bun is absent. CI's server lane runs on these paths too (`scripts/ci/paths.py`) |
+| `sdk/ts/src/**` | In addition to the `sdk/ts/**` check, `go test ./internal/extension/denohost/...`: the trusted Deno adapter `server/internal/extension/denohost/adapter.mjs` bundles these sources, and `TestTrustedAdapterMatchesOfficialSDK` fails while the committed one is stale (#4221; regenerate it with `scripts/gen/deno_adapter.sh` and the Bun version `.github/workflows/server-test.yml` pins). Skipped with a reason when bun is absent; `pre-push` is not (see "Trusted Deno adapter" below). CI's server lane runs on these paths too (`scripts/ci/paths.py`) |
 | `sdk/go/**` | `go test ./...` in sdk/go module |
 | `server/internal/foo/**`, `server/cmd/bar/**`, `server/plugins/baz/**` | Affected packages, e.g. `go test ./internal/foo/...`; unmappable server changes fall back to `go build ./...` |
 | `server/**`, `sdk/go/**` | In addition to other checks in this table, the server's repo-wide guards (`job_go_guards` in `scripts/test/check-fast.sh`): `go test` on `internal/lazyre`, `internal/archguard`, `internal/tzguard` and `plugins`, and the named guard tests of `internal/hub` and `internal/assistant`. They read other packages' source, `go list` output, the migrations or `sdk/go`, so they fail on code outside their own package (#1936). The list is curated: not every `*guard*_test.go` is repo-wide. `--all` runs them within `go test ./...` |
@@ -431,6 +431,7 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
 - Gap healing (`docs/protocol/protocol.md` ("Item continuity")): `MOCK_GAP=1`, uninstall/reinstall App, `-openSession macbook/a1f3c2d4-0000-4000-8000-000000000001`.
   Starts with 8 rows; writes 6 more after 2 seconds but pushes only last 2 (`from_seq` 12); log should show `items after_seq=8` about 1.5 seconds later,
   work shows "Tool 5". Use timeout-bounded waits, not success-only `until grep`.
+- Hand-off write-back card (#5932): `MOCK_TASKS=1 MOCK_HANDOFF_CARD=1` puts an item handed to the main conversation, with that conversation's reply suggestion, into the Inbox and its write-back card into the main conversation's feed, so the chat draws the card and "Wrap up: 示例客户" over the composer; confirming the card files the item as replied. `MOCK_HANDOFF_CARD=sent` starts with the reply sent.
 - Hand to AI per source (#2121): `MOCK_INBOX_EVENTS=1 MOCK_EVENT_MUTES=1` gives three events their mute options. The two mail notifications ("构建失败：主分支" and "会议室变更通知") share one sender, so handing one off preselects that target, marked Last time, on the other (`InboxHandOffBarTests`). With `MOCK_INBOX_EVENTS=legacy MOCK_EVENT_MUTES=1` the same two open as plain item pages, and `InboxHandOffSheetTests` checks the Hand to AI sheet the same way.
 - GitHub thread page (#1055): `MOCK_GITHUB_INBOX=1`, `-tab mail -openInboxItem github:review12` opens fictional example-org/example-repo#12:
   header (status/branches/three labels), Markdown description, request-changes/approve reviews, inline comment/reply, three checks (failed test logs), events.
@@ -1071,7 +1072,7 @@ Not private: loopback (`127.0.0.0/8`, `::1`, `localhost`, including protocol/por
 backtick paths/commands/config keys in `CLAUDE.local.md` (only ID/host/email/IP-like values count), and `site/` contact/site domain
 (`app_store.feedback_email`, `privacy_url`, already public for App Store/OAuth). Docs say hub machine/another Mac;
 example machine ids `server` / `laptop`. `release.sh` scans before packaging;
-precommit hooks: `git config core.hooksPath scripts/hooks` (`pre-commit` staged content, plus `scripts/assets/gen_tokens.py --check` and the token drift tests when `spec/tokens`, `apple/Shared/Design` or the generated Android tokens are staged; `commit-msg` commit message, `pre-push` changed files/messages against the first of `origin/HEAD`, `origin/main`, `origin/master` that shares history with the pushed commit, every file and message of an orphan branch).
+precommit hooks: `git config core.hooksPath scripts/hooks` (`pre-commit` staged content, plus `scripts/assets/gen_tokens.py --check` and the token drift tests when `spec/tokens`, `apple/Shared/Design` or the generated Android tokens are staged; `commit-msg` commit message, `pre-push` changed files/messages against the first of `origin/HEAD`, `origin/main`, `origin/master` that shares history with the pushed commit, every file and message of an orphan branch; `pre-push` also checks the trusted Deno adapter, see "Trusted Deno adapter").
 **Message lines** (#1107): `--message <file>` checks every line, Markdown headings included (a PR's title and body become the squash commit's message as they are).
 `commit-msg` passes `--commit-msg`, which checks only what `git commit` records: when git opened an editor it skips the comment lines (hints, branch, paths) and everything from the scissors line down (the `commit -v` diff);
 a `-m` / `-F` message keeps its `#` lines, so they are checked. It follows git's comment string and `commit.cleanup` (`commit_msg_lines`), but cannot see `--cleanup` or `-v` on the command line; `pre-push` still reads every recorded line.
@@ -1095,6 +1096,34 @@ Independent of local config/private words, reports file/line/type only, never UR
   Includes public Go dependency constants/classification, verification/replace/tool-failure refusal, personal values not hidden by public constants.
   Isolated HOME/Git-config temporary repos test real hooks/staged-worktree differences, never main worktree index/history.
 - hooksPath is clone-local; new clones must run `git config`; files existing doesn't mean enabled.
+
+## Trusted Deno adapter
+
+`server/internal/extension/denohost/adapter.mjs` is generated from `adapter.ts`, which bundles `sdk/ts/src`, and is
+embedded in `personad`; `TestTrustedAdapterMatchesOfficialSDK` fails while the committed one is not what the sources
+build. It went stale on `main` five times (#2171, #2416, #4217, #5862, #5971), each after an `sdk/ts/src` change pushed
+without Bun. Two things keep it current (#6001):
+
+- **No identifier minification.** `scripts/gen/deno_adapter.sh` and the test build with `--minify-syntax
+  --minify-whitespace`, not `--minify`. Bun's identifier minifier renamed symbols whenever the SDK's set of symbols
+  changed, so a type-only edit (#5834, #5934) changed the adapter's bytes but not its code. Now only a change to code
+  the adapter bundles changes it (24.9 KB instead of 19.0 KB).
+- **`pre-push` checks it.** When the pushed commits change `sdk/ts/src`, `denohost/adapter.ts`, `adapter.mjs` or the
+  generator (compared with the same base as the privacy scan; an orphan branch is skipped),
+  `scripts/hooks/check-deno-adapter.sh <commit>` builds the adapter from that commit's files, never the worktree, with
+  that commit's generator, and compares it with the committed one. A mismatch refuses the push and names the
+  regenerate command.
+- **Only the pinned Bun counts**: the version `.github/workflows/server-test.yml` pins (1.4.2). Without identifier
+  minification another version builds other bytes (1.4.0 renames a shadowed `out` to `out2`). The check uses
+  `~/.bun-<version>/node_modules/.bin/bun` or `~/.bun-<version>/bin/bun` when there, else `bun` on PATH.
+  **Without Bun it refuses**, and so does another version whose build differs; both name the pinned version and an
+  install that leaves the global Bun alone: `npm install --prefix ~/.bun-1.4.2 bun@1.4.2`.
+- Fix a refusal: `PATH=~/.bun-1.4.2/node_modules/.bin:$PATH scripts/gen/deno_adapter.sh`, commit `adapter.mjs`, push
+  again.
+- By hand: `scripts/hooks/check-deno-adapter.sh HEAD`. Tests: `scripts/test/test_check_deno_adapter_sh.py` (a fake
+  `bun`, no real Bun needed). `git push --no-verify` skips every hook, the privacy scan included; don't.
+- CI does not run this check. `merge-pr.sh` does not either; the test on the hub machine still catches what a push
+  without the hooks lets through.
 
 ## Expand / collapse (`UnfoldTests`, #1123)
 
