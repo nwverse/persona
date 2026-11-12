@@ -334,6 +334,15 @@ fun Modifier.workRail(last: Boolean): Modifier {
     }
 }
 
+/**
+ * Where what an open step shows (its details, its to-dos, a failure, a thought's words) starts. In Glass it is right of
+ * the rail, under the step's words ([WorkStep]'s inset, icon and gap; iOS `WorkCardSlice.textColumn`), so the rail runs
+ * past it and never through it; in the other styles it is at [otherwise], as before.
+ */
+@Composable
+fun Modifier.workDetail(otherwise: androidx.compose.ui.unit.Dp = Tokens.Space.flush): Modifier =
+    padding(start = if (PersonaTheme.style == AppStyle.Glass) Tokens.Space.m + Tokens.Size.iconXS + Tokens.Space.l else otherwise)
+
 /** [Unknown]: an older step with no recorded result; neither a success nor a failure. */
 enum class WorkState { Done, Running, Failed, Waiting, Unknown }
 
