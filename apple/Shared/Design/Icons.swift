@@ -52,6 +52,8 @@ extension Theme {
         /// Some of a group picked (the inbox's Select, #2059).
         static let partlyChecked = "minus.circle.fill"
         static let uncheckedBox = "square"
+        /// A box ticked: a file marked viewed in a code review (`TickBoxToggleStyle`), a done to-do in a document.
+        static let checkedBox = "checkmark.square.fill"
         static let todo = "checklist"
         /// Recent, or waiting to come back (reconnecting, last used).
         static let recent = "clock.arrow.circlepath"
@@ -194,6 +196,8 @@ extension Theme {
         static let interrupt = "stop.fill"
         static let stopLoop = "stop.circle"
         static let run = "play.fill"
+        /// Resume a stopped Agent in a terminal on its computer (#5521): the web's Resume shows the same play mark.
+        static let resume = run
         static let add = "plus"
         static let send = "arrow.up"
         /// Move up, the up-arrow key: the same arrow as `send`.
@@ -321,6 +325,8 @@ extension Theme {
         static let forward = "chevron.forward"
         static let expand = "chevron.down"
         static let collapse = "chevron.up"
+        /// All of the lines hidden between a diff's hunks shown at once (UI version 5's `context`, #827): arrows out of a line.
+        static let unfoldLines = "arrow.up.and.line.horizontal.and.arrow.down"
         /// Holding the mic: slide this way to drop what was heard, or up to keep dictating hands-free (`DictationHold`).
         static let slideToCancel = back
         static let slideToLock = collapse
@@ -487,6 +493,8 @@ extension Theme {
         static let pluginCalendar = calendarView
         static let pluginMoney = "creditcard"
         static let pluginStar = "star"
+        /// Asking for a GitHub star for Persona (#5761): the empty Agents pill, the milestone card, the onboarding toast.
+        static let gitHubStar = pluginStar
         static let phone = "iphone"
         /// The assistant operating an iPhone through a Mac (the extension iphone): its section, its tools.
         static let phoneControl = "iphone.radiowaves.left.and.right"

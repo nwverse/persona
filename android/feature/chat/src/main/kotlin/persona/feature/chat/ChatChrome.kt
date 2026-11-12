@@ -16,6 +16,8 @@ import persona.core.contracts.api.*
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
+import persona.core.domain.lines.isLiveStatus
+import persona.core.domain.sort.AgentSession
 import persona.core.domain.sort.SessionRename
 import persona.core.domain.sort.canAttach
 import persona.core.domain.sort.canInterrupt
@@ -25,8 +27,11 @@ import persona.core.domain.sort.deleteConfirmation
 import persona.core.domain.sort.isTern
 import persona.core.domain.sort.resumeCommand
 import persona.core.domain.sort.slotLabel
+import persona.core.domain.sort.stateLabel
 import persona.core.domain.sort.source
 import persona.core.domain.sort.sourceSubtitle
+import persona.core.domain.sort.TerminalResume
+import persona.core.domain.sort.terminalResume
 
 @Composable
 internal fun ChatHeader(
@@ -44,6 +49,13 @@ internal fun ChatHeader(
     onTerminal: (() -> Unit)? = null,
     /** The chat has a terminal it can't open from here: Brief's and Board's header button explains it instead. */
     onTerminalHelp: (() -> Unit)? = null,
+    /**
+     * Resume in Terminal (#5565): opens the session's terminal and resumes the stopped Agent there (iOS / web same
+     * action). Nil when the shell has no terminal to open.
+     */
+    onResumeInTerminal: (() -> Unit)? = null,
+    /** When the turn that runs now began (the newest turn's start, iOS `Turn.startedAt`): "Working 22 min" counts from it. */
+    turnStart: java.time.Instant? = null,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     var menu by remember { mutableStateOf(false) }
@@ -66,8 +78,11 @@ internal fun ChatHeader(
     DisposableEffect(Unit) { onDispose { onOverlay(false) } }
     val line = resolveStatusLine(statusState)
     val status = headerStatus(statusState, session)
-    // How long it has worked this turn, in minutes (the work line in the chat has the seconds): read again every 30 s.
-    val since = session?.takeIf { status == Status.Working && it.backgroundWorking != true }?.stateSince?.let(::parseTime)
+    // iOS `stateWords`: its turn ended and a workflow or background work keeps it going, or all it runs only waits; else how
+    // long this turn has worked, in minutes (the work line in the chat has the seconds), read again every 30 s.
+    val agent = remember(session) { session?.let(::AgentSession) }
+    val inBackground = agent?.runsInBackground == true
+    val since = workedSince(agent, turnStart)?.takeIf { status == Status.Working }
     val now by produceState(java.time.Instant.now(), since) {
         while (since != null) { kotlinx.coroutines.delay(30_000); value = java.time.Instant.now() }
     }
@@ -91,8 +106,11 @@ internal fun ChatHeader(
             // As iOS (#4339 C4): Seen and the other quiet states say nothing in words, the dot carries them; a turn
             // that has run a minute says for how long ("Working 22 min").
             else -> when {
+                inBackground -> agent!!.stateLabel.text()
                 status in QuietStatuses -> null
                 worked != null -> "${status.localizedLabel} $worked"
+                // The hub counts background commands as working: the state's name, not the status line's own "Waiting".
+                status == Status.Waiting && agent?.state == AgentState.Working -> Status.Working.localizedLabel
                 else -> status.localizedLabel
             }
         },
@@ -107,6 +125,7 @@ internal fun ChatHeader(
             ChatTitleTap.Status -> onDetails
         },
         agentMark = session?.agentMark,
+        waiting = agent?.waitsInBackground == true,
         titleClickLabel = if (PersonaTheme.style == AppStyle.Glass)
             stringResource(if (linkTitle == null) R.string.chat_chrome_title_info else R.string.chat_chrome_title_connection) else null,
     ) {
@@ -129,6 +148,24 @@ internal fun ChatHeader(
         }
         // iOS's first item after the to-do: the terminal comes up over the chat.
         onTerminal?.let { add(JAction(stringResource(R.string.chat_chrome_terminal), PersonaIcons.terminal, onClick = it)) }
+        // Resume in Terminal (#5565): offered for a stopped Agent; disabled with why where its computer has no terminal engine.
+        when (terminalResume(session, machine)) {
+            TerminalResume.Available -> onResumeInTerminal?.let {
+                add(JAction(stringResource(R.string.chat_chrome_resume_in_terminal), PersonaIcons.run, onClick = it))
+            }
+            TerminalResume.NoEngine -> add(
+                JAction(
+                    stringResource(R.string.chat_chrome_resume_in_terminal),
+                    PersonaIcons.run,
+                    enabled = false,
+                    subtitle = stringResource(
+                        R.string.chat_chrome_resume_no_engine,
+                        machine?.displayName?.takeIf(String::isNotBlank) ?: session?.machineId.orEmpty(),
+                    ),
+                ) {},
+            )
+            TerminalResume.Hidden -> Unit
+        }
         onSearch?.let { add(JAction(stringResource(R.string.chat_chrome_search), PhIcons.MagnifyingGlass, onClick = it)) }
         onFiles?.let { add(JAction(stringResource(R.string.chat_chrome_files), PhIcons.FolderSimple, onClick = it)) }
         onGit?.let { add(JAction(gitLabel, onClick = it)) }
@@ -247,16 +284,26 @@ internal fun ChatActionsSheet(actions: List<JAction>, onDismiss: () -> Unit, tit
         LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(bottom = 16.dp.dense)) {
             items(actions) { action ->
                 JRow(action.label, leadingIcon = action.icon, enabled = action.enabled, destructive = action.destructive,
+                    subtitle = action.subtitle,
                     leading = if (action.icon == null && iconColumn) ({ Spacer(Modifier.width(24.dp.dense)) }) else null,
-                    chevron = false, onClick = { onDismiss(); action.onClick() })
+                    chevron = false, onClick = if (action.enabled) ({ onDismiss(); action.onClick() }) else null)
             }
         }
     }
 }
 
-/** The state the header shows: the status line's (an ended chat, an offline machine, a request), else the session's. */
-internal fun headerStatus(state: StatusLineState, session: Session?): Status =
-    resolveStatusLine(state)?.status ?: Status.entries.firstOrNull { it.name == session?.agentState?.name } ?: Status.Unknown
+/**
+ * The state the header shows: the status line's (an ended chat, an offline machine, a request), else the session's. The status
+ * line's own "Waiting" (a loop or background work on a chat that is not working) is not a state of the session: the header says
+ * the session's own, as iOS does (`stateWords`, `StatusDot`), so a seen chat with a loop says nothing in words and has Seen's dot,
+ * and a finished one says Unread; the loop and the background work have their pill (Glass) and their chips above the composer.
+ * A chat the hub counts as working keeps it: its words are [stateLabel]'s.
+ */
+internal fun headerStatus(state: StatusLineState, session: Session?): Status {
+    val own = Status.entries.firstOrNull { it.name == session?.agentState?.name } ?: Status.Unknown
+    val line = resolveStatusLine(state) ?: return own
+    return if (line.kind == StatusLineKind.Waiting && own != Status.Working) own else line.status
+}
 
 /**
  * The slim bar an Agent chat's header folds into on Glass (iOS `compactChrome`, #4339 C4): back, the agent's mark, the
@@ -270,7 +317,8 @@ internal fun ChatSlimHeader(
     val link = connectionTitle(connection)
     val haptics = rememberHaptics()
     ChatSlimBar(title, stringResource(R.string.chat_chrome_slim_open, link ?: title), onOpen = { haptics(Haptic.Tap); onOpen() },
-        onBack = onBack, status = headerStatus(statusState, session), agentMark = session?.agentMark, linkText = link)
+        onBack = onBack, status = headerStatus(statusState, session), agentMark = session?.agentMark, linkText = link,
+        waiting = session?.let(::AgentSession)?.waitsInBackground == true)
 }
 
 /** The states the line under the title names by its dot only (iOS `ChatView.quiet`). */
@@ -288,6 +336,17 @@ internal fun chatPlace(session: Session, machine: String?, source: String? = nul
     return listOfNotNull(source?.takeIf(String::isNotBlank), computer, place.takeIf(String::isNotEmpty))
         .joinToString(" · ").takeIf(String::isNotEmpty)
 }
+
+/** Its turn has ended and a workflow or background work keeps it going, or all it runs only waits (iOS `stateWords`' first rule). */
+internal val AgentSession.runsInBackground: Boolean get() = isBackgroundWorking || waitsInBackground
+
+/**
+ * Where "Working 22 min" counts from (iOS `ChatView.stateWords`): the start of the turn that runs now ([turnStart]), only while
+ * the agent works, its turn is live ([isLiveStatus]) and it is not in the background ([runsInBackground]); else null, and the
+ * header says the state's name alone.
+ */
+internal fun workedSince(agent: AgentSession?, turnStart: java.time.Instant?): java.time.Instant? =
+    turnStart.takeIf { agent != null && agent.state == AgentState.Working && isLiveStatus(agent.session.status) && !agent.runsInBackground }
 
 /** Whole minutes from [since] to [now], null under one minute or without a start. */
 internal fun workedMinutes(since: java.time.Instant?, now: java.time.Instant): Long? =

@@ -52,6 +52,7 @@ import persona.core.domain.rewind.Rewind
 import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.internal.GeneratedComponentManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
@@ -74,6 +75,8 @@ fun ChatScreen(
     sessionKey: SessionKey, repository: ChatRepository, sender: MessageSender,
     interactions: InteractionCenter, sessions: SessionsRepository, onBack: () -> Unit,
     onTerminal: ((SessionKey) -> Unit)? = null,
+    /** Resume in Terminal (#5565): open the terminal and resume there; null when the shell has no terminal. */
+    onResumeInTerminal: ((SessionKey) -> Unit)? = null,
     chrome: ChatChromeBindings = ChatChromeBindings(),
     pendingBadge: @Composable () -> Unit = { PendingBadge(PendingStatus.NeedsReview) },
     readingKey: ChatReadingKey? = null,
@@ -100,7 +103,8 @@ fun ChatScreen(
         key(sessionKey, scopedReadingKey) {
             val readOnlyRefusal = androidx.compose.ui.res.stringResource(R.string.chat_read_only_history)
             val pageSender = remember(sender, historyReadOnly) { if (historyReadOnly) ReadOnlyMessageSender(sender, readOnlyRefusal) else sender }
-            ChatPage(sessionKey, repository, pageSender, interactions, sessions, onBack, onTerminal, chrome, scopedReadingKey, anchorStore ?: local?.anchors,
+            ChatPage(sessionKey, repository, pageSender, interactions, sessions, onBack, onTerminal, onResumeInTerminal, chrome,
+                scopedReadingKey, anchorStore ?: local?.anchors,
                 renderStyle, textUpdates,
                 composerService, composerState ?: rememberChatComposerState(), onDraftChanged, onContextCleared, statusBindings,
                 embedded, showTopBar, historyReadOnly, historyFooter, historySession)
@@ -113,7 +117,7 @@ fun ChatScreen(
 private fun ChatPage(
     key: SessionKey, repository: ChatRepository, sender: MessageSender,
     interactions: InteractionCenter, sessions: SessionsRepository, onBack: () -> Unit,
-    onTerminal: ((SessionKey) -> Unit)?, chrome: ChatChromeBindings,
+    onTerminal: ((SessionKey) -> Unit)?, onResumeInTerminal: ((SessionKey) -> Unit)?, chrome: ChatChromeBindings,
     readingKey: ChatReadingKey?, anchorStore: ChatAnchorStore?,
     renderStyle: ChatRenderStyle, textUpdates: Map<String, ChatTextUpdate>,
     composerService: ChatComposerService?, composer: ChatComposerState,
@@ -148,6 +152,8 @@ private fun ChatPage(
     val machines by sessions.machines.collectAsStateWithLifecycle()
     val allRequests by interactions.pending.collectAsStateWithLifecycle()
     val allMessages by sender.outbox.collectAsStateWithLifecycle()
+    val adoptedSessions by sessions.adoptedSessions.collectAsStateWithLifecycle()
+    val startedThreads by sessions.startedThreads.collectAsStateWithLifecycle()
     val writtenAt by sender.writtenAt.collectAsStateWithLifecycle()
     val allSendReceipts by key(sender) { sender.sendReceipts.collectAsStateWithLifecycle() }
     val sendReceipts = allSendReceipts.filter { receipt -> receipt.session == key ||
@@ -170,7 +176,11 @@ private fun ChatPage(
     val readOnly = historyOnly || child != null || workflowAgent != null || key.sessionId.contains('@')
     var lastSession by remember(key) { mutableStateOf<Session?>(null) }
     var detailInfo by remember(key) { mutableStateOf<SessionInfo?>(null) }
-    val row = sessionList.firstOrNull { it.key == key }
+    val adopted = adoptedSessions.lastOrNull { it.key == key }
+    val row = sessionList.firstOrNull { it.key == key }?.let {
+        // Summary rows from older hubs omit this flag; a waiting pane keeps its id only until it becomes a thread.
+        if (adopted?.awaitingFirstMessage == true) it.copy(awaitingFirstMessage = true) else it
+    } ?: adopted
     LaunchedEffect(key, row?.waiting != null, row?.rev, row?.model, chrome.actions) {
         if (row?.waiting == null) return@LaunchedEffect
         try { detailInfo = chrome.actions?.info(row) }
@@ -180,8 +190,8 @@ private fun ChatPage(
     // What an Agent's summary row leaves out and `info` doesn't say: the launcher switch waiting for the next message
     // (#5055), read from the session's complete row where the hub looks one up (`sessions_lookup`); Glass's pill shows it.
     var completeRow by remember(key) { mutableStateOf<Session?>(null) }
-    val lookup = "sessions_lookup" in LocalHubFeatures.current && PersonaTheme.style == AppStyle.Glass &&
-        renderStyle != ChatRenderStyle.Assistant && AgentModelPanel.LAUNCHER_SWITCH in LocalHubFeatures.current
+    val lookup = "sessions_lookup" in LocalHubFeatures.current && renderStyle != ChatRenderStyle.Assistant &&
+        PersonaTheme.style == AppStyle.Glass && AgentModelPanel.LAUNCHER_SWITCH in LocalHubFeatures.current
     LaunchedEffect(key, row?.waiting != null, row?.rev, chrome.actions, lookup) {
         if (row?.waiting == null || !lookup) return@LaunchedEffect
         try { completeRow = chrome.actions?.completeRow(row) }
@@ -201,6 +211,13 @@ private fun ChatPage(
     } ?: lastSession
     SideEffect { if (liveSession != null) lastSession = liveSession }
     val session = liveSession ?: readOnlySessionMetadata(key, historyReadOnly, historySession)
+    val codexThread = session?.takeIf { it.awaitingFirstMessage && !historyOnly }?.let {
+        startedThreads[key] ?: codexThreadOf(sessionList, it)
+    }
+    val followSession = chrome.onFollowSession ?: onContextCleared ?: chrome.onOpenSession
+    LaunchedEffect(codexThread?.key) {
+        codexThread?.let { followSession?.invoke(it.key) }
+    }
     // A launcher switch this page recorded or dropped (#5055), drawn at once until the row's next push says what the hub has.
     var drawnSwitch by remember(key) { mutableStateOf<DrawnSwitch?>(null) }
     val switchSession = session?.let { drawnSwitch.over(it) }
@@ -434,6 +451,8 @@ private fun ChatPage(
         }
         projectedFrom = items
     }
+    // Where the header counts "Working 22 min" from: the start of the turn that runs now (iOS `Turn.startedAt`).
+    val runningSince = remember(projection) { projection.liveTurnId?.let { id -> projection.turns.firstOrNull { it.id == id }?.start } }
     val liveWorkLines = remember(projection) { liveWorkIds(projection.lines) }
     var previousLiveWork by remember { mutableStateOf(emptySet<String>()) }
     // Fold the completed run, but keep choices made on historical lines and transfer an opened placeholder.
@@ -573,6 +592,7 @@ private fun ChatPage(
     // A session without a terminal (a Codex thread, an agent runtime's) has nothing to open or explain (#4339 C7).
     val hasTerminal = ChatTerminalPlaces.has(readOnly, canTerminal, renderStyle)
     val agentTerminal = terminal?.takeIf { hasTerminal }
+    val resumeInTerminal: (() -> Unit)? = onResumeInTerminal?.let { action -> { action(key) } }
     val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
 
     fun followEnd() {
@@ -617,12 +637,6 @@ private fun ChatPage(
         if (readOnly || !canSend) return false
         if (sending || submittedDraft != null) return false
         if (command == null && ((!composer.hasContent && linkContexts.isEmpty()) || !composer.ready)) return false
-        // Routed to a task ("Say to "xx""): straight to its agent, not to Persona (docs/assistant/unified-entry.md "Routing").
-        if (command == null && tasks != null && linkContexts.isEmpty() && composer.attachments.isEmpty() &&
-            tasks.sendRouted(key.sessionId, composer.value.text.trim()) { notice = operationFeedback(it).text.resolve(res) }) {
-            composer.clearIfUnchanged(composer.draft)
-            return true
-        }
         val draft = composer.draft
         val refs = if (command == null) linkContexts else emptyList()
         val wireText = command ?: linkMessage(composer.message(), refs, context.resources)
@@ -634,12 +648,18 @@ private fun ChatPage(
         followEnd()
         scope.launch {
             try {
-                // The user's own message carries out a launcher switch waiting on Glass, where the pill shows it (#5055):
-                // `apply_switch`; any other message leaves it waiting.
-                if (command == null && switchesNext(switchSession, glass && agentChat)) {
-                    sender.sendApplyingSwitch(key, wireText, id)
-                    drawnSwitch = null
-                } else sender.send(key, wireText, id, null, conversationLauncher, conversationModel)
+                // Routed to a task ("Say to "xx""): its accepted response, not launching the request, consumes the route
+                // and clears the draft below. Until then this has the same pending state as an ordinary send (#5949).
+                val routed = command == null && tasks != null && refs.isEmpty() && draft.attachments.isEmpty() &&
+                    tasks.sendRouted(key.sessionId, draft.text.trim())
+                if (!routed) {
+                    // The user's own message carries out a launcher switch waiting on Glass, where the pill shows it (#5055):
+                    // `apply_switch`; any other message leaves it waiting.
+                    if (command == null && switchesNext(switchSession, glass && agentChat)) {
+                        sender.sendApplyingSwitch(key, wireText, id)
+                        drawnSwitch = null
+                    } else sender.send(key, wireText, id, null, conversationLauncher, conversationModel)
+                }
                 if (command == null) {
                     composer.clearIfUnchanged(draft)
                     linkContexts = linkContexts.filterNot { ref -> refs.any { it.id == ref.id } }
@@ -817,7 +837,8 @@ private fun ChatPage(
             sheet = taskSheet, machines = machines.filter { GroupKeys.namespaceOf(it.id) == namespace }.map { it.copy(id = GroupKeys.raw(it.id)) },
             pending = taskCards.filter { GroupKeys.namespaceOf(it.machineId) == namespace }.map { it.copy(machineId = GroupKeys.raw(it.machineId)) },
             manager = session?.manager,
-            backgroundRecords = assistantPresentation.background, onOpenBackground = { backgroundOpen = true })
+            backgroundRecords = assistantPresentation.background, onOpenBackground = { backgroundOpen = true },
+            onOpenSetup = chrome.onOpenSetup?.let { open -> { page: persona.core.contracts.BriefSetupPage -> open(page, session?.manager) } })
     }
     fun approveTray(captured: List<Pair<Interaction, Resolution>>) {
         if (trayApproving || taps.busy || readOnly) return
@@ -948,12 +969,19 @@ private fun ChatPage(
         line.holds(lastUserId)
     }?.let { ChatListEntry(it.contentKey, lastLineAtTop = true) } else null
     val placed = remember(lines, messages, writtenAt) { placeFailed(lines.asReversed(), messages, writtenAt) }
-    // The list's keys from the bottom (reverse layout): the tail rows, the outbox's bubbles still on their way, then the
-    // lines, each with the failed sends written before it just above it (#2769).
-    val listKeys = remember(lines, placed, tailRows) {
+    // Persona's first message, not in the transcript yet: its day stands over it on Glass, as the transcript's will once it
+    // is there (iOS `DayLine`, #1911), so the line does not appear above it later. The day it was written, else today.
+    val pendingDay = if (glass && !agentChat && lines.isEmpty() && placed.rest.isNotEmpty())
+        placed.rest.mapNotNull { it.createdAt }.minOrNull()?.let { java.time.Instant.ofEpochMilli(it).atZone(java.time.ZoneId.systemDefault()).toLocalDate() }
+            ?: java.time.LocalDate.now()
+        else null
+    // The list's keys from the bottom (reverse layout): the tail rows, the outbox's bubbles still on their way, that day,
+    // then the lines, each with the failed sends written before it just above it (#2769).
+    val listKeys = remember(lines, placed, tailRows, pendingDay != null) {
         buildList {
             addAll(tailRows)
             placed.rest.asReversed().forEach { add("outbox-${it.clientMessageId}") }
+            if (pendingDay != null) add(PENDING_DAY_ROW)
             for (line in lines) {
                 add(line.contentKey)
                 placed.before[line.id].orEmpty().asReversed().forEach { add("outbox-${it.clientMessageId}") }
@@ -1016,7 +1044,12 @@ private fun ChatPage(
                 .map { (todo, state) -> MentionTask(todo.id, todo.title, todo.place(host, null), state.status()) }
         }
     }
-    val mentions = if (readOnly || !canSend) null else ComposerMentions(mentionFiles, session?.cwd.orEmpty(), sessionList, key, taskMentions)
+    // Its session's folder and any folder a typed path names are read from the session's computer, as iOS's `MentionSource` does.
+    val mentionFolders = remember(chrome.files, key.machineId) {
+        chrome.files?.let { files -> MentionFolders { dir, cwd -> files.directory(key.machineId, cwd, dir).entries } }
+    }
+    val mentions = if (readOnly || !canSend) null
+        else ComposerMentions(mentionFiles, session?.cwd.orEmpty(), sessionList, key, taskMentions, mentionFolders)
     // An assistant conversation's cards answer through its hub's store (docs/assistant/assistant-views.md); elsewhere they only draw.
     val cardsHost = remember(tasks, key.sessionId, readOnly, canSend) {
         tasks?.let { persona.core.domain.views.AssistantCardsHost(key.sessionId, it.cards, it.cardActions, interactive = !readOnly && canSend) }
@@ -1049,6 +1082,11 @@ private fun ChatPage(
             BoxWithConstraints(Modifier.fillMaxSize().padding(bottom = linkInset)) {
                 val pageHeight = maxHeight
                 val trayMax = maxHeight * AssistantTrayTokens.maximumHeightFraction
+                // The rule a question a supervisor passed up suggests, under its card (#4929); a hub from before sends none.
+                val ruleLine: (@Composable (Interaction) -> Unit)? = if (tasks == null) null else { card ->
+                    RuleSuggestionLine("card:${card.id}", card.suggestion, tasks, { notice = operationFeedback(it).text.resolve(res) },
+                        card.manager, enabled = canApprove)
+                }
                 // The pending cards above the composer (DESIGN_SYSTEM.md 4.8, iOS PendingCards and TaskQuestions), in two places:
                 // [task] Persona's task question above its entries, else the stack. Each takes at most half the page and never so
                 // much that the composer leaves it; with the keyboard up, what the conversation has above the rest of the
@@ -1108,7 +1146,7 @@ private fun ChatPage(
                                 }
                             }, keyboard = keyboard,
                             labels = if (task) taskAsk?.let { mapOf(it.card.id to it.label) }.orEmpty() else emptyMap(),
-                            first = if (task) null else chrome.requestId, counted = !task)
+                            first = if (task) null else chrome.requestId, counted = !task, suggestion = ruleLine)
                     }
                 }
                 val onOpenSibling = chrome.onOpenSession
@@ -1134,7 +1172,9 @@ private fun ChatPage(
                                         statusState = status, onDetails = { statusSheet = true },
                                         onOpenTodo = chrome.onOpenTodo, agentShares = chrome.agentShares, worktrees = chrome.worktrees,
                                         onSearch = { search.open(chatList) { timeline.freeze(currentItems); timelineVersion++ } },
-                                        onTerminal = agentTerminal, onTerminalHelp = if (hasTerminal && terminal == null) ({ terminalHelp = true }) else null)
+                                        onTerminal = agentTerminal, onTerminalHelp = if (hasTerminal && terminal == null) ({ terminalHelp = true }) else null,
+                                        onResumeInTerminal = resumeInTerminal,
+                                        turnStart = runningSince)
                                     // The space's other tabs under the title (iOS SiblingTabs); not for the assistant's conversation.
                                     if (tabs && session != null && onOpenSibling != null) {
                                         ChatSiblingTabs(session, siblingSessions, onOpenSibling, trailing = activityPill)
@@ -1370,6 +1410,7 @@ private fun ChatPage(
                                 placed.rest.asReversed().forEach { message ->
                                     item(key = "outbox-${message.clientMessageId}", contentType = "outbox") { outboxBubble(message) }
                                 }
+                                pendingDay?.let { day -> item(key = PENDING_DAY_ROW, contentType = "day") { DayLine(day, Modifier.testTag("chat-pending-day")) } }
                                 for (line in lines) {
                                     item(key = line.contentKey, contentType = line.contentType()) {
                                         ChatSearchHighlight(search, line.contentKey) {
@@ -1422,7 +1463,7 @@ private fun ChatPage(
                             }
                             else if (!settling && lines.isEmpty() && messages.isEmpty() && snapshot.error == null)
                                 JEmptyState(stringResource(R.string.chat_screen_empty_title),
-                                    stringResource(if (readOnly) R.string.chat_screen_empty_read_only else R.string.chat_screen_empty_hint),
+                                    emptyChatHint(res, session, machines.firstOrNull { it.id == key.machineId }?.name, readOnly),
                                     Modifier.align(Alignment.Center).padding(padding).padding(horizontal = horizontalPadding))
                             // The newest plan card scrolled out of view: "Step N/M" above the composer brings it back (web PlanPill).
                             val anchor = remember(lines, contentPlans, renderStyle) { latestPlanLine(lines, contentPlans) }
@@ -1506,3 +1547,5 @@ internal fun ComposerContextCards(contexts: List<ChatLinkContext>, compact: Bool
 /** The rows at the chat's newest end, under your unsent messages: a load error (Glass), then "Claude is getting ready…". */
 private const val ERROR_ROW = "load-error"
 private const val READY_ROW = "getting-ready"
+/** The day over a first message not in the transcript yet (Glass, Persona's conversation). */
+private const val PENDING_DAY_ROW = "pending-day"

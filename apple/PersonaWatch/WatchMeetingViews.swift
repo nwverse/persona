@@ -14,7 +14,8 @@ struct WatchMeetingEntries: View {
         if capture.allDay {
             Button { allDay.markMeeting() } label: {
                 VStack(alignment: .leading, spacing: Theme.Watch.lineSpacing) {
-                    Label("Mark Meeting", systemImage: Theme.Icon.meetingMark).font(Theme.Font.secondaryMedium).lineLimit(1)
+                    Label("Mark Meeting", systemImage: Theme.Icon.meetingMark).labelStyle(.watchRow)
+                        .font(Theme.Font.secondaryMedium).lineLimit(1)
                     if allDay.feedback == .meetingMarked {
                         Text("Meeting marked").font(Theme.Font.caption).foregroundStyle(.secondary)
                     }
@@ -29,7 +30,7 @@ struct WatchMeetingEntries: View {
             .accessibilityIdentifier("watch-meeting-recording")
         if !model.minutes.meetings.isEmpty {
             NavigationLink { WatchMinutesList() } label: {
-                Label("Meeting Minutes", systemImage: Theme.Icon.minutes).font(Theme.Font.secondaryMedium).lineLimit(1)
+                Label("Meeting Minutes", systemImage: Theme.Icon.minutes).labelStyle(.watchRow).font(Theme.Font.secondaryMedium).lineLimit(1)
             }
             .watchCard()
             .accessibilityIdentifier("watch-meeting-minutes")
@@ -46,7 +47,7 @@ struct WatchRecordingsLabel: View {
     var body: some View {
         Label(capture.state == .idle || capture.allDay ? String(localized: "Recordings") : String(localized: "Recording… Open"),
               systemImage: Theme.Icon.recording)
-            .lineLimit(1)
+            .labelStyle(.watchRow).lineLimit(1)
     }
 }
 

@@ -178,6 +178,17 @@ class ChatComposerState(initial: ChatComposerDraft = ChatComposerDraft()) {
         attachments = attachments + restored.attachments.filter { item -> attachments.none { it.id == item.id } }
     }
 
+    /**
+     * Photos taken back with a queued message (the hub returns a Persona conversation's beside its queue, [restoredPhotos]),
+     * kept in the draft as the photos they were. All of them stay, as on iOS: a message went out with at most four, and the
+     * draft's four-place limit is the pickers', not the send's.
+     */
+    internal fun restorePhotos(photos: List<ComposerAttachment>) {
+        if (photos.isEmpty()) return
+        beginEdit()
+        attachments = attachments + photos
+    }
+
     companion object {
         val Saver = listSaver<ChatComposerState, String>(
             save = { state -> listOf(state.value.text, JsonCodec.encodeToString(state.draft.storedAttachments()),
@@ -211,6 +222,9 @@ private val composerPhotoStandIns = setOf(
     "画像を見てください", // i18n-ignore
     "動画を見てください", // i18n-ignore
 )
+
+/** How many photos a message carries as paths on the computer (its `<attached_images>` block): what a queued row says it carries. */
+internal fun composerPhotoCount(text: String): Int = composerImagePaths(text).size
 
 private fun composerImagePaths(text: String): List<String> =
     composerImageTags.findAll(text).flatMap { it.groupValues[1].lineSequence() }
