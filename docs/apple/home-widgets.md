@@ -63,7 +63,7 @@ The persona never takes the hero's place. It appears in three places:
 | Done | idle with the green check (happy eyes on the line drawing) | `idle` frame + the check |
 | Thinking | eyes up, the thought bubble | its `thinking` frame |
 | Idle | as the icon | its `idle` frame |
-| Offline | gray, eyes closed: the snapshot is over 30 minutes old | its `offline` frame |
+| Offline | gray, eyes closed: the snapshot is over an hour old | its `offline` frame |
 
 Mochi is drawn in code (`PersonaFace` in full color, `MochiGlyph` otherwise). A package's pictures are written by the
 app into the App Group at the widget sizes, as the Live Activity's are.
@@ -109,11 +109,11 @@ Widgets/faces/<id>_<rev>/    the chosen package's pictures, one per state, at th
 
 - **What it holds** (`apple/Shared/HomeWidgets/HomeSnapshot.swift`): only what a widget draws. Up to 40 agent rows
   (the rest counted), today's events, 8 to-dos, the accounts, 8 computers, 5 messages and a week of steps. About
-  6 KB. Times are Unix seconds, and every field decodes leniently.
-- **When the app writes it**: on every change a widget shows, coalesced to at most one write every 5 seconds in the
-  foreground (P7); when it goes to the background; after a background refresh (`BGAppRefreshTask`
-  `persona.widgets.refresh`, about every 30 minutes while a widget is on a screen); and when the hub's widget push
-  wakes it (#5721). That push is sent within seconds when Needs You changes; other changes are coalesced to at most one
+  6 KB. Times are Unix seconds. The app and its widgets ship together: a file of another shape (`HomeSnapshot.version`,
+  written before an update) reads as none until the app writes again.
+- **When the app writes it**: on every change a widget shows, coalesced to at most one write every 5 seconds (P7);
+  when it goes to the background; at least every 20 minutes while it runs (`HomeWidgetWriter.heartbeat`); and when the
+  hub's widget push wakes it (#5721). That push is sent within seconds when Needs You changes; other changes are coalesced to at most one
   every 15 minutes per device. The app writes only when the bytes changed, then reloads only the kinds whose part
   changed (`WidgetCenter.reloadTimelines(ofKind:)`): WidgetKit budgets reloads. The writer is `HomeWidgetWriter`; what
   the watch's summary follows asks it for a write (`AppModel.summariesChanged`), and a recording that starts or stops
@@ -121,9 +121,9 @@ Widgets/faces/<id>_<rev>/    the chosen package's pictures, one per state, at th
 - **Waking the app** (#5721): from the foreground the app tells the hub whether any of the widgets is on a screen
   (`widgets` in its device prefs, `HomeWidgetWriter.tellHub`); the hub's silent `persona_wake: "widgets"` push then
   connects it for 25 seconds, and it writes before it lets go.
-- **Off the main thread** (P1): encoding and writing run in the background, with the file protected until first
-  unlock, as `FleetLookStore`'s.
-- **Stale**: the timeline adds an entry at `HomeSnapshot.staleAfter` (30 minutes after the write). From then on the
+- **Off the main thread** (P1): the file is written on a background task, protected until first unlock as
+  `FleetLookStore`'s; only encoding the few kilobytes runs on the main actor, at most every 5 seconds.
+- **Stale**: the timeline adds an entry at `HomeSnapshot.staleAfter` (an hour after the write). From then on the
   content steps back (`staleOpacity`), the face is offline and the widget says "Updated … ago" (principle 7).
 
 ## Taps
