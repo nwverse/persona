@@ -468,7 +468,11 @@ For every component: use the design-system one, not a lookalike. Counts are appr
   a round mark on each message's leading edge (filled accent when picked), a tap anywhere on the message toggles it, the
   composer gives way to a bar with Cancel, "N Selected" and Forward N (disabled at 0), and Cancel leaves the chat as it
   was. Several forwards of one chat are one row over the composer (a line each, one ×) and one card in the bubble (each
-  message's author, time and two lines, each opening it; past three, "N More").
+  message's author, time and two lines, each opening it; past three, "N More"). Web (#3838): "Select messages…" is the
+  first row of Forward to; while selecting, each message with a Forward has a checkbox (`ui/CheckMark`) in its first
+  place, a click anywhere on it toggles it and nothing inside it answers (no hover bar or menus), and the bar in the
+  composer's place reads Cancel, "N selected" and Forward N; Esc cancels too. The row over the composer is
+  `ForwardGroupBar` and the bubble's card `ForwardGroupBlock` (`views/chat/ForwardGroup.tsx`), past three "N more".
 - Share as Image (iOS `MessageShareSheet`): a full-screen page with the message as a card (who said it, where and when, the
   words with code blocks that wrap and have no Copy bar, a quiet Persona mark, on a pale blue-to-lilac gradient), Light /
   Dark at the top, and Share (the picture), Save, Copy and Share Text along the bottom; the card is 390 pt wide, wider for
