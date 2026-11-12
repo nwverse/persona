@@ -4,6 +4,7 @@ import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.view.View
+import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
@@ -14,7 +15,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.*
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
@@ -36,7 +37,7 @@ import java.io.File
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], qualifiers = "zh-w400dp-h640dp-xhdpi")
 class ComposerGrowthScrollUiTest {
-    @get:Rule val rule = createComposeRule()
+    @get:Rule val rule = createAndroidComposeRule<ComponentActivity>()
     private val state = ChatComposerState()
     private val out = File("build/composer-growth-scroll-shots").apply { mkdirs() }
     private var style by mutableStateOf(AppStyle.Glass)
@@ -82,9 +83,9 @@ class ComposerGrowthScrollUiTest {
         save("$name-${style.name.lowercase()}-${if (dark) "dark" else "light"}-${if (scale == 1f) "standard" else "large"}",
             rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap())
     }
-    private fun layout(): TextLayoutResult {
+    private fun layout(expanded: Boolean = false): TextLayoutResult {
         val layouts = mutableListOf<TextLayoutResult>()
-        field().performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(layouts)) }
+        field(expanded).performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(layouts)) }
         return layouts.single()
     }
     @Test
@@ -175,10 +176,17 @@ class ComposerGrowthScrollUiTest {
         assertEquals(text + "X", state.value.text)
         println("SCROLL input=${visibleLines(afterInput)} selection=${visibleLines(bitmap())}")
     }
-    @Test fun lightAndDarkEvidenceAndExpandedControlsInspectionOnly() {
+    @Test fun lightAndDarkEvidenceAndExpandedControlsInspectionOnly() = screenshotScenes(1f)
+    @Test fun largeTextLightAndDarkEditorInspectionOnly() = screenshotScenes(2f)
+
+    private fun screenshotScenes(fontScale: Float) {
+        // Font-scale changes recreate the Activity; complete that before installing the test composition.
+        org.robolectric.RuntimeEnvironment.setFontScale(fontScale)
+        rule.activityRule.scenario.recreate()
+        scale = fontScale
         mount()
-        for (s in AppStyle.entries) for (d in listOf(false, true)) for (fontScale in listOf(1f, 2f)) {
-            rule.runOnIdle { style = s; dark = d; scale = fontScale; height = 640; home = true }
+        for (s in AppStyle.entries) for (d in listOf(false, true)) {
+            rule.runOnIdle { style = s; dark = d; height = 640; home = true }
             for (lines in if (fontScale == 1f) listOf(1, 6, 7) else listOf(6)) {
                 rule.runOnIdle { state.value = TextFieldValue((1..lines).joinToString("\n") { "Line $it" }) }
                 rule.waitForIdle()
@@ -193,7 +201,11 @@ class ComposerGrowthScrollUiTest {
             val collapse = rule.onNodeWithTag("composer-collapse").fetchSemanticsNode().boundsInRoot
             val textBounds = field(expanded = true).fetchSemanticsNode().boundsInRoot
             assertTrue("Expanded text and top control occupy separate rows", collapse.bottom <= textBounds.top)
-            println("EXPANDED style=$s dark=$d scale=$fontScale collapse=$collapse text=$textBounds")
+            val editorLayout = layout(expanded = true)
+            val editorLineHeight = editorLayout.getLineBottom(0) - editorLayout.getLineTop(0)
+            assertEquals("The dialog must really use the requested system font scale", fontScale,
+                editorLayout.layoutInput.density.fontScale, 0f)
+            println("EXPANDED style=$s dark=$d scale=$fontScale lineHeight=$editorLineHeight collapse=$collapse text=$textBounds")
             captureEditor("expanded-${s.name.lowercase()}-${if (d) "dark" else "light"}-${if (fontScale == 1f) "standard" else "large"}")
             rule.onNodeWithTag("composer-collapse").performClick()
             rule.waitForIdle()

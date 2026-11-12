@@ -169,6 +169,9 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
   Assistant and Agents now share the fixed six-line `ComposerGrowLines` token. Test short and tall viewports,
   wrapped text, and large text; a manual swipe's bitmap must stay unchanged across idle cursor-blink frames,
   while typing and selection movement must restore the visible caret. Native renders do not verify a real IME.
+  Full-screen dialogs own another Android view: override system font scale with `RuntimeEnvironment.setFontScale`
+  as well as Compose's density, complete the Activity recreation before mounting the fixture, and assert the dialog's
+  actual text-layout density before labelling a capture large. Inspect its rendered line height and pixels too.
 
 - **A big page must not read a state that changes on every scroll frame** (#4039). `ChatListState.position` holds the
   reading anchor's pixel offset, written each frame; `ChatPage` read `position.expanded`, so a scroll re-ran the whole
