@@ -72,14 +72,6 @@ func agentEngine(a host.Agent) string {
 	return ""
 }
 
-// engineName is how a refusal names an engine.
-func engineName(engine string) string {
-	if engine == "codex" {
-		return "Codex"
-	}
-	return "Claude Code"
-}
-
 // engineOwnLauncher is the launcher session id runs on with engine, and whether that is known: a Claude Code
 // session's as ownLauncher says, a Codex session's from its record (Persona started or resumed it); else plain codex,
 // not known.

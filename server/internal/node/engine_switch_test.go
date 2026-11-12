@@ -125,8 +125,8 @@ func promptsTo(f *fakeHerdr) []string {
 	return out
 }
 
-// handoffOf checks that prompt is the handoff block (from, to, model, resumed) followed by the user's words text.
-func handoffOf(t *testing.T, prompt, from, to, model string, resumed bool, text string) {
+// checkHandoffBlock checks that prompt is the handoff block (from, to, model, resumed) followed by the user's words text.
+func checkHandoffBlock(t *testing.T, prompt, from, to, model string, resumed bool, text string) {
 	t.Helper()
 	head := `<persona-context kind="engine-switch" title="Handoff" from="` + from + `" to="` + to + `"`
 	if model != "" {
@@ -161,6 +161,10 @@ func codexSwitchNode(t *testing.T) (n *Node, f *fakeHerdr, home, cwd string, unt
 	until = time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
 	n.state.put(sidB, sessionState{Launcher: "codex", Cwd: cwd, StartedAt: until,
 		EngineHistory: []proto.EngineLeg{{SessionID: sidA, Agent: "claude", Until: until}}})
+	// the Codex stretch's own words: what a switch back hands over (engineHandoff reads them)
+	writeRollout(t, home, sidB, cwd, until, until.Add(time.Minute),
+		`{"timestamp":"`+until.Add(10*time.Second).Format(time.RFC3339)+`","type":"event_msg","payload":{"type":"user_message","message":"make it faster"}}`,
+		`{"timestamp":"`+until.Add(20*time.Second).Format(time.RFC3339)+`","type":"event_msg","payload":{"type":"agent_message","message":"Cached the lookup."}}`)
 	f.reply("session.snapshot", snapshot(nil, nil, []any{agentOf("codex", sidB, proto.StatusIdle, "w1:p1", "w1:t1", "w1", cwd, "")}, nil))
 	f.setScreens("w1:p1", "", "")
 	listSessions(t, n)
@@ -317,7 +321,7 @@ func TestEngineSwitchToCodexOnTheUsersNextMessage(t *testing.T) {
 	if got[0].Dir != cwd || !strings.Contains(strings.Join(got[0].Argv, " "), " launch cx --model gpt-6") {
 		t.Errorf("codex-start runs %q in %q", got[0].Argv, got[0].Dir)
 	}
-	handoffOf(t, got[0].Prompt, "claude", "codex", "gpt-6", false, "hello")
+	checkHandoffBlock(t, got[0].Prompt, "claude", "codex", "gpt-6", false, "hello")
 	marks := strings.Join(f.trace("pane.report_metadata"), "\n")
 	if !strings.Contains(marks, `"persona_from":"todo-1@m1/`+sidA+`"`) || !strings.Contains(marks, `"persona_tab":"`+newThread+`"`) {
 		t.Errorf("the pane's marks:\n%s", marks)
@@ -362,7 +366,12 @@ func TestEngineSwitchBackResumesTheEarlierSession(t *testing.T) {
 	if len(got) == 0 || len(got) > 1 && got[1] != got[0] { // typed again, the same, while the transcript does not show it
 		t.Fatalf("prompts %q", got)
 	}
-	handoffOf(t, got[0], "codex", "claude", "", true, "and now?")
+	checkHandoffBlock(t, got[0], "codex", "claude", "", true, "and now?")
+	for _, words := range []string{"make it faster", "Cached the lookup."} { // the Codex stretch, handed back
+		if !strings.Contains(got[0], words) {
+			t.Errorf("the handoff leaves out %q:\n%s", words, got[0])
+		}
+	}
 	st, _ := n.state.get(sidA)
 	if len(st.EngineHistory) != 2 || st.EngineHistory[0] != (proto.EngineLeg{SessionID: sidA, Agent: "claude", Until: until}) ||
 		st.EngineHistory[1].SessionID != sidB || st.EngineHistory[1].Agent != "codex" || st.Launcher != "claude" {
@@ -396,7 +405,12 @@ func TestEngineSwitchFallsBackToAFreshSession(t *testing.T) {
 	if len(got) == 0 || len(got) > 1 && got[1] != got[0] {
 		t.Fatalf("prompts %q", got)
 	}
-	handoffOf(t, got[0], "codex", "claude", "", false, "and now?")
+	checkHandoffBlock(t, got[0], "codex", "claude", "", false, "and now?")
+	for _, words := range []string{"make it faster", "Cached the lookup."} { // the Codex stretch, handed back
+		if !strings.Contains(got[0], words) {
+			t.Errorf("the handoff leaves out %q:\n%s", words, got[0])
+		}
+	}
 	fresh := sessionIDArg.FindStringSubmatch(starts[1])[1]
 	if st, _ := n.state.get(fresh); len(st.EngineHistory) != 2 || st.EngineHistory[1].SessionID != sidB {
 		t.Errorf("the fresh session's record = %+v", st)
