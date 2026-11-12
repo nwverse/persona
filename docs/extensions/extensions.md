@@ -992,12 +992,13 @@ Only used on the hub machine: it reads the master token and the `listen` port fr
 If there is no hub.json on this machine it errors out; it does not connect anywhere else. `personad ext …` and `personad plugin …` (the name before #1844) are the same command. `help` prints usage to stdout; with no subcommand, usage is printed to stderr as an error with exit code 1; `contributions` / `contribution` are only listed together when a subcommand is mistyped.
 An option the command does not take, a missing argument or an extra one is refused with exit code 1 before anything is sent to the hub (a mistyped `--keep-data` does not delete the data).
 `new`, `test` and `pack` below do not need the hub; everything else needs the hub running.
+What the commands print reads in the terminal's language (`PERSONA_LANG`, else `LC_ALL` / `LC_MESSAGES` / `LANG`; English when none is set or it is `C`), and they ask the hub for its text (errors, permission lines, statuses) in the same language, not in the user language an app last set ([i18n.md](../protocol/i18n.md), "Command line"). `show` stays JSON. The quotes below are the English text.
 
 ```text
-personad extension list                              One line each: id, version, source, status, name; errors are shown on failing ones, and ones needing setup show "还缺：…" (missing: …)
+personad extension list                              One line each: id, version, source, status, name; errors are shown on failing ones, and ones needing setup show "; still needs: …"
 personad extension show <id>                         Details as JSON: permissions, settings, whether secrets are set, its data directory (data_dir)
-personad extension install <source> [--yes]          First prints what it can do, the dependencies it uses, what gets installed with it and what cannot be found, then asks "继续吗？[y/N]" (continue?);
-                                                     installs only on y / yes; --yes skips the question. Afterwards prints "<id> <version>：<status>", and what is missing if settings are missing
+personad extension install <source> [--yes]          First prints what it can do, the dependencies it uses, what gets installed with it and what cannot be found, then asks "Continue? [y/N]";
+                                                     installs only on y / yes; --yes skips the question. Afterwards prints "<id> <version>: <status>", and what is missing if settings are missing
 personad extension upgrade <id> <source> [--yes]     Same as install, but upgrades the installed <id>
 personad extension rollback <id>                     Go back to the version before the last upgrade
 personad extension attach <id> remote:rpc=<socket>,http=<socket>   Reach an installed package's program, running on its own at the same version, on its sockets; see "Attaching an installed package"
@@ -1010,7 +1011,7 @@ personad extension contribution <id> <point>/<cid> on|off   Turn a single contri
 personad extension config <id> key=value …           Values that parse as JSON are taken as JSON, otherwise as text; key= deletes the entry
 personad extension secret <id> <name> [--delete]     The value is read from stdin (not echoed in a terminal; first line from a pipe), never as a command-line argument; an empty one is refused (--delete removes it)
 personad extension uninstall <id> [--keep-data] [--cascade] [--members]   --members: also uninstall a bundle's members
-personad extension market list                       Registered marketplaces: id, name, extension count, signing, address (the official one is marked "官方" (official))
+personad extension market list                       Registered marketplaces: id, name, extension count, signing, address (the official one is marked "official")
 personad extension market add <spec> [--token | --token-from=<marketplace id>]
                                                      --token: read the token from stdin; --token-from: use the token of that registered marketplace (not shown)
 personad extension market set-spec <id> <spec>       The marketplace moved (repo renamed): the id stays, and what was installed from it still counts as its own, see "Naming and compatibility"
@@ -1318,7 +1319,7 @@ Activation still decides when the manager connects (an `on_startup` one is conne
 - **API**: the `ExtensionView` (list and details) of an attached extension has `attached`: `{online, since?, error?, version?}`. `since` is when it came online or went offline (none while it is switched off or nothing needs it); `error` is why it is offline, also while its status is still `starting`;
   `version` is set only when the program says another version than `version`. Other extensions have no `attached`.
 - **Clients**: the web's Settings › Extensions and the admin UI keep the status as before (`starting` is a gray pulsing dot, `error` red) and add a line: "Runs on its own · online since 10:42", "… reconnecting, offline since 10:40: <why>", "… offline since 10:40", or "Runs on its own; connects when needed";
-  the details' version reads "1.0.0 approved, the program is 1.1.0" (the admin list shows a red **program 1.1.0** tag). `personad extension list` adds `独立运行，在线（自 …）` or `离线（自 …）` and the program's version. The iOS / Mac and Android apps show the status as they always have.
+  the details' version reads "1.0.0 approved, the program is 1.1.0" (the admin list shows a red **program 1.1.0** tag). `personad extension list` adds `; runs on its own, online (since …)` or `offline (since …)` and the program's version, in the terminal's language. The iOS / Mac and Android apps show the status as they always have.
 - **Old and new**: older apps and managers ignore `attached`; the protocol is unchanged, so a program written for an older manager is attached as it is.
 
 ### Attaching an installed package
