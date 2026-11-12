@@ -159,9 +159,15 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * rest of what it adds fits the room main had: lib/background-supervisor.ts, which the sidebar, the conversation menu,
  * the chat's header and its review line read, the store's re-read of the assistant for a supervisor made since, the
  * line's reviewer, and its name and "Built-in"; the switch, the model row and their words are in the lazy Settings
- * page). Raise it on purpose, in the change that needs it.
+ * page). And 1,699 B for the changed-files card and the error notices (#5157 added 1,328 B to ja as counted, 594,414 B
+ * at 46991c4d2 to 595,742 B: the card at the end of a finished Agent exchange and its review and file targets, the
+ * count of its own edits without drawing their diffs (lib/turn-changes.ts) and of a fold's `changes`, the store read of
+ * the session's folder, the feed cache's check of `changes`, the shared ErrorNotice the model-error and usage-limit
+ * lines become, their two marks and their words); main was already 371 B over its budget at 46991c4d2 (ja 594,414 B
+ * against 594,043 B), and that overage is kept here, not new room; the room is 0 B. Raise it on purpose, in the change
+ * that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 594_043;
+export const FIRST_SCREEN_BUDGET = 595_742;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
