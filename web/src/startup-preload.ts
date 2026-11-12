@@ -168,10 +168,18 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * the panel). A Codex opened with no first message (#4961) moved ja as counted by +223 B against b0a4a08b5 (594,241 B
  * to 594,464 B) and by -80 B against 449a12d7f (593,469 B to 593,389 B), inside the room either way: the waiting chat's
  * note, its box's placeholder, the page following the pane to the thread the first message began, their words and
- * the list row's line (New Agent's optional first message is in its lazy dialog). Raise it on purpose, in the change
- * that needs it.
+ * the list row's line (New Agent's optional first message is in its lazy dialog). And 498 B for the changed-files card
+ * and the error notices (#5157: ja 595,110 B against 593,659 B on main at f6f07e375, +1,451 B, of which 993 B fit the
+ * room main had, plus 40 B of room: the card at the end of a finished Agent exchange, its count of the exchange's own
+ * edits without drawing their diffs (lib/turn-changes.ts) and of a fold's `changes`, its review and file targets, the
+ * store read of the session's folder, the feed cache's check of `changes`, the shared ErrorNotice the model-error and
+ * usage-limit lines become, their marks and words). And 98 B for the provider wizard's paste and found aliases (#5193:
+ * no first-screen code or words; the lazy wizard's pieces shared through views/settings/ProviderFields.tsx changed how
+ * Rollup names the shared chunks' exports, which renamed App's imports and moved App 138 B as counted, its length
+ * unchanged: ja 595,110 B on main at d7908558d to 595,248 B, 40 B of it in the room main had; take it back when App's
+ * imports are renamed back). Raise it on purpose, in the change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 594_652;
+export const FIRST_SCREEN_BUDGET = 595_248;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
