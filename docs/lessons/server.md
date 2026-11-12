@@ -1,5 +1,28 @@
 # Lessons: hub / node and networking
 
+## Authority handover must include the trusted keeper roster (#5228)
+
+A machine its manager keeps has moved out of hub.json, but its hub-owned keeper
+record still authorizes routing. Building sharing authority from cfgEntries alone
+leaves that manager's authority map empty while per-request routing produces a
+valid authority: creation skips as authority_stale and persists no receipt.
+Use knownEntries for this authority handover, retain entryOwner and database
+routing checks, and leave the separate machine-config handover alone. A manager's
+report is not a keeper record. Test a kept machine through the real handover, not
+only by injecting a matching authority map into both sides of a fixture.
+
+## A creation reply is not a durable receipt (#5215)
+
+A successful runtime reply and `ownership_unbound` do not reveal whether the
+manager prepared an intent, the node emitted its receipt, or the database accepted
+its state. Trace each boundary with bounded session IDs and fixed outcome codes;
+compare prepared/returned identities in memory without logging them. A one-way
+notification's successful write is not a database acknowledgement. Log its failure
+without raw error text, which may contain private input, and preserve existing
+reconnect handling. Missing diagnostics from an old node or inaccessible stream
+are not evidence of a missing receipt. Keep the actual-node callback regression
+separate from the HTTP/manager/stub-node durable integration test.
+
 ## Virtual-file sizes and EOF (#4425)
 
 Some Linux sysfs attributes report a stable page-sized length even when their readable contents are shorter. A short
@@ -68,6 +91,12 @@ The web production build typechecks test files. A JSON fixture imported from `sp
 `.dockerignore` exception and a `COPY` into the web stage at the same relative path. A native build sees the
 whole checkout and can pass while the Docker build fails with TS2307. The Docker entrypoint suite now checks
 shared JSON imports, including globs, against both files, catching new fixture groups before an image build.
+
+Checking was not enough (2026-11-12, #5197): PRs run no hosted CI, so #4968 merged a test reading
+`spec/fixtures/forward/` with neither line, and every image build from `main` failed, the fourth time after #2666,
+#2517 and #4260. The image now carries all of `spec/fixtures/` (about 2 MB, web stage only) with one exception and one
+`COPY`, and the guard checks that no per-folder lines come back. A fixture-only change now rebuilds the web stage; that
+cost is smaller than a broken image. When something has to be listed by hand in two files, prefer a rule that needs no list.
 
 ## Sharing frontiers and migration lanes (#3604)
 
@@ -1852,6 +1881,7 @@ On TestFlight 224 an extension's **Review** spun for two minutes and then failed
 - `proto.Session` is copied row by row all over the hub, the manager and the node, and the allocator rounds every allocation up to a size class. #3897 added two fields (40 bytes) and took the struct from 1,528 to 1,568 bytes. A row copied on its own went from the 1,536-byte class to 1,792 (+256 B), every list copy grew by 40 B a row plus page rounding, and four allocation budgets in the assistant failed at once, none of them near the change. The readers copied no more rows than before.
 - When a budget is over by one size-class step per row it keeps, or by rows × a few bytes, compare the row type's `unsafe.Sizeof` at both commits before hunting for new copies.
 - Make room before raising a budget. The 17 bools sat in 10 separate words, 63 bytes of padding; moving bools beside other bools brought the row back to 1,528 bytes without dropping a field. Reordering fields reorders the reflect encoder's keys, so `appendSession` and `sessionWireLayout` follow, and byte goldens change only in key order (check that every line decodes to the same object). `TestSessionFitsItsSizeClass` now fails in `proto`, listing the bools that sit alone, instead of in another package's budgets.
+- The same happens to a type built as one slice per pass (2026-11-12, #5188). #5150 added three fold fields to `sessionlist.Item` (208 to 240 bytes); the hub reads a machine's 150 items as one `[]Item` each pass, and 36,000 B is past the largest size class (32 KiB), so it took whole pages, 40 KiB, 8 KB more a pass. Moving the fields behind one pointer (`Item.Fold`, nil for a row without a hierarchy) brought it back to 216 bytes. Then allocate the pointer only where it is new: `return &fold` moves `fold` to the heap where it is declared, for every row, even on the paths that return nil; copy it in the branch that returns it (`go build -gcflags=-m` says `moved to heap`).
 
 ## What the port relay costs, hop by hop (2026-11-10, #3067)
 
@@ -1924,3 +1954,9 @@ computer every 2 s): the manager allocated 555 MB and used about 2.1 s of CPU a 
   `ConnState`, and move the gaps with `synctest.Sleep`. The transport's idle timer and pings then run on the fake clock
   (`TestRelayPushesKeepOneConnection`, `TestSendsKeepOneConnection`). Register the server's and transport's shutdown
   with `t.Cleanup`, or a failed assertion ends in a synctest deadlock panic.
+
+## `exec.CommandContext` cancels only while the process runs (2026-11-11, #4363)
+
+- `cmd.Cancel` runs only when the context ends before the process exits. A shell that exits at once and leaves a background child holding its stdout or stderr (`sleep 4 & echo $!`) keeps `Wait` reading the pipe until that child exits or `WaitDelay`, counted from the shell's exit, closes it: the deadline passes unnoticed. `secret.run` held a 1-second run for 4 seconds, and the next command, which could no longer start, came back as timed out.
+- Watch the context for as long as `Wait` runs and stop the group at the deadline, sharing one "stopped" flag with `Cancel` so the group gets one SIGTERM (`runSecretCommand`). Classify the result by that flag, not the exit status: the shell exited 0.
+- A command that never started because the time was used up gets no result. A timed-out result for it reads as a command that ran and was stopped, and makes the Agent check the computer for one that never ran.

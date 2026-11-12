@@ -116,14 +116,17 @@ private val CropCornerWidth get() = Tokens.Space.xxs * 1.5f
  * the left; Reset), Undo and Redo over every change, and Clear. [onDone] gets the picture with the edits burned in at
  * [source]'s own resolution ([source] itself when nothing was done); after that the editor waits, "Done" spinning, until
  * its caller removes it. Back and "Cancel" call [onCancel]. Pass a software bitmap ([decodePicture] with `software = true`).
+ * [start]: the edits a picture edited before carries on from, still undoable; [onEdited] gets the edits and their history
+ * just before [onDone], so the caller can keep them beside the result (#4992, iOS `EditedImage`).
  */
 @Composable
-fun ImageEditor(source: Bitmap, onCancel: () -> Unit, onDone: (Bitmap) -> Unit) {
+fun ImageEditor(source: Bitmap, onCancel: () -> Unit, onDone: (Bitmap) -> Unit, start: ImageEditState = ImageEditState(),
+                onEdited: (ImageEditState) -> Unit = {}) {
     var finishing by remember(source) { mutableStateOf(false) }
     AlwaysDark {
         JFullScreen({ if (!finishing) onCancel() }) {
             CompositionLocalProvider(LocalReadingInset provides 0.dp) {
-                EditorBody(source, finishing, { finishing = it }, onCancel, onDone)
+                EditorBody(source, start, finishing, { finishing = it }, onCancel, onDone, onEdited)
             }
         }
     }
@@ -163,14 +166,15 @@ internal data class EditorLayout(val picture: Rect, val scale: Float, val visibl
 }
 
 @Composable
-private fun EditorBody(source: Bitmap, finishing: Boolean, onFinishing: (Boolean) -> Unit, onCancel: () -> Unit, onDone: (Bitmap) -> Unit) {
+private fun EditorBody(source: Bitmap, start: ImageEditState, finishing: Boolean, onFinishing: (Boolean) -> Unit, onCancel: () -> Unit,
+                       onDone: (Bitmap) -> Unit, onEdited: (ImageEditState) -> Unit) {
     val palette = PersonaTheme.palette
     val density = LocalDensity.current
     var tool by remember { mutableStateOf(EditorTool.Box) }
     var color by remember { mutableStateOf(MarkupColors.Red) }
     var width by remember { mutableStateOf(1) }
-    var edits by remember(source) { mutableStateOf(ImageEdits()) }
-    var history by remember(source) { mutableStateOf(EditHistory()) }
+    var edits by remember(source) { mutableStateOf(start.edits) }
+    var history by remember(source) { mutableStateOf(start.history) }
     var current by remember(source) { mutableStateOf<EditorMark?>(null) }
     var dragging by remember { mutableStateOf(false) }
     var box by remember { mutableStateOf(IntSize.Zero) }
@@ -200,6 +204,7 @@ private fun EditorBody(source: Bitmap, finishing: Boolean, onFinishing: (Boolean
         onFinishing(true)
         failed = false
         val final = edits
+        onEdited(ImageEditState(final, history))
         scope.launch {
             val result = try {
                 if (final.isEmpty) source else withContext(Dispatchers.Default) { final.render(source) }
