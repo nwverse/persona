@@ -59,6 +59,7 @@ import androidx.compose.foundation.background
 import persona.core.domain.inbox.buildInboxList
 import persona.core.navigation.*
 import persona.feature.agents.agentsEntries
+import persona.feature.agents.machineSpacesEntries
 import persona.feature.agents.spaceEntries
 import persona.feature.agents.AgentsDependencies
 import persona.feature.agents.AgentsPreferencesSnapshot
@@ -663,6 +664,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
             agentsEntries(navigator, agents, machine, { machine = it },
                 terminalPanes = if (session.demo == null) shell.terminalPanes.available else kotlinx.coroutines.flow.flowOf(false))
             spaceEntries(navigator, agents)
+            machineSpacesEntries(navigator, agents)
             chatEntries(navigator) {
                 ShellChat(it, session, navigator, shell.feedback, onSessionClosed = navigator::sessionClosed, onOpenCard = ::openWithCard,
                     onGroupGone = navigator::groupGone, terminal = chatTerminal(it))

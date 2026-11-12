@@ -35,6 +35,9 @@ type Item struct {
 	// BackgroundWaiting: a working row that only waits on background commands (#6045). It stays in State's count
 	// (older apps call it working) and is counted apart in Counts.BackgroundWaiting too.
 	BackgroundWaiting bool
+	// Private: a row a reader with Options.NoPrivate is never shown, in its rows, totals or counts (a health-space
+	// conversation, which an extension's token does not see).
+	Private bool
 	// Fold is the item's place in the session hierarchy (#5120); nil for an item folded under none that shows its own
 	// State and BackgroundWaiting, as every item without children does. It sits behind a pointer to keep Item in its
 	// allocation size class: an adapter builds a whole batch as one []Item, as the hub does on every pass.
@@ -83,6 +86,9 @@ type Options struct {
 	Roots   bool
 	Under   string
 	Summary bool
+	// NoPrivate leaves the Private items out of the rows, the totals and every count; like Manager it is the adapter's
+	// to set (who asks), not a key Parse reads, and it binds a cursor as the other filters do.
+	NoPrivate bool
 }
 
 // Page contains transport values rather than adapter-specific session types.
@@ -140,7 +146,7 @@ type journalEntry struct {
 
 type filters struct {
 	ID, State, Machine, Project, Group, Source, Provider, Q, PaneSource, Manager, Under string
-	Roots                                                                               bool
+	Roots, NoPrivate                                                                    bool
 }
 
 type binding struct {

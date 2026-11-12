@@ -35,7 +35,7 @@ internal fun SpaceScreen(
     /** The name to show before the sessions are read; until then ([loaded] false) the page shows no empty state. */
     title: String = "",
     loaded: Boolean = true,
-    /** Opens a computer's page, from the computer at the top of the cards (iOS opens its projects; Android has its details). */
+    /** Opens a computer's projects (iOS `MachineSpacesView`), from the computer at the top of the cards. */
     onMachine: ((String) -> Unit)? = null,
 ) {
     val cards = remember(pending) { pending.firstBySession() }

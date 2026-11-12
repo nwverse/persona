@@ -361,6 +361,7 @@
     <string name="chat_reader_empty">内容がありません</string>
     <string name="chat_reader_open">全文を表示</string>
     <string name="chat_reader_raw_input">元の入力</string>
+    <string name="chat_tool_hide_raw_input">元の入力を隠す</string>
     <string name="chat_reader_full_output">出力全体</string>
     <string name="chat_reader_raw_output">元の出力</string>
     <string name="chat_reader_copy_both">すべてコピー</string>

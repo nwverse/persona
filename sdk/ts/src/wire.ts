@@ -345,25 +345,36 @@ export interface Contributes {
 
 /**
  * A skill (docs "Declarative contributions"): a directory of the package with SKILL.md, put in with the assistant's
- * skills.
+ * skills. With source data (docs "Assistant content from the data directory"): a directory of the extension's data
+ * directory whose subdirectories with a SKILL.md are skills its program writes (Markdown files only, 256 KB and 32
+ * skills per extension).
  */
 export interface SkillItem {
   id: string;
-  /** The directory, relative to the package. */
+  /** The directory, relative to the package (or to the data directory with source data). */
   dir: string;
+  source?: ContentSource;
 }
+
+/**
+ * Where a skill's or a prompt's files are: package (the default) or data, the extension's data directory, which its
+ * program writes and upgrades keep.
+ */
+export type ContentSource = "package" | "data" | (string & {});
+export const CONTENT_SOURCES = ["package", "data"] as const;
 
 export type PromptKind = "instructions" | "quick" | (string & {});
 export const PROMPT_KINDS = ["instructions", "quick"] as const;
 
 /**
- * A prompt: instructions (a .md of the package added to the assistant's CLAUDE.md) or quick (a template the apps
- * offer in the message box).
+ * A prompt: instructions (a .md of the package, or with source data of the data directory, added to the assistant's
+ * CLAUDE.md) or quick (a template the apps offer in the message box).
  */
 export interface PromptItem {
   id: string;
   kind: PromptKind;
-  /** instructions: the .md file. */
+  source?: ContentSource;
+  /** instructions: the .md file (with source data: at most 6 KB, adopted at most once a day). */
   file?: string;
   /** quick: what the apps show. */
   title?: string;
@@ -5136,9 +5147,10 @@ export interface ModelRefusal {
 }
 
 /**
- * error.code of the assistant calls besides permission_denied (data {scope: "assistant.read"}): invalid_params;
- * not_found (assistant.messages: no such conversation in the assistant's own space); assistant_offline (the manager
- * is away: try again); machine_offline (the assistant's computer is not connected or not set up: try again).
+ * error.code of the assistant calls besides permission_denied (data {scope: "assistant.read"}, or
+ * "assistant.memory.read" for assistant.memory): invalid_params; not_found (assistant.messages: no such conversation
+ * in the assistant's own space); assistant_offline (the manager is away: try again); machine_offline (the assistant's
+ * computer is not connected or not set up: try again).
  */
 export type AssistantErrorCode = "invalid_params" | "not_found" | "assistant_offline" | "machine_offline" | (string & {});
 export const ASSISTANT_ERROR_CODES = ["invalid_params", "not_found", "assistant_offline", "machine_offline"] as const;
@@ -5207,11 +5219,115 @@ export type AssistantRole = "user" | "assistant" | (string & {});
 export const ASSISTANT_ROLES = ["user", "assistant"] as const;
 
 /**
+ * assistant.memory (assistant.memory.read): the assistant's memory entries of its own space (never the health
+ * space's), by name. Read-only.
+ */
+export interface AssistantMemoryParams {
+  /**
+   * Return each entry's text too: cut at 16 KB each, and left out once a page holds 512 KB of text (truncated says
+   * so).
+   */
+  include_content?: boolean;
+}
+
+export interface AssistantMemoryEntry {
+  /** The entry's file name. */
+  name: string;
+  /** The frontmatter's description; empty without one. */
+  description?: string;
+  /** The frontmatter's type (or metadata.type); empty without one. */
+  type?: string;
+  /** The file's size in bytes. */
+  size: number;
+  /** When the file was made, where the computer's file system keeps it. */
+  created?: string;
+  modified: string;
+  /** With include_content: the text, perhaps cut. */
+  content?: string;
+  /** content was cut or left out for its size. */
+  truncated?: boolean;
+}
+
+/**
+ * An assistant without memory (none written yet, or the feature off) has no entries.
+ */
+export interface AssistantMemoryResult {
+  entries: AssistantMemoryEntry[];
+}
+
+/**
  * next_seq is set while there is more to read (pass it as after_seq), even when this page has no messages.
  */
 export interface AssistantMessagesResult {
   messages: AssistantMessage[];
   next_seq?: number;
+}
+
+/**
+ * assistant.data_status takes no parameters.
+ */
+export interface AssistantDataStatusParams {
+}
+
+/**
+ * What the assistant reads of the contribution: adopted (the content as it is now; skills: sent), pending
+ * (instructions: an older version, the new one waits for next_adopt_at), kept (instructions: an older version, the
+ * new one cannot be used, see reason), none (nothing: none written yet, none usable, or the extension or contribution
+ * is switched off).
+ */
+export type AssistantDataState = "adopted" | "pending" | "kept" | "none" | (string & {});
+export const ASSISTANT_DATA_STATES = ["adopted", "pending", "kept", "none"] as const;
+
+/**
+ * Why what the assistant reads is not the content as it is now: too_large (over its limit), invalid (not UTF-8 text),
+ * not_regular (not a plain file inside the data directory: a directory, or a link out of it), unreadable,
+ * rate_limited (a new version of instructions waits for its turn), disabled (the extension is switched off or cannot
+ * run), switched_off (this contribution is switched off).
+ */
+export type AssistantDataReason = "too_large" | "invalid" | "not_regular" | "unreadable" | "rate_limited" | "disabled" | "switched_off" | (string & {});
+export const ASSISTANT_DATA_REASONS = ["too_large", "invalid", "not_regular", "unreadable", "rate_limited", "disabled", "switched_off"] as const;
+
+/**
+ * One data contribution of the extension.
+ */
+export interface AssistantDataItem {
+  /** Its id, as the manifest has it. */
+  contribution: string;
+  /** instructions or skills. */
+  kind: string;
+  /** Its file or directory, relative to the data directory. */
+  path: string;
+  /** The most it may weigh, in bytes. */
+  limit: number;
+  /** What it weighs now (all files, for skills). */
+  bytes: number;
+  state: AssistantDataState;
+  reason?: AssistantDataReason;
+  /** The rest of a file's problem, for logs. */
+  detail?: string;
+  /**
+   * The digest of the content as it is now (instructions: the cleaned text, the first 16 hex digits of its sha256;
+   * skills: of every skill's name and digest).
+   */
+  hash?: string;
+  /**
+   * instructions: the digest of the text the assistant reads (for a contribution or extension switched off: read
+   * last); empty when that is no text.
+   */
+  adopted_hash?: string;
+  /** instructions: when that text was adopted (RFC 3339). */
+  adopted_at?: string;
+  /**
+   * instructions, state pending: the new version is adopted by then at the latest (RFC 3339); sooner when the hub's
+   * own instructions change or the user applies it.
+   */
+  next_adopt_at?: string;
+  /** skills: the skills sent. */
+  skills?: string[];
+}
+
+export interface AssistantDataStatusResult {
+  items: AssistantDataItem[];
 }
 
 export interface StorageEmptyParams {
@@ -5802,6 +5918,8 @@ export const CALLS: Record<string, Call> = {
   "model.complete": { from: "program", params: "ModelCompleteParams", result: "ModelCompleteResult" },
   "assistant.conversations": { from: "program", params: "AssistantConversationsParams", result: "AssistantConversationsResult" },
   "assistant.messages": { from: "program", params: "AssistantMessagesParams", result: "AssistantMessagesResult" },
+  "assistant.memory": { from: "program", params: "AssistantMemoryParams", result: "AssistantMemoryResult" },
+  "assistant.data_status": { from: "program", params: "AssistantDataStatusParams", result: "AssistantDataStatusResult" },
   "storage.request": { from: "program", params: "StorageEmptyParams", result: "StorageRequestResult" },
   "storage.get": { from: "program", params: "StorageKeyParams", result: "StorageEntry" },
   "storage.list": { from: "program", params: "StorageListParams", result: "StorageListResult" },
