@@ -35,6 +35,7 @@ import { useChatContext } from "./chat-context";
 import { useFreshWords } from "./fresh-words";
 import { Icon } from "../../ui/icons";
 import { WorkGroup, WorkNodes, type WorkProps } from "./WorkGroup";
+import { planCardStep } from "./PlanCard";
 import { useCallSeeker } from "./jump";
 import { t } from "../../i18n";
 
@@ -286,11 +287,13 @@ export const SegmentView = memo(function SegmentView({
   const steps = useMemo(() => (nesting ? withNestedSubagents(own, subagents) : own), [own, nesting]);
   const turnStart = seg.user?.ts ?? seg.start;
   const thinking = useMemo(() => thinkingDurations(steps, turnStart), [steps, turnStart]);
+  // one plan card per exchange, where its latest list was written (cindy); the other updates are rows
+  const plan = useMemo(() => planCardStep(steps), [steps]);
   const p = useMemo<WorkProps>(() => {
     const agent = (s: ToolStep) =>
       isNestedSubagentStep(s) ? nestedSubagentStatus(subagentFor(subagents, s.use)) : agentStatus(s.result, subagentFor(subagents, s.use), live, s.use.tool_use_id ? tasks.notes.get(s.use.tool_use_id) : undefined);
-    return { mid, sid, scope, expandFold, agentStatus: agent, thinking, segment: seg.id, workflowCalls, trace, lineStyle, turnLive: live };
-  }, [mid, sid, scope, expandFold, subagents, tasks, live, thinking, seg.id, workflowCalls, trace, lineStyle]);
+    return { mid, sid, scope, expandFold, agentStatus: agent, thinking, segment: seg.id, workflowCalls, trace, lineStyle, turnLive: live, plan };
+  }, [mid, sid, scope, expandFold, subagents, tasks, live, thinking, seg.id, workflowCalls, trace, lineStyle, plan]);
   const identity = segmentIdentity(seg);
   const nodes = useMemo(
     () => workBlocks(steps, { live, turnStart, streaming: streaming !== undefined, identity }),

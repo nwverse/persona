@@ -9,7 +9,7 @@ import { conversationPage } from "../../lib/conversation-page";
 import { navigate, withWorkView, type SessionView } from "../../lib/router";
 import { canShowTerminal, composerSlot, otherView, useSessionView, viewOnlyRow } from "../../lib/session-view";
 import { openLink } from "../../lib/links";
-import { openPanel, togglePanel, usePanel } from "../../lib/panel";
+import { togglePanel, usePanel } from "../../lib/panel";
 import { machineWithHub } from "../../lib/mesh";
 import { hasModes, isMuted, toggleMute } from "../../lib/session-actions";
 import { attachLive, flipPin } from "../../lib/agent-actions";
@@ -65,8 +65,7 @@ import { paneRoute, tabSessions } from "../../lib/herdr-tree";
 import { CommentMarks } from "./CommentMarks";
 import { PaneTabs } from "./PaneTabs";
 import { RunningStatusBar } from "./RunningStatusBar";
-import { latestPlan, PlanPill, usePlanOutOfView } from "./PlanCard";
-import { publishPlan } from "../../lib/plan-store";
+import { latestPlan, PlanPill, usePlanClosed, usePlanOutOfView } from "./PlanCard";
 import { ChatContext, LiveClockContext, type ChatContextValue } from "./chat-context";
 import { addFreshWords, resetFreshWords } from "./fresh-words";
 import { backgroundLine, backgroundWaitLine, waitingOnWorkflow, workflowAgentFor, workflowCalls, workflowCallsKey } from "../../lib/workflows";
@@ -1336,11 +1335,11 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   }, []);
   const rounds = useMemo(() => segs.filter((x) => x.user).length, [segs]);
 
-  // the newest plan of the chat (lib/work-groups.ts planSteps): while its card is out of view, a pill above the composer
+  // the newest plan of the chat (PlanCard.tsx planCardStep draws its card): while that card is out of view, a pill above the composer
   const plan = useMemo(() => latestPlan(segs), [segs]);
   const planOut = usePlanOutOfView(scroller, plan?.id);
-  // the side panel's Plan follows this chat's newest plan (#5602)
-  useEffect(() => publishPlan(mid, sid, plan ? { todos: plan.todos, live: lastLive } : undefined), [mid, sid, plan, lastLive]);
+  // Close Plan in the pill's flyout hides it until the plan changes (cindy's PinnedPlanPanel)
+  const [planClosed, closePlan] = usePlanClosed(`${mid}/${sid}`, plan);
   const lastLine = lines[lines.length - 1];
   // "Retry" on an API error card: only when it is the last thing, the agent is not working (someone may have retried already)
   const retry = useCallback(() => void deliver({ text: t("chat-chatview.continue_text"), images: [] }, uuid()), [deliver]);
@@ -1403,8 +1402,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     const live = lines.flatMap((l) => l.kind === "supervision" ? l.lines : [l]).findLast((l) => l.kind === "segment" && l.live);
     return (live?.kind === "segment" ? turnStart(live.seg) : undefined) ?? stateSince;
   }, [lines, stateSince]);
-  const planPill = plan && planOut && (lastLive || !planProgress(plan.todos).allDone) ? (
-    <PlanPill todos={plan.todos} onClick={() => openPanel({ kind: "plan", mid, sid })} />
+  // as cindy's: gone once every step is done or a later message of the user's started another turn
+  const planPill = plan && planOut && !plan.superseded && !planClosed && !planProgress(plan.todos).allDone ? (
+    <PlanPill key={plan.id} todos={plan.todos} live={lastLive} onClose={closePlan} />
   ) : null;
   // Persona's own chats too (#3654), and from the moment the message is in, not from the hub's next push
   const background = useMemo(() => backgroundLine(session), [session]);

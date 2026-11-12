@@ -741,6 +741,28 @@ its own (no panel, no page, no sidebar row). Like every tool call the cards sit 
 not (super rule 2; cindy's running cards outside it wait on #5047). Nested subagents are flat cards by start time. A card offers Stop only
 where the node can stop that task. iOS and Android still draw the earlier design (#5045).
 
+**The plan card and pill** (web, #5156; the owner asked on 2026-11-12 that the plan follow cindy's `InlinePlanCard` and
+`TodoListCard` exactly, which replaces the one-line card and the side panel's Plan). One card per exchange, where its
+latest TodoWrite of two or more items was written (`PlanCard`, `planCardStep`); earlier updates and lists of one item are ordinary rows. A
+12 px rounded, 1 px `line`-bordered `surface` card; its head (14 × 10 px padding, 8 px gaps) is a 14 px chevron in
+`tool-ink`, a 16 px `todo` icon, done / total in 13 px monospace medium, a `tool-ink` dot and the step in progress (else
+the last) on one line. It starts open on the whole list (rows at least 30 px, 10 px gaps, 13/1.45 text that wraps):
+done steps an 18 px check in a circle with their text in `tool-ink`, the step in progress an arc on the same circle in
+`ink` with medium text, pending steps an empty circle in `ink`. The arc turns only while the turn runs and, unlike the
+spinners, never with reduced motion (its shape already says "in progress", as in cindy). Closed, a 2 px bar under the
+head: `line` track, `ink` fill of done / total, moving over `MOVE_MS` with `EASE`. The card stays inside the folded
+summary (super rule 2; cindy draws it in the open, #5162).
+While that card is out of view a pill sits above the composer: rounded-full, 1 px `line` border, `surface`, 14 × 6 px
+padding, a still 16 px progress ring (stroke 2, `tool-ink` at 45% under an `ink` arc of step / total; a check once all
+are done) and "Step 3 of 5". Hover shows a flyout and leaving hides it; a click pins it, and a second click, a press
+outside or Esc unpins it (one Esc closes only the flyout). The flyout is a new pattern: a 12 px rounded, bordered
+`surface` panel centered on the composer column, 8 px above the pill, 220–420 px wide (and the screen less 32), its
+list scrolling past 280 px (30 px rows, the step in progress semibold), coming in with `pop-in` (160 ms, `EASE`) and
+fading out over `EXIT_MS.card`; it is drawn on the page's body so the scrolling box over the composer does not clip it,
+with a 12 px band over the pill's top so the pointer can cross the gap. Its 28 px round ✕ (**Close Plan**, `tool-hover`
+on hover) hides the pill until the plan changes. The pill also goes once every step is done or a later message of the
+user's starts another turn.
+
 A tool row names its tool in words on iOS, the web and Android (#2986; Android `ToolNaming.kt`, #4339): Claude Code's tools have verbs of their own, another
 server's MCP tool reads "<Server> · <Tool>" ("GitHub · Create issue"), and any other name is humanized. Opened, a tool
 no table knows shows its arguments as `key: value` lines, with the JSON one tap away under Raw Input (`RawInputToggle`,

@@ -11481,6 +11481,57 @@ if os.environ.get("MOCK_SUBAGENT_CARDS") == "1":
     mock_subagent_cards()
 
 
+# MOCK_PLAN_CARDS=1: the plan as cindy draws it (#5156, web): an agent at work on a five-step plan (two done, one in
+# progress, two to go) after a long earlier answer, so scrolled up its card is out of view and the pill above the
+# composer shows; a second agent whose plan is all done (the pill is gone, the card says 5/5); and the Persona chat
+# "整理这个季度的读书笔记" with a plan of its own in its last turn.
+PLANRUN = "a1f3c2d4-0000-4000-8000-0000000c1e21"
+PLANDONE = "a1f3c2d4-0000-4000-8000-0000000c1e22"
+
+
+def mock_plan_cards():
+    steps = ["新建横屏的布局文件", "把温度和降雨概率并排放", "适配小号和中号两种尺寸，长标题在中号里换成两行，不再截断",
+             "跑快照测试", "在模拟器上截深浅色的图"]
+    plan = lambda states: {"todos": [{"content": c, "status": st, "activeForm": c} for c, st in zip(steps, states)]}
+    _p = [it("user", "text", 40, text="小组件横屏的时候为什么会挤在一起？")]
+    _p.append(it("assistant", "text", 39, text="\n\n".join([
+        "横屏时小组件的宽度变大、高度变小，现在的布局是竖着排的：温度在上，降雨概率在下，高度不够就被压在一起。",
+        "改成横屏时并排放：左边温度，右边接下来几小时的降雨概率，两块各占一半宽度，高度就够了。"] * 4)))
+    _p.append(it("user", "text", 20, text="那就按这个改，改完跑一下快照测试"))
+    _p.append(it("assistant", "text", 19.9, text="好，我分五步来。"))
+    _p += tool("TodoWrite", plan(["in_progress", "pending", "pending", "pending", "pending"]), "Todos have been modified successfully.", 19.8)
+    _p += tool("Write", {"file_path": "/Users/me/code/weather/WeatherWidget/LandscapeView.swift", "content": "import SwiftUI\n\nstruct LandscapeView: View { … }"}, "ok", 18)
+    _p += tool("TodoWrite", plan(["completed", "in_progress", "pending", "pending", "pending"]), "Todos have been modified successfully.", 17.5)
+    _p += tool("Edit", {"file_path": "/Users/me/code/weather/WeatherWidget/LandscapeView.swift", "old_string": "VStack {", "new_string": "HStack {"}, "ok", 12)
+    _p += tool("TodoWrite", plan(["completed", "completed", "in_progress", "pending", "pending"]), "Todos have been modified successfully.", 11.5)
+    _p.append(it("assistant", "text", 6, text="横屏的布局写好了，在适配中号的长标题。"))
+    _p.append(it("assistant", "tool_use", 1, tool_use_id="toolu_planrun", tool_name="Bash",
+                 tool_input={"command": "xcodebuild build -scheme WeatherWidget -quiet", "description": "编译小组件"}))
+    ITEMS[PLANRUN] = _p
+    SESSIONS.append(sess("macbook", PLANRUN, "小组件的横屏布局", "/Users/me/code/weather", "working", "working", "weather", 1, "plan", 9, 0,
+                         "横屏的布局写好了，在适配中号的长标题。"))
+    _d = [it("user", "text", 30, text="把小组件的横屏布局做完，跑快照测试")]
+    _d += tool("TodoWrite", plan(["in_progress", "pending", "pending", "pending", "pending"]), "Todos have been modified successfully.", 29.8)
+    _d += tool("Bash", {"command": "xcodebuild test -scheme WeatherWidget -quiet", "description": "跑快照测试"}, "Executed 52 tests, with 0 failures", 22)
+    _d += tool("TodoWrite", plan(["completed"] * 5), "Todos have been modified successfully.", 21)
+    _d.append(it("assistant", "text", 20, text="横屏布局做完了：温度和降雨概率并排，小号和中号都适配了，52 个快照测试全部通过，深浅色的截图在 `Screenshots/` 里。"))
+    ITEMS[PLANDONE] = _d
+    SESSIONS.append(sess("macbook", PLANDONE, "横屏布局做完了", "/Users/me/code/weather", "done", "done", "weather", 1, "plan", 9, 20,
+                         "横屏布局做完了。"))
+    # a Persona chat's own plan: everyday steps, no engineering words
+    reading = lambda states: {"todos": [{"content": c, "status": st, "activeForm": c} for c, st in zip(
+        ["找出这个季度读完的 30 本书", "每本写三句话的要点", "按主题分成几组", "做成一页目录发给你"], states)]}
+    ITEMS[ASK4] = ITEMS[ASK4] + (
+        [it("user", "text", 3, text="把这个季度的读书笔记整理成一页目录")]
+        + [it("assistant", "text", 2.9, text="好的，我分四步来。")]
+        + tool("TodoWrite", reading(["completed", "in_progress", "pending", "pending"]), "Todos have been modified successfully.", 2.8)
+        + [it("assistant", "text", 2, text="30 本书都找齐了，正在给每本写要点，写完按主题分组。")])
+
+
+if os.environ.get("MOCK_PLAN_CARDS") == "1":
+    mock_plan_cards()
+
+
 # MOCK_SUBAGENT_REPORTS=1: long subagent reports start folded (#6381): a background subagent's report in its card and in
 # its notice, and a hand-back that an older node handed on as a message from "general-purpose" (Claude Code's frame
 # first, the report indented under it). The launch receipt is Claude Code 2.1.319's ("the agentId below" before the id)
