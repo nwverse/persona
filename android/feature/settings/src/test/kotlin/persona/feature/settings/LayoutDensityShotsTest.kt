@@ -3,6 +3,7 @@ package persona.feature.settings
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -30,9 +31,13 @@ import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import persona.core.designsystem.AppStyle
 import persona.core.designsystem.AppStyleStore
+import persona.core.designsystem.GroupPosition
 import persona.core.designsystem.LayoutDensity
 import persona.core.designsystem.LocalAppStyleStore
+import persona.core.designsystem.MessageItem
 import persona.core.designsystem.PersonaTheme
+import persona.core.designsystem.Status
+import persona.core.designsystem.Tokens
 import persona.core.designsystem.pagePadding
 import java.io.File
 
@@ -56,7 +61,18 @@ class LayoutDensityShotsTest {
             PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
                 CompositionLocalProvider(LocalAppStyleStore provides store) {
                     Box(Modifier.testTag("shot").width(400.dp).background(PersonaTheme.palette.background)) {
-                        AppearanceSettings(Modifier.fillMaxWidth().padding(horizontal = pagePadding))
+                        Column {
+                            AppearanceSettings(Modifier.fillMaxWidth().padding(horizontal = pagePadding))
+                            // A slice of the inbox, so the shots show a list too, not only this page.
+                            Column(Modifier.padding(horizontal = pagePadding, vertical = Tokens.Space.l)) {
+                                MessageItem("Alex Chen", "Design review moved to Wednesday", onClick = {}, time = "10:42",
+                                    preview = "Can we push the density review to Wed afternoon?", unread = 2, position = GroupPosition.of(0, 3))
+                                MessageItem("Build bot", "android: compact density", onClick = {}, time = "09:15", status = Status.Working,
+                                    preview = "Running unit tests", tags = listOf("CI"), position = GroupPosition.of(1, 3))
+                                MessageItem("Sam Lee", "Lunch?", onClick = {}, time = "Yesterday", preview = "Noodles at noon",
+                                    position = GroupPosition.of(2, 3))
+                            }
+                        }
                     }
                 }
             }

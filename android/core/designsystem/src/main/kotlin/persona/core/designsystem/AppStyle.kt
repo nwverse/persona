@@ -88,13 +88,13 @@ class AppStyleStore(context: Context) {
     init {
         ActiveStyle.value = currentStyle.value
         AppAppearance.scheme = currentScheme.value
-        LayoutDensity.spaceScale = currentDensity.value.scale
+        LayoutDensity.apply(currentDensity.value)
     }
 
     fun setDensity(choice: LayoutDensity) {
         preferences.edit().putString(KEY_DENSITY, choice.key).apply()
         currentDensity.value = choice
-        LayoutDensity.spaceScale = choice.scale
+        LayoutDensity.apply(choice)
     }
 
     fun setScheme(choice: ColorSchemeChoice) {

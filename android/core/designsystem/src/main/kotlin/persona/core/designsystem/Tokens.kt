@@ -121,11 +121,18 @@ object Tokens {
         }
     }
     object Radius {
-        val badge: Dp = 6.dp
-        val bubble: Dp = 20.dp
-        val card: Dp = 14.dp
-        val control: Dp = 10.dp
-        val panel: Dp = 22.dp
+        val badge: Dp get() = Standard.badge * LayoutDensity.radiusScale
+        val bubble: Dp get() = Standard.bubble * LayoutDensity.radiusScale
+        val card: Dp get() = Standard.card * LayoutDensity.radiusScale
+        val control: Dp get() = Standard.control * LayoutDensity.radiusScale
+        val panel: Dp get() = Standard.panel * LayoutDensity.radiusScale
+        object Standard {
+            val badge: Dp = 6.dp
+            val bubble: Dp = 20.dp
+            val card: Dp = 14.dp
+            val control: Dp = 10.dp
+            val panel: Dp = 22.dp
+        }
     }
     object Semantic {
         object Claude {

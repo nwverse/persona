@@ -10,7 +10,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 
-/** Settings › Appearance › Layout density (#5564): Compact tightens the spacing tokens, Standard draws the spec's values. */
+/** Settings › Appearance › Layout density (#5564): Compact tightens the spacing tokens, radii and row heights, Standard draws the spec's values. */
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35])
 class LayoutDensityTest {
@@ -19,7 +19,7 @@ class LayoutDensityTest {
     @After
     fun reset() {
         context.getSharedPreferences("persona-appearance", Context.MODE_PRIVATE).edit().clear().commit()
-        LayoutDensity.spaceScale = LayoutDensity.Default.scale
+        LayoutDensity.apply(LayoutDensity.Default)
     }
 
     @Test
@@ -35,15 +35,18 @@ class LayoutDensityTest {
     @Test
     fun compactTightensSpacingAndIsKept() {
         AppStyleStore(context).setDensity(LayoutDensity.Compact)
-        assertEquals(12.dp, Tokens.Space.l)
-        assertEquals(6.dp, Tokens.Space.s)
+        assertEquals(8.dp, Tokens.Space.l)
+        assertEquals(4.dp, Tokens.Space.s)
+        assertEquals(14.dp * 0.6f, Tokens.Radius.card)
+        assertEquals(14.dp, Tokens.Radius.Standard.card)
+        assertEquals(32.dp, 40.dp.row)
         // what sizes things with a spacing token keeps its size
         assertEquals(16.dp, Tokens.Space.Standard.l)
 
-        LayoutDensity.spaceScale = LayoutDensity.Default.scale
+        LayoutDensity.apply(LayoutDensity.Default)
         val reopened = AppStyleStore(context)
         assertEquals(LayoutDensity.Compact, reopened.density.value)
-        assertEquals(12.dp, Tokens.Space.l)
+        assertEquals(8.dp, Tokens.Space.l)
 
         reopened.setDensity(LayoutDensity.Standard)
         assertEquals(16.dp, Tokens.Space.l)

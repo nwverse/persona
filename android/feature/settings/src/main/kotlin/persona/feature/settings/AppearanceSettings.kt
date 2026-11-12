@@ -42,6 +42,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import persona.core.contracts.api.PersonaInfo
 import persona.core.designsystem.*
+import persona.core.designsystem.corner
+import persona.core.designsystem.dense
 import persona.core.designsystem.icons.PhIcons
 import persona.core.domain.sort.AgentListDisplay
 import persona.core.domain.sort.AgentListDisplaySettings
@@ -73,7 +75,7 @@ fun AppearanceSettings(modifier: Modifier = Modifier, agentsDisplay: AgentListDi
         if (current == AppStyle.Glass) {
             JSectionHeader(stringResource(R.string.settings_style_transparency))
             JSegmented(GlassPreference.entries.map { JSegment(it.label) }, GlassPreference.entries.indexOf(glass), { store.setGlass(GlassPreference.entries[it]) })
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(10.dp.dense))
             Text(
                 stringResource(when (glass) {
                     GlassPreference.Auto -> R.string.settings_style_glass_auto
@@ -161,20 +163,20 @@ private class LayoutSample(row: PreviewRow, val tab: String) {
 private fun StyleOption(style: AppStyle, selected: Boolean, onClick: () -> Unit) {
     val palette = PersonaTheme.palette
     Row(
-        Modifier.option(selected, onClick).padding(14.dp),
+        Modifier.option(selected, onClick).padding(14.dp.dense),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         StylePreview(style)
-        Spacer(Modifier.width(16.dp))
+        Spacer(Modifier.width(16.dp.dense))
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(style.label, style = PersonaTheme.type.title, color = palette.ink)
-                if (style == AppStyle.Default) { Spacer(Modifier.width(8.dp)); JTag(stringResource(R.string.settings_default)) }
+                if (style == AppStyle.Default) { Spacer(Modifier.width(8.dp.dense)); JTag(stringResource(R.string.settings_default)) }
             }
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(4.dp.dense))
             Text(style.summary, style = PersonaTheme.type.callout, color = palette.ink2)
         }
-        Spacer(Modifier.width(8.dp))
+        Spacer(Modifier.width(8.dp.dense))
         // The card is the radio button; this one only shows the state, so a screen reader stops once.
         JRadio(selected, null)
     }
@@ -219,7 +221,7 @@ private val PreviewCounts = listOf(Status.NeedsYou to 1, Status.Working to 1)
 private fun StylePreview(style: AppStyle) {
     // A picture: screen readers skip it (the option says which style it is) and taps reach the option around it,
     // not the headings, rows and tabs drawn in it.
-    Box(Modifier.size(96.dp, 132.dp).clip(RoundedCornerShape(14.dp)).clearAndSetSemantics {}) {
+    Box(Modifier.size(96.dp, 132.dp).clip(RoundedCornerShape(14.dp.corner)).clearAndSetSemantics {}) {
         Box(Modifier.requiredSize(320.dp, 440.dp).graphicsLayer { scaleX = 0.3f; scaleY = 0.3f }) {
             PersonaTheme(darkTheme = PersonaTheme.darkTheme, style = style) {
                 CompositionLocalProvider(LocalReadingInset provides 0.dp, LocalGlassSource provides null) {

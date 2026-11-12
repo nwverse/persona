@@ -321,14 +321,14 @@ def render_kotlin(catalog, package):
         for key, child in sorted(tree.items()):
             if isinstance(child, dict):
                 lines.append(f"{indent}object {key[0].upper() + key[1:]} {{")
-                # spacing follows Settings › Appearance › Layout density (LayoutDensity.kt); `Standard` keeps the values
+                # spacing and corner radii follow Settings › Appearance › Layout density (LayoutDensity.kt); `Standard` keeps the values
                 # for the few places that size something with a spacing token
-                emit(child, depth + 1, scaled=depth == 1 and key == "space")
+                emit(child, depth + 1, scaled={"space": "spaceScale", "radius": "radiusScale"}.get(key) if depth == 1 else False)
                 lines.append(indent + "}")
             elif scaled:
                 kind, value = kotlin_value(catalog.tokens[child]["$type"], catalog.values[child], child)
                 name = kotlin_identifier(key)
-                lines.append(f"{indent}val {name}: {kind} get() = Standard.{name} * LayoutDensity.spaceScale")
+                lines.append(f"{indent}val {name}: {kind} get() = Standard.{name} * LayoutDensity.{scaled}")
             else:
                 kind, value = kotlin_value(catalog.tokens[child]["$type"], catalog.values[child], child)
                 modifier = "const val" if kind in {"Int", "Float", "String"} else "val"

@@ -1029,13 +1029,13 @@ fun QuickFilterBar(bays: List<Bay>, selected: Int, onSelect: (Int) -> Unit, modi
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
     when (PersonaTheme.style) {
-        AppStyle.Glass -> Row(modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        AppStyle.Glass -> Row(modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp.dense)) {
             bays.forEachIndexed { index, bay -> JChip(bay.label, selected = index == selected, onClick = { onSelect(index) }, status = bay.status, count = bay.count) }
         }
         // Tabs that do not fit scroll sideways rather than being cut off at the edge.
         AppStyle.Brief -> JSegmented(bays.map { JSegment(it.label, it.count) }, selected, onSelect, modifier.horizontalScroll(rememberScrollState()))
         AppStyle.Board -> BoxWithConstraints(modifier.fillMaxWidth()) {
-            val shape = RoundedCornerShape(10.dp)
+            val shape = RoundedCornerShape(10.dp.corner)
             // Each bay is a share of the width while its label fits; more bays than that (the Agents list's six) keep
             // their width and the board scrolls sideways instead of cutting every label short.
             val fits = maxWidth / bays.size.coerceAtLeast(1) >= BoardBayMinWidth
@@ -1051,11 +1051,11 @@ fun QuickFilterBar(bays: List<Bay>, selected: Int, onSelect: (Int) -> Unit, modi
                     val color = bay.status?.let { palette.status(it).dot } ?: palette.ink
                     val cell = if (fits) Modifier.weight(1f) else Modifier.widthIn(min = bayWidth)
                     Box(cell.clickable(role = Role.Tab) { onSelect(index) }.semantics { this.selected = on }) {
-                        Column(Modifier.padding(start = 12.dp, top = 10.dp, bottom = 12.dp, end = 6.dp)) {
+                        Column(Modifier.padding(start = 12.dp.dense, top = 10.dp.dense, bottom = 12.dp.dense, end = 6.dp.dense)) {
                             Text("${bay.count ?: "—"}", style = type.number, color = if ((bay.count ?: 0) == 0) palette.ink3 else palette.ink, maxLines = 1)
-                            Spacer(Modifier.height(2.dp))
+                            Spacer(Modifier.height(2.dp.dense))
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                if (bay.status != null) { Box(Modifier.size(8.dp).clip(RoundedCornerShape(2.dp)).background(color)); Spacer(Modifier.width(5.dp)) }
+                                if (bay.status != null) { Box(Modifier.size(8.dp).clip(RoundedCornerShape(2.dp)).background(color)); Spacer(Modifier.width(5.dp.dense)) }
                                 Text(bay.label, style = type.caption.copy(fontSize = androidx.compose.ui.unit.TextUnit(12f, androidx.compose.ui.unit.TextUnitType.Sp)), color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                         }

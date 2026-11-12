@@ -1,6 +1,7 @@
 package persona.feature.agents
 
 import persona.core.contracts.clipped
+import persona.core.designsystem.dense
 import persona.core.designsystem.text
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -881,7 +882,7 @@ private fun ConnectionNotice(state: ConnectionState, onSettings: () -> Unit) {
         }), status = Status.NeedsYou,
             actionLabel = stringResource(if (state == ConnectionState.NeedsLocalNetworkPermission) R.string.agents_connection_allow else R.string.agents_connection_diagnose),
             onAction = onSettings)
-    } else Text(stringResource(R.string.agents_connection_cached), Modifier.padding(vertical = 8.dp), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3)
+    } else Text(stringResource(R.string.agents_connection_cached), Modifier.padding(vertical = 8.dp.dense), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3)
 }
 
 @Composable
