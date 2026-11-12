@@ -113,7 +113,9 @@ async function run(browser, size, theme, scenario) {
     }
     await shot("expanded");
     if (!live && size === "wide") {
-      await quiet.locator('[data-thinking="words"] > button').click();
+      // a thought that fits on its row says it there; one that does not opens in place (#5155)
+      const thoughtRow = quiet.locator('[data-thinking="words"] > button');
+      if (await thoughtRow.isEnabled()) await thoughtRow.click();
       await quiet.locator('[data-action-row="Read"] > button').click();
       await quiet.locator('[data-action-row="supervision_finish"] > button').click();
       assert((await quiet.textContent()).includes(thought.text), "original thoughts are inspectable");
