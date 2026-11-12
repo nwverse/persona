@@ -4,7 +4,8 @@
 // elsewhere, opened by keyboard focus. Without a cost, the tokens ("23.4k tokens"), their lines in cindy's tooltip
 // (500 ms into a hover or at keyboard focus, gone when the pointer leaves). A Persona conversation (super rules 0 and 4)
 // says only "≈ $0.12" and what that is in plain words; without a cost it says nothing. On a touch screen it ends the
-// reply's copy + ⋯ row (MessageActions) and a tap opens the card. Lines and prices: lib/turn-cost.ts.
+// reply's copy + ⋯ row (MessageActions): a tap opens the card or the tooltip, a second tap closes it. Lines and prices:
+// lib/turn-cost.ts.
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { t } from "../../i18n";
@@ -132,9 +133,10 @@ function UsageTrigger({ label, lines, title, tip, touch, onOpen }: { label: stri
         onClick={(e) => {
           e.stopPropagation();
           clear();
-          // a click pins the card; the tooltip closes, as a tooltip does, but a finger has no hover: a tap holds it
-          if (!tip || touch) setMode((m) => (tip && m === "pinned" ? "closed" : "pinned"));
-          else setMode("closed");
+          // a click pins the card; the tooltip closes, as a tooltip does. A finger has no hover: a tap holds either, and
+          // the next tap on the text lets it go
+          if (touch) setMode((m) => (m === "pinned" ? "closed" : "pinned"));
+          else setMode(tip ? "closed" : "pinned");
         }}
       >
         {label}

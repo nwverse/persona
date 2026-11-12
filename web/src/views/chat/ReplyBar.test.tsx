@@ -322,6 +322,26 @@ describe("on a touch screen", () => {
     expect(card()).toBeNull();
     act(() => row!.click());
     expect(card()?.dataset.usageCard).toBe("pinned");
+    // a second tap on the text lets it go (cindy's popover trigger), as a press anywhere else does
+    act(() => row!.click());
+    expect(card()).toBeNull();
+    act(() => row!.click());
+    act(() => void document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true })));
+    expect(card()).toBeNull();
+  });
+
+  it("holds the tokens' lines on a tap, and lets them go on the next", async () => {
+    await draw({ usage: usageKey({ entries: [tokens({ model: "claude-haiku-5-5", out: 1200 })] }) });
+    await act(async () => {
+      await vi.dynamicImportSettled();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const row = [...host.querySelectorAll<HTMLElement>("[data-turn-usage]")].find((el) => !el.closest("[data-reply-bar]"));
+    expect(row?.textContent).toBe("1.2k tokens");
+    act(() => row!.click());
+    expect(card()?.getAttribute("role")).toBe("tooltip");
+    act(() => row!.click());
+    expect(card()).toBeNull();
   });
 });
 

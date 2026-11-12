@@ -10,8 +10,8 @@ import { injectedOf } from "./injected";
 import { markModelChanges, type ModelChange } from "./model-change";
 import { sourceKey, sourceOf, userSourceSentinel } from "./message-source";
 import { attachedAgentNotices, taskCalls } from "./task-association";
-import { countUsage, markFirstUsage, type TurnUsage } from "./turn-usage";
-import type { Injected, Item, MessageSource } from "./types";
+import { addUsage, countUsage, itemUsage, markFirstUsage, type TurnUsage } from "./turn-usage";
+import type { Injected, Item, MessageSource, TokenUsage } from "./types";
 
 export type Step =
   | { kind: "tool"; id: string; use: Item; result?: Item; images: Item[] }
@@ -89,8 +89,8 @@ export interface Segment {
    *  words are not a finished reply, and say so (cindy's "This reply did not complete", #5314). */
   cut?: boolean;
   /** What its items used (#5426, lib/turn-usage.ts): every item counts, those it does not show too (a tool's result, a
-   *  Codex turn's duration); chatLines adds a subagent's notice drawn on its card to the exchange that launched it.
-   *  Absent when none of them carries tokens. */
+   *  Codex turn's duration, a stopped turn's notice); each subagent counts once in the chat, in the exchange that
+   *  launched it (chatLines' lineUsage). Absent when none of them carries tokens. */
   usage?: TurnUsage;
 }
 
@@ -900,6 +900,8 @@ function turnLines(t: Turn, live: boolean, results?: ReadonlyMap<string, Item>):
   // stopped after everything it did (not an exchange that went on after it): its last words are not a finished reply
   const end = segs.at(-1), at = t.ordered.at(-1)?.seq ?? 0;
   if (end && !live && t.trailing.some((n) => isInterruptNotice(n) && n.seq > at)) end.cut = true;
+  // what a stopped turn's notice carries (a Codex turn's total) is its last exchange's
+  if (end) for (const n of t.trailing) countUsage(end, n);
   segs.forEach((seg, k) => {
     if (k === 0 && !seg.user && wokeAt) seg.start = wokeAt;
     const last = k === segs.length - 1;
@@ -959,7 +961,7 @@ export function chatLines(items: Item[], opts: ChatLinesOptions = {}): ChatLine[
   // Working with nothing of this run yet (the last thing is a recap): retain the supervision round's visibility.
   if (opts.live && !liveId) append([{ kind: "segment", id: "live", seg: { id: "live", steps: [], tools: 0, thoughts: 0, replies: 0, folds: [] }, live: true }], [], true);
   flush();
-  lineUsage(out, items, attached);
+  lineUsage(out, items);
   const lines = markModelChanges(foldRecaps(foldAPIErrors(out)));
   if (background) hideScheduledPrompts(lines);
   let previous: string | undefined;
@@ -975,17 +977,46 @@ export function chatLines(items: Item[], opts: ChatLinesOptions = {}): ChatLine[
   return lines;
 }
 
-/** What the exchanges used, across the chat (lib/turn-usage.ts): a subagent's notice drawn on its card (`attached`,
- *  left out of every exchange) counts in the exchange that launched it, and only the chat's first exchange that used
- *  tokens is its first round. */
-function lineUsage(lines: ChatLine[], items: Item[], attached: ReadonlySet<string>) {
+const KINDS = ["in", "out", "cache_read", "cache_write", "cache_write_1h"] as const;
+
+/** What the exchanges' subagents used, across the chat (lib/turn-usage.ts): each subagent (an entry's `id`, its model and
+ *  speed) once, at the largest count of each kind any of its reports gives (a later report includes the work it did
+ *  after being resumed), in the earliest exchange that launched an item carrying it (the item's call, its task's, or
+ *  the call taskCalls finds); with none of those on the page, where its first report is. Then only the chat's first
+ *  exchange that used tokens is its first round. */
+function lineUsage(lines: ChatLine[], items: Item[]) {
   const segs = lines.flatMap((l) => (l.kind === "segment" ? [l.seg] : l.kind === "supervision" ? l.lines.flatMap((c) => (c.kind === "segment" ? [c.seg] : [])) : []));
-  const reports = items.filter((it) => attached.has(it.id) && it.usage?.length);
-  const calls = reports.length ? taskCalls(items) : undefined;
-  for (const it of reports) {
-    const call = calls!.get(it.id);
-    const seg = call && segs.find((s) => s.steps.some((st) => st.kind === "tool" && st.use.tool_use_id === call));
-    if (seg) countUsage(seg, it);
+  if (items.some((it) => itemUsage(it, true).length)) {
+    // each item's exchange, and each call's: the first exchange that has it
+    const at = new Map<string, number>();
+    const own = (id: string | undefined, k: number) => id && !at.has(id) && at.set(id, k);
+    segs.forEach((s, k) => {
+      for (const i of s.user?.rawInput ?? []) own(i.id, k);
+      for (const st of s.steps) {
+        own(st.kind === "tool" ? st.use.id : st.item.id, k);
+        if (st.kind === "tool") {
+          own(`call:${st.use.tool_use_id}`, k);
+          own(st.result?.id, k);
+        }
+      }
+      own(s.answer?.id, k);
+    });
+    const calls = taskCalls(items);
+    const reports = new Map<string, { u: TokenUsage; k: number; launched?: boolean }>();
+    let here = 0; // the exchange the walk is in: an item none draws (a result, a notice on a card) lands in the one before
+    for (const it of items) {
+      here = at.get(it.id) ?? here;
+      const list = itemUsage(it, true);
+      if (!list.length) continue;
+      const launch = [it.tool_use_id, it.task?.tool_use_id, calls.get(it.id)].map((c) => at.get(`call:${c}`)).find((k) => k !== undefined);
+      for (const u of list) {
+        const key = `${u.id}\n${u.model ?? ""}\n${u.fast ? 1 : 0}`;
+        const r = reports.get(key) ?? reports.set(key, { u: { id: u.id, ...(u.model ? { model: u.model } : {}), ...(u.fast ? { fast: true } : {}) }, k: here }).get(key)!;
+        for (const kind of KINDS) if ((u[kind] ?? 0) > (r.u[kind] ?? 0)) r.u[kind] = u[kind];
+        if (launch !== undefined && (!r.launched || launch < r.k)) Object.assign(r, { k: launch, launched: true });
+      }
+    }
+    for (const { u, k } of reports.values()) if (segs[k]) addUsage(segs[k], [u]);
   }
   markFirstUsage(segs);
 }

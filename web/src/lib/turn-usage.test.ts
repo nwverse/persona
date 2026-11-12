@@ -45,21 +45,58 @@ describe("an exchange's usage", () => {
     const [first, second] = segOf(chatLines(items));
     expect(models(first)).toEqual([
       { model: OPUS, in: 13, out: 95, cache_read: 4400, cache_write: 500, cache_write_1h: 100 },
-      { model: SONNET, in: 50, out: 60, cache_read: 70, cache_write: 80, cache_write_1h: 0 },
       { model: "gpt-5.5", in: 7, out: 8, cache_read: 9, cache_write: 0, cache_write_1h: 0 },
+      { model: SONNET, in: 50, out: 60, cache_read: 70, cache_write: 80, cache_write_1h: 0 }, // its subagent's, after its own
     ]);
     expect(first.usage?.first).toBe(true);
     expect(second.usage).toBeUndefined(); // an older node's exchange: nothing to show
-    expect(segments(items)[0].usage?.entries).toHaveLength(6); // as the items carry them, summed only with the bar
+    // as the items carry them, summed only with the bar; the subagent's report is the chat's to place (chatLines)
+    expect(segments(items)[0].usage?.entries).toHaveLength(5);
   });
 
   it("counts a subagent's report once, its largest count of each kind", () => {
     const report = (n: Partial<TokenUsage>): TokenUsage[] => [{ id: "agent:x", model: SONNET, ...n }];
     const items = [u(1, "go"), call(2, "c2", "Agent"), result(3, "c2", report({ in: 10, out: 5 })), { ...result(4, "c2", report({ in: 8, out: 9 })), id: "r4b#0" }, a(5, "ok")];
-    expect(models(segments(items)[0])).toEqual([{ model: SONNET, in: 10, out: 9, cache_read: 0, cache_write: 0, cache_write_1h: 0 }]);
-    // two subagents on the same model are two reports, summed
+    expect(models(segOf(chatLines(items))[0])).toEqual([{ model: SONNET, in: 10, out: 9, cache_read: 0, cache_write: 0, cache_write_1h: 0 }]);
+    // two subagents on the same model are two reports, summed; their calls not on the page, they count where they are
     const two = [u(1, "go"), result(3, "c2", report({ in: 10 })), result(4, "c4", [{ id: "agent:y", model: SONNET, in: 3 }]), a(5, "ok")];
-    expect(models(segments(two)[0])?.[0].in).toBe(13);
+    expect(models(segOf(chatLines(two))[0])?.[0].in).toBe(13);
+  });
+
+  it("counts a subagent once across the chat, in the exchange that launched it, its work after a resume included", () => {
+    // it failed in the first exchange, was resumed (SendMessage) in the second and finished in the third
+    const items = [
+      u(1, "check the export"), call(2, "c2", "Agent", [opus({ out: 10 })]), result(3, "c2", [{ id: "agent:x", model: SONNET, in: 5, out: 100 }]), a(4, "it failed"),
+      u(5, "try again"), call(6, "c6", "SendMessage", [opus({ out: 11 })]), result(7, "c6"), a(8, "resumed"),
+      u(9, "and?"), { ...result(10, "c2", [{ id: "agent:x", model: SONNET, in: 7, out: 300 }]), id: "r10#0" }, a(11, "done", [opus({ out: 12 })]),
+    ];
+    const segs = segOf(chatLines(items));
+    expect(segs.map((s) => models(s)?.map((m) => [m.model, m.in, m.out]))).toEqual([[[OPUS, 0, 10], [SONNET, 7, 300]], [[OPUS, 0, 11]], [[OPUS, 0, 12]]]);
+  });
+
+  it("counts a background subagent's result after your next message in the exchange that launched it", () => {
+    // newer nodes turn the completion notification into a tool result, its call the notification's own
+    const done: Item = { ...result(6, "notify-bg1", [{ id: "agent:bg1", model: SONNET, out: 900 }]), task: { kind: "agent", status: "completed", task_id: "bg1", tool_use_id: "c2" } };
+    const items = [u(1, "look in the background"), call(2, "c2", "Agent", [opus({ out: 10 })]), result(3, "c2"), a(4, "started"), u(5, "and meanwhile?"), done, a(7, "here", [opus({ out: 20 })])];
+    const segs = segOf(chatLines(items));
+    expect(models(segs[0])?.map((m) => [m.model, m.out])).toEqual([[OPUS, 10], [SONNET, 900]]);
+    expect(models(segs[1])?.map((m) => [m.model, m.out])).toEqual([[OPUS, 20]]);
+  });
+
+  it("counts a nested subagent once, reported under its parent's report and on its own", () => {
+    const parent = result(3, "c2", [{ id: "agent:p", model: SONNET, out: 100 }, { id: "agent:child", model: "claude-haiku-5-5", out: 40 }]);
+    const child: Item = { id: "n5#0", seq: 5, role: "system", kind: "notice", text: "Agent done", task: { kind: "agent", status: "completed", task_id: "child" }, usage: [{ id: "agent:child", model: "claude-haiku-5-5", out: 60 }] };
+    const items = [u(1, "split it up"), call(2, "c2", "Agent"), parent, a(4, "on it"), child, a(6, "all done", [opus({ out: 1 })])];
+    const [seg] = segOf(chatLines(items));
+    expect(models(seg)?.map((m) => [m.model, m.out])).toEqual([[OPUS, 1], [SONNET, 100], ["claude-haiku-5-5", 60]]);
+  });
+
+  it("counts what a stopped turn's notice carries in its last exchange", () => {
+    // a Codex turn you stopped: its total rides on the interruption notice, a line of its own after the exchange
+    const stopped: Item = { id: "n4#0", seq: 4, role: "system", kind: "notice", text: "已中断", usage: [{ model: "gpt-5.5", in: 70, out: 8 }] };
+    const lines = chatLines([u(1, "rename it"), call(2, "c2"), result(3, "c2"), stopped]);
+    expect(lines.map((l) => l.kind)).toEqual(["segment", "notice"]);
+    expect(models(segOf(lines)[0])).toEqual([{ model: "gpt-5.5", in: 70, out: 8, cache_read: 0, cache_write: 0, cache_write_1h: 0 }]);
   });
 
   it("sums a model whatever wrapper its id has, and keeps the fast speed apart", () => {

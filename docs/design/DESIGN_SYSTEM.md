@@ -439,11 +439,12 @@ For every component: use the design-system one, not a lookalike. Counts are appr
   cindy's "This reply did not complete" line above it (13 px `--ink-2`). After the time (#5426, `TurnUsage`, cindy's
   usage cell): what the exchange cost, 6 px on, 12 px `--ink-3`, half a pixel down, "Worth $0.12" in an Agent session
   with cindy's usage card (320 px, `--surface`, `--line` border, 12 px radius, `shadow-overlay`, 16 px padding, 12 px
-  `--ink-2` lines; under the text from its start, above it when the chat has no room below; 250 ms into a hover, held on the card, gone
-  220 ms after the pointer leaves, pinned by a click, Esc or a press elsewhere closes it, the bar stays while it is
-  open), or without a cost "23.4k tokens" with their lines in the dark tooltip (`--tooltip-bg`, 13 px, at most 420 px,
-  500 ms into a hover, never pinned). A Persona conversation shows only "≈ $0.12" and one plain line, and nothing
-  without a cost (super rules 0 and 4). On touch screens the text ends the copy + ⋯ row and a tap opens the card.
+  `--ink-2` lines; under the text from its start, above it when the chat has no room below; 250 ms into a hover, held
+  on the card, gone 220 ms after the pointer leaves, pinned by a click, Esc or a press elsewhere closes it, the bar
+  stays while it is open), or without a cost "23.4k tokens" with their lines in the dark tooltip (`--tooltip-bg`,
+  13 px, at most 420 px, 500 ms into a hover, never pinned by a pointer). A Persona conversation shows only "≈ $0.12"
+  and one plain line, and nothing without a cost (super rules 0 and 4). On touch screens the text ends the copy + ⋯
+  row: a tap holds the card or the tooltip, and a second tap on the text or a press elsewhere closes it.
   Details: `docs/web/web.md` ("Reply bar").
 - Model change divider (web, #5034, `ModelChangeDivider`): where an exchange's reply came from another model than the
   previous visible reply, between that exchange's message and its reply: two `--line-strong` hairlines and a centered
