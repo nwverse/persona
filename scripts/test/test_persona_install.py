@@ -195,6 +195,25 @@ class PersonaInstallTests(unittest.TestCase):
                 self.assertIn(expected, result.stderr)
                 self.assertFalse((home / '.persona').exists())
 
+    def test_installer_messages_show_their_values(self):
+        # The catalog prints each entry as it is, so install_format fills its values in (#5623): the option an error
+        # names, the command a hint says to run.
+        for lang in ('en', 'zh-Hans', 'ja'):
+            with self.subTest(lang, message='unknown_option'), tempfile.TemporaryDirectory() as directory:
+                result = self.run_install(Path(directory), args=('--lang', lang, '--not-an-option'))
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn('--not-an-option', result.stderr)
+            with self.subTest(lang, message='hub_run_next'), tempfile.TemporaryDirectory() as directory:
+                result = self.run_install(Path(directory), extra={'PERSONA_ROLE': ''}, args=('--lang', lang))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertRegex(result.stdout, r'/bin/personad hub setup')
+        # A text printed without values still has its line breaks, not a literal \n.
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.run_install(Path(directory), link=LINK_FIXTURE, node=True, extra={'PERSONA_ROLE': 'node'},
+                                      args=('--lang', 'en'), answers=[('Choose one [1-2', '2')])
+            self.assertIn('How should this computer connect to the hub?', result.stdout)
+            self.assertNotIn('\\n', result.stdout)
+
     def test_admin_access_prompt_uses_selected_language(self):
         cases = (
             ('en', 'Who can open the hub admin page'),
