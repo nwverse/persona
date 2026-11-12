@@ -241,18 +241,24 @@ keeps the last hello's flag for a start without the app in front, `MeetingAttend
 Recordings page's start through `RecordingStart.make`). The Topics row is in [DESIGN_SYSTEM.md](../design/DESIGN_SYSTEM.md)
 "Meeting page (#3862)"; the Live Activity's topic and line in [live-activity.md](live-activity.md) "Recording".
 
-- **15-second segments**: while Persona attends such a meeting (`RecordingAttendance.shortSegments`: a room meeting with
-  the live view whose role isn't off), its segments are `RecordingAudioSpec.meetingLiveSegmentSeconds` (15 s, above the
+- **15-second segments**: while Persona attends such a meeting and its lines reach the room
+  (`RecordingAttendance.shortSegments(roomMissing:)`: a room meeting with the live view whose role isn't off, not stopped
+  by the hub (`live_full`, `unsupported`) and not taken by an older manager without the room, `RecordingSync.roomMissing`),
+  its segments are `RecordingAudioSpec.meetingLiveSegmentSeconds` (15 s, above the
   writer's 10 s minimum) in the foreground and the background alike, so a line reaches the page and the room within about
   15–30 seconds. `MeetingRecorder` hands it to the capture at the start (`RecordingCapture.start(…, shortSegments:)`)
   and again when the role changes (the page's role, the activity's Turn Off) or the recording turns into a note or back
-  (`RecordingCapture.setShortSegments`; the open segment closes as soon as it is longer). Every other recording keeps
+  (`RecordingCapture.setShortSegments`; the open segment closes as soon as it is longer), and whenever a save or an
+  upload's answer changes whether the lines go (`RecordingSync.onSegments` → `MeetingRecorder.followSegments`). Every other recording keeps
   30 s in front and 60 s behind (`RecordingCapture.segmentLength(short:watched:)`), all-day recording its own chunks.
 - **Topics**: `MeetingConversation` reads `topics` and `topics_at` with the rest of `GET …/live` (`LiveRead`, leniently:
   an unknown state reads as `open`, a topic without a title leaves the list, at most 20 are kept) and follows `topics` in
   `meeting_live` (`partsRead(for:)` adds it for such a meeting only), reading `?parts=topics` when its revision is newer.
   A read of other parts keeps the topics; a meeting started without the live view keeps none (`applyTopics`). The page
-  shows them as chips under the header, above the Live box, once the room set any.
+  shows them as chips under the header, above the Live box, once the room set any. In the background the WebSocket is
+  closed, so no `meeting_live` comes: while this phone records such a meeting, an accepted `POST …/live` reads
+  `?parts=topics` at most every 20 s (`MeetingConversation.liveAccepted`, only with the socket closed), so the Live
+  Activity's topic follows.
 - **The Live box keeps the phone's own lines** (its transcript): the phone never reads `lines` of `GET …/live`, which is
   for other devices.
 - **The Live Activity**: the current topic (`topic`, at most 60 characters) and the live log's latest line (`line`, at

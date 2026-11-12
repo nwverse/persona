@@ -54,7 +54,8 @@ import OSLog
         let previous = shown?.id == id ? shown?.content : nil
         let now = Date.now
         // Read here, so the activity follows them: an older manager took the room meeting with Persona off (#3862), and
-        // the room's topics (phase 2). Just me never reaches the activity: its answers aren't `MeetingAsk`'s.
+        // the room's topics (phase 2; in the background, without `meeting_live`, read after the lines went:
+        // `MeetingConversation.liveAccepted`). Just me never reaches the activity: its answers aren't `MeetingAsk`'s.
         let roomMissing = RecordingSync.shared.roomMissing.contains(id)
         let answered = MeetingAsk.shared.exchanges(for: id).last(where: { $0.answer != nil })
         if let answered, answerSeen?.id != answered.id { answerSeen = (answered.id, now) }

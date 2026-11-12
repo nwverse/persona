@@ -145,7 +145,7 @@ A trimmed recording:
 
 - Is still returned by `GET /api/v1/kb/recordings/{id}` with `detail.meta` (`trimmed_at` included, `minutes_state` `ready`), `detail.minutes`, no `segments` and no `summary`; `kb_get` prints the minutes and says the transcript expired; `kb_search` still finds `minutes.md`; earlier-meeting retrieval remains available in code but is disabled for in-meeting answers until a private-meeting mark exists (#3862).
 - Still turns confirmed action items into to-dos (`POST …/minutes/todos`), but cannot regenerate them: `POST …/minutes` is `409 transcript_expired`.
-- Takes no upload: `PUT /api/v1/recordings/{id}` answers `expired` (it started before the `recording_days` window, and the hub never takes a transcript back even when `recording_days` grows again). Its attendance is turned off with the live log gone, and no live log is written to it again, not even by a write that read the log before the trim.
+- Takes no upload: `PUT /api/v1/recordings/{id}` answers `expired` (it started before the `recording_days` window, and the hub never takes a transcript back even when `recording_days` grows again). Its attendance is turned off with the live log gone (its lines, asks and topics with it: `GET …/live` reads them empty, their revisions 0, "The `meeting_live` event"), and no live log is written to it again, not even by a write that read the log before the trim.
 - Stays in reconciliation (`GET /api/v1/recordings`) at its revision with `trimmed_at`, while `days` stays `recording_days`. A phone deletes its own copy at `days` and never uploads one that old; one that still holds it sees the hub has that revision and sends nothing, so the phone contract is unchanged.
 - Is deleted entirely by the user's delete, which leaves a tombstone as before. Tombstones keep the `recording_days` window: they only refuse late uploads, and an upload of a recording older than that window is expired anyway.
 
@@ -564,7 +564,7 @@ On `PUT /api/v1/recordings/{id}`, with `kind: "meeting"`:
 
 A manager's WebSocket event, content-free: `{"type": "meeting_live", "recording_id": "<id>", "changed": ["room", "asks"], "revs": {"room": 3, "asks": 12}}`. It goes out when the room's state, the asks, the private mark or the follow-up change, and from later phases on new lines, topics, photos and transcription state; at most one a second per recording. `changed` is an open set: `room`, `asks`, `private`, `followup`, `lines`, `topics`, `photos`, `transcription`.
 
-- `revs` holds each changed part's revision: a number per recording and part that only goes up (for `lines`, the live log's length). Numbers only, so the event still carries nothing of the meeting.
+- `revs` holds each changed part's revision: a number per recording and part that only goes up (for `lines`, the live log's length). Numbers only, so the event still carries nothing of the meeting. The one exception is the trim: it removes the live log, so `lines`, `asks` and `topics` read empty and their revisions start again from 0, with no event for them. A client compares those revisions only within a recording that is not trimmed (the live view is shown only while the recording is partial and not trimmed anyway).
 - `GET …/live` returns `revs` for every part it has, and takes `parts` (`?parts=asks,room`: only those parts, with their `revs`). `photos` has a revision there but no field: `?parts=photos` returns only its revision, and the photos come from `GET …/photos`. A client keeps the revisions it has read and on an event reads only the parts that are newer: `GET …/live?parts=…`, the new lines with `?from=` its own next position (phase 2), `GET …/photos` only for `photos` (phase 3). Without `parts` the read returns everything, as #2981 reads do.
 
 Its row in protocol.md's WebSocket table and the hub's list of manager message types come with the code.
@@ -583,7 +583,7 @@ Its row in protocol.md's WebSocket table and the hub's list of manager message t
 - Live lines are shown only through `…/live`, to full devices; `kb_get` and `GET /api/v1/kb/recordings/{id}` still never show them (#2981).
 - `meeting_live` adds `lines` (after every append that stored a position, `revs.lines` the live log's length) and `topics` (after every change).
 - **The phone's own lines, sooner.** A meeting Persona attends writes 15-second segments in the foreground and the background (the writer's minimum is 10), so a line reaches the page and the room within about 15–30 seconds. The page shows the phone's own lines; other devices read `lines`. Hub mode (phase 5) brings this to about two seconds.
-- **Web.** The recording detail shows Topics and the live lines while the recording is partial, read again on `meeting_live` (polling every 5 seconds without the WebSocket, as today).
+- **Web.** The recording detail shows Topics (once the room set any) and the live lines while Persona attends the meeting (its room `starting`, `ready` or `unavailable`) and the recording is partial, read again on `meeting_live` (polling every 5 seconds without the WebSocket, as today).
 
 ### Phase 3: photos
 
@@ -833,25 +833,26 @@ The Lock Screen keeps within its height of about 160 pt ([live-activity.md](../a
 ```
 +--------------------------------------------------------+
 | (*) Design review                               23:41  |
-|     Now: Pricing . Persona takes part                  |
+|     Persona taking part . Now: Pricing                 |
 |     Persona: On Nov 3 you kept them through Q3.        |
 |  [ Talk ]      [bookmark]     [turn off]      [stop]   |
 +--------------------------------------------------------+
 ```
 
+- Under the name, Persona's role and then the current topic: the role first, so it is never cut (whoever sees the phone learns that Persona is in the meeting), and the topic after it, which may run onto a second line and is what gets cut. Beside a topic the third line takes one line, since two lines each would pass the height; without one it may take two. Cutting the role and topic to one line instead left a character or two of a Chinese topic (up to 60 characters in the state) beside the role.
 - The third line is the latest answer for 60 seconds after it came, otherwise the latest live line, and "Listening to you..." while a talk window is open. Just me never appears there.
 - Before phase 4 the first button is **Ask** (what was just said); with the role `off`, only Bookmark and Stop. **Turn off** stays on the Lock Screen while Persona attends, as #3375 promised for one-tap starts: the owner silences Persona without unlocking the phone. Photo is on the page only, since opening the camera needs the phone unlocked anyway.
-- Dynamic Island: compact shows the recording mark and the time (a talk mark instead while a talk window is open; no repeating animation); minimal the mark; expanded the title and time, `Now: <topic>`, the third line above, and the Lock Screen's buttons.
+- Dynamic Island: compact shows the recording mark and the time (a talk mark instead while a talk window is open; no repeating animation); minimal the mark; expanded the title and time, the Lock Screen's line under the name on one line (the role, then `Now: <topic>`), the third line above, and the Lock Screen's buttons.
 
 ```
 compact:   (*) ......................... 23:41
 expanded:  Design review                        23:41
-           Now: Pricing
+           Persona taking part . Now: Pricing
            Persona: On Nov 3 you kept them through Q3.
            [ Talk ]     [bookmark]   [turn off]    [stop]
 ```
 
-- `ContentState` gains `topic` (the current topic's title, at most 60 characters), `line` (the latest live line, at most 120) and `talking` (a talk window is open), beside `persona` and `answer`; the whole stays far under the 4 KB limit. The app updates the activity at once for an answer, a talk window or a change of phase, and at most every 5 seconds for a new line or topic. It stays local (`pushType: nil`).
+- `ContentState` gains `topic` (the current topic's title, at most 60 characters), `line` (the latest live line, at most 120) and `talking` (a talk window is open), beside `persona` and `answer`; the whole stays far under the 4 KB limit. The app updates the activity at once for an answer, a talk window or a change of phase, and at most every 5 seconds for a new line or topic. It stays local (`pushType: nil`). In the background the app has no WebSocket, so no `meeting_live`: while it records, after a `POST …/live` the hub took it reads `GET …/live?parts=topics`, at most every 20 seconds, so the topic follows the room with the phone locked.
 - Talk is a `LiveActivityIntent` that runs in the app, like Ask today; Turn off stays `TurnOffMeetingAttendanceIntent`. Both are `.alwaysAllowed`, as Stop is. `persona://record/<id>` opens the meeting page. The watch's Smart Stack stays as it is.
 
 ### Privacy per mode

@@ -74,6 +74,8 @@ final class MeetingConversation {
         var reupload: (UUID) async -> Bool = { _ in false }
         /// `GET …/photos` of a meeting that takes photos (`MeetingPhotos.refresh`); whether its list was applied.
         var readPhotos: (UUID) async -> Bool = { await MeetingPhotos.shared.refresh($0) }
+        /// `meeting_live` reaches the phone now: the hub-level group's socket is open (the app behind closes it).
+        var streaming: () -> Bool = { false }
     }
 
     /// Longest Just me or `…/followup` text (the contract's limit, in characters).
@@ -99,6 +101,9 @@ final class MeetingConversation {
     @ObservationIgnored private var readAgain: [UUID: Wanted] = [:]
     /// Request ids the hub answered for good (a replay would return the same failure): a retry goes under a new one.
     @ObservationIgnored private var spent: Set<UUID> = []
+    /// The topics read without `meeting_live` (`liveAccepted`): when each meeting's last read began, and a read due later.
+    @ObservationIgnored private var topicsReadAt: [UUID: Date] = [:]
+    @ObservationIgnored private var topicsDue: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var started = false
 
     private enum Wanted: Equatable {
@@ -232,6 +237,57 @@ final class MeetingConversation {
 
     /// The most topics the hub keeps (the contract's limit): a longer list is cut, not refused.
     nonisolated static let maxTopics = 20
+
+    // MARK: Topics without the socket
+
+    /// A `POST …/live` the hub took (`MeetingLive`'s report). The app behind closes its socket (`AppModel.suspendLinks`),
+    /// so no `meeting_live` says the room moved on, while the recording goes on and its lines keep going: for a meeting
+    /// with the live view that Persona attends while this phone records it, the topics are read here instead, with
+    /// `?parts=topics` as their event reads them (`refresh`), at most every `topicsEvery`, so the Live Activity's "Now:"
+    /// follows the room (it updates under its own 5-second throttle). A read due later waits for its time rather than
+    /// being dropped: the room sets the topics a little after the batch it read. Nothing while the socket is open (the
+    /// events come), for any other meeting, or once the recording stopped.
+    func liveAccepted(_ id: UUID) {
+        guard topicsDue[id] == nil else { return }
+        guard let wait = Self.topicsReadWait(follows: followsTopicsBehind(id), lastRead: topicsReadAt[id], now: deps.now()) else {
+            topicsReadAt[id] = nil
+            return
+        }
+        let sleep = deps.wait
+        topicsDue[id] = Task { [weak self] in
+            if wait > 0 { await sleep(.seconds(wait)) }
+            guard let self else { return }
+            self.topicsDue[id] = nil
+            // Looked at again: the recording may have stopped, Persona gone off or the app come back meanwhile.
+            guard self.followsTopicsBehind(id) else { return }
+            self.topicsReadAt[id] = self.deps.now()
+            await self.refresh(id, parts: ["topics"])
+        }
+    }
+
+    private func followsTopicsBehind(_ id: UUID) -> Bool {
+        Self.readsTopicsBehind(library.entry(id), roomMissing: sync.roomMissing.contains(id), streaming: deps.streaming())
+    }
+
+    /// Whether `liveAccepted` reads the topics of `entry` (pure, for the tests): a meeting started with the live view that
+    /// Persona attends while this phone records it, as the activity shows the topic (`MeetingAsk.canAsk`), and only while
+    /// `meeting_live` doesn't reach the phone (`streaming`).
+    nonisolated static func readsTopicsBehind(_ entry: RecordingEntry?, roomMissing: Bool, streaming: Bool) -> Bool {
+        guard !streaming, let entry, entry.attendance?.liveView == true else { return false }
+        return MeetingAsk.canAsk(entry, roomMissing: roomMissing)
+    }
+
+    /// How long after an accepted `POST …/live` the topics are read (pure, for the tests): nil for no read (`follows`:
+    /// `readsTopicsBehind`), 0 for now, else what is left of `topicsEvery` since the last read began.
+    nonisolated static func topicsReadWait(follows: Bool, lastRead: Date?, now: Date) -> TimeInterval? {
+        guard follows else { return nil }
+        guard let lastRead else { return 0 }
+        return max(0, topicsEvery - now.timeIntervalSince(lastRead))
+    }
+
+    /// The topics are read without the socket at most this often: the lines go every 15 seconds or so (15-second
+    /// segments), and a topic lasts minutes, so every other batch at most is enough.
+    nonisolated static let topicsEvery: TimeInterval = 20
 
     /// The photos moved at the hub (added, noted, cited, deleted), as of `rev` when it is known: `GET …/photos` reads
     /// them, and only once that list applied is `rev` kept, so the same event isn't read twice. A read that fails
@@ -783,7 +839,8 @@ extension MeetingConversation.Deps {
                      if let entry = RecordingLibrary.shared.entry(id), RecordingSync.shared.status(entry) == .synced { return true }
                  }
                  return false
-             })
+             },
+             streaming: { AppModel.shared.hub?.live.state == .connected })
     }
 }
 #endif

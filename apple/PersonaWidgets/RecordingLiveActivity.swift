@@ -109,6 +109,12 @@ struct RecordingTime: View {
 struct RecordingSubtitle: View {
     var state: RecordingActivityAttributes.ContentState
 
+    /// The role and the current topic (#3862 phase 2): while it records, Persona attends and the room has named one. On
+    /// the Lock Screen they take up to two lines, so the third line takes one (`RecordingAnswer.lockLines`).
+    static func showsTopic(_ state: RecordingActivityAttributes.ContentState) -> Bool {
+        state.phase == .recording && state.persona != nil && state.topic?.isEmpty == false
+    }
+
     var body: some View {
         switch state.phase {
         case .interrupted: Text("Paused by a call · Open Persona to continue")
@@ -117,7 +123,8 @@ struct RecordingSubtitle: View {
             if let persona = state.persona {
                 // Persona attends (#2981): said in place of what it is, so whoever sees the phone knows (the bookmarks
                 // stay on the recording's page). With the live view (#3862 phase 2) the current topic follows it, so a long
-                // one is what gets cut (on the Lock Screen after a second line), never the role.
+                // one is what gets cut (on the Lock Screen after a second line, in the island after the first), never the
+                // role.
                 if let topic = state.topic, !topic.isEmpty {
                     Text("\(RecordingRole.text(persona)) · \(Text("Now: \(topic) [Meeting Topic]"))")
                 } else {
@@ -195,22 +202,32 @@ struct RecordingRole: View {
 
 /// The third line, in a meeting Persona attends: its latest answer (the hub posts no notification for answers; with the
 /// live view only for 60 s after it came, `RecordingActivity.content`), else the meeting's latest line (#3862 phase 2),
-/// or, while the recording is paused and the subtitle says why, that Persona still attends. Two lines at most, so the
-/// Lock Screen keeps within its height (docs/apple/live-activity.md「Pitfalls」). Never Just me: it isn't in the state.
+/// or, while the recording is paused and the subtitle says why, that Persona still attends. Two lines at most, and one
+/// on the Lock Screen beside a topic (`lockLines`), so the Lock Screen keeps within its height (docs/apple/live-activity.md
+/// 「Pitfalls」). Never Just me: it isn't in the state.
 struct RecordingAnswer: View {
     var state: RecordingActivityAttributes.ContentState
+    /// The most lines the answer or the line takes.
+    var lines = 2
+
+    /// Its lines on the Lock Screen: one while the subtitle carries the current topic (#3862 phase 2), which may take two
+    /// lines: two lines each passed the ~160 pt. Not the subtitle cut to one line instead: beside the role (never cut)
+    /// it left a character or two of a Chinese topic. Else two, as before the live view (#2981).
+    static func lockLines(_ state: RecordingActivityAttributes.ContentState) -> Int {
+        RecordingSubtitle.showsTopic(state) ? 1 : 2
+    }
 
     var body: some View {
         if let persona = state.persona {
             if let answer = state.answer, !answer.isEmpty {
-                Label { Text(answer).lineLimit(2) } icon: { Image(systemName: RecordingSymbol.persona) }
+                Label { Text(answer).lineLimit(lines) } icon: { Image(systemName: RecordingSymbol.persona) }
                     .font(.caption.weight(.medium))
                     .accessibilityLabel(Text("Persona: \(answer)"))
             } else if state.phase != .recording {
                 Label { RecordingRole(persona: persona).lineLimit(1) } icon: { Image(systemName: RecordingSymbol.persona) }
                     .font(.caption.weight(.medium))
             } else if let line = state.line, !line.isEmpty {
-                Label { Text(line).lineLimit(2) } icon: { Image(systemName: RecordingSymbol.line) }
+                Label { Text(line).lineLimit(lines) } icon: { Image(systemName: RecordingSymbol.line) }
                     .font(.caption.weight(.medium))
             }
         }
@@ -252,8 +269,10 @@ struct RecordingLockScreen: View {
                 RecordingTime(state: state)
                     .font(.title2.weight(.semibold))
                     .foregroundStyle(state.phase == .recording ? Palette.recordingRed : .secondary)
+                    // It takes all the width it is offered: fixed, the name and the subtitle keep the rest of the row.
+                    .frame(width: IslandMetrics.recordingLockTimerWidth, alignment: .trailing)
             }
-            RecordingAnswer(state: state).foregroundStyle(.secondary)
+            RecordingAnswer(state: state, lines: RecordingAnswer.lockLines(state)).foregroundStyle(.secondary)
             RecordingButtons(id: id, attends: state.persona != nil, recording: state.phase == .recording)
         }
         .padding(IslandMetrics.lockPadding)

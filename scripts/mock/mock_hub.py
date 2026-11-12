@@ -3806,10 +3806,10 @@ def meeting_route(h, method, p, rid):
     if is_read_only(h): return h.send_json({"error": "只有完整权限的设备可以参会", "code": "forbidden"}, 403) or True
     raw = (getattr(h, "last_body", b"") or b"") if method == "POST" else b""
     if len(raw) > (64 << 10 if is_ask else 1 << 20): return h.send_json({"error": "请求太大", "code": "too_large"}, 413) or True
-    frm = live_from(h) if method == "GET" and meeting_live_view_on() else None  # without live view `from` is ignored
-    if frm == -1: return h.send_json({"error": "from must be a non-negative integer"}, 400) or True
     if rid in RECORDINGS_DELETED: return h.send_json({"error": "这条录音已删除", "code": "recording_deleted"}, 410) or True
     if rid not in RECORDINGS: return h.send_json({"error": "还没有上传这条录音", "code": "recording_not_found"}, 404) or True
+    frm = live_from(h) if method == "GET" and meeting_live_view_on() else None  # without live view `from` is ignored
+    if frm == -1: return h.send_json({"error": "from must be a non-negative integer"}, 400) or True  # after 410 and 404
     with MEETING_LOCK:
         st = meeting_live(rid)
         if method == "GET":
@@ -4380,6 +4380,10 @@ def followup_seed(rid, text):
     minutes = (KB_DETAIL.get(("recordings", rid)) or {}).get("minutes")
     parts = [f"Meeting: {meeting_name(rec)}", f"Started: {rec.get('started_at', '')}", f"Recording: {rid}", f"Private: {private}"]
     if minutes: parts.append("\nMinutes:\n" + "\n".join(f"- {x['text']}" for x in minutes.get("points", [])))
+    if rid not in RECORDINGS_TRIMMED and (topics := (MEETING_LIVE.get(rid) or {}).get("topics")):  # the room's, after the minutes
+        parts.append("\nTopics (as the meeting's room kept them: done, current or open):\n" + "\n".join(
+            f"- {t['state']}: {context_text(t['title'])}" + (f" (from {clock_of(t['at'])} into the meeting)" if t.get("at") is not None else "")
+            + (f": {context_text(t['note'])}" if t.get("note") else "") for t in topics))
     if rid not in RECORDINGS_TRIMMED and (photos := photos_seed(rid)): parts.append("\nPhotos:\n" + "\n".join(photos))  # trimmed: minutes only
     asks = [a for a in (MEETING_LIVE.get(rid) or {}).get("asks", []) if a["state"] == "answered"]
     if asks: parts.append("\nAsked in the room:\n" + "\n".join(f"Q: {a['question'] or (a.get('heard') or [{'text': ''}])[-1]['text']}\nA: {a['answer']}" for a in asks))
@@ -4592,14 +4596,16 @@ def meeting_conversation_reset():
 # Live view (#3862 phase 2, docs/assistant/meeting-minutes.md "Phase 2: live view"): the feature `meeting_live_view`
 # (only beside meeting_conversation); GET …/live?from=<n> has `lines`, the live log from position n (`{n, start, end,
 # text}`, at most 500, `more: true` when there are more; without `from` none, a `from` that is not a non-negative
-# integer 400), and always `topics` (`[]` before the first) with `topics_at` once they were set (absent before, as the
-# hub's omitzero); `lines` (the live log's length) and `topics` in meeting_live and in GET …/live's `revs` (`?parts=lines`
-# its revision and, with `from`, the lines; `?parts=topics` the topics too). The topics are kept with the live log
-# (live.json at the hub) and go at the trim. Each batch tells the room the topics so far (a context block after the
-# lines' block, which the apps read as the batch), and after one with lines the room sets made-up topics derived from
-# them with a meeting_topics_set call: the current topic turns done, the batch's first line is the current one (its
-# speaker and time in the note) and the open ones stay (`Next steps` at first), in Chinese when the recording's
-# language is zh. MOCK_NO_MEETING_LIVE_VIEW=1 is a manager without it (no feature, `from` ignored, no lines or topics).
+# integer 400, after 410 and 404), and always `topics` (`[]` before the first) with `topics_at` once they were set
+# (absent before, as the hub's omitzero); `lines` (the live log's length) and `topics` in meeting_live and in GET
+# …/live's `revs` (`?parts=lines` its revision and, with `from`, the lines; `?parts=topics` the topics too). The topics
+# are kept with the live log (live.json at the hub) and go with it at the trim, which empties the lines, asks and
+# topics and starts their revisions again from 0, with no meeting_live; the follow-up's seed lists them after the
+# minutes. Each batch tells the room the topics so far (a context block after the lines' block, which the apps read as
+# the batch), and after one with lines the room sets made-up topics derived from them with a meeting_topics_set call:
+# the current topic turns done, the batch's first line is the current one (its speaker and time in the note) and the
+# open ones stay (`Next steps` at first), in Chinese when the recording's language is zh. MOCK_NO_MEETING_LIVE_VIEW=1
+# is a manager without it (no feature, `from` ignored, no lines or topics).
 # POST /mock/meeting_live_view {"on": bool} switches it (apps see it from their next hello); GET reads it back with
 # every recording's topics. POST /mock/meeting_topics {"id", "topics"} is the room calling meeting_topics_set with
 # those topics (the call in the room while it is ready): refused, 400 with the limit it breaks, as the hub's tool.
@@ -4715,15 +4721,16 @@ def topics_after_batch(st, rec, lines):
     if topics is not None: topics_set(st, topics)
 
 
-def topics_trim(rid):
-    """The trim takes the live log, and the topics with it (the hub's trim removes live.json)."""
+def live_trim(rid):
+    """The trim takes the live log, as the hub's removes live.json: its lines, asks and topics go, their revisions start
+    again from 0 (lines is the log's length; asks' and topics' were kept in it), with no meeting_live, and the role is
+    off (a trimmed recording attends no more)."""
     with MEETING_LOCK:
         st = MEETING_LIVE.get(rid)
-        if not st or not st.get("topics"): return
-        st["topics"] = []
+        if not st: return
+        st.update(role="off", session=None, segments=[], bytes=0, fed=0, full=False, asks=[], sent={}, due={}, asks_rev=0,
+                  topics=[], topics_rev=0)
         st.pop("topics_at", None)
-        st["topics_rev"] = st.get("topics_rev", 0) + 1
-    meeting_changed(rid, ["topics"])
 
 
 def live_view_route(h, method, p):
@@ -5172,7 +5179,7 @@ def recordings_route_locked(h, method, p):
         if is_day:
             RECORDINGS[rid]["segments"] = []
             RECORDINGS[rid]["recap_state"] = "ready"
-        topics_trim(rid)  # the topics go with the live log
+        live_trim(rid)  # the live log goes: its lines, asks and topics
         with PHOTO_LOCK:  # what goes into the room (a photo's note, a withdrawn line) never lands in one deleted
             room_delete(rid)  # the room goes at the transcript cut; the private mark and the follow-up stay
             photos_trim(rid)  # and the photos the minutes do not cite

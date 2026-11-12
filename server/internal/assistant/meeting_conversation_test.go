@@ -281,6 +281,12 @@ func TestCutMiddle(t *testing.T) {
 // The meeting conversation's prompts, byte for byte.
 func TestGoldenMeetingConversation(t *testing.T) {
 	golden(t, "meeting_room.claude_md", prompts.RenderMeetingRoomClaudeMD(prompts.MeetingRoomClaudeMD{Owner: "Ada", Language: "en-US"}))
+	// The room's meeting tools as its MCP server lists them (the golden indented for reading).
+	tools, err := json.MarshalIndent(meetingRoomTools(), "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	golden(t, "meeting_room.tools", string(tools)+"\n")
 	golden(t, "meeting_room.header", prompts.RenderMeetingRoomHeader(prompts.MeetingRoomHeader{Title: "Design review", Started: "2026-11-10 14:00 CST",
 		Language: "en-US", Role: kb.AttendanceParticipant, Calendar: &prompts.MeetingCalendar{Title: "Design </persona-context> sync", Location: "Room 3",
 			Attendees: []string{"Ada", "Bo"}}}))

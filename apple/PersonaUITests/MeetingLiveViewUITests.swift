@@ -27,7 +27,8 @@ final class MeetingLiveViewUITests: XCTestCase {
     }
 
     /// The room sets topics after a batch of the meeting's lines: the page shows them as chips under its header, the
-    /// current one among them, as the hub has them; the Live Activity says "Now: <topic>" on the Lock Screen.
+    /// current one among them, as the hub has them; the Live Activity says "Now: <topic>" on the Lock Screen after the
+    /// role, within its height even for the longest topic beside an answer.
     @MainActor func testTopicsShowOnThePageAndTheLockScreen() throws {
         let hub = try mockHub()
         let app = try meetingPage(hub)
@@ -42,9 +43,29 @@ final class MeetingLiveViewUITests: XCTestCase {
         }
         XCTAssertTrue(element(app, "meeting-live").exists, "the Live box stays under the topics")
         try shot(app, "topics")
+        guard current != nil else { return }
+
+        // The longest topic, in Chinese (the hub's 80 characters; the activity carries 60), and an answer that would take
+        // two lines: the Lock Screen keeps the role first, the topic cut after a second line and the answer to one, so it
+        // stays within its ~160 pt (docs/apple/live-activity.md「Pitfalls」). The room sets the topics as its tool does;
+        // the answer is a typed question's, the third line for a minute.
+        let set: [[String: Any]] = [
+            ["title": "录音入口", "state": "done", "at": 1],
+            ["title": Self.longTopic, "state": "current", "at": 741],
+            ["title": "下一步", "state": "open"],
+        ]
+        try post(hub, "/mock/meeting_topics", ["id": live, "topics": set])
+        let now = element(app, "meeting-topic-current")
+        let begins = String(Self.longTopic.prefix(12))
+        XCTAssertTrue(waitFor(20) { now.exists && now.label.contains(begins) }, "the page never showed the room's new topic:\n\(app.debugDescription)")
+        try shot(app, "topics-long")
+        let answers = app.descendants(matching: .any).matching(identifier: "meeting-thread-answer")
+        let before = answers.count
+        try ask(app, "上次评审定的导出上限是多少？")
+        XCTAssertTrue(waitFor(30) { answers.count > before }, "no answer:\n\(app.debugDescription)")
+        let title = Self.longTopic
 
         // The Lock Screen: the current topic under the name (the activity follows the page's read of the topics).
-        guard let title = current?["title"] as? String else { return }
         XCUIDevice.shared.press(.home)
         sleep(3)
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
@@ -61,7 +82,8 @@ final class MeetingLiveViewUITests: XCTestCase {
             let b = springboard.buttons[label].firstMatch
             if b.exists { b.tap(); sleep(2) }
         }
-        let topic = springboard.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", title)).firstMatch
+        // The activity carries the first 60 characters, and the line shows fewer: its beginning is enough.
+        let topic = springboard.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", String(title.prefix(12)))).firstMatch
         let found = topic.waitForExistence(timeout: 10)
         try screen("lock")
         // Unlock (swipe up; no passcode on the simulator): a locked simulator hangs the next test run.
@@ -85,7 +107,23 @@ final class MeetingLiveViewUITests: XCTestCase {
         try shot(app, "no-topics")
     }
 
+    /// A current topic at the hub's longest (80 characters), in Chinese.
+    private static let longTopic = "下季度企业版定价方案：按席位还是按用量收费，老客户迁移折扣与合同续签时间表，销售团队培训计划、渠道伙伴返点政策和年度预算审批流程的最终确认，以及各项工作的负责人"
+
     // MARK: Helpers: the app
+
+    /// Types `text` into the page's composer and sends it (to the room: the answer is Persona's, which the activity shows).
+    @MainActor private func ask(_ app: XCUIApplication, _ text: String) throws {
+        let field = element(app, "meeting-ask-field")
+        XCTAssertTrue(field.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(waitFor(15) { field.isEnabled }, "the composer is off: \(app.debugDescription)")
+        field.tap()
+        field.typeText(text)
+        let send = app.buttons["meeting-ask-send"].firstMatch
+        XCTAssertTrue(send.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(waitFor(15) { send.isEnabled }, "Send stays off: \(app.debugDescription)")
+        send.tapCenter()
+    }
 
     @MainActor private func meetingPage(_ hub: String) throws -> XCUIApplication {
         let app = XCUIApplication()

@@ -761,13 +761,20 @@ private struct MeetingLiveBox: View {
 /// never by color alone: "Done: …" on the neutral fill, "Now: …" in the accent, an open topic its title alone in an
 /// outline; VoiceOver reads each with its state ("Not yet: …" for an open one).
 struct MeetingTopicsRow: View {
-    var topics: [MeetingTopic]
+    /// The room's topics with a stable identity each (`MeetingTopic.listed`): the room replaces the list as a whole,
+    /// inserting and reordering, so a chip keeps its identity by its title, not its place.
+    private let listed: [MeetingTopic.Listed]
     /// The row's side margin (the page's; none where the page's content scrolls inside its own margin).
     var inset: CGFloat
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private var current: Int? { topics.firstIndex { $0.known == .current } }
+    init(topics: [MeetingTopic], inset: CGFloat) {
+        listed = MeetingTopic.listed(topics)
+        self.inset = inset
+    }
+
+    private var current: String? { listed.first { $0.topic.known == .current }?.id }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
@@ -777,17 +784,17 @@ struct MeetingTopicsRow: View {
             ScrollViewReader { proxy in
                 ScrollView(.horizontal) {
                     HStack(spacing: Theme.Space.s) {
-                        ForEach(Array(topics.enumerated()), id: \.offset) { index, topic in
-                            chip(topic).id(index)
+                        ForEach(listed) { item in
+                            chip(item.topic).id(item.id)
                         }
                     }
                     .padding(.horizontal, inset)
                     .padding(.vertical, Theme.Space.xxs)
                 }
                 .scrollIndicators(.hidden)
-                .onChange(of: current, initial: true) { _, index in
-                    guard let index else { return }
-                    withAnimation(reduceMotion ? nil : Theme.Motion.state) { proxy.scrollTo(index, anchor: .center) }
+                .onChange(of: current, initial: true) { _, id in
+                    guard let id else { return }
+                    withAnimation(reduceMotion ? nil : Theme.Motion.state) { proxy.scrollTo(id, anchor: .center) }
                 }
             }
         }

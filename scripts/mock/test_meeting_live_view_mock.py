@@ -1,7 +1,8 @@
 """The mock hub's live view (#3862 phase 2, docs/assistant/meeting-minutes.md "Phase 2: live view"): the feature beside
 the meeting conversation, `lines` on GET …/live?from= (at most 500, `more`, 400 for a bad `from`), `topics` and
 `topics_at`, the room setting made-up topics after a batch with a meeting_topics_set call and the tool's limits,
-`lines` and `topics` in meeting_live, in `revs` and in `?parts=`, the trim taking the topics; and managers without it."""
+`lines` and `topics` in meeting_live, in `revs` and in `?parts=`, the follow-up's seed listing the topics, the trim taking
+the live log (lines, asks and topics, their revisions 0 again, no event); and managers without it."""
 import re
 import time
 import unittest
@@ -62,6 +63,14 @@ class MeetingLiveViewMockTests(conversation.Conversation, unittest.TestCase):
         self.assertEqual(self.live(rid, "?from=9")["lines"], [])
         for bad in ("-1", "x", "", "1.5", "%201"):
             self.assertEqual(self.call("GET", f"/api/v1/recordings/{rid}/live?from={bad}")[0], 400, bad)
+        # A bad `from` is checked after 410 and 404: a never-uploaded id is not found, a deleted one gone.
+        status, out = self.call("GET", f"/api/v1/recordings/{uuid.uuid4()}/live?from=x")
+        self.assertEqual((status, out["code"]), (404, "recording_not_found"))
+        gone = str(uuid.uuid4())
+        self.upload(gone, attendance="listener")
+        self.call("DELETE", f"/api/v1/recordings/{gone}")
+        status, out = self.call("GET", f"/api/v1/recordings/{gone}/live?from=-1")
+        self.assertEqual((status, out["code"]), (410, "recording_deleted"))
         # ?parts=lines: its revision, and the lines only with from.
         self.assertEqual(self.live(rid, "?parts=lines"), {"revs": {"lines": 3}})
         self.assertEqual(self.live(rid, "?parts=lines&from=2"), {"lines": [{"n": 2, "start": 1810, "end": 1812, "text": ""}], "revs": {"lines": 3}})
@@ -192,18 +201,55 @@ class MeetingLiveViewMockTests(conversation.Conversation, unittest.TestCase):
         self.assertEqual(seen, {"lines": 2, "topics": 1})
         self.assertEqual((live["revs"]["lines"], live["revs"]["topics"]), (2, 1))
 
-    def test_the_trim_takes_the_topics(self):
+    def seed(self, rid):
+        status, out = self.call("POST", f"/api/v1/recordings/{rid}/followup", {"id": str(uuid.uuid4()), "text": "Draft it."})
+        self.assertEqual(status, 200, out)
+        return next(x["text"] for x in self.items(out["followup"]["session_id"]) if x["kind"] == "text" and x["role"] == "user")
+
+    def test_the_seed_lists_the_topics_after_the_minutes(self):
         self.call("POST", "/mock/recording_minutes", {"mode": "ready"})
         self.addCleanup(self.call, "POST", "/mock/recording_minutes", {"mode": "pending"})
         rid = str(uuid.uuid4())
         self.ready_room(rid, segments=LINES)
         self.post_lines(rid, 0, LINES)
-        rev = self.live(rid)["revs"]["topics"]
-        self.assertTrue(self.call("GET", "/mock/meeting_live_view")[1]["topics"][rid]["topics"])
         self.upload(rid, segments=LINES, complete=True, ended_at="2026-11-10T15:00:00+08:00", room={"attendance": "listener"})
+        seed = self.seed(rid)
+        topics = ("\nTopics (as the meeting's room kept them: done, current or open):\n"
+                  "- current: Today we look at the export flow (from 0:05 into the meeting): Raised by Ada at 0:05.\n- open: Next steps\n")
+        self.assertIn(topics, seed)
+        self.assertLess(seed.index("\nMinutes:\n"), seed.index(topics))
+        self.assertLess(seed.index(topics), seed.index("\nTranscript:\n"))
+
+    def test_the_trim_takes_the_live_log(self):
+        self.call("POST", "/mock/recording_minutes", {"mode": "ready"})
+        self.addCleanup(self.call, "POST", "/mock/recording_minutes", {"mode": "pending"})
+        next_of = self.websocket()
+        mine = lambda f: f.get("recording_id") == rid
+        rid = str(uuid.uuid4())
+        self.ready_room(rid, segments=LINES)
+        self.post_lines(rid, 0, LINES)
+        self.assertEqual(self.call("POST", f"/api/v1/recordings/{rid}/ask", {"id": str(uuid.uuid4()), "question": "Who owns the test?"})[0], 200)
+        self.upload(rid, segments=LINES, complete=True, ended_at="2026-11-10T15:00:00+08:00", room={"attendance": "listener"})
+        before = self.live(rid, "?from=0")
+        self.assertTrue(before["lines"] and before["asks"] and before["topics"])
+        self.assertTrue(all(before["revs"][p] > 0 for p in ("lines", "asks", "topics")))
+        while next_of("meeting_live", wait=1.5, where=mine):  # what the lines, the ask and the end moved has gone out
+            pass
         self.assertEqual(self.call("POST", "/mock/recording_trim", {"id": rid})[0], 200)
-        live = self.live(rid)
-        self.assertEqual((live["topics"], "topics_at" in live, live["revs"]["topics"]), ([], False, rev + 1))
+        # As the hub's trim removes live.json: lines, asks and topics empty, their revisions 0 again, the role off.
+        live = self.live(rid, "?from=0")
+        self.assertEqual((live["next"], live["fed"], live["attendance"], live["lines"], live["asks"], live["topics"], "topics_at" in live),
+                         (0, 0, "off", [], [], [], False))
+        self.assertEqual({p: live["revs"][p] for p in ("lines", "asks", "topics")}, {"lines": 0, "asks": 0, "topics": 0})
+        # No meeting_live for them: only the room's deletion goes out.
+        while (got := next_of("meeting_live", wait=1.5, where=mine)) is not None:
+            self.assertEqual(got["changed"], ["room"])
+        self.assertNotIn(rid, self.call("GET", "/mock/meeting_live_view")[1]["topics"])
+        # A trimmed recording's seed has its minutes only: no topics, no asks.
+        seed = self.seed(rid)
+        self.assertIn("\nMinutes:\n", seed)
+        self.assertNotIn("Topics (", seed)
+        self.assertNotIn("Asked in the room", seed)
 
 
 class WithoutLiveViewMockTests(conversation.Conversation, unittest.TestCase):

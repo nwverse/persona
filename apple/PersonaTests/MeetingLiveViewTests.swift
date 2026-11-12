@@ -4,8 +4,9 @@ import Testing
 
 /// The live view on the phone (#3862 phase 2; contract docs/assistant/meeting-minutes.md「Phase 2: live view」, the phone's
 /// side docs/apple/recording.md「Live view (phase 2)」): the flag snapshot, 15-second segments for the meetings Persona
-/// attends with it, the room's topics read through `MeetingConversation`, and the Live Activity's topic and latest line
-/// with its third-line rule and its 5-second throttle. The hub is a `FakeHub`; nothing reaches a network.
+/// attends with it while their lines go, the room's topics read through `MeetingConversation` (on their event, and
+/// without the socket after a batch), the chips' identities, and the Live Activity's topic and latest line with its
+/// third-line rule and its 5-second throttle. The hub is a `FakeHub`; nothing reaches a network.
 @MainActor struct MeetingLiveViewTests {
     // MARK: Fixtures
 
@@ -81,14 +82,70 @@ import Testing
         #expect(RecordingCapture.segmentLength(short: false, watched: false) == 60)
         #expect(RecordingAudioSpec.meetingLiveSegmentSeconds >= 10, "the writer's minimum")
 
-        #expect(live(.participant).shortSegments)
-        #expect(live(.listener).shortSegments)
-        #expect(!live(.off).shortSegments, "lines go only while Persona attends")
-        #expect(!live(.participant, liveView: false).shortSegments, "a meeting started without the live view")
+        #expect(live(.participant).shortSegments(roomMissing: false))
+        #expect(live(.listener).shortSegments(roomMissing: false))
+        #expect(!live(.off).shortSegments(roomMissing: false), "lines go only while Persona attends")
+        #expect(!live(.participant, liveView: false).shortSegments(roomMissing: false), "a meeting started without the live view")
         var turnedOff = live(.listener)
         turnedOff.set(.off, at: 120)
-        #expect(!turnedOff.shortSegments)
-        #expect(!RecordingAttendance(role: .participant, session: "server/s1").shortSegments, "a #3746 meeting")
+        #expect(!turnedOff.shortSegments(roomMissing: false))
+        #expect(!RecordingAttendance(role: .participant, session: "server/s1").shortSegments(roomMissing: false), "a #3746 meeting")
+    }
+
+    /// Short segments follow the attended state the asks and the activity use (`MeetingAsk.canAsk`), and only while the
+    /// lines still go: not while an older manager holds the meeting without its room (`roomMissing`), not after the hub
+    /// took its last line (`live_full`) or the phone stopped attending (`unsupported`). `RecordingSync` says when
+    /// `roomMissing` moves (`onSegments`), so the recording goes back to the usual length and to 15 s again with the room.
+    @Test func noShortSegmentsWhileTheLinesCantGo() async throws {
+        #expect(!live().shortSegments(roomMissing: true), "an older manager took the meeting without its room")
+        var full = live()
+        full.stopped = .liveFull
+        #expect(!full.shortSegments(roomMissing: false), "the hub takes no more lines: questions still work")
+        #expect(MeetingAsk.canAsk(meeting(full), roomMissing: false), "still attended")
+        var unsupported = live()
+        unsupported.stopped = .unsupported
+        #expect(!unsupported.shortSegments(roomMissing: false))
+        var back = full
+        back.set(.listener, at: 300)
+        #expect(back.shortSegments(roomMissing: false), "attending again clears `stopped`")
+
+        let root = FileManager.default.temporaryDirectory.appending(path: "meeting-live-view-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lib = RecordingLibrary(root: root)
+        var e = meeting(live())
+        e.segments = [RecordingSegment(index: 0, start: 0, duration: 15, sentences: [RecordingSentence(start: 1, end: 4, text: "line")])]
+        try lib.save(e)
+        let told = Told()
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/recordings", json: #"{"days":14,"recordings":[],"deleted":[]}"#)
+        hub.on("PUT", "/api/v1/recordings/\(e.id.uuidString.lowercased())") { req in
+            let body = (try? JSONSerialization.jsonObject(with: req.body ?? Data())) as? [String: Any] ?? [:]
+            let revision = (body["revision"] as? NSNumber)?.int64Value ?? 0
+            let room = told.withRoom ? #","room":{"state":"ready"},"private":false"# : ""
+            return Data(#"{"id":"x","revision":\#(revision),"status":"stored","attendance":"participant"\#(room)}"#.utf8)
+        }
+        let client = hub.client
+        let sync = RecordingSync(library: lib, api: { client })
+        sync.onSegments = { told.ids.append($0) }
+
+        await sync.syncNow()
+        #expect(sync.roomMissing.contains(e.id))
+        #expect(told.ids == [e.id], "the recording hears that its lines can't go")
+        let waiting = try #require(lib.entry(e.id)?.attendance)
+        #expect(!waiting.shortSegments(roomMissing: sync.roomMissing.contains(e.id)))
+
+        told.withRoom = true
+        lib.change(e.id) { $0.title = "Weekly, later" }
+        await sync.syncNow()
+        #expect(!sync.roomMissing.contains(e.id))
+        #expect(told.ids == [e.id, e.id], "and that they can again")
+        let settled = try #require(lib.entry(e.id)?.attendance)
+        #expect(settled.shortSegments(roomMissing: sync.roomMissing.contains(e.id)))
+    }
+
+    private final class Told {
+        var ids: [UUID] = []
+        var withRoom = false
     }
 
     // MARK: Topics
@@ -186,6 +243,72 @@ import Testing
         #expect(c.meeting(plain.id).topics.isEmpty)
     }
 
+    // MARK: Topics without the socket
+
+    /// In the background the socket is closed, so no `meeting_live` comes: after an accepted `POST …/live` the topics of a
+    /// meeting with the live view that Persona attends while it records are read, at most every 20 s; never while the
+    /// socket is open, for a meeting without the live view, one Persona doesn't attend or one no longer recording.
+    @Test func theTopicsAreReadBehindOnlyForARecordingLiveViewMeeting() {
+        let e = meeting(live())
+        #expect(MeetingConversation.readsTopicsBehind(e, roomMissing: false, streaming: false))
+        #expect(!MeetingConversation.readsTopicsBehind(e, roomMissing: false, streaming: true), "the events come")
+        #expect(!MeetingConversation.readsTopicsBehind(nil, roomMissing: false, streaming: false))
+        #expect(!MeetingConversation.readsTopicsBehind(meeting(live(liveView: false)), roomMissing: false, streaming: false))
+        #expect(!MeetingConversation.readsTopicsBehind(meeting(live(.off)), roomMissing: false, streaming: false))
+        #expect(!MeetingConversation.readsTopicsBehind(e, roomMissing: true, streaming: false))
+        var stopped = e
+        stopped.active = false
+        #expect(!MeetingConversation.readsTopicsBehind(stopped, roomMissing: false, streaming: false), "not recording")
+
+        #expect(MeetingConversation.topicsEvery >= 15 && MeetingConversation.topicsEvery <= 30)
+        #expect(MeetingConversation.topicsReadWait(follows: false, lastRead: nil, now: now) == nil)
+        #expect(MeetingConversation.topicsReadWait(follows: true, lastRead: nil, now: now) == 0, "the first at once")
+        #expect(MeetingConversation.topicsReadWait(follows: true, lastRead: now, now: now.addingTimeInterval(5)) == 15)
+        #expect(MeetingConversation.topicsReadWait(follows: true, lastRead: now, now: now.addingTimeInterval(25)) == 0)
+    }
+
+    /// An accepted `POST …/live` reads `?parts=topics` and applies them as their event would; the next one within 20 s
+    /// waits for the rest of them and reads then. Nothing while the socket is open, nor for a meeting without the view.
+    @Test func anAcceptedBatchReadsTheTopicsWithoutTheSocket() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "meeting-live-view-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lib = RecordingLibrary(root: root)
+        let made = meeting(live()), plain = meeting(live(liveView: false))
+        try lib.save(made)
+        try lib.save(plain)
+        let hub = FakeHub()
+        for id in [made.id, plain.id] {
+            hub.on("GET", path(id, "live")) { _ in
+                Data(#"{"topics":[{"title":"Export cap","state":"done"},{"title":"Pricing","state":"current","at":300}],"topics_at":"2026-11-12T10:05:00Z","revs":{"topics":2}}"#.utf8)
+            }
+        }
+        let client = hub.client, clock = now, waits = Waits(), socket = Socket()
+        let c = MeetingConversation(deps: MeetingConversation.Deps(api: { client }, group: { "" }, now: { clock },
+                                                                  wait: { waits.list.append($0) }, readPhotos: { _ in true },
+                                                                  streaming: { socket.open }),
+                                    library: lib, sync: RecordingSync(library: lib, api: { nil }))
+        c.liveAccepted(made.id)
+        await until("the topics read") { c.meeting(made.id).topics.count == 2 }
+        #expect(hub.sent("GET", path(made.id, "live")).map { $0.query["parts"] } == ["topics"])
+        #expect(MeetingTopic.current(c.meeting(made.id).topics)?.title == "Pricing")
+        #expect(c.meeting(made.id).revs["topics"] == 2)
+        #expect(waits.list.isEmpty, "the first at once")
+
+        c.liveAccepted(made.id)
+        await until("the second read") { hub.sent("GET", path(made.id, "live")).count == 2 }
+        #expect(waits.list == [.seconds(MeetingConversation.topicsEvery)], "at most every 20 s")
+
+        c.liveAccepted(plain.id)
+        socket.open = true
+        c.liveAccepted(made.id)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(hub.sent("GET", path(plain.id, "live")).isEmpty, "no live view: no read")
+        #expect(hub.sent("GET", path(made.id, "live")).count == 2, "the socket is open: the events come")
+    }
+
+    private final class Waits { var list: [Duration] = [] }
+    private final class Socket { var open = false }
+
     /// The chips say each state in words (never the color alone), and VoiceOver says it for an open topic too.
     @Test func theTopicChipsSayTheirState() {
         let done = MeetingTopic(title: "Export cap", state: "done"), now = MeetingTopic(title: "Pricing", state: "current")
@@ -195,6 +318,29 @@ import Testing
         #expect(MeetingTopicsRow.words(done) != MeetingTopicsRow.words(MeetingTopic(title: "Export cap", state: "current")))
         #expect(MeetingTopicsRow.words(open) == open.title, "its outline tells it apart")
         #expect(MeetingTopicsRow.spoken(open) != open.title && MeetingTopicsRow.spoken(open).contains(open.title))
+    }
+
+    /// The chips' identities don't hang on their place (the room inserts and reorders the whole list) nor on the state
+    /// or `at` (a topic goes from open to now to done), and stay unique when the room lists a title twice.
+    @Test func theTopicsKeepTheirIdentityWhenTheListChanges() {
+        let a = MeetingTopic(title: "Export cap", state: "done", at: 12), b = MeetingTopic(title: "Pricing", state: "current", at: 300)
+        let c = MeetingTopic(title: "Hiring", state: "open")
+        let before = MeetingTopic.listed([a, b, c])
+        #expect(before.map(\.id) == ["Export cap", "Pricing", "Hiring"])
+        var begun = c
+        begun.state = "current"
+        begun.at = 900
+        var finished = b
+        finished.state = "done"
+        let after = MeetingTopic.listed([MeetingTopic(title: "Budget", state: "done"), a, finished, begun])
+        #expect(after.map(\.id) == ["Budget", "Export cap", "Pricing", "Hiring"], "an insert moves no other topic's identity")
+        #expect(after.first { $0.id == "Hiring" }?.topic.known == .current)
+
+        let twice = MeetingTopic.listed([MeetingTopic(title: "Q&A", state: "done"), MeetingTopic(title: "Q&A #2", state: "open"),
+                                         MeetingTopic(title: "Q&A", state: "current"), MeetingTopic(title: "Q&A", state: "open")])
+        #expect(Set(twice.map(\.id)).count == twice.count, "unique: \(twice.map(\.id))")
+        #expect(twice.first?.id == "Q&A")
+        #expect(MeetingTopic.listed([]).isEmpty)
     }
 
     // MARK: The Live Activity

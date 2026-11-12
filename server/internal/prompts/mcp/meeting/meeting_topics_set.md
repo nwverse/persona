@@ -24,7 +24,7 @@ Replaces this meeting's topics with the whole list given: the agenda as it has g
           },
           "at": {
             "type": "number",
-            "description": "Seconds from the meeting's start when the topic began, as meeting_lines shows them ([mm:ss]); absent for one that has not begun."
+            "description": "When the topic began, in seconds from the meeting's start: the offset meeting_lines shows before each line ([mm:ss], or [h:mm:ss] past an hour). A batch's [HH:MM] are clock times, not offsets. Absent for one that has not begun."
           },
           "note": {
             "type": "string",

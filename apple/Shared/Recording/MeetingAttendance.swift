@@ -139,10 +139,14 @@ nonisolated struct RecordingAttendance: Codable, Hashable, Sendable {
         if next.attends { stopped = nil }
     }
 
-    /// The recording writes its short segments (#3862 phase 2, docs/assistant/meeting-minutes.md「Phase 2: live view」): a
-    /// room meeting started with the live view whose role attends, so a line reaches the page and the room within about
-    /// 15–30 seconds, in the foreground and the background (`RecordingAudioSpec.meetingLiveSegmentSeconds`).
-    var shortSegments: Bool { room && liveView && sentRole.attends }
+    /// The recording writes its short segments (#3862 phase 2, docs/assistant/meeting-minutes.md「Phase 2: live view」), so
+    /// a line reaches the page and the room within about 15–30 seconds, in the foreground and the background
+    /// (`RecordingAudioSpec.meetingLiveSegmentSeconds`): a room meeting started with the live view that Persona attends as
+    /// the asks and the Live Activity see it (`MeetingAsk.canAsk`: its role attends, and the last upload's `200` named the
+    /// room, not `roomMissing`, `RecordingSync.roomMissing`: an older manager, which takes no line or ask), and whose lines
+    /// still go to the hub (`stopped` nil: after `live_full` questions still work, but no line reaches the room, so
+    /// shorter segments would only cost battery). A new recording has no answer yet: `roomMissing` false.
+    func shortSegments(roomMissing: Bool) -> Bool { room && liveView && sentRole.attends && stopped == nil && !roomMissing }
 
     /// The sentence ended while Persona attended.
     func attended(_ line: RecordingSentence) -> Bool {
@@ -287,6 +291,30 @@ nonisolated struct MeetingTopic: Codable, Hashable, Sendable {
 
     /// The topic being discussed now: the first `current` (the hub keeps at most one).
     static func current(_ topics: [MeetingTopic]) -> MeetingTopic? { topics.first { $0.known == .current } }
+
+    /// A topic with its identity in the list (`listed`).
+    nonisolated struct Listed: Identifiable, Hashable, Sendable {
+        var id: String
+        var topic: MeetingTopic
+    }
+
+    /// The topics with an identity each (pure, for the tests and the page's chips; docs/apple/performance.md P6): the room
+    /// replaces the whole list, inserting and reordering topics, so a place in it is no identity. A topic is its title,
+    /// which stays while it goes from open to now to done (`at` comes only once it begins); the hub doesn't promise
+    /// unique titles, so a title listed again gets its count ("Q&A", "Q&A #2", …), and one that is taken already the
+    /// next free count: the ids are unique whatever the room sends.
+    static func listed(_ topics: [MeetingTopic]) -> [Listed] {
+        var used = Set<String>()
+        return topics.map { topic in
+            var id = topic.title, n = 1
+            while used.contains(id) {
+                n += 1
+                id = "\(topic.title) #\(n)"
+            }
+            used.insert(id)
+            return Listed(id: id, topic: topic)
+        }
+    }
 }
 
 nonisolated extension MeetingTopic {

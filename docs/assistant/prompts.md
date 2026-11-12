@@ -206,7 +206,7 @@ Note that `scheduleHeader` in `assistant/schedule.go` recognizes copied-back old
 
 ## Golden tests
 
-MCP tool goldens are in `hub/mcp_tools_golden_test.go` (three lists: assistant with / without Lark, regular chats) and `mail/mcp_golden_test.go`. They compare the transmitted `json.Marshal` content (goldens are indented for readability, with a one-to-one correspondence before and after indentation).
+MCP tool goldens are in `hub/mcp_tools_golden_test.go` (three lists: assistant with / without Lark, regular chats), `mail/mcp_golden_test.go` and, for a meeting's room, `assistant/meeting_conversation_test.go` (`meeting_room.tools`). They compare the transmitted `json.Marshal` content (goldens are indented for readability, with a one-to-one correspondence before and after indentation).
 
 `hub/prompts_golden_test.go`, `assistant/prompts_golden_test.go`, `kb/prompts_golden_test.go`, and `node/prompts_golden_test.go` test at the caller layer (fake Lark gateway, fake model recording received
 system / user text, knowledge base in a temporary directory), so they also cover data conversion. The clock in the snapshot's "Now" line is replaced with a placeholder before comparison.
