@@ -448,6 +448,11 @@ Published files live in `apps/android/` under the hub's config directory, with A
 External Codex sessions keep using `(machine_id, session_id)`. The fixed legacy home keeps its existing raw thread IDs; threads in other canonical homes use an opaque ID of `c0de-` plus a deterministic digest. Changes in PID, endpoint or connection generation don't change the session ID. `source_thread_id` is the original thread ID; never put the opaque ID into `claude --resume`.
 
 New optional Session fields: `source_kind` (`codex_history` / `codex_app_server` / `identity_conflict`; Agent runtime sessions are `runtime`, see "Runtime ↔ node"; Claude Code sessions outside Persona's terminals are `claude_bg` (a background session), `claude_desktop` (Claude's desktop app) and `claude_cli` (a terminal Persona does not drive), sending through the session's peer inbox when the node can use it, see `docs/integrations/claude-integration.md` "Claude outside Persona's terminals"), `source_thread_id`, `source_instance_id`, `parent_thread_id`, `read_only_reason`, `attached`, `capabilities` (six booleans: read/send/interrupt/approve/terminal/attach, and the optional `modes` and `close`). Old sources lacking these fields stay compatible; new sources lacking capabilities default to refusing writes. Without the terminal capability, terminal / keys / close pane are not shown.
+`capabilities.rewind` permits `session.rewind` to before a user message. `capabilities.rewind_code` additionally permits
+`code_and_conversation`. Absent values keep the Claude terminal heuristic. Codex advertises conversation rewind for a
+shared app-server with persistent paginated history and a node able to materialize that history. Runtime rows report
+`caps.rewind`, excluding sub-Agents, and explicitly disable file restoration. The web message menu reads both fields.
+
 `capabilities.model` permits model changes through `POST …/modes`. Runtime rows explicitly report whether the runtime
 advertised `caps.model`, excluding sub-Agent rows. Absent values preserve older clients' model-switch heuristics.
 A runtime that advertises `caps.models` also handles `launchers.models` for live native model discovery.
@@ -2362,6 +2367,16 @@ When Claude Code answers an upstream refusal with another model and keeps the se
 ```
 
 - `prompt`: the user message to go back to; `occurrence`: counting back from the end, which **identical message** it is (1 = the last one); `prompts_after` (optional): how many user messages come after it;
+  Codex uses `thread/revert {threadId, beforeTurnId}`, with `thread/rollback` on older servers that answer method-not-found.
+  It verifies native user-message occurrence and position, requires an idle top-level thread, and reads back the retained
+  prefix before answering. The selected input must begin a native turn. Its paginated history database supplies the
+  canonical transcript because native revert keeps old rollout segments. Segment database keys and each header's `history_base` bounds preserve the retained lineage and exclude abandoned rows.
+
+  Antigravity uses its owned ACP process's native `RevertToCascadeStep` with `conversationOnly: true`, retaining the step
+  immediately before the selected explicit user input. The runtime reads back native state, reconciles the summary's
+  current step count with appended replacement exports, and changes the history token even when the result has zero items.
+  These two integrations support `restore: conversation`. The selected original message returns to the web composer.
+
   `restore`: `conversation` (rewind the conversation only) or `code_and_conversation` (put the files back too). Both Claude Code's list and the App's chat count from the end, so earlier pages not yet loaded don't matter.
 - The node's `session.rewind` types `/rewind` in the session's terminal, presses ↑ to reach that message, picks the mode and presses Enter, **reading the screen before every step** (`server/internal/node/rewind.go`, `screen/rewind.go`):
   if anything in any step differs from what's expected (the text of that row in the list, its position (`prompts_after`), the whole message quoted on the confirmation page, the option names (chosen by name, not number: when there are no code changes after the message, there are only "Restore conversation", "Summarize…", "Never mind"))
@@ -2887,7 +2902,7 @@ hub → node requests:
 | `session.echoes` | `{echoes: [{session_id, client_msg_id, text, images, sent_at, after_seq, line?}]}` → `{ok}`: the hub hands back sends recorded for this machine within the last day (every time the node connects, before `sessions.list`); the node skips ones it already knows. Old nodes return unknown method and the hub ignores it |
 | `session.keys` | `{session_id, keys, text}` |
 | `start.keys` | `{pane, text?, keys?}` → `{ok}`: types `text` as is (no enter, at most 32 characters), then presses `keys` (at most 8, Persona's key names) in a failed start's kept tab while no agent runs there (#2570, `node/startremedy.go`); any other pane is refused with `start_tab_gone`, too much with `too_large` |
-| `session.rewind` | `{session_id, prompt, occurrence, prompts_after?, restore}` → `{prompt, restore, code_restored, input_cleared}`: drives Claude Code's `/rewind` in the terminal ("Rewind to a message"); refusals carry `code` |
+| `session.rewind` | `{session_id, prompt, occurrence, prompts_after?, restore}` → `{prompt, restore, code_restored, input_cleared}`: uses the owning tool's native rewind ("Rewind to a message"); refusals carry `code` |
 | `session.restore_model` | `{session_id}` → `{restore: "next_start", restore_to, closed}`: closes a Persona conversation's idle headless process so its next start uses the configured model; sends nothing ("Going back to the configured model"); refusals carry `code` |
 | `session.interrupt` | `{session_id}` |
 | `session.screen` | `{session_id, lines, source, format?}` → `{text, status}` (`format: "ansi"` includes colors) |
@@ -3459,6 +3474,7 @@ node → runtime requests (sent only on the connection that owns the session; al
 | `launchers.check {launcher, cwd, prompt}` | optional availability probe when `caps.check` is true. Returns `{ok, agent?, model?, answer?, millis, error?}`. Runs in the runtime's authentication context. The node owns and removes the temporary workspace and preserves native failures without falling back to the shell |
 | `launchers.models {launcher, refresh?}` | optional live model catalog request when `caps.models` is true. Returns `{agent, models, locked?}` in the existing launcher-model shape. Errors propagate to the caller. Older runtimes keep their advertised list |
 | `session.modes {session_id, permission_mode?, effort?, model?}` | the phone switches permission mode / thinking effort (for runtimes that declared `caps.modes`; values are validated by the node first). `model` requires explicit `caps.model`, otherwise the entire request is refused |
+| `session.rewind {session_id, prompt, occurrence, prompts_after?, restore}` | requires `caps.rewind`. Conversation rewind returns `{prompt, restore, code_restored: false, input_cleared: true}` after verifying the selected message and publishing the new history token. Refusals carry the existing `rewind_*` codes. The SDK exposes optional `driver.rewind(params)` and refreshes inventory after success |
 | `session.archive {session_id}`, `session.unarchive {session_id}` | archive / restore an idle session in the runtime's own archive, without stopping or closing it (for runtimes that declared `caps.archive`; a runtime without it is never asked, and the node answers the manager `native: "unsupported"`). Both must be idempotent: already archived (restored) answers success |
 
 Fields `session.start` carries, each only when set:

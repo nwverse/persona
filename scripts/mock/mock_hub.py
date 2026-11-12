@@ -5847,6 +5847,11 @@ if os.environ.get("MOCK_REWIND"):
         it("user", "text", 60, text="继续"), it("assistant", "text", 55, text="把 `fetchAll` 改成了 `loadAll`。"),
         it("user", "text", 40, text="把 tmp 也改了"), it("assistant", "text", 35, text="`tmp` 已经改成 `cached`。"),
         it("user", "text", 20, text="继续"), it("assistant", "text", 15, text="CI 绿了，可以合。")]
+    native = os.environ.get("MOCK_REWIND")
+    if native in ("codex", "agy"):
+        review = next(s for s in SESSIONS if s["session_id"] == REVIEW)
+        review.update(agent=native, source_kind="codex_app_server" if native == "codex" else "runtime",
+                      capabilities={"read": True, "send": True, "rewind": True, "rewind_code": False}, status="idle")
     if os.environ.get("MOCK_REWIND") == "safeguards":
         ITEMS[REVIEW][-2]["text"] = "> Example quote\n\nRevise this paragraph"
         ITEMS[REVIEW][-1]["text"] = "API Error: Opus 5.5's safeguards flagged this message. Details: [frontier_llm]"
@@ -22745,6 +22750,7 @@ class H(BaseHTTPRequestHandler):
             # Claude Code keeps the rewound turns in its transcript file (a tree); the node leaves them out and the history
             # token changes (".r<n>"), which makes every client read the session again.
             global HISTORY
+            CHURN_ITEMS.setdefault(sid, list(items))
             ITEMS[sid] = items[:users[at]]
             HISTORY = "mock-1.r%d" % (len(REWINDS))
             last = ITEMS[sid][-1]["seq"] if ITEMS[sid] else 0
@@ -23785,7 +23791,7 @@ MOCK_HELP.append("MOCK_MANAGER_EXPIRED=1  设置 › 管理者：多一个安装
 MOCK_HELP.append("MOCK_MANAGER_COMMANDS=1  设置 › 管理者：新建 / 换个地方装的回答带安装命令（commands.service / docker）；MOCK_MANAGERS=0 是还没有名册的旧 hub（/api/v1/managers 404）")
 MOCK_HELP.append("MOCK_SENT=1|empty|nodb|forbidden|old  Settings > Sent as you (#5278, scripts/mock/sent_ledger_mock.py): 1 is about 70 made-up rows (four ways through the gate, one text of 4000 characters), empty has none, nodb is 503 no_database, forbidden 403, old a hub from before the ledger (404 with no code); POST …/sent/{id}/recall takes back row 66 and refuses row 60 (502 recall_refused), row 54 is already recalled")
 MOCK_HELP.append("MOCK_SHARED_BOTS=1  Settings > Managers: two managers share a Feishu app and a WeChat account (#5826)")
-MOCK_HELP.append("MOCK_REWIND=1|safeguards  检查 PR 的对话里有四条你的消息（两条同样的「继续」），试「回退到这里」（#2436）；safeguards 显示安全拦截；POST …/rewind 记在 REWINDS，MOCK_REWIND_ERROR=<code>:<提示> 让它像节点一样拒绝，MOCK_REWIND_DELAY=<秒> 调等待")
+MOCK_HELP.append("MOCK_REWIND=1|safeguards|codex|agy  检查 PR 的对话里有四条你的消息（两条同样的「继续」），试「回退到这里」（#2436）；safeguards 显示安全拦截；POST …/rewind 记在 REWINDS，MOCK_REWIND_ERROR=<code>:<提示> 让它像节点一样拒绝，MOCK_REWIND_DELAY=<秒> 调等待")
 MOCK_HELP.append("MOCK_INBOX_SOURCES=none  还没接任何消息来源：收件箱空、没有邮箱账号、飞书没设置、GitHub 没登录（#4480）")
 MOCK_HELP.append("MOCK_INBOX_EXTRA=<n>  收件箱多 n 封知悉即可的示例通知，试「全部清理」的「将清理 N 件」确认")
 MOCK_HELP.append("MOCK_CHANNELS=1  设置 › 插件 › 渠道：App、飞书机器人和微信已连接、飞书 /agent 只读、一个待绑定（令牌 example-token）、一个出错、一个在市场里；主对话第一条来自微信")
