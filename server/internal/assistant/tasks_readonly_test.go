@@ -230,6 +230,35 @@ func TestReadonlyTaskDispatchBoundary(t *testing.T) {
 	}
 }
 
+func TestReadonlyTaskResolveStartFailureDoesNotSavePlan(t *testing.T) {
+	ctx := context.Background()
+	database, err := db.Open(ctx, newDatabase(t), db.ManagerSet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(database.Close)
+	s, f := newTaskServiceOn(t, database)
+	f.launcherList = []proto.Launcher{{Name: "claude", Agent: "claude"}}
+	if err := s.putSetting(ctx, launchersManagedKey, []storedLauncher{{ManagedLauncher: proto.ManagedLauncher{
+		Name: "direct", Kind: "api", API: "responses", BaseURL: "https://api.example.com", Model: "m",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	setModel(t, s, "agent.new", ModelBinding{Provider: "launcher.direct"})
+	_, err = s.toolTaskPlan(ctx, "readonly-chat", readonlyTaskArgs(t, readonlyTestTask("")))
+	resolutionError := i18n.T(s.lang(ctx), "assistant-models.err_api_as_launcher")
+	if err == nil || !strings.Contains(err.Error(), resolutionError) {
+		t.Fatalf("planning error = %v, want the launcher/model resolution failure", err)
+	}
+	if len(f.starts) != 0 {
+		t.Fatalf("a failed resolution started agents: %v", f.starts)
+	}
+	rows, readErr := database.TaskPlans(ctx, "readonly-chat")
+	if readErr != nil || len(rows) != 0 {
+		t.Fatalf("a failed resolution saved a plan: %v, error = %v", rows, readErr)
+	}
+}
+
 func TestReadonlyCodexTaskKeepsPlanSandbox(t *testing.T) {
 	s, f := readonlyTaskService(t)
 	f.launcherList = []proto.Launcher{{Name: "codex", Agent: "codex"}}
