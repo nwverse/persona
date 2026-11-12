@@ -332,7 +332,7 @@ private fun CheckRow(place: String, asked: Boolean, check: LauncherCheck?, failu
     }
     JRow(place, subtitle = subtitle, leadingIcon = PhIcons.Laptop, subtitleLines = 3, trailing = {
         when {
-            asked && check == null -> JSpinner(Modifier.size(Tokens.Space.l))
+            asked && check == null -> JSpinner(Modifier.size(Tokens.Space.Standard.l))
             check != null -> JTag(if (check.ok) stringResource(R.string.settings_providers_check_ms, check.millis) else stringResource(R.string.settings_providers_check_failed),
                 status = if (check.ok) Status.Unread else Status.NeedsYou)
             else -> {}

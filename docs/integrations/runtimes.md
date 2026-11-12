@@ -364,7 +364,8 @@ the complete export. Use one source for sequences and content so a watch cannot 
 Older histories fall back to the compact export when the complete file is unavailable. Persona applies the SDK's
 normal page limits to complete native records and serves larger items through the full-item endpoint. The history
 scope includes `:full` to invalidate previously cached compact pages. Parsed files are cached by file identity, size
-and nanosecond modification/change times, bounded to 16 files and 64 MiB of source data.
+and nanosecond modification/change times, bounded to 16 files and 64 MiB of source data. Files modified within the
+last second bypass the cache because rapid same-size writes can share a filesystem timestamp tick.
 
 ### Shared runtime behavior
 

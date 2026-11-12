@@ -248,11 +248,13 @@ export function readTranscriptSteps(brainDir, full = false) {
   try {
     const info = statSync(target, { bigint: true })
     const version = [info.dev, info.ino, info.size, info.mtimeNs, info.ctimeNs].join(':')
+    // Fast same-size native rewrites can share a filesystem timestamp tick.
+    const settled = Math.max(Number(info.mtimeMs), Number(info.ctimeMs)) <= Date.now() - 1000
     const cached = transcriptCache.get(target)
     if (cached) {
       transcriptCache.delete(target)
       transcriptCacheBytes -= cached.size
-      if (cached.version === version) {
+      if (settled && cached.version === version) {
         transcriptCache.set(target, cached)
         transcriptCacheBytes += cached.size
         return cached.steps
@@ -268,7 +270,7 @@ export function readTranscriptSteps(brainDir, full = false) {
       } catch {}
     }
     const size = Number(info.size)
-    if (size <= MAX_TRANSCRIPT_CACHE_BYTES) {
+    if (settled && size <= MAX_TRANSCRIPT_CACHE_BYTES) {
       while (transcriptCache.size >= MAX_CACHED_TRANSCRIPTS || transcriptCacheBytes + size > MAX_TRANSCRIPT_CACHE_BYTES) {
         const oldest = transcriptCache.keys().next().value
         transcriptCacheBytes -= transcriptCache.get(oldest).size
