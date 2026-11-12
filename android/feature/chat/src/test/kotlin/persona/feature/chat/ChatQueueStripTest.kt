@@ -1,6 +1,9 @@
 package persona.feature.chat
 
 import android.content.Context
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasAnyAncestor
@@ -203,6 +206,35 @@ class ChatQueueStripTest {
         rule.onNode(hasText("立即发送") and hasAnyAncestor(isDialog())).performClick()
         rule.waitForIdle()
         assertEquals(1, queue.sentNow)
+    }
+
+    // Seeing one's own queue is behaviour: Brief and Board show Persona's too, as their always-open strip without Send now.
+    @Test fun briefAndBoardShowPersonasQueueOpenWithTheRelayedOneLast() {
+        var style by mutableStateOf(AppStyle.Brief)
+        val queue = Queue()
+        rule.setContent {
+            PersonaTheme(style = style, reduceMotion = true) {
+                ChatQueueStrip(persona, queue, ChatComposerState(), {}, {})
+            }
+        }
+        for (s in listOf(AppStyle.Brief, AppStyle.Board)) {
+            style = s
+            rule.waitForIdle()
+            rule.onNodeWithText("排队中 3 条 · Persona 忙完会依次处理").assertExists()
+            rule.onNodeWithContentDescription("第 1 条：顺便把下周三的会也挪到下午").assertExists()
+            rule.onNodeWithContentDescription("第 3 条：来自「早报」：会议纪要整理好了，要不要发给参会的人？。对话空闲后送达").assertExists()
+            assertEquals(1, rule.onAllNodesWithText("对话空闲后送达").fetchSemanticsNodes().size)
+            rule.onNodeWithText("立即发送").assertDoesNotExist()
+            rule.onNodeWithContentDescription("第 3 条", substring = true).performClick()
+            rule.onNodeWithText("撤回编辑").assertDoesNotExist()
+            rule.onNodeWithText("拷贝").performClick()
+            rule.waitForIdle()
+            rule.onNodeWithContentDescription("第 2 条：再查一下航班").performClick()
+            rule.onNodeWithText("下移").assertIsNotEnabled()
+            rule.onNodeWithText("上移").performClick()
+            rule.waitForIdle()
+        }
+        assertEquals(listOf(listOf(1, 0), listOf(1, 0)), queue.kept)
     }
 
     @Test fun onlyRelayedMessagesOfferNoSendNow() {

@@ -59,6 +59,7 @@ internal class GroupNames(val namespace: String?) {
         is RevsEvent -> value.copy(machineId = machineId(value.machineId))
         is InteractionEvent -> value.copy(interaction = interaction(value.interaction))
         is InteractionResolvedEvent -> value.copy(id = interactionId(value.id))
+        is InteractionReansweredEvent -> value.copy(id = interactionId(value.id))
         is NotifyEvent -> value.copy(machineId = machineId(value.machineId), interactionId = value.interactionId?.let(::interactionId),
             id = value.id?.let(::interactionId))
         is FleetEvent -> value.copy(fleet = fleet(value.fleet))
