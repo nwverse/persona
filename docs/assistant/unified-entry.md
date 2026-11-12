@@ -170,7 +170,7 @@ for each Agent instead, which opens that Agent's page ("Hand-off cards (web)" be
 **Pending** holds plans that still require Start and acceptance decisions, alongside ordinary questions/approvals. Drafts sent
 on the user's behalf are a separate group and require their own explicit Send; Approve all never sends drafts or chooses an
 answer to a question. **Progress** also has a separate quiet supervision/scheduled-task group, with inspectable background
-records. System housekeeping notices are not conversation messages. Tools and intermediate narration stay manually
+records (Android's Glass style keeps a supervision round in the chat as one folded "Supervision record" line instead, as iOS does). System housekeeping notices are not conversation messages. Tools and intermediate narration stay manually
 inspectable under a single collapsed summary; source metadata, not title/emoji guesses, identifies background turns.
 
 A report's row shows a paraphrase, not the Agent's own words (#3181): those are often in another language than the user's,

@@ -10,4 +10,7 @@
     <string name="chat_report_done">Says it is done: %1$s</string>
     <string name="chat_report_step_of">Step %1$d/%2$d · %3$s</string>
     <string name="chat_report_step">Step %1$d · %2$s</string>
+    <!-- A quiet supervision round folded into one line (iOS SupervisionRecordLine). -->
+    <string name="chat_supervision_record">Supervision record</string>
+    <string name="chat_supervision_record_live">Supervision record · running</string>
 </resources>
