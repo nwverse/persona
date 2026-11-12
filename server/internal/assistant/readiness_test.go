@@ -649,6 +649,30 @@ func TestReadinessFailureOccurrence(t *testing.T) {
 	if got := occurrence(getReadiness(t, healthService, "", "")); got != laterReset.Format(time.RFC3339Nano) {
 		t.Fatalf("a new reset window kept the old occurrence: %q", got)
 	}
+
+	// The settled health record comes from the same main turn. Its reset must not give that turn a second occurrence.
+	turnReset := time.Now().Add(2 * time.Hour).UTC()
+	turn := proto.Session{SessionID: "m1", State: proto.StateIdle, TurnError: limitText, TurnErrorKind: proto.TurnErrorUsageLimit,
+		TurnErrorResetsAt: &turnReset, UpdatedAt: firstAt}
+	turnHub, turnService, _ := readyMachine(t, turn)
+	beforeHealth := occurrence(getReadiness(t, turnService, "", ""))
+	settled := LauncherHealth{Machine: "server", Launcher: "claude", State: healthFailing, Kind: errKindUsageLimit,
+		Error: limitText, CheckedAt: firstAt.Add(time.Minute), ResetsAt: &turnReset}
+	turnService.health.loaded = true
+	turnService.health.recs = map[string]*LauncherHealth{healthKey("server", "claude"): &settled}
+	if got := occurrence(getReadiness(t, turnService, "", "")); got != beforeHealth {
+		t.Fatalf("settling the same turn changed its occurrence from %q to %q", beforeHealth, got)
+	}
+	if beforeHealth != turnReset.Format(time.RFC3339Nano) {
+		t.Fatalf("main turn occurrence = %q, want reset window %q", beforeHealth, turnReset.Format(time.RFC3339Nano))
+	}
+	laterTurnReset := turnReset.Add(time.Hour)
+	turn.TurnErrorResetsAt, turn.UpdatedAt = &laterTurnReset, firstAt.Add(time.Minute)
+	turnHub.setSessions("server", turn)
+	turnService.health.recs = nil
+	if got := occurrence(getReadiness(t, turnService, "", "")); got != laterTurnReset.Format(time.RFC3339Nano) {
+		t.Fatalf("a later turn kept the old reset occurrence: %q", got)
+	}
 }
 
 // The newest evidence wins: an answer in the main conversation after a signed-out status (signed in since, within
