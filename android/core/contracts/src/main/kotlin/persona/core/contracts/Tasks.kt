@@ -46,6 +46,8 @@ data class TaskPlan(
     @WireEnum("open", "started", "dismissed", "unknown")
     val state: String = "unknown",
     @WireTime @SerialName("created_at") val createdAt: String? = null,
+    /** The rule an open plan suggests after three Starts of its kind (#4929): the hub fills it in on every read; null otherwise. */
+    val suggestion: RuleSuggestion? = null,
 )
 
 /** A message card's reply that went out: when, and what it said. */
@@ -242,7 +244,9 @@ data class TodoOrphaned(val reason: String? = null, @WireTime val since: String?
  * owner can answer") also carries what is to be decided ([question]), why only the owner can ([whyOwner]), its
  * [options] with the recommended one first, where the task came from and stands in one line ([background]), what waiting
  * costs, whether the recommendation is taken at [deadline] ([default] "taken") or never ("never"), the fixed answers the
- * hub takes ([responses]) and the one already given while it still waits ([response]). All absent from an older hub.
+ * hub takes ([responses]) and the one already given while it still waits ([response]). A decision that can wait is held
+ * for the next briefing, with nothing pushed for it, while [forBriefing] (#4930, "Decisions that can wait"); one the owner
+ * gave the same go-ahead for three times carries the rule it suggests ([suggestion], #4929). All absent from an older hub.
  */
 @Serializable
 data class TodoAsk(
@@ -259,6 +263,8 @@ data class TodoAsk(
     val default: String? = null,
     val responses: List<String>? = null,
     val response: String? = null,
+    @SerialName("for_briefing") val forBriefing: Boolean = false,
+    val suggestion: RuleSuggestion? = null,
 )
 
 /** One option of a decision: its [label], which is the answer, and what choosing it leads to. */

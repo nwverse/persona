@@ -17,6 +17,7 @@
 | [fleet.json](fleet.json) | GET `/api/v1/fleet`；WS `fleet` | 调用 `buildFleet`，再使用实际快照或信封结构 |
 | [inbox.json](inbox.json) | GET `/api/v1/inbox` | `InboxItem.listed` 清理列表中的内部字段，再经 `writeJSON` |
 | [feed.json](feed.json) | GET `/api/v1/assistant/conversations/{id}/feed` | `answeredBody` 由 `answeredItems` 等生成，再经 `writeJSON` |
+| [queue.json](queue.json) | POST `/api/v1/sessions/{mid}/{sid}/queue` 的应答（Persona 对话取回、删除、移动排队消息） | `proto.QueueEdit` 按 node 的编码生成，再经 `writeJSON` 写出；hub 对此应答原样转发 |
 | [errors.json](errors.json) | 未鉴权请求的 401；发送及屏幕操作拒绝的 409 | 调用 `Hub.auth`、`callErr`，同时断言 HTTP 状态 |
 | [compatibility.json](compatibility.json) | 上述类型的旧格式、未知字段及异常类型 | 用 Go 编码器构造兼容性输入，交当前 iOS 解码；异常输入不代表 hub 正常输出 |
 
@@ -35,6 +36,7 @@
 | 会话列表保留模式、队列、后台任务、子任务和循环信息，事件用信封中的机器标识设置会话归属。 | `server/internal/proto/session.go`：`Session`；`apple/Shared/Models.swift`：`Session.init(from:)`；`ServerEvent.decode` | `sessions_list`、`sessions_event` |
 | 完整会话行携带等待下一条消息的服务商切换（`pending_switch`）和 Persona 对话自己选的模型（`model_pick`）；摘要行保留 `model_pick`，省略启动器和 `pending_switch`，客户端用此前完整行里的值。 | `server/internal/proto/session.go`：`PendingSwitch`、`ModelPick`；`server/internal/hub/sessions_list.go`：`runtimeSummary`；`android/core/domain/src/main/kotlin/persona/core/domain/models/SummaryRows.kt` | `sessions_model_switch`、`sessions_summary_model_pick` |
 | Persona 对话的 `queued` 先列用户自己的消息，最后 `queued_relayed` 条来自其他对话或系统，客户端只展示和拷贝这几条。 | `server/internal/proto/session.go`：`Session`；`server/internal/assistant/fleet_sessions.go`：`Service.decorateInventory`；`apple/Shared/Models.swift`：`Session.ownQueuedCount` | `sessions_assistant_queue` |
+| Persona 对话编辑队列的应答是 `{queue, images}`：`queue` 是编辑前排队的消息，`images[i]` 是第 i 条的照片（没有照片的为 null，一条都没有时整个键省略），客户端取回时放回输入框。 | `server/internal/proto/session.go`：`QueueEdit`；`server/internal/node/assistant_queue.go`：`assistantEditQueue`；`docs/protocol/protocol.md`：`POST /api/v1/sessions/{mid}/{sid}/queue`；`android/core/contracts/src/main/kotlin/persona/core/contracts/Models.kt`：`QueueEdit` | `queue_edit_images`、`queue_edit_words` |
 | 在线与离线机器使用同一类型，系统信息和版本字段可选。 | `server/internal/hub/machine.go`：`Machine.snapshot`；`apple/Shared/Models.swift`：`Machine` | `machines_list`、`machines_event` |
 | items 用 kind 区分内容块，工具输入中的自定义键名原样保留。 | `server/internal/proto/item.go`：`Item`；`apple/Shared/Models.swift`：`Item`；`apple/Shared/JSONValue.swift`：`JSONValue` | `items_all_kinds` |
 | 助手条目携带写出它的模型（`model`），用户条目没有；客户端据此标出回复模型变化的位置。 | `server/internal/proto/item.go`：`Item.Model`；`android/core/domain/src/main/kotlin/persona/core/domain/lines/ModelChanges.kt` | `items_reply_models` |
@@ -51,6 +53,7 @@
 | 屏幕对话框携带选项和 rev，密码提示使用 secret 且不记录密码输入。 | `server/internal/screen/dialog.go`：`ParseDialog`；`secret.go`：`SecretPrompt`；`apple/Shared/Models.swift`：`ScreenDialog`、`Interaction` | `interaction_screen`、`interaction_secret` |
 | elicitation 交互携带 MCP 服务名和 form（requested_schema）或 url 载荷，只发给声明 elicitation 能力的连接，旧 iOS 收不到。 | `server/internal/hub/http.go`：`Hub.broadcast`、`broadcastTo`；`proto.Elicitation`；`android/core/contracts/src/main/kotlin/persona/core/contracts/Elicitation.kt` | `interaction_elicitation_form`、`interaction_elicitation_url` |
 | interaction_resolved 按 id 撤回交互。 | `server/internal/hub/hub.go`：`resolve`；`ServerEvent.decode` | `interaction_resolved` |
+| 助手 ask_user 的提问卡另带 deadline、reversible（没说就没有）和每题的 recommend；客户端不建模这几个键，照常读卡片的其余字段。 | `server/internal/proto/interaction.go`：`Interaction.Deadline`、`Interaction.Reversible`、`Question.Recommend`；`server/internal/assistant/decision_deadline.go`：`keepAskDecision` | `interaction_question_decision` |
 | 助手代答的问题撤回时另带 answered_by、reason 和按问题文字的 answers；改答事件 interaction_reanswered 只带改了的问题，放在 resolution.answers。 | `server/internal/hub/fleet_link.go`：`EventFleetResolved`；`server/internal/assistant/fleet_delegate.go`：`reanswer`；`Hub.relayBroadcastFrom`；`ServerEvent.decode`；`docs/protocol/protocol.md`「WebSocket `/api/v1/ws`」 | `interaction_resolved_assistant`、`interaction_reanswered` |
 | Fleet 保留驼峰键名，时间使用 Unix 秒数字。 | `server/internal/hub/liveactivity.go`：`FleetState`、`buildFleet`；`apple/Shared/FleetState.swift` | `fleet_snapshot`、`fleet_event` |
 | 收件箱列表统一承载飞书和邮件，移除 context 等内部字段并保留草拟回复。 | `server/internal/assistant/inbox.go`：`InboxItem.listed`；`apple/Shared/InboxModels.swift`：`InboxItem` | `inbox_list` |

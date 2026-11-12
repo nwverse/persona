@@ -334,6 +334,10 @@
     </plurals>
     <string name="chat_queue_deleted">Removed from the queue</string>
     <string name="chat_queue_restored">Moved back to the input box. Edit it and send again.</string>
+    <plurals name="chat_queue_photos_lost">
+        <item quantity="one">Moved back to the input box. %1$d photo couldn\'t be put back.</item>
+        <item quantity="other">Moved back to the input box. %1$d photos couldn\'t be put back.</item>
+    </plurals>
     <string name="chat_queue_not_found">Couldn\'t find this one. The queue may have changed; check and try again</string>
     <string name="chat_queue_failed">Didn\'t change: %1$s</string>
     <string name="chat_queue_edit">Take back to edit</string>

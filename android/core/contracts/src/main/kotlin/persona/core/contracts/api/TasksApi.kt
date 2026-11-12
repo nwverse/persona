@@ -61,6 +61,13 @@ interface TasksApi {
     suspend fun answerTask(todoId: String, askedAt: String, answer: AskAnswer): Unit = error("Task answers unavailable")
     /** Mark a question left for a briefing as handled (`POST /api/v1/later/{id}/handled`). */
     suspend fun markLaterHandled(questionId: String): Unit = error("Later-question handling unavailable")
+    /**
+     * "Always" on a card's suggested rule (#4929, `POST /api/v1/assistant/rule-suggestions/{id}/always`): the hub counts
+     * the answers again and makes the rule only if they still earn it. 404: not earned any more, or already answered.
+     */
+    suspend fun ruleAlways(suggestionId: String): persona.core.contracts.RuleSuggestionMade = error("Rule suggestions unavailable")
+    /** "Not now": the line is not shown for its kind and scope for 30 days (`…/rule-suggestions/{id}/not-now`). */
+    suspend fun ruleNotNow(suggestionId: String): Unit = error("Rule suggestions unavailable")
     /** Sends text straight to a task's agent; the answer is the conversation's new `routed` item. */
     suspend fun route(conversation: String, todoId: String, text: String): FeedItem
     /** The conversation's "Today" card for the user's day (made on the first call of the day). */
