@@ -608,7 +608,7 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   Items the hub didn't stamp with a manager get the default one when there are several, so the per-manager filter keeps them. Done from history reopens through the item's own manager.
   - **With day counts** (#2969; "Days" under "Lifecycle", #2967): when the list is shown the apps ask for the counts in this device's zone, and Done lists every group they name
     with its exact count, loaded or not (Today less what Just now holds). Groups older than today start folded, so nothing more loads until one opens: opening a group, or
-    picking it in Jump To, loads its first page from its end (`before=<the group's end>`, no `before_id`), and Show Older inside it loads the next, until a page reaches
+    picking it in Jump To, loads its first page from its end (`before=<the group's end>`, no `before_id`; on the web, past the oldest done item the list holds when that falls in the group, so the page brings rows the list doesn't have), and Show Older inside it loads the next, until a page reaches
     the group's start, or (unfiltered) once as many are loaded as the hub counts. The list's own done rows show at once, but its 3 days page like the rest, since it carries
     only their newest 200 (web, #5549). iOS builds (#5558) and web bundles from before that take the groups of the list's 3 days as complete without a page, so past 200 done
     items in 3 days they show the newest 200 there and the counts; the history still pages them all. A web link to a done item neither the list nor a loaded page has

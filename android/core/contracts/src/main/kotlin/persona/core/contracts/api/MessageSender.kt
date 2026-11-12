@@ -22,7 +22,7 @@ data class OutboxMessage(
 
 private val NoWrittenAt = MutableStateFlow(emptyMap<String, Long>())
 
-interface MessageSender {
+interface MessageSender : MessageSendReceiptSource {
     val outbox: StateFlow<List<OutboxMessage>>
     /** When this phone wrote each send, including ones already in the transcript. Epoch millis, by client message id. */
     val writtenAt: StateFlow<Map<String, Long>> get() = NoWrittenAt

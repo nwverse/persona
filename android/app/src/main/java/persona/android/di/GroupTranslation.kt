@@ -39,6 +39,7 @@ internal class GroupNames(val namespace: String?) {
         item.copy(id = path(item.id), interaction = item.interaction?.let(::interactionId))
     })
     fun outbox(value: OutboxMessage) = if (plain) value else value.copy(session = key(value.session))
+    fun receipt(value: MessageSendReceipt) = if (plain) value else value.copy(session = key(value.session))
     fun draftKey(value: DraftKey) = if (plain || value !is DraftKey.Chat) value else DraftKey.Chat(key(value.session))
     fun draft(value: DraftSnapshot) = if (plain) value else value.copy(key = draftKey(value.key))
     fun metrics(value: MachineMetrics) = if (plain) value else value.copy(machineId = machineId(value.machineId))
@@ -51,12 +52,14 @@ internal class GroupNames(val namespace: String?) {
         AgentOperationPreferences(value.spaces.map(::path), value.sessions.map(::path), value.allowed.mapTo(LinkedHashSet(), ::path))
 
     fun event(value: ServerEvent): ServerEvent = if (plain) value else when (value) {
+        is MessageSendStateEvent -> value.copy(machineId = machineId(value.machineId))
         is ItemsEvent -> value.copy(machineId = machineId(value.machineId))
         is SessionsEvent -> value.copy(machineId = machineId(value.machineId), sessions = value.sessions.map(::session))
         is MachinesEvent -> value.copy(machines = value.machines.map(::machine))
         is RevsEvent -> value.copy(machineId = machineId(value.machineId))
         is InteractionEvent -> value.copy(interaction = interaction(value.interaction))
         is InteractionResolvedEvent -> value.copy(id = interactionId(value.id))
+        is InteractionReansweredEvent -> value.copy(id = interactionId(value.id))
         is NotifyEvent -> value.copy(machineId = machineId(value.machineId), interactionId = value.interactionId?.let(::interactionId),
             id = value.id?.let(::interactionId))
         is FleetEvent -> value.copy(fleet = fleet(value.fleet))
@@ -130,6 +133,7 @@ internal fun HubConnection.inGroup(names: GroupNames, scope: CoroutineScope): Hu
     val source = this
     return object : HubConnection {
         override val state = source.state
+        override val currentHello = source.currentHello
         override val resumed get() = source.resumed
         override val events: SharedFlow<ServerEvent> = source.events.map(names::event)
             .shareIn(scope, SharingStarted.WhileSubscribed())
@@ -291,6 +295,7 @@ internal fun MainConversationSender.inGroup(names: GroupNames, scope: CoroutineS
     val source = this
     return object : MainConversationSender {
         override val outbox = source.outbox.mapIn(scope) { list -> list.map(names::outbox) }
+        override val sendReceipts = source.sendReceipts.mapIn(scope) { list -> list.map(names::receipt) }
         override suspend fun sendToMain(text: String, clientMessageId: String, draft: DraftSnapshot?) =
             source.sendToMain(text, clientMessageId, draft?.let(names::rawDraft))
         override suspend fun mainReplaced(previous: SessionKey) = source.mainReplaced(names.raw(previous))

@@ -115,6 +115,7 @@ type Sender struct {
 type Message struct {
 	MessageID       string          `json:"message_id"`
 	MessagePosition string          `json:"message_position,omitempty"`
+	MessageAppLink  string          `json:"message_app_link,omitempty"`
 	MsgType         string          `json:"msg_type,omitempty"`
 	CreateTime      string          `json:"create_time,omitempty"`
 	UpdateTime      string          `json:"update_time,omitempty"`

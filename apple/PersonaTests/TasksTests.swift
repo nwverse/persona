@@ -1,4 +1,5 @@
 import Foundation
+import MapKit
 import Testing
 @testable import Persona
 
@@ -208,6 +209,47 @@ struct TasksTests {
         #expect(QuickResult(toolCall("mcp__persona__phone_reminders_list", result: #"{"id":"x"}"#)) == nil) // a read is no result card
         #expect(QuickResult(toolCall("mcp__persona__phone_reminders_create", result: #"{"error":"denied"}"#, error: true)) == nil)
         #expect(QuickResult(toolCall("mcp__persona__phone_reminders_create", result: nil)) == nil) // still running
+    }
+
+    /// Where the phone is and the places a search found become a map card (#5543); a failed, empty or running call
+    /// does not, and neither do coordinates out of range.
+    @Test func placeMapsComeFromTheLocationTools() throws {
+        let here = try #require(PlaceMapResult(toolCall("mcp__persona__phone_location_current",
+            result: #"{"latitude":31.23,"longitude":121.47,"accuracy_meters":12,"address":{"formatted":"上海市黄浦区人民大道"}}"#)))
+        #expect(here.kind == .here && here.places.count == 1 && here.places[0].address == "上海市黄浦区人民大道")
+        let nearby = try #require(PlaceMapResult(toolCall("phone_maps_search_nearby", result: """
+            {"query":"cafe","places":[{"name":"A","address":"x","latitude":31.231,"longitude":121.475,"distance_meters":180},
+            {"name":"","address":"Road 2","latitude":31.229,"longitude":121.476},{"name":"Bad","latitude":91,"longitude":0}]}
+            """)))
+        #expect(nearby.kind == .places && nearby.places.map(\.name) == ["A", nil])
+        #expect(nearby.places[0].distance == 180 && nearby.places[1].distance == nil)
+        #expect(PlaceMapText.title(nearby.places[1], number: 2) == "Road 2")
+        let search = try #require(PlaceMapResult(toolCall("mcp__persona__phone_location_search",
+            result: #"{"count":1,"places":[{"name":"Office","latitude":31.2,"longitude":121.4}]}"#)))
+        #expect(search.kind == .places && search.places.count == 1)
+        let many = (0..<20).map { #"{"name":"P\#($0)","latitude":31.2,"longitude":121.4}"# }.joined(separator: ",")
+        #expect(PlaceMapResult(toolCall("phone_maps_search_nearby", result: #"{"places":[\#(many)]}"#))?.places.count == PlaceMapResult.most)
+        #expect(PlaceMapResult(toolCall("phone_maps_search_nearby", result: #"{"count":0,"places":[]}"#)) == nil)
+        #expect(PlaceMapResult(toolCall("phone_location_current", result: #"{"error":"denied"}"#, error: true)) == nil)
+        #expect(PlaceMapResult(toolCall("phone_location_current", result: nil)) == nil) // still running
+        #expect(PlaceMapResult(toolCall("phone_maps_navigate", result: #"{"latitude":31.2,"longitude":121.4}"#)) == nil)
+    }
+
+    /// The map shows every place, and one place is not drawn at street level.
+    @Test func placeMapRegionHoldsEveryPlace() throws {
+        let r = try #require(PlaceMapResult(toolCall("phone_maps_search_nearby",
+            result: #"{"places":[{"name":"A","latitude":31.20,"longitude":121.40},{"name":"B","latitude":31.24,"longitude":121.48}]}"#)))
+        let region = r.region()
+        #expect(abs(region.center.latitude - 31.22) < 0.0001 && region.span.latitudeDelta >= 0.04 && region.span.longitudeDelta >= 0.08)
+        let one = try #require(PlaceMapResult(toolCall("phone_location_current", result: #"{"latitude":31.2,"longitude":121.4}"#)))
+        #expect(one.region().span.latitudeDelta > 0.004)
+    }
+
+    /// A map card goes where a reminder's card goes: right after its turn's work line.
+    @Test func placeMapFollowsItsWork() {
+        let call = toolCall("mcp__persona__phone_location_current", result: #"{"latitude":31.2,"longitude":121.4}"#)
+        let work = ChatLine.work(id: "wt-1", items: [.step(.call(call))], live: false, start: .now, end: .now)
+        #expect(ChatLines.quickResults([user(1, 5), work, answer(2, 4)]).map(\.id) == ["1#0", "wt-1", "map-10#0", "2#0"])
     }
 
     /// A turn's quick result goes right after its work line, after the line's open steps.

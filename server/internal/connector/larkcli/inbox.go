@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -756,6 +757,20 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 		CanReply: latest.MessageID != "",
 		Rules:    c.rules(),
 		Tags:     tags,
+	}
+	// Keep the CLI's link opaque: it includes the message position and, for a
+	// topic, the source thread. Do not guess a link from a sender or a thread id.
+	for _, message := range contextMessages {
+		if message.MessageID != latest.MessageID || message.ChatID != group.chatID || group.threadID != "" && topicID(message) != group.threadID {
+			continue
+		}
+		link, err := url.Parse(message.MessageAppLink)
+		if err == nil && link.Scheme == "https" && link.User == nil &&
+			(link.Host == "applink.feishu.cn" || link.Host == "applink.larksuite.com") &&
+			(link.Path == "/client/chat/open" || link.Path == "/client/thread/open") {
+			thing.OpenURL = message.MessageAppLink
+		}
+		break
 	}
 	if thing.At.IsZero() {
 		thing.At = time.Now().UTC()

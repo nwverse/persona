@@ -1,5 +1,6 @@
 package persona.feature.chat
 
+import persona.core.designsystem.dense
 import persona.core.domain.isOwnMessage
 import androidx.compose.foundation.background
 import androidx.compose.animation.core.*
@@ -44,7 +45,7 @@ internal fun MessageContent(item: Item, user: Boolean, update: ChatTextUpdate? =
         .let { if (hideCloseout) persona.core.domain.sort.stripCloseout(it) else it }
     val model = remember(text, item.from, user) { messageModel(text, item.from, user) }
     val uri = LocalUriHandler.current
-    Column(Modifier.fillMaxWidth().messageMenu(MessageTarget(item.id, model.plain, user, model.editText()))) {
+    Column(Modifier.fillMaxWidth().messageMenu(MessageTarget(item.id, model.plain, user, model.editText(), time = item.ts))) {
         MessageContextGroup(model.contexts, "${item.id}/contexts", uri::openUri, alignEnd = user)
         AttachedFileCards(model.attached, alignEnd = user)
         // a reply still being written: its quotes do not fold yet (#2984)
@@ -98,7 +99,7 @@ private fun MessageParts(parts: List<MessagePart>, user: Boolean, id: String, on
                         viewKeys = { n -> persona.core.domain.views.AssistantFences.key(id, firstCard[index] + n) }, streaming = streaming)
                 }
             is MessagePart.Source -> JGroupItem(GroupPosition.Single) {
-                Column(Modifier.fillMaxWidth().padding(10.dp)) {
+                Column(Modifier.fillMaxWidth().padding(10.dp.dense)) {
                     Text(stringResource(R.string.chat_content_from, part.name.ifBlank { stringResource(R.string.chat_content_other_session) }), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
                     // Markdown like an answer: agents write Markdown, and the hub turns a teammate's JSON notes into it.
                     if (part.text.isNotBlank()) ChatMarkdown(keepLineBreaks(part.text), "$id/$index", selectable = false)
@@ -138,7 +139,7 @@ internal fun MergedUserBubble(items: List<Item>, updates: Map<String, ChatTextUp
     val attached = remember(models) { models.flatMap { it.attached }.distinctBy { it.path } }
     val target = remember(models, items, pending) {
         MessageTarget(items.firstOrNull()?.id.orEmpty(), models.joinToString("\n\n") { it.plain }.trim(), true,
-            models.joinToString("\n\n") { it.editText() }.trim(), pending)
+            models.joinToString("\n\n") { it.editText() }.trim(), pending, items.lastOrNull()?.ts)
     }
     val timestamp = items.lastOrNull()?.ts
     val locale = currentLocale
@@ -228,7 +229,7 @@ internal fun ToolCategoryIcon(name: String) {
 @Composable
 internal fun DiffStats(diff: ToolDiff) {
     val palette = PersonaTheme.palette
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp.dense)) {
         Text("+${diff.added}", color = palette.diffAdd, style = PersonaTheme.type.caption, maxLines = 1)
         Text("−${diff.removed}", color = palette.diffDel, style = PersonaTheme.type.caption, maxLines = 1)
     }
@@ -277,7 +278,7 @@ internal fun DiffView(diff: ToolDiff, id: String) {
 
 @Composable
 internal fun TodoList(todos: List<TodoEntry>, failed: Boolean) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp.dense)) {
         val progress = pluralStringResource(R.plurals.chat_todos_progress, todos.size, todos.count { it.status == "completed" }, todos.size)
         Text(if (failed) stringResource(R.string.chat_todos_progress_failed, progress) else progress,
             style = PersonaTheme.type.caption, color = if (failed) PersonaTheme.palette.danger.text else PersonaTheme.palette.ink2)
