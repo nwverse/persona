@@ -367,6 +367,9 @@ nonisolated struct VoiceStart: Equatable, Sendable {
     var resume: [VoiceRun] = []
     /// False: the microphone records without echo cancellation, so a caption of the user's may be the voice's own.
     var echoCancellation: Bool?
+    /// False: the user turned the user-speech gate off on this device (Only Send What I Just Said, #5904); nil leaves
+    /// it on, as it is for an extension that does not know it.
+    var speechGate: Bool?
 }
 
 /// Text frames the app sends.
@@ -376,7 +379,7 @@ nonisolated enum VoiceMessage {
                           target: s.target.map { TargetFrame(machineID: $0.machineID, sessionID: $0.sessionID) },
                           recent: s.recent.isEmpty ? nil : s.recent, history: s.history.isEmpty ? nil : s.history,
                           resume: s.resume.isEmpty ? nil : ResumeFrame(runs: s.resume.map(ResumeRun.init)),
-                          echoCancellation: s.echoCancellation))
+                          echoCancellation: s.echoCancellation, speechGate: s.speechGate))
     }
 
     /// Stops what the voice is saying (not the agent).
@@ -387,8 +390,9 @@ nonisolated enum VoiceMessage {
         encode(TextFrame(text: text))
     }
 
-    /// Sends again a run a 409 refused, under the same id. `clearDraft`: the line in the agent's input box the node is to
-    /// clear first (`run.clearable`, checked against what is there).
+    /// Sends again a run a 409 refused, or one the user-speech gate held back (Send Anyway), under the same id.
+    /// `clearDraft`: the line in the agent's input box the node is to clear first (`run.clearable`, checked against
+    /// what is there).
     static func resend(id: String, clearDraft: String?) -> String {
         encode(ResendFrame(id: id, clearDraft: nonEmpty(clearDraft)))
     }
@@ -419,11 +423,13 @@ nonisolated enum VoiceMessage {
         var history: [VoiceLine]?
         var resume: ResumeFrame?
         var echoCancellation: Bool?
+        var speechGate: Bool?
 
         enum CodingKeys: String, CodingKey {
             case type, model, voice, target, recent, history, resume
             case protocolVersion = "protocol"
             case echoCancellation = "echo_cancellation"
+            case speechGate = "speech_gate"
         }
     }
 

@@ -50,6 +50,20 @@ struct VoiceConversationTests {
         #expect(try #require(socket.start)["echo_cancellation"] as? Bool == false)
     }
 
+    /// #5904: Only Send What I Just Said turned off on this device (its preference, per group and extension) goes in
+    /// `start` as speech_gate false; on, the default, `start` leaves it out (an older extension sees nothing new).
+    @Test func startSaysWhenTheSpeechGateIsOff() async throws {
+        let rig = VoiceRig()
+        let key = "voice.speechGate." + rig.key.group + ".voice"
+        UserDefaults.standard.set(false, forKey: key)
+        defer { UserDefaults.standard.removeObject(forKey: key) }
+        let (_, socket) = await started(rig)
+        #expect(try #require(socket.start)["speech_gate"] as? Bool == false)
+        let plain = VoiceRig()
+        let (_, other) = await started(plain)
+        #expect(try #require(other.start)["speech_gate"] == nil)
+    }
+
     @Test func theModelComesFromTheUseAndUnverifiedIsUsable() async throws {
         let rig = VoiceRig()
         rig.hub.on("GET", "/api/v1/model-config/purposes/plugin.voice", json: #"{"purpose":{"id":"plugin.voice","name":"实时语音","group":"语音","kind":"plugin","override":{"model":"custom/gpt-live-1"},"effective":{"model":"custom/gpt-live-1"},"revision":1,"status":"未验证"},"providers":[]}"#)
