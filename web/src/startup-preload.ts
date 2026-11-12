@@ -197,13 +197,13 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * and their words; the earlier stretches' windows, reading and drawing, the handoff panel and their words, the "Switch
  * Agent?" dialog and the panel's engine code load lazily). And 453 B because #5303 and #5457 landed together (#5488):
  * #5303 counted the room main had at d7536a601c as its own, and #5457 (#5420, the provider import link) used that room
- * too, merged in between; ja 591,939 B on main at 48f1e053b5, plus 41 B of room. And 354 B for each turn's cost on the
- * reply bar (#5426: ja 592,334 B against 591,928 B on main at d7017cbe6e, +406 B, of which 52 B fit the room main had:
+ * too, merged in between; ja 591,939 B on main at 48f1e053b5, plus 41 B of room. And 684 B for each turn's cost on the
+ * reply bar (#5426: ja 592,664 B against 591,753 B on main at cc83e770df, +911 B, of which 227 B fit the room main had:
  * collecting an exchange's usage while the chat's lines are built, a subagent's once in the chat, in the exchange that
- * launched it; the prices, the sums by model, the card and their words load with the reply bar). Raise it on purpose, in
- * the change that needs it.
+ * launched it, and handing it to the reply; the prices, the sums by model, the card and their words load with the reply
+ * bar). Raise it on purpose, in the change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 592_334;
+export const FIRST_SCREEN_BUDGET = 592_664;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
