@@ -256,6 +256,8 @@ struct PreviewPage: View {
     @State private var pickWhenLoaded = PreviewPage.startsPicking
     @State private var picked: PickedElement?
     @State private var note = ""
+    /// The comment panel's height at the accessibility sizes, so it takes that much room before the page does (#5114).
+    @State private var noteHeight: CGFloat?
     @State private var shooting = false
     @FocusState private var writing: Bool
 
@@ -457,19 +459,25 @@ struct PreviewPage: View {
     }
 
     /// The element picked: what it is, where its code is, and the line to write about it. At the accessibility sizes the
-    /// element and its page take a line each, the buttons stack with Add to Message first, and the panel scrolls: it can be
-    /// taller than the room above the keyboard (#5114).
+    /// element and its page take a line each, the buttons stack with Add to Message first, and the panel takes the room
+    /// it needs before the page does, scrolling when it is taller than the room above the keyboard (#5114): sharing it
+    /// with the page left a strip with the element scrolled away and the buttons under the keyboard.
     private func notePanel(_ el: PickedElement) -> some View {
         Group {
             if typeSize.isAccessibilitySize {
-                ScrollView { noteForm(el, large: true) }
-                    .scrollBounceBehavior(.basedOnSize)
-                    .accessibilityIdentifier("preview-note-panel")
+                ScrollView {
+                    noteForm(el, large: true)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { noteHeight = $0 }
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                .frame(maxHeight: noteHeight)
+                .accessibilityIdentifier("preview-note-panel")
             } else {
                 noteForm(el, large: false)
             }
         }
         .background(Theme.pageBackground)
+        .layoutPriority(typeSize.isAccessibilitySize ? 1 : 0)
         .transition(reduceMotion ? AnyTransition.opacity : AnyTransition.move(edge: .bottom).combined(with: .opacity))
     }
 
