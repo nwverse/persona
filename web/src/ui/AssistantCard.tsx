@@ -45,8 +45,8 @@ export const HtmlRuntime = createContext<boolean>(WEB_HTML_RUNTIME_VERIFIED);
 
 const HtmlCard = lazy(() => import("./HtmlCard"));
 
-/** A card's html components run when the runtime may, the hub has the bridge (persona_view and html_views on), and the
- *  card is one the hub keeps (a conversation and a key). Otherwise the whole card is its fallback. */
+/** A card's html components run when the runtime may, the hub has the bridge (assistant_html_bridge), and the card is
+ *  one the hub keeps (a conversation and a key). Otherwise the whole card is its fallback. */
 function useHtmlRuns(keyed: boolean): boolean {
   const verified = useContext(HtmlRuntime);
   const hubAllows = useStore((s) => hubHas(s.features, HTML_BRIDGE_FEATURE));

@@ -27,9 +27,6 @@ type AssistantClaudeMD struct {
 	OnHub        bool
 	// LarkCLI: hub.json configures lark-cli (docs/plans/plan-lark-cli.md), on the assistant's PATH.
 	LarkCLI bool
-	// PersonaView: every app draws ```persona-view (hub.json assistant.persona_view); else the assistant writes
-	// ```persona-card, which they all draw.
-	PersonaView bool
 	// Language is the language the user reads, by its own name ("English", or Japanese written in Japanese); "" is Chinese, as before i18n.
 	Language string
 	// BackgroundSupervisor: the background supervisor follows up the tasks no leader supervises (#4927), so the main

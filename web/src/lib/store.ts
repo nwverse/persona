@@ -14,7 +14,7 @@ import { SESSIONS_HIERARCHY_FEATURE } from "./child-sessions";
 import { applySessionDelta, SESSIONS_DELTA_FEATURE, sessionRefreshed, sessionSnapshot } from "./sessions-delta";
 import { dueMarks, heldRows, liveMarks, markOver, newMark, nextDue, unansweredMarks, type SeenMark, type SeenMarks } from "./seen-outbox";
 import { probeEdge } from "./edge-auth";
-import { api, ApiError, CLIENT_FEATURES, CLIENT_PONG_TIMEOUT, CLIENT_PLATFORM, CLIENT_VERSION, errorText, getToken, sessionPath } from "./api";
+import { api, ApiError, CLIENT_FEATURES, CLIENT_PONG_TIMEOUT, CLIENT_PLATFORM, CLIENT_VERSION, errorText, getToken, credentialOwner, sessionPath } from "./api";
 import { currentLanguage } from "../i18n";
 import type { AgentMutes } from "./agent-groups";
 import { stateOf } from "./format";
@@ -33,6 +33,7 @@ import { setOfflineProbe } from "./feedback";
 import { readDirectionTree } from "./direction-names";
 import { unnamedTaskConversations } from "./background-supervisor";
 import { directionTreeAwaitsHello } from "./direction-tree";
+import { configureMessageFeedback, resetMessageFeedback } from "./message-send";
 import { afterEvent, afterHello, graceUntil, isResumed, NO_CURSOR, RESTART_FAST_MS, retryDelay, shownConn, wsQuery, type Drop, type EventCursor } from "./reconnect";
 
 export type Conn = "connecting" | "online" | "offline";
@@ -520,8 +521,9 @@ export function onAppSocket(listener: (connected: boolean) => void) {
   socketListeners.add(listener);
   return () => { socketListeners.delete(listener); };
 }
+let receiptOwner: string | undefined;
 function socketChanged(connected: boolean) {
-  if (!connected) authenticatedSocket = null;
+  if (!connected) { authenticatedSocket = null; receiptOwner = undefined; }
   socketListeners.forEach((listener) => listener(connected));
 }
 /** A WebSocket open event or cached features cannot substitute for this connection's authenticated hello. */
@@ -742,6 +744,7 @@ function onMessage(msg: Record<string, unknown>) {
   cursor = msg.type === "hello" ? afterHello(cursor, msg) : afterEvent(cursor, msg);
   switch (msg.type) {
     case "hello": {
+      receiptOwner = msg.message_send_state === 1 ? credentialOwner() : undefined;
       helloHooks.forEach((f) => f()); // e.g. a hub that came back may serve a new web build (lib/new-version.ts)
       setCompatibilityFeatures(Array.isArray(msg.features) ? msg.features as string[] : []);
       const mesh = (msg.mesh as { hubs?: MeshHub[] } | undefined)?.hubs;
@@ -1494,6 +1497,7 @@ function resendSeen() {
 
 export function reset() {
   disconnect();
+  resetMessageFeedback();
   cursor = NO_CURSOR; // another login: another stream
   ixChanges.clear();
   resolvedSeen.clear();
@@ -1547,3 +1551,5 @@ export function reset() {
     link: { ...NO_LINK, networkUp: networkUp() },
   });
 }
+
+configureMessageFeedback({ getSession, send, onHubEvent, subscribe, receiptsAllowed: () => appSocketReady() && receiptOwner === credentialOwner() });

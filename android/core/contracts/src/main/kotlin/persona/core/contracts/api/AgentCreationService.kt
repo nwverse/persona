@@ -94,6 +94,8 @@ data class AgentModel(
     /** The thinking efforts it takes, weakest first; empty: no effort setting. */
     val efforts: List<String> = emptyList(),
     @SerialName("default_effort") val defaultEffort: String? = null,
+    /** An id the user typed for this launcher before (feature `typed_models`, #1644): listed after its own models. */
+    val custom: Boolean = false,
 ) {
     val label: String get() = modelName(id, name)
 }
@@ -117,9 +119,55 @@ data class AgentLauncher(
     @SerialName("base_url") val baseUrl: String? = null,
     val model: String? = null,
     @SerialName("agent_type") val agentType: String = "claude",
+    /** A runtime's own declaration that it can run the assistant; false or absent on other launchers. */
+    val assistant: Boolean = false,
     /** Its health on this computer (docs/server/launcher-health.md); null when never checked or from an older hub. */
     val health: LauncherHealth? = null,
+    /** A Persona-managed provider's own name (feature `launcher_auto_name`), shown over [name]; null for the others. */
+    @SerialName("display_name") val displayName: String? = null,
+) {
+    /** What people read for it: its display name, else its startup name (the web's `providerTitle`). */
+    val title: String get() = displayName?.trim()?.takeIf(String::isNotEmpty) ?: name
+}
+
+/**
+ * What the assistant's computer lists for Persona chats (`GET /api/v1/machines/{mid}/launchers?purpose=assistant`,
+ * docs/protocol/protocol.md): the launchers that can run them, the main chat's default (Model configuration › Main chat)
+ * and what can't run them there, with the hub's reason ([UnavailableLauncher], feature `assistant_model_pick`).
+ */
+@Serializable
+data class AssistantLaunchers(
+    val launchers: List<AgentLauncher> = emptyList(),
+    val default: LauncherDefault? = null,
+    val unavailable: List<UnavailableLauncher> = emptyList(),
 )
+
+/** The model a launcher names, short. Older nodes used the Chinese display placeholder for no model. */
+fun launcherModel(launcher: AgentLauncher): String? = launcher.model
+    ?.takeUnless { it == "默认" } // i18n-ignore: legacy wire value, never displayed
+    ?.substringAfterLast('/')
+    ?.takeIf(String::isNotBlank)
+
+/** A purpose's effective setup ([provider] is a launcher's name). */
+@Serializable
+data class LauncherDefault(val provider: String = "", val model: String? = null, val effort: String? = null)
+
+/**
+ * A launcher or provider that can't run Persona chats on that computer (#5033): [kind] `launcher` or `api`, [code] why
+ * (`not_main_chat`, `api_protocol`, `launcher_out_of_scope`, `launcher_own_service`) and [reason] in the request's language.
+ */
+@Serializable
+data class UnavailableLauncher(
+    val name: String,
+    @SerialName("display_name") val displayName: String? = null,
+    val kind: String = "",
+    val agent: String? = null,
+    val api: String? = null,
+    val code: String = "",
+    val reason: String = "",
+) {
+    val title: String get() = displayName?.trim()?.takeIf(String::isNotEmpty) ?: name
+}
 
 /**
  * A launcher's health on one computer as the hub records it (docs/server/launcher-health.md): [state] working, failing,

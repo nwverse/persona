@@ -177,6 +177,20 @@ func (g guardedStore) Interactions(ctx context.Context, machine, session string,
 	return g.st.Interactions(ctx, machine, session, limit)
 }
 
+// interactionPager is a store that pages the history by time (db.DB); one without it answers errNoTable.
+type interactionPager interface {
+	InteractionsPage(ctx context.Context, q db.InteractionQuery) (db.InteractionPage, error)
+}
+
+func (g guardedStore) InteractionsPage(ctx context.Context, q db.InteractionQuery) (out db.InteractionPage, err error) {
+	defer guard(&err)
+	p, ok := g.st.(interactionPager)
+	if !ok {
+		return out, errNoTable
+	}
+	return p.InteractionsPage(ctx, q)
+}
+
 func (g guardedStore) AllowAlways(ctx context.Context, session, tool string, keys []string) (err error) {
 	defer guard(&err)
 	return g.st.AllowAlways(ctx, session, tool, keys)

@@ -923,7 +923,7 @@ func newKBService(t *testing.T, f *fakeHub) *Service {
 	}
 	f.mu.Unlock()
 	s := withSettings(t, f, New(Options{Hub: f, Store: func() Store { return st }, Logf: testLogf(t), KB: &KBOptions{Dir: t.TempDir()}}))
-	t.Cleanup(s.kbClose)
+	t.Cleanup(s.kbEnd)
 	return s
 }
 
@@ -936,7 +936,7 @@ func newKBServiceOn(t *testing.T, f *fakeHub, st Store) *Service {
 	}
 	f.mu.Unlock()
 	s := withSettings(t, f, New(Options{Hub: f, Store: func() Store { return st }, Logf: testLogf(t), KB: &KBOptions{Dir: t.TempDir()}}))
-	t.Cleanup(s.kbClose)
+	t.Cleanup(s.kbEnd)
 	return s
 }
 

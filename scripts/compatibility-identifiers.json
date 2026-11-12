@@ -862,15 +862,6 @@
       "path_tokens": [],
       "external_refs": []
     },
-    "server/internal/assistant/testdata/prompts/assistant_claude_md.persona_view.golden": {
-      "reason": "Generated assistant-instruction golden for exact legacy tool-name migration guidance.",
-      "tokens": [
-        "jarvis_settings",
-        "mcp__jarvis__X"
-      ],
-      "path_tokens": [],
-      "external_refs": []
-    },
     "server/internal/compat/legacy.go": {
       "reason": "Dedicated adapter for a versioned runtime, protocol or persisted identity.",
       "tokens": [
@@ -1176,6 +1167,14 @@
         "my-jarvis-art",
         "plugin_jarvis",
         "started_by_jarvis"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
+    "web/src/lib/provider-link.test.ts": {
+      "reason": "Regression assertion for the historical managed-provider source accepted by the exact compatibility adapter.",
+      "tokens": [
+        "jarvis"
       ],
       "path_tokens": [],
       "external_refs": []

@@ -5,7 +5,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { createRuntime, interactionId, page, snippet, summaryOf } from '../../runtime-sdk/index.js'
+import { createRuntime, interactionId, page, RpcError, snippet, summaryOf } from '../../runtime-sdk/index.js'
 import { isAssistantDir } from '../../runtime-sdk/lib/identity.js'
 import { AgyAcpClient } from './acp.js'
 import { discoverModels, mapModels } from './models.js'
@@ -16,6 +16,7 @@ import {
   mapToolName,
   nativeWorking,
   personaModeToAgy,
+  PREFIX,
   readTranscriptSteps,
   RUNTIME,
   stepsToItems,
@@ -313,7 +314,7 @@ export function createAgyRuntime(options = {}) {
   }
 
   function historyOf(rawId) {
-    return `agy:${rawId}`
+    return `agy:${rawId}:full`
   }
 
   function readConversationStates() {
@@ -347,7 +348,7 @@ export function createAgyRuntime(options = {}) {
   function syncTranscriptAppend(rawId) {
     const pid = toPersonaId(rawId)
     const bDir = brainDirOf(rawId)
-    const steps = readTranscriptSteps(bDir, false)
+    const steps = readTranscriptSteps(bDir, true)
     if (steps.length === 0) return
     const { items: allItems, toSeq } = stepsToItems(steps, { brainDir: bDir, full: false })
     const prevSeq = lastPushedSeq.get(pid) ?? 0
@@ -420,7 +421,7 @@ export function createAgyRuntime(options = {}) {
     })
 
     return chosen.map(({ rawId, pid, summary, native, cwd, mtimeMs, running, hasTranscript }) => {
-      const steps = readTranscriptSteps(brainDirOf(rawId), false)
+      const steps = readTranscriptSteps(brainDirOf(rawId), true)
       const parsed = stepsToItems(steps, { brainDir: brainDirOf(rawId), full: false })
       if (!lastPushedSeq.has(pid)) lastPushedSeq.set(pid, parsed.toSeq)
       let status = running ? 'working' : transcriptStatus(steps, native)
@@ -457,23 +458,32 @@ export function createAgyRuntime(options = {}) {
     })
   }
 
+  // The agy id of one of this runtime's sessions. Every id it hands out carries PREFIX; anything else is another
+  // runtime's. The node asks every runtime about a session nobody listed and gives it to the first that answers, so an
+  // empty page here would take a new Claude Code session (no transcript yet) for an Antigravity one.
+  function ownedId(sessionId) {
+    const id = String(sessionId ?? '').trim()
+    if (!id.startsWith(PREFIX)) throw new RpcError(`Antigravity has no session ${id}`, 'not_found')
+    return toAgyId(id)
+  }
+
   async function items(params) {
-    const rawId = toAgyId(params.session_id)
+    const rawId = ownedId(params.session_id)
     const bDir = brainDirOf(rawId)
-    const steps = readTranscriptSteps(bDir, false)
+    const steps = readTranscriptSteps(bDir, true)
     const { items: allItems, toSeq } = stepsToItems(steps, { brainDir: bDir, full: false })
     return page(allItems, params, { history: historyOf(rawId), toSeq })
   }
 
   async function cursor(sessionId) {
-    const rawId = toAgyId(sessionId)
-    const steps = readTranscriptSteps(brainDirOf(rawId), false)
+    const rawId = ownedId(sessionId)
+    const steps = readTranscriptSteps(brainDirOf(rawId), true)
     const { toSeq } = stepsToItems(steps, { brainDir: brainDirOf(rawId), full: false })
     return toSeq
   }
 
   async function item(params) {
-    const rawId = toAgyId(params.session_id)
+    const rawId = ownedId(params.session_id)
     const bDir = brainDirOf(rawId)
     const steps = readTranscriptSteps(bDir, true)
     const { items: fullItems } = stepsToItems(steps, { brainDir: bDir, full: true })
@@ -611,9 +621,9 @@ export function createAgyRuntime(options = {}) {
   }
 
   async function send(params) {
-    const pid = toPersonaId(params.session_id)
+    const rawId = ownedId(params.session_id)
+    const pid = toPersonaId(rawId)
     completedTurns.delete(pid)
-    const rawId = toAgyId(pid)
     if (archived.has(rawId)) throw new Error('Antigravity session is closed')
     const cwd = sessionCwds.get(rawId) || home
     const isAsst = Boolean(params.assistant) || assistants.has(pid) || isAssistantDir(cwd)
@@ -688,14 +698,14 @@ export function createAgyRuntime(options = {}) {
   }
 
   async function interrupt(params) {
-    const rawId = toAgyId(params.session_id)
+    const rawId = ownedId(params.session_id)
     if (activeTurns.has(toPersonaId(rawId))) cancelling.add(rawId)
     withdrawPermissionAsks(rawId, 'interrupted')
     await acp.cancel(rawId)
   }
 
   async function rename(params) {
-    const rawId = toAgyId(params.session_id)
+    const rawId = ownedId(params.session_id)
     if (typeof params.title === 'string' && params.title.trim()) {
       sessionTitles.set(rawId, params.title.trim())
       rt.sessionsChanged()
@@ -703,7 +713,7 @@ export function createAgyRuntime(options = {}) {
   }
 
   async function close(params) {
-    const rawId = toAgyId(params.session_id)
+    const rawId = ownedId(params.session_id)
     archived.add(rawId)
     await interrupt(params)
     await acp.closeSession(rawId)
@@ -711,7 +721,7 @@ export function createAgyRuntime(options = {}) {
   }
 
   async function modes(params) {
-    const rawId = toAgyId(params.session_id)
+    const rawId = ownedId(params.session_id)
     if (archived.has(rawId)) throw new Error('Antigravity session is closed')
     if (params.model && (activeTurns.has(toPersonaId(rawId)) || nativeWorking(readConversationStates().get(rawId)))) {
       throw new Error('Antigravity session is busy')

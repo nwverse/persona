@@ -75,6 +75,7 @@ type kbState struct {
 	key     []byte
 	unlock  func()
 	passed  bool // the one-time passes ran (once a process)
+	ended   bool // the service ended (kbEnd): never opened again
 	notOpen time.Time
 
 	// sourceWrites lets deletion finish after already running connector reads and writes.
@@ -157,6 +158,10 @@ func sameKBSettings(a, b assistantwire.KBSettings) bool {
 func (s *Service) kbOpen(ctx context.Context, set assistantwire.KBSettings) (*kb.Engine, error) {
 	k := &s.kb
 	k.open.Lock()
+	if k.ended {
+		k.open.Unlock()
+		return nil, errKBNotOpen
+	}
 	if o := k.cur.Load(); o != nil && sameKBSettings(o.set, set) {
 		k.open.Unlock()
 		return o.eng, nil
@@ -251,12 +256,29 @@ func (s *Service) kbOpenLocked(ctx context.Context, set assistantwire.KBSettings
 	return e, nil
 }
 
-// kbClose lets the knowledge base go (the data directory's lock with it): the assistant is not connected, or stops.
-// It opens again when it is next needed.
+// kbClose lets the knowledge base go (the data directory's lock with it) while the assistant is not connected. It
+// opens again when it is next needed.
 func (s *Service) kbClose() {
 	k := &s.kb
 	k.open.Lock()
 	defer k.open.Unlock()
+	k.closeLocked()
+}
+
+// kbEnd lets the knowledge base go for good: the service stops (BusHub.Serve ends). A call after it finds the knowledge
+// base not open instead of opening it again: a debounced timer that fires late (the directions, the direction tree, a
+// meeting's live event, an attending look) would otherwise take the data directory's lock back while the process
+// winds down, from the manager taking over, and write into the directory after the hand-over (#5510).
+func (s *Service) kbEnd() {
+	k := &s.kb
+	k.open.Lock()
+	defer k.open.Unlock()
+	k.ended = true
+	k.closeLocked()
+}
+
+// closeLocked closes the open knowledge base; k.open is held.
+func (k *kbState) closeLocked() {
 	k.cur.Store(nil)
 	if k.unlock != nil {
 		k.unlock()
