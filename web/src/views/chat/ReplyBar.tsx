@@ -6,8 +6,10 @@
 // then fades (at once with reduced motion), and an open ⋯ menu keeps it. Narration inside a work summary and a reply
 // still streaming have no bar: their right-click / long-press menu (MessageActions) has every action, and touch screens
 // have MessageActions' copy + ⋯ row instead. The chat's last reply (`pinned`, #5285) keeps its time on screen in its
-// place at the end of the bar; the buttons still come only with the pointer. All of it watches the pointer itself, so the reply around it draws nothing
-// again, and none of it is on the first screen (MessageActions loads it lazily).
+// place at the end of the bar; the buttons still come only with the pointer. After the time, what the exchange cost or its
+// tokens, with cindy's usage card (TurnUsage, #5426): it comes with the pointer like the buttons (cindy shows it on hover),
+// and an open card keeps the bar. All of it watches the pointer itself, so the reply around it draws nothing again, and
+// none of it is on the first screen (MessageActions loads it lazily).
 import { useEffect, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { exactTime, relativeTime } from "../../lib/relative-time";
@@ -15,6 +17,9 @@ import { copyText, cx, Menu } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { REPLY_BAR_FADE_MS, REPLY_BAR_LINGER_MS } from "../../ui/motion";
 import type { Action } from "./MessageActions";
+import { TurnUsage } from "./TurnUsage";
+
+export { TurnUsage };
 
 /** How often the time is worked out again while the pointer is over the reply (cindy's 30 s): only then, so a long chat
  *  holds no timer per reply. */
@@ -29,14 +34,16 @@ async function copyQuietly(text: string): Promise<boolean> {
 }
 
 /** `fork`: "Start a new session", when the session can. `more`: the ⋯ menu's actions; no ⋯ without any. `pinned`: the
- *  chat's last message, whose time stays shown without the pointer. */
-export function ReplyBar({ text, ts, fork, more, pinned }: { text: string; ts?: string; fork?: Action; more: Action[]; pinned?: boolean }) {
+ *  chat's last message, whose time stays shown without the pointer. `usage`: what the exchange used (lib/turn-usage.ts
+ *  usageKey), `usageMs` its work time, `persona` a Persona conversation's plain cost. */
+export function ReplyBar({ text, ts, fork, more, pinned, usage, usageMs, persona }: { text: string; ts?: string; fork?: Action; more: Action[]; pinned?: boolean; usage?: string; usageMs?: number; persona?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const [hovered, setHovered] = useState(false);
   const [visible, setVisible] = useState(false);
   const [copied, setCopied] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [menu, setMenu] = useState<HTMLElement | null>(null);
+  const [card, setCard] = useState(false);
 
   // the pointer over the reply: the element this bar is in
   useEffect(() => {
@@ -77,7 +84,7 @@ export function ReplyBar({ text, ts, fork, more, pinned }: { text: string; ts?: 
 
   const time = relativeTime(ts, now);
   // with the pointer, an open ⋯ menu or keyboard focus in it: the whole bar; otherwise nothing, or (`pinned`) the time only
-  const fade = visible || menu ? "opacity-100" : pinned ? "pointer-events-none opacity-0 group-has-[:focus-visible]/bar:pointer-events-auto group-has-[:focus-visible]/bar:opacity-100" : "pointer-events-none opacity-0 has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:opacity-100";
+  const fade = visible || menu || card ? "opacity-100" : pinned ? "pointer-events-none opacity-0 group-has-[:focus-visible]/bar:pointer-events-auto group-has-[:focus-visible]/bar:opacity-100" : "pointer-events-none opacity-0 has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:opacity-100";
   const fadeStyle = { transitionDuration: `${REPLY_BAR_FADE_MS}ms` };
   const copyLabel = t("chat-messageactions.copy_message");
   const moreLabel = t("chat-replybar.more_actions");
@@ -130,6 +137,15 @@ export function ReplyBar({ text, ts, fork, more, pinned }: { text: string; ts?: 
           {time}
         </time>
       )}
+      {usage &&
+        (pinned ? (
+          // a pinned reply's time stays; what it cost comes with the pointer, as the buttons do
+          <span data-usage-fade className={cx("flex items-center transition-opacity", fade)} style={fadeStyle}>
+            <TurnUsage usage={usage} ms={usageMs} persona={persona} onOpen={setCard} />
+          </span>
+        ) : (
+          <TurnUsage usage={usage} ms={usageMs} persona={persona} onOpen={setCard} />
+        ))}
       {menu && <Menu anchor={menu} onClose={() => setMenu(null)} items={more} width={more.some((a) => a.hint) ? 200 : 184} />}
     </div>
   );
