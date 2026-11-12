@@ -32,6 +32,7 @@ var (
 	jobRetry         = time.Minute      // a job that could not be opened, or failed, is opened again after this
 	jobReadyWait     = 30 * time.Second // a job answers ready within this, else it counts as upstream_unavailable
 	jobIdle          = time.Minute      // a job with no audio this long is ended (sessions bill silence)
+	jobStall         = 30 * time.Second // a job behind (audio skipped) that acknowledged nothing this long has failed
 	jobDoneWait      = 5 * time.Minute  // a replay job sends done within this of the manager's end
 	echoHoldMost     = time.Minute      // a speaking span still open after this counts as closed
 	hubSegmentsEvery = 15 * time.Second // the hub's live sentences are written to hub_segments.json this often
@@ -271,6 +272,10 @@ func (r *hubRun) tick(now time.Time) {
 	if j := r.job; j != nil && !j.ending && !r.audioAt.IsZero() && now.Sub(r.audioAt) >= jobIdle {
 		r.s.logf("recording %s: transcription job idle, ended", r.id)
 		r.endJobLocked(j)
+	}
+	if j := r.job; j != nil && j.ready && !j.ending && j.behind && now.Sub(j.behindAt) >= jobStall && now.Sub(j.ackAt) >= jobStall {
+		r.s.logf("recording %s: transcription job stalled (nothing acknowledged), closed", r.id)
+		r.jobStalledLocked(j)
 	}
 	r.fallbackCheckLocked(now)
 }

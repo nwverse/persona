@@ -27,7 +27,7 @@ import (
 func shortHubTimes(t *testing.T) {
 	t.Helper()
 	saved := []*time.Duration{&audioStartWait, &audioAckEvery, &audioPingEvery, &audioEndWait, &fallbackAfter, &jobRetry,
-		&jobReadyWait, &jobIdle, &jobDoneWait, &echoHoldMost, &hubSegmentsEvery, &hubTick, &interimShown, &finalEvery,
+		&jobReadyWait, &jobIdle, &jobStall, &jobDoneWait, &echoHoldMost, &hubSegmentsEvery, &hubTick, &interimShown, &finalEvery,
 		&finalGapWait, &liveAhead, &replayAhead, &askLiveWait, &askLivePoll}
 	old := make([]time.Duration, len(saved))
 	for i, p := range saved {

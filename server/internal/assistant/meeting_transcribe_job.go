@@ -144,7 +144,9 @@ type liveJob struct {
 	ackedS     int64 // the extension's last ack
 	ready      bool
 	ending     bool
-	behind     bool // audio was skipped: the next frame is a seek
+	behind     bool      // audio was skipped: the next frame is a seek
+	behindAt   time.Time // since when it is behind
+	ackAt      time.Time // its last ack (its ready before one)
 	flushAsked bool
 	usage      float64 // the job's billed seconds so far (its last usage frame)
 }
@@ -246,7 +248,7 @@ func (r *hubRun) runJob(j *liveJob) {
 		case extwire.TFAck:
 			if f.At != nil {
 				r.mu.Lock()
-				j.ackedS = max(j.ackedS, int64(*f.At*kb.AudioRate))
+				j.ackedS, j.ackAt = max(j.ackedS, int64(*f.At*kb.AudioRate)), time.Now()
 				r.mu.Unlock()
 			}
 		case extwire.TFFlushed:
@@ -320,21 +322,32 @@ func (j *liveJob) feedLocked(from int64, pcm []byte) {
 		if !j.behind {
 			j.run.s.logf("recording %s: transcription job behind, audio skipped", j.run.id)
 		}
-		j.behind = true
+		j.setBehindLocked(true)
 		return
 	}
 	if j.behind || from != j.sentS {
 		if !j.queueLocked(jobOut{f: &extwire.TranscriptionFrame{Type: extwire.TFSeek, At: extwire.F(float64(from) / kb.AudioRate)}}) {
-			j.behind = true
+			j.setBehindLocked(true)
 			return
 		}
-		j.behind = false
+		j.setBehindLocked(false)
 	}
 	if !j.queueLocked(jobOut{pcm: pcm}) {
-		j.behind = true
+		j.setBehindLocked(true)
 		return
 	}
 	j.sentS = from + int64(len(pcm)/2)
+}
+
+// setBehindLocked notes whether job j skips audio, and since when.
+func (j *liveJob) setBehindLocked(behind bool) {
+	switch {
+	case !behind:
+		j.behindAt = time.Time{}
+	case !j.behind:
+		j.behindAt = time.Now()
+	}
+	j.behind = behind
 }
 
 // flushLocked asks job j for its sentences up to now (an ask needs them).
@@ -389,6 +402,16 @@ func (r *hubRun) endJobLocked(j *liveJob) {
 	})
 }
 
+// jobStalledLocked: job j stays connected but took no audio for jobStall (its upstream hangs): it is closed as failed,
+// upstream_failed stands (so the fallback comes once it stood fallbackAfter), and a new job is opened with the next
+// audio; its sentences end the problem.
+func (r *hubRun) jobStalledLocked(j *liveJob) {
+	j.ending = true // closed by the manager: no drop of its own
+	r.dropJobLocked(j)
+	r.dropped = true
+	r.setUpstreamLocked(problemUpstreamFailed)
+}
+
 // dropJobLocked closes job j and forgets it.
 func (r *hubRun) dropJobLocked(j *liveJob) {
 	j.close()
@@ -402,7 +425,7 @@ func (r *hubRun) dropJobLocked(j *liveJob) {
 func (r *hubRun) jobReady(j *liveJob, features []string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	j.ready = true
+	j.ready, j.ackAt = true, time.Now()
 	r.dropped = false
 	if !slices.Contains(features, extwire.TranscriptionInterim) {
 		r.noInterim = true

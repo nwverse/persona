@@ -183,3 +183,29 @@ func TestFallbackUploadWithBlankSegments(t *testing.T) {
 		t.Fatalf("live log %q", got)
 	}
 }
+
+// A job that stays connected but acknowledges nothing (its upstream hangs) is closed once it has been behind for
+// jobStall: upstream_failed, then the fallback, so the live log is not left empty.
+func TestFallbackJobStalled(t *testing.T) {
+	h := newHubFixture(t)
+	h.tr.set(func(f *fakeTranscriber) { f.live = jobScript{lines: mixedLines, noAck: true, held: true} })
+	liveAhead, jobStall = time.Second, 300*time.Millisecond
+	h.hubUpload(meetingRec, 1, map[string]any{"segments": phoneSegs(fakeLine{0, 3, "Phone text."})})
+	p, _ := h.open(meetingRec, 0, nil)
+	p.audio(0.5)
+	waitFor(t, "the job ready", func() bool {
+		r := h.s.hubRunOf(meetingRec)
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		return r.job != nil && r.job.ready
+	})
+	p.audio(3)
+	if f := p.wait("problem", 1); f["code"] != problemUpstreamFailed {
+		t.Fatalf("problem %v", f)
+	}
+	if !h.tr.jobsOf(extwire.TranscriptionLive)[0].over() {
+		t.Fatal("the stalled job is still open")
+	}
+	waitFor(t, "the fallback", func() bool { return h.transcription(meetingRec)["fallback"] == true })
+	waitFor(t, "the phone's line", func() bool { return slices.Contains(lineTexts(h.lines(meetingRec)), "Phone text.") })
+}
