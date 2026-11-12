@@ -48,6 +48,7 @@ def features():
                 ["sessions_list", "sessions_lookup", "sessions_hierarchy"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
                 ["preview"] if os.environ.get("MOCK_PREVIEW") else []) + (
                 ["task_cron"] if os.environ.get("MOCK_CRON") == "1" else []) + (
+                [] if os.environ.get("MOCK_TODO_SEEN") == "off" else ["todo_seen"]) + (
                 [] if os.environ.get("MOCK_LOOK_UPLOADS") == "off" else ["look_uploads"])
 
 
@@ -945,6 +946,31 @@ if os.environ.get("MOCK_WORKTREES") == "1":
         sess("macbook", "a1f3c2d4-0000-4000-8000-0000000000c3", "整理读书笔记", "/Users/me/code/notes",
              "idle", "idle", "notes", 4, "1", 1, 60 * 48, "按主题整理好了，每本书一页。", seen_at=ago(days=2)),
     ]
+
+# MOCK_SHARED_FOLDER=1 (#5715): one folder two repositories claim, on Mac Studio. Three Claude desktop chats (one finished
+# and unseen, two idle) have /Users/me/code/atlas as their main checkout; a finished Codex App chat in the same folder
+# names its Codex project, /Users/me/code, as its repository. By Repository lists the three under atlas's working tree
+# (the two idle ones behind their fold) and the Codex chat under code's, each tree's count matching its rows.
+if os.environ.get("MOCK_SHARED_FOLDER") == "1":
+    _atlas, _herdr = "/Users/me/code/atlas", ("space_kind", "space_id", "space_name", "space_index", "slot_id", "slot_name",
+                                              "slot_index", "pane_id", "tab_id", "workspace_id")
+
+    def _desktop(sid, title, status, state, minutes, last, agent="claude", **kw):
+        s = {k: v for k, v in sess("studio", sid, title, _atlas, status, state, "", 0, "", 0, minutes, last, agent=agent).items()
+             if k not in _herdr}
+        s.update(worktree=_atlas, branch="feat/tiles", agent_surface="desktop", **kw)
+        return s
+
+    SESSIONS += [
+        _desktop("a1f3c2d4-0000-4000-8000-00000000571%d" % i, title, *(("done", "unread") if i == 1 else ("idle", "idle")),
+                 40 + 20 * i, last, repo_root=_atlas, source_kind="claude_desktop",
+                 **({} if i == 1 else {"seen_at": ago(minutes=30 + 20 * i)}))
+        for i, (title, last) in enumerate([("地图瓦片缓存", "瓦片缓存改成按缩放级别分目录了。"),
+                                           ("离线包大小评估", "离线包压到 180 MB，列了三种取舍。"),
+                                           ("标注图层的点击区域", "点击区域放大到 44 pt，补了测试。")], 1)
+    ] + [_desktop("a1f3c2d4-0000-4000-8000-000000005719", "总结这周的地图反馈", "done", "unread", 8,
+                  "反馈分成三类：加载慢、离线包太大、标注难点，各附了例子。", agent="codex", repo_root="/Users/me/code",
+                  source_kind="codex_history", space_kind="codex_app", space_id="codex-project:/Users/me/code", space_name="code")]
 
 
 # MOCK_MACHINES=1: the machine pages' edge cases (MachinePagesTests): a fourth machine that is offline with an ssh
@@ -8599,7 +8625,8 @@ if os.environ.get("MOCK_IMESSAGE_INBOX"):
 
 # MOCK_SUBSCRIPTION_INBOX=1 (#5537): an item a source subscription delivered (a mail subscription's notice): its source is
 # the subscription's id, not a connector's, and its content is the whole of it. Its thread request answers as the hub
-# does now, a page that is no conversation (`chat.kind: none`); =old as hubs before #5537 did, 404 "no connector".
+# does now, a page that is no conversation (`chat.kind: none`); =old as hubs before #5537 did, 404 "no connector"
+# (=group and =group_before below answer as =1).
 # GET /mock/subscription_inbox?mode=old|1 switches it for the next requests. Only with ?sources=all, like connectors' items.
 SUBSCRIPTION_INBOX = os.environ.get("MOCK_SUBSCRIPTION_INBOX", "")
 if SUBSCRIPTION_INBOX:
@@ -8614,6 +8641,50 @@ if SUBSCRIPTION_INBOX:
          "connector": {"thread": "sub:sub_example01:t1", "label": "示例邮件", "url": "https://mail.example.com/notice/1116"}},
     ]
 
+# MOCK_SUBSCRIPTION_INBOX=group (#5671): beside it, a group chat's subscription grouped by source, as one row like a Lark
+# chat: titled by the subscription, the newest message its sender line, nine came in, one of them asks the owner (so the
+# row is Needs you), the earlier ones listed in its context. =group_before: the same messages as hubs before #5671 delivered them, a row each.
+SUB_GROUP_MESSAGES = [  # (minutes ago, sender, text, tier, summary): made up
+    (58, "小林", "周六的读书会改到下午了", "fyi", "读书会改到周六下午"),
+    (51, "Mia", "下午几点？我两点以后才有空", "fyi", ""),
+    (47, "小林", "@我 周六你能带投影仪吗？", "action", "小林问你周六能不能带投影仪"),
+    (40, "阿杰", "这次读第三章，大家记得带书", "fyi", ""),
+    (33, "Mia", "我可以带零食", "fyi", ""),
+    (24, "小林", "地点还是图书馆二楼？", "fyi", ""),
+    (18, "阿杰", "对，二楼靠窗那间", "fyi", ""),
+    (11, "Mia", "好的", "fyi", ""),
+    (6, "阿杰", "那就定周六下午两点，老地方见", "fyi", "读书会定在周六下午两点"),
+]
+
+
+def sub_group_line(m):
+    return f"{fmt_hm(ago(minutes=m[0]))} · {m[1]} · {m[2]}"
+
+
+def fmt_hm(iso):
+    t = datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone()
+    return t.strftime("%m-%d %H:%M")
+
+
+def sub_group_row(ms, key, count, tier, summary):
+    last = ms[-1]
+    earlier = "\n".join(sub_group_line(m) for m in ms[:-1][-10:])
+    block = f"{last[2]}\n{last[1]} · {fmt_hm(ago(minutes=last[0]))}"  # the body is the title: said once
+    return {"id": f"sub_example02:{key}", "source": "sub_example02", "kind": "sub_message", "account": "sub_example02",
+            "account_name": "示例读书群", "title": last[2], "sender": last[1], "preview": last[2], "count": count,
+            "started_at": ago(minutes=ms[0][0]), "updated_at": ago(minutes=last[0]), "tier": tier, "summary": summary,
+            "reason": "订阅的群消息", "read": False, "context": (earlier + "\n\n" if earlier else "") + block,
+            "connector": {"thread": f"sub:sub_example02:{key}", "label": "示例读书群"}}
+
+
+if SUBSCRIPTION_INBOX == "group":
+    _row = sub_group_row(SUB_GROUP_MESSAGES, "all", len(SUB_GROUP_MESSAGES), "action", "读书会定在周六下午两点，小林问你能不能带投影仪")
+    _row["title"] = "示例读书群"  # the one row is titled by the subscription, with no tag saying it again
+    del _row["connector"]["label"]
+    INBOX[1:1] = [_row]
+elif SUBSCRIPTION_INBOX == "group_before":
+    INBOX[1:1] = [sub_group_row([m], f"m{i}", 1, m[3], m[4] or m[2]) for i, m in reversed(list(enumerate(SUB_GROUP_MESSAGES)))]
+
 
 def subscription_thread_area(h, method, p):
     """A subscription's thread request (MOCK_SUBSCRIPTION_INBOX) and /mock/subscription_inbox; True when it answered."""
@@ -8623,7 +8694,7 @@ def subscription_thread_area(h, method, p):
     if p == "/mock/subscription_inbox":
         SUBSCRIPTION_INBOX = parse_qs(urlparse(h.path).query).get("mode", [SUBSCRIPTION_INBOX])[0] or "1"
         return h.send_json({"mode": SUBSCRIPTION_INBOX}) or True
-    if p != "/api/v1/connectors/sub_example01/thread":
+    if p not in ("/api/v1/connectors/sub_example01/thread", "/api/v1/connectors/sub_example02/thread"):
         return False
     if SUBSCRIPTION_INBOX == "old":
         return h.send_json({"error": 'no connector "sub_example01"'}, 404) or True
@@ -21553,6 +21624,19 @@ class H(BaseHTTPRequestHandler):
                         push_machine(mid)
                         push_todos()
                         return self.send_json({"ok": True})
+        # PUT / DELETE /api/v1/todos/{id}/seen (#5707, server/internal/assistant/todo_seen.go): Got it and its Undo. Not
+        # activity: updated_at stays. MOCK_TODO_SEEN=off is a hub without it (no feature, 404 here).
+        if p.startswith("/api/v1/todos/") and p.endswith("/seen") and p.count("/") == 5 and self.command in ("PUT", "DELETE") \
+                and os.environ.get("MOCK_TODO_SEEN") != "off":
+            if is_read_only(self): return self.send_json({"error": "只读角色不能修改待办"}, 403)
+            t = next((x for x in TODOS if x["id"] == p.split("/")[4]), None)
+            if not t: return self.send_json({"error": "待办不存在"}, 404)
+            if self.command == "PUT":
+                t["seen_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            else:
+                t.pop("seen_at", None)
+            push_todos()
+            return self.send_json({"todo": format_todo(t)})
         if p.startswith("/api/v1/todos/") and "/agents/" in p:
             if is_read_only(self): return self.send_json({"error": "只读角色不能修改待办"}, 403)
             parts = p.split("/")  # ['', 'api', 'v1', 'todos', id, 'agents', mid, sid]

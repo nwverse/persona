@@ -171335,7 +171335,122 @@
         }
       }
     },
-    "Take over" : {
+    "Couldn't move it to Done: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't move it to Done: %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「完了」に移動できませんでした：%@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没能移到「已完成」：%@"
+          }
+        }
+      }
+    },
+    "Couldn't put it back: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't put it back: %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "元に戻せませんでした：%@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没能放回：%@"
+          }
+        }
+      }
+    },
+    "Got It [To-do Seen]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Got It"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "了解"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "知道了"
+          }
+        }
+      }
+    },
+    "Got It: move %@ to Done" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Got It: move %@ to Done"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "了解：「%@」を完了に移動"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "知道了：把「%@」移到已完成"
+          }
+        }
+      }
+    },
+    "Moved to Done" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Moved to Done"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「完了」に移動しました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已移到「已完成」"
+          }
+        }
+      }
+    },
+    "Take over": {
       "extractionState": "manual",
       "localizations": {
         "en": {
@@ -171358,7 +171473,7 @@
         }
       }
     },
-    "Continue in a new session" : {
+    "Continue in a new session": {
       "extractionState": "manual",
       "localizations": {
         "en": {
@@ -171381,7 +171496,7 @@
         }
       }
     },
-    "Take over this Codex session?" : {
+    "Take over this Codex session?": {
       "extractionState": "manual",
       "localizations": {
         "en": {
@@ -171404,7 +171519,7 @@
         }
       }
     },
-    "This will end the turn currently running in the terminal." : {
+    "This will end the turn currently running in the terminal.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
@@ -171427,7 +171542,7 @@
         }
       }
     },
-    "Session note" : {
+    "Session note": {
       "extractionState": "manual",
       "localizations": {
         "en": {
@@ -171450,7 +171565,7 @@
         }
       }
     },
-    "This session cannot be safely resumed. Continue in a new session instead." : {
+    "This session cannot be safely resumed. Continue in a new session instead.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
@@ -171473,7 +171588,7 @@
         }
       }
     },
-    "This conversation's context is sealed. Continue in a new session instead." : {
+    "This conversation's context is sealed. Continue in a new session instead.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
@@ -171496,7 +171611,7 @@
         }
       }
     },
-    "Continue in a new session?" : {
+    "Continue in a new session?": {
       "extractionState": "manual",
       "localizations": {
         "en": {

@@ -19,6 +19,8 @@ extension Theme {
         static let success = "checkmark.circle"
         static let successFilled = "checkmark.circle.fill"
         static let done = "checkmark"
+        /// Got It on a Just finished to-do: seen, filed under Done (#5707). Not `done`, which beside it closes one.
+        static let seen = success
         /// Every open item in view set aside at once (Inbox › Clear All).
         static let cleanUpAll = "rectangle.stack.badge.minus"
         static let info = "info.circle"

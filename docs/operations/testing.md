@@ -491,6 +491,17 @@ Select Text copies only a segment (`SelectTextTests`: Agent reply with code bloc
 `TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<port>`, style `TEST_RUNNER_PERSONA_UI_STYLE=beautiful`, `TEST_RUNNER_PERSONA_SHOTS=<directory>` (named by simulator appearance).
 Run a new UI test against unfixed code first to confirm it fails, then apply the fix.
 
+Agents tab navigation (#5641): `AgentsTabNavigationTests/testDispatchBackThenAgentsAlwaysShowsList` opens a dispatched
+Agent from Assistant, goes Back, and selects Agents five times; it checks the list's visible control, navigation root
+and absence of an Agent detail. `testNativeTabReselectionAndSwitchBackShowList` runs on iPad's native tabs and checks
+reselection from a detail and three Assistant/Agents round trips. Use
+`PORT=<dedicated port> python3 apple/PersonaUITests/Fixtures/dispatch_hub.py` (defaults to a single assistant),
+`TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<port>`, and `TEST_RUNNER_PERSONA_SHOTS=<directory>`;
+`TEST_RUNNER_PERSONA_SHOTS_APPEARANCE=<name>` names evidence and `TEST_RUNNER_PERSONA_UI_TEXT_SIZE=UICTContentSizeCategoryAccessibilityXXXL`
+checks the largest text. Set actual appearance with `xcrun simctl ui <udid> appearance light|dark`.
+Run `PersonaTests/AgentsTabNavigationTests` too: explicit selection cancels restoration, reselection returns to the list,
+notification/link targets are preserved, and a consumed newer target invalidates an older deferred list reset.
+
 ### Simulators: always `scripts/app/sim-boot.sh`, slim by default (simslim, #2287, #2801)
 
 **Create, reuse and boot simulators through `scripts/app/sim-boot.sh`**, not direct `simctl create` / `simctl boot` or letting `xcodebuild test` create one.
@@ -742,6 +753,8 @@ Long-scroll uses `XCTOSSignpostMetric`; simulator reports duration, not dropped 
   no computer name repeated in group headers, computer title collapses whole section, machine filter removes headers. Repository/worktree inference: `AgentRepoTreeTests`.
   `MOCK_WORKTREES=1`: weather widget Agent in `.worktrees/widget` (idle peer),
   idle in `.claude/worktrees/fix-crash`, all-idle notes repo on MacBook. Both groupings, light/dark, all three renderings (default, `-ui.style beautiful`, compact).
+  `MOCK_SHARED_FOLDER=1` (#5715): Mac Studio's `atlas` folder is claimed by two repositories, its own three Agents' and a
+  Codex App chat's that names `/Users/me/code`; each worktree line's count matches the Agents under it.
   `-openWelcome YES` removes prior pairing (Keychain hub beats demo); `-demo.on YES` enters demo.
   All `launchPersona()` / `launchPinned()` launches auto-add `-openWelcome YES` when demo on without `-pairURL`, never reuse previous mock pairing.
 

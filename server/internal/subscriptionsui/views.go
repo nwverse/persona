@@ -136,7 +136,7 @@ func (p *pages) source() wire.View {
 	if p.env.Builtin != nil { // who is muted of it, by sender (#5306), as a built-in source's
 		how.Items = append(how.Items, p.mutesRow(s.ID))
 	}
-	how.Items = append(how.Items, p.askRow("ask.line_subscription"))
+	how.Items = append(how.Items, p.askRows("ask.line_subscription")...)
 	v.Sections = append(v.Sections, how)
 	v.Sections = append(v.Sections, wire.Section{Key: "try", Items: []wire.Component{p.previewPress()}})
 	v.Sections = append(v.Sections, p.previewOf(s.Recipe.Kind, s.FallbackTier)...)
@@ -226,9 +226,9 @@ func (p *pages) newSource() wire.View {
 		own.Icon, own.IconColor = "check", "green"
 		other := row("h.pick", p.t("new.other"))
 		other.Action = open(state{P: pageTools, C: p.st.C, S: p.st.S}, p.t("title.tools"))
-		how.Items = []wire.Component{own, p.askRow("ask.line_source"), other}
+		how.Items = append(append([]wire.Component{own}, p.askRows("ask.line_source")...), other)
 	} else {
-		how.Items = []wire.Component{p.askRow("ask.line_source")}
+		how.Items = p.askRows("ask.line_source")
 		pick := row("h.pick", p.t("new.pick"))
 		pick.Subtitle = p.t("list.tools", i18n.Args{"count": subscribable(*src)})
 		pick.Icon, pick.IconColor = "search", "blue"
@@ -308,7 +308,7 @@ func (p *pages) recipe(dry *subscriptions.DryRun, dryErr error) wire.View {
 	raw := row("x.raw", p.t("recipe.raw"))
 	raw.Action = open(state{P: pageRaw, ID: s.ID}, p.t("recipe.raw"))
 	v.Sections = append(v.Sections, wire.Section{Key: "edit", Footer: p.origin(s) + " " + p.t("recipe.no_model"),
-		Items: []wire.Component{try, p.askRow("ask.line_recipe"), edit, other, raw}})
+		Items: append(append([]wire.Component{try}, p.askRows("ask.line_recipe")...), edit, other, raw)})
 	return v
 }
 
