@@ -1,3 +1,4 @@
+#if os(iOS)
 import SwiftUI
 import WidgetKit
 
@@ -215,3 +216,4 @@ func homeAgo(_ since: Double, now: Date) -> String {
 func homeShort(_ n: Int) -> String {
     n.formatted(.number.notation(.compactName).precision(.significantDigits(2)))
 }
+#endif

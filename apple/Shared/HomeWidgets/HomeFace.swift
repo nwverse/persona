@@ -1,3 +1,4 @@
+#if os(iOS)
 import SwiftUI
 import WidgetKit
 #if canImport(UIKit)
@@ -150,7 +151,7 @@ private struct DoneCheck: View {
         Circle()
             .fill(full ? HomeWidgetTokens.done.dot : .white)
             .overlay {
-                Image(systemName: HomeWidgetTokens.checkSymbol)
+                HomeWidgetTokens.symbol(HomeWidgetTokens.checkSymbol)
                     .font(.system(size: side * 0.56, weight: .heavy))
                     .foregroundStyle(full ? Color.white : Color.black)
                     .blendMode(full ? .normal : .destinationOut)
@@ -248,3 +249,4 @@ struct MochiGlyph: View {
         }
     }
 }
+#endif

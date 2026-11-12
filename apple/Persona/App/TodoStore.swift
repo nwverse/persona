@@ -89,7 +89,7 @@ final class TodoStore {
     init(cachedTodos: [TodoItem]? = nil,
          cacheWriter: (@MainActor ([TodoItem]) -> Void)? = { StateCache.save(TodoStore.stateName, $0) },
          hubListChanged: @escaping @MainActor () -> Void = {
-        WatchSync.shared.push(summary: AppModel.shared.watchSummary()) // its questions name their tasks
+        AppModel.shared.summariesChanged() // its questions name their tasks
     }, managers: Managers = .one) {
         self.managers = managers
         let initial = cachedTodos ?? StateCache.load(Self.stateName, as: [TodoItem].self) ?? []

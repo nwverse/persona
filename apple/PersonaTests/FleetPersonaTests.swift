@@ -178,11 +178,11 @@ struct FleetPersonaTests {
         let faces = try #require(read.faces(shared.store))
         #expect(faces.package == "\(Self.packID)/r1")
         // A file a picture and size: the three states the package draws and its avatar for the other two, each at
-        // the compact (22), minimal (24) and expanded / lock screen (26) size, × 3.
-        #expect(FleetFaces.sizes == [22, 24, 26])
+        // the compact (22), minimal (24) and expanded / lock screen (26) size, and the widgets' 40 and 46, × 3.
+        #expect(FleetFaces.sizes == [22, 24, 26, 40, 46])
         let files = try #require(shared.store.files())
         let names: [String] = ["avatar", "idle", "thinking", "working"].flatMap { (n: String) -> [String] in
-            FleetFaces.sizes.map { "faces/\(Self.packID)_r1_3x/\(n)_\($0).png" }
+            FleetFaces.sizes.map { "faces/\(Self.packID)_r1_3xw/\(n)_\($0).png" }
         }
         #expect(files.map(\.name) == names + ["look.json"])
         for picture in faces.states.values {
@@ -219,7 +219,7 @@ struct FleetPersonaTests {
         let shared = Shared()
         FleetLook.save(FleetLook(persona: personas.current, builtinAccent: Palette.systemBlue),
                        faces: { FleetFaces(persona: personas.current, personas: personas) }, to: shared.store)
-        #expect(shared.packages == ["\(Self.packID)_r1_3x"])
+        #expect(shared.packages == ["\(Self.packID)_r1_3xw"])
 
         let circuit = FleetLook(persona: .builtin, builtinAccent: Palette.coral)
         #expect(FleetLook.save(circuit, faces: { nil }, to: shared.store))
@@ -250,10 +250,10 @@ struct FleetPersonaTests {
         for s in PersonaState.allCases { states[s.rawValue] = disc }
         #expect(shared.store.save(FleetFaces(package: "a/1", states: states, avatar: nil)))
         #expect(shared.store.files()?.map(\.name) == PersonaState.allCases.flatMap { s in
-            FleetFaces.sizes.map { "faces/a_1_3x/\(s.rawValue)_\($0).png" }
+            FleetFaces.sizes.map { "faces/a_1_3xw/\(s.rawValue)_\($0).png" }
         }.sorted())
         #expect(shared.store.save(FleetFaces(package: "b/2", states: ["idle": try #require(Self.picture(0x24418F))], avatar: nil)))
-        #expect(shared.packages == ["b_2_3x"])
+        #expect(shared.packages == ["b_2_3xw"])
         let working = shared.store.face("b/2", .working, points: 24)
         #expect(working?.file == "idle_24.png" && working?.own == false)
         #expect(shared.store.face("a/1", .working, points: 24) == nil)

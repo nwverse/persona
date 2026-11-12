@@ -417,6 +417,9 @@ targets:
       - path: Shared/Design/ExtensionSurfaceTokens.swift
       # The persona's face (the app's PersonaAvatar draws it too), on the activity's leading side.
       - path: Shared/Design/PersonaFace.swift
+      # Persona's Home Screen widgets (docs/apple/home-widgets.md): the snapshot the app writes, the views, their tokens.
+      - path: Shared/HomeWidgets
+      - path: Shared/Design/HomeWidgetTokens.swift
       # The app's String Catalog and interface language (docs/apple/ios.md「Interface language」).
       - path: Shared/Localization
     entitlements:

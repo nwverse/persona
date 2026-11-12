@@ -8,8 +8,12 @@ import Foundation
 ///
 /// Counts are the app's own, worked out where the app shows them (the Agents list's Needs you, the Inbox's Needs you,
 /// the Machines page's online count), so a widget never says another number than the app (principle 4). Times are Unix
-/// seconds. Every field decodes leniently: an older app's file never breaks a newer widget, or the other way round.
+/// seconds.
 nonisolated struct HomeSnapshot: Codable, Hashable, Sendable {
+    /// The file's shape. The app and its widgets ship together; a file of another shape (written by the version before
+    /// an update, until the app runs again) reads as none. Bump it with any change to the fields.
+    static let version = 1
+    var version = HomeSnapshot.version
     /// When the app wrote it; the widgets say how old it is once it is `staleAfter` old.
     var at: Double = 0
     /// A hub is paired. Without one every widget asks to open Persona to connect.
@@ -25,8 +29,9 @@ nonisolated struct HomeSnapshot: Codable, Hashable, Sendable {
     var inbox: Inbox?
 
     /// After this long without a write the widgets show the time of the data and the persona offline (gray): numbers
-    /// that may be old are never passed off as current.
-    static let staleAfter: TimeInterval = 30 * 60
+    /// that may be old are never passed off as current. The app writes at least every `HomeWidgetWriter.heartbeat` while
+    /// it runs, and the hub wakes it when the counts change (#5721).
+    static let staleAfter: TimeInterval = 60 * 60
 
     func isStale(at date: Date) -> Bool { at > 0 && date.timeIntervalSince1970 - at > Self.staleAfter }
 

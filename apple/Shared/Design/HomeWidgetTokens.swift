@@ -1,3 +1,4 @@
+#if os(iOS)
 import SwiftUI
 #if canImport(UIKit)
 import UIKit
@@ -82,6 +83,8 @@ nonisolated enum HomeWidgetTokens {
 
     // MARK: Spacing
 
+    static let flush: CGFloat = 0
+    static let hairline: CGFloat = 1
     static let gap: CGFloat = 8
     static let tight: CGFloat = 4
     static let hair: CGFloat = 2
@@ -100,6 +103,8 @@ nonisolated enum HomeWidgetTokens {
     static let ringSmall: CGFloat = 50
     static let ringStroke: CGFloat = 10
     static let ringStrokeSmall: CGFloat = 7
+    /// The shortest event block in Today's day view: one line of its title.
+    static let timelineLine: CGFloat = 16
     /// The charts' height and their bars' corner.
     static let chartHeight: CGFloat = 92
     static let chartBar: CGFloat = 3
@@ -144,6 +149,24 @@ nonisolated enum HomeWidgetTokens {
     static let inboxSymbol = "tray.full" // icon: mirrors Theme.Icon.inbox
     static let checkSymbol = "checkmark" // icon: mirrors Theme.Icon.done
 
+    /// A symbol as the widgets draw it: plain, at the size of the words around it (the extension builds no
+    /// `ThemedIcon`; every name is one of the tokens above).
+    static func symbol(_ name: String) -> Image { Image(systemName: name) }
+
+    #if DEBUG
+    /// The gallery's made-up wallpapers and the tint it paints tinted widgets with (`-showHomeWidgets`).
+    enum Gallery {
+        static let lightWall = [Color(hex: 0xDCE7F5), Color(hex: 0xF3E3EC)]
+        static let darkWall = [Color(hex: 0x0E1B33), Color(hex: 0x2B1630)]
+        static let tintedWall = [Color(hex: 0x1E140A), Color(hex: 0x3A2610)]
+        static let clearWall = [Color(hex: 0x3E6FB0), Color(hex: 0xB0566F), Color(hex: 0xE59A4B)]
+        static let lockWall = [Color(hex: 0x23305A), Color(hex: 0x5A3E6E)]
+        static let tint = Color(hex: 0xF2B45A)
+        static let tintedSurface = Color(hex: 0x2A1E12).opacity(0.92)
+        static let sheet = Color(hex: 0xF4F4F6)
+    }
+    #endif
+
     #if canImport(UIKit)
     private static func dynamic(light: (UInt32, CGFloat), dark: (UInt32, CGFloat)) -> Color {
         Color(uiColor: UIColor { trait in
@@ -153,3 +176,4 @@ nonisolated enum HomeWidgetTokens {
     }
     #endif
 }
+#endif

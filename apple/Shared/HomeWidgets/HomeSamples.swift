@@ -11,21 +11,22 @@ enum HomeSamples {
         return Calendar.current.date(from: c) ?? .now
     }()
 
-    static func at(_ hour: Int, _ minute: Int) -> Double {
-        var c = Calendar.current.dateComponents([.year, .month, .day], from: now)
-        c.hour = hour; c.minute = minute
-        return (Calendar.current.date(from: c) ?? now).timeIntervalSince1970
-    }
-
-    static func ago(_ minutes: Double) -> Double { now.timeIntervalSince1970 - minutes * 60 }
-
-    static func busy(zh: Bool = false, package: Bool = false) -> HomeSnapshot {
+    static func busy(zh: Bool = false, package: Bool = false, now: Date = HomeSamples.now) -> HomeSnapshot {
         func t(_ en: String, _ cn: String) -> String { zh ? cn : en }
+        // At the gallery's 13:20 the day's events keep their times; at any other moment (the app's sample, written
+        // for Home Screen shots) they come the same while after it.
+        let shift = now.timeIntervalSince(HomeSamples.now)
+        func at(_ hour: Int, _ minute: Int) -> Double {
+            var c = Calendar.current.dateComponents([.year, .month, .day], from: HomeSamples.now)
+            c.hour = hour; c.minute = minute
+            return (Calendar.current.date(from: c) ?? HomeSamples.now).timeIntervalSince1970 + shift
+        }
+        func ago(_ minutes: Double) -> Double { now.timeIntervalSince1970 - minutes * 60 }
         var s = HomeSnapshot()
         s.at = ago(1)
         s.paired = true
         s.look = package
-            ? .init(name: t("Milk Frog", "奶蛙"), package: "nwverse/sample", primaryLight: 0xF6C23E, primaryDark: 0xF6C23E)
+            ? .init(name: t("Milk Frog", "奶蛙"), package: "nwverse/sample", primaryLight: 0xF6_C2_3E, primaryDark: 0xF6_C2_3E)
             : .init(name: "Mochi")
         s.agents.rows = [
             .init(id: "studio/s1", title: t("Fix the sign-in redirect", "修好登录后的跳转"), state: .needsYou, kind: .coding, machine: "studio", place: t("Studio", "工作室"),
@@ -127,7 +128,7 @@ enum HomeSamples {
     /// The app has not written for an hour.
     static func stale(zh: Bool = false) -> HomeSnapshot {
         var s = busy(zh: zh)
-        s.at = ago(65)
+        s.at -= 64 * 60
         return s
     }
 

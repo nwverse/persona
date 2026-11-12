@@ -15,6 +15,7 @@ struct PersonaApp: App {
             RootView()
                 #if DEBUG && os(iOS)
                 .modifier(TreeSwapFlip()) // `-swapTreeAway YES` (#2836)
+                .overlay { HomeGalleryOverlay() } // `-showHomeWidgets YES`: every widget, every size (docs/apple/home-widgets.md)
                 #endif
                 .environment(model)
                 .task(id: model.fleetLook) { LiveActivityController.shared.look(model.fleetLook) { model.fleetFaces } }
@@ -30,6 +31,7 @@ struct PersonaApp: App {
                         return
                     }
                     if RecordingLink.matches(url) { MeetingRecorder.openRecordings(); return } // the recording's activity
+                    if let kind = HomeWidgetLink.kind(url) { model.openWidget(kind); return } // a Home Screen widget
                     #endif
                     if let link = ExtensionSystemLink(url: url) { model.openExtension(link); return }
                     if SentSettingsLink.matches(url) { model.openSentRecords(); return }
@@ -263,6 +265,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                 try? Data(PushCrypto.publicKey(key).utf8).write(to: dir.appending(path: "push-key.txt"))
             }
         }
+        #if os(iOS)
+        // `-showHomeWidgetSample YES`: the widgets draw the gallery's made-up snapshot, written at once (Home Screen
+        // screenshots without a hub, docs/apple/home-widgets.md「Screenshots」).
+        if d.bool(forKey: "showHomeWidgetSample") { HomeWidgetWriter.shared.showSample() }
+        #endif
         if let phase = d.string(forKey: "showFleetSample") {
             LiveActivityController.shared.showSample(phase, details: d.bool(forKey: "fleetDetails"), island: d.string(forKey: "fleetIsland"),
                                                      count: d.integer(forKey: "showFleetCount"))

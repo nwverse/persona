@@ -1,4 +1,4 @@
-#if DEBUG && canImport(UIKit)
+#if DEBUG && os(iOS)
 import SwiftUI
 import WidgetKit
 
@@ -32,7 +32,7 @@ enum HomeGallery {
     }
 
     /// The tint the gallery paints tinted widgets with (one of the system's choices: a warm amber).
-    static let tint = Color(hex: 0xF2B45A)
+    static let tint = HomeWidgetTokens.Gallery.tint
     /// iPhone 17 Pro Max's widget sizes; iPad Pro 13-inch's extra large; the Lock Screen's.
     static func size(_ family: WidgetFamily) -> CGSize {
         switch family {
@@ -57,15 +57,15 @@ struct HomeGalleryWallpaper: View {
     var body: some View {
         switch look {
         case .light:
-            LinearGradient(colors: [Color(hex: 0xDCE7F5), Color(hex: 0xF3E3EC)], startPoint: .topLeading, endPoint: .bottomTrailing)
+            LinearGradient(colors: HomeWidgetTokens.Gallery.lightWall, startPoint: .topLeading, endPoint: .bottomTrailing)
         case .dark:
-            LinearGradient(colors: [Color(hex: 0x0E1B33), Color(hex: 0x2B1630)], startPoint: .topLeading, endPoint: .bottomTrailing)
+            LinearGradient(colors: HomeWidgetTokens.Gallery.darkWall, startPoint: .topLeading, endPoint: .bottomTrailing)
         case .tinted:
-            LinearGradient(colors: [Color(hex: 0x1E140A), Color(hex: 0x3A2610)], startPoint: .topLeading, endPoint: .bottomTrailing)
+            LinearGradient(colors: HomeWidgetTokens.Gallery.tintedWall, startPoint: .topLeading, endPoint: .bottomTrailing)
         case .clear:
-            LinearGradient(colors: [Color(hex: 0x3E6FB0), Color(hex: 0xB0566F), Color(hex: 0xE59A4B)], startPoint: .topLeading, endPoint: .bottomTrailing)
+            LinearGradient(colors: HomeWidgetTokens.Gallery.clearWall, startPoint: .topLeading, endPoint: .bottomTrailing)
         case .lock:
-            LinearGradient(colors: [Color(hex: 0x23305A), Color(hex: 0x5A3E6E)], startPoint: .top, endPoint: .bottom)
+            LinearGradient(colors: HomeWidgetTokens.Gallery.lockWall, startPoint: .top, endPoint: .bottom)
         }
     }
 }
@@ -104,7 +104,7 @@ struct HomeGalleryCell: View {
     @ViewBuilder private var background: some View {
         switch look {
         case .light, .dark: HomeWidgetTokens.surface
-        case .tinted: Color(hex: 0x2A1E12).opacity(0.92)
+        case .tinted: HomeWidgetTokens.Gallery.tintedSurface
         case .clear, .lock: Color.white.opacity(0.12)
         }
     }
@@ -151,7 +151,28 @@ struct HomeGallerySheet<Content: View>: View {
             content
         }
         .padding(HomeGallery.pad * 2)
-        .background(Color(hex: 0xF4F4F6))
+        .background(HomeWidgetTokens.Gallery.sheet)
+    }
+}
+/// `-showHomeWidgets YES`: every widget at every Home Screen size, light and dark, with the sample data, over the app
+/// (screenshots and design review; the real proof is the Home Screen itself).
+struct HomeGalleryOverlay: View {
+    @State private var shown = UserDefaults.standard.bool(forKey: "showHomeWidgets")
+
+    var body: some View {
+        if shown {
+            let entry = HomeEntry(date: .now, snapshot: HomeSamples.busy(zh: LanguageStore.shared.launched.hasPrefix("zh"), now: .now))
+            ScrollView([.vertical, .horizontal]) {
+                HomeGallerySheet(title: "Persona", note: nil) {
+                    ForEach(HomeKind.allCases, id: \.self) { kind in
+                        ForEach(kind.families.filter { [.systemSmall, .systemMedium, .systemLarge].contains($0) }, id: \.self) { family in
+                            HomeGalleryRow(title: "\(kind.rawValue) · \(family)", kind: kind, family: family, looks: [.light, .dark], entry: entry)
+                        }
+                    }
+                }
+            }
+            .background(HomeWidgetTokens.Gallery.sheet)
+        }
     }
 }
 #endif

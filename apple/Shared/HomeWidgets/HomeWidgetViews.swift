@@ -1,3 +1,4 @@
+#if os(iOS)
 import AppIntents
 import SwiftUI
 import WidgetKit
@@ -313,7 +314,7 @@ private struct AgentsWidget: View {
 
     /// The large widget's three numbers side by side, as Fitness shows Move, Exercise and Stand.
     private var stats: some View {
-        HStack(alignment: .top, spacing: 0) {
+        HStack(alignment: .top, spacing: HomeWidgetTokens.flush) {
             stat(counts.needsYou, StateName.needsYou.text, HomeWidgetTokens.needsYou.dot)
             stat(counts.working, StateName.working.text, HomeWidgetTokens.working.dot)
             stat(counts.done, interfaceText("Just Finished [Home Widgets]"), HomeWidgetTokens.done.dot)
@@ -484,25 +485,31 @@ private struct DayTimeline: View {
                         Text(cal.date(bySettingHour: h % 24, minute: 0, second: 0, of: c.date) ?? c.date, format: .dateTime.hour())
                             .font(HomeWidgetTokens.caption).monospacedDigit().lineLimit(1).homeInk(.tertiary)
                             .frame(width: gutter - HomeWidgetTokens.tight, alignment: .leading)
-                        Rectangle().frame(height: 1).foregroundStyle(HomeWidgetTokens.rule)
+                        Rectangle().frame(height: HomeWidgetTokens.hairline).foregroundStyle(HomeWidgetTokens.rule)
                     }
                     .offset(y: CGFloat(h - firstHour) * perHour - HomeWidgetTokens.gap)
                 }
                 ForEach(Array(c.events.filter { !$0.allDay }.enumerated()), id: \.offset) { _, e in
                     let top = max(0, y(e.start)), bottom = min(geo.size.height, y(e.end))
+                    // Tall enough for two lines: its title and its time; shorter (under about an hour): its title alone,
+                    // on one line, never past the block (the block is at least that line tall).
+                    let long = bottom - top >= HomeWidgetTokens.timelineLine * 2
                     VStack(alignment: .leading, spacing: 0) {
                         Text(verbatim: e.title).font(HomeWidgetTokens.captionStrong).lineLimit(1)
-                        if bottom - top > perHour * 0.9 {
+                        if long {
                             Text(Date(timeIntervalSince1970: e.start)..<Date(timeIntervalSince1970: e.end), format: .interval.hour().minute())
                                 .font(HomeWidgetTokens.caption).lineLimit(1).opacity(0.8)
                         }
                     }
                     .homeTone(HomeWidgetTokens.today)
                     .padding(.horizontal, HomeWidgetTokens.gap - HomeWidgetTokens.hair)
-                    .padding(.vertical, HomeWidgetTokens.hair)
-                    .frame(width: geo.size.width - gutter, height: max(perHour * 0.5, bottom - top), alignment: .topLeading)
+                    .padding(.vertical, long ? HomeWidgetTokens.hair : 0)
+                    .frame(width: geo.size.width - gutter, height: max(HomeWidgetTokens.timelineLine, bottom - top), alignment: long ? .topLeading : .leading)
+                    .clipped()
                     .background(alignment: .leading) {
                         ZStack(alignment: .leading) {
+                            // Opaque under the tint, so the hour lines do not run through an event.
+                            if mode == .fullColor { HomeWidgetTokens.surface }
                             RoundedRectangle(cornerRadius: HomeWidgetTokens.tight, style: .continuous)
                                 .fill(mode == .fullColor ? HomeWidgetTokens.today.opacity(0.16) : Color.white.opacity(0.18))
                             Rectangle().frame(width: HomeWidgetTokens.bar - 1).homeTone(HomeWidgetTokens.today)
@@ -511,11 +518,12 @@ private struct DayTimeline: View {
                     }
                     .offset(x: gutter, y: top)
                 }
-                // Now.
-                HStack(spacing: 0) {
+                // Now: from the hours' column to the widget's margin, never past it.
+                HStack(spacing: HomeWidgetTokens.flush) {
                     Circle().frame(width: HomeWidgetTokens.dot, height: HomeWidgetTokens.dot)
                     Rectangle().frame(height: HomeWidgetTokens.hair)
                 }
+                .frame(width: geo.size.width - gutter + HomeWidgetTokens.dot / 2)
                 .homeTone(HomeWidgetTokens.overdue)
                 .offset(x: gutter - HomeWidgetTokens.dot / 2, y: y(c.now) - HomeWidgetTokens.dot / 2)
             }
@@ -613,7 +621,7 @@ private struct TodoBadge: View {
         let full = mode == .fullColor
         ZStack {
             Circle().fill(full ? HomeWidgetTokens.todos : .white)
-            Image(systemName: HomeWidgetTokens.todoSymbol).font(HomeWidgetTokens.headline)
+            HomeWidgetTokens.symbol(HomeWidgetTokens.todoSymbol).font(HomeWidgetTokens.headline)
                 .foregroundStyle(full ? Color.white : Color.black)
                 .blendMode(full ? .normal : .destinationOut)
         }
@@ -623,19 +631,15 @@ private struct TodoBadge: View {
     }
 }
 
-/// A to-do with its box: a tap ticks it (`CompleteTodoIntent`, which runs in the app and tells the hub). Ticked, it
-/// shows done at once; refused, it says so in red and a tap tries again.
+/// A to-do with its box. Ticked on the widget it shows done at once; refused by the hub, it says so in red (the box
+/// becomes a button with the ticking PR, docs/apple/home-widgets.md「Ticking off a to-do」).
 private struct TodoRow: View {
     var todo: HomeSnapshot.Todo
     var large = false
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: HomeWidgetTokens.gap) {
-            Button(intent: CompleteTodoIntent(todoID: todo.id)) {
-                Image(systemName: mark).font(large ? HomeWidgetTokens.headline : HomeWidgetTokens.body).modifier(MarkTone(todo: todo))
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(Text("Complete [Home Widgets]"))
+            HomeWidgetTokens.symbol(mark).font(large ? HomeWidgetTokens.headline : HomeWidgetTokens.body).modifier(MarkTone(todo: todo))
             VStack(alignment: .leading, spacing: 0) {
                 Text(verbatim: todo.title).font(large ? HomeWidgetTokens.headline : HomeWidgetTokens.body).lineLimit(1)
                     .strikethrough(todo.tick == .ticking).homeInk(todo.tick == .ticking ? .tertiary : .primary)
@@ -708,7 +712,7 @@ private struct UsageWidget: View {
                     if let top { hero(top) } else { tokensHero }
                 case .systemMedium:
                     Spacer(minLength: 0)
-                    HStack(alignment: .top, spacing: 0) {
+                    HStack(alignment: .top, spacing: HomeWidgetTokens.flush) {
                         ForEach(c.accounts.prefix(3)) { AccountRings(account: $0).frame(maxWidth: .infinity) }
                     }
                     Spacer(minLength: 0)
@@ -718,7 +722,7 @@ private struct UsageWidget: View {
                     Spacer().frame(height: HomeWidgetTokens.row)
                     if !usage.hourly.isEmpty { HourChart(hours: usage.hourly, now: c.date) }
                     Spacer(minLength: HomeWidgetTokens.row)
-                    HStack(alignment: .top, spacing: 0) {
+                    HStack(alignment: .top, spacing: HomeWidgetTokens.flush) {
                         ForEach(c.accounts.prefix(3)) { AccountRings(account: $0).frame(maxWidth: .infinity) }
                     }
                 }
@@ -766,12 +770,30 @@ private struct UsageWidget: View {
     }
 }
 
-/// "5 hours", "7 days": a window's length in words.
+/// A window's length in the interface language: "5 hours" / "5 小时" in full, the system's short form ("5h") where that
+/// does not fit; the hub's own label ("5h") only for a window of unknown length.
 enum WindowName {
-    static func of(_ w: HomeSnapshot.Window) -> String {
+    static func of(_ w: HomeSnapshot.Window, short: Bool = false) -> String {
         guard w.minutes > 0 else { return w.label }
         let d = Duration.seconds(Double(w.minutes) * 60)
-        return d.formatted(.units(allowed: [.days, .hours, .minutes], width: .wide, maximumUnitCount: 1))
+        return d.formatted(.units(allowed: [.days, .hours, .minutes], width: short ? .narrow : .wide, maximumUnitCount: 1))
+    }
+
+    /// "5 hours 86% · 7 days 61%", shortest window first.
+    static func list(_ account: HomeSnapshot.Account, short: Bool) -> String {
+        account.windows.sorted { $0.minutes < $1.minutes }.map { "\(of($0, short: short)) \(Int($0.percent))%" }.joined(separator: " · ")
+    }
+}
+
+/// An account's windows in words, in full when they fit, else in the system's short form.
+private struct WindowList: View {
+    var account: HomeSnapshot.Account
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            Text(verbatim: WindowName.list(account, short: false))
+            Text(verbatim: WindowName.list(account, short: true))
+        }
+        .font(HomeWidgetTokens.caption).lineLimit(1).homeInk(.secondary)
     }
 }
 
@@ -793,8 +815,7 @@ private struct AccountRings: View {
             }
             .frame(width: HomeWidgetTokens.ringMedium, height: HomeWidgetTokens.ringMedium)
             Text(verbatim: account.name).font(HomeWidgetTokens.captionStrong).lineLimit(1).homeInk(.primary)
-            Text(verbatim: account.windows.sorted { $0.minutes < $1.minutes }.map { "\($0.label) \(Int($0.percent))%" }.joined(separator: " · "))
-                .font(HomeWidgetTokens.caption).lineLimit(1).homeInk(.secondary)
+            WindowList(account: account)
         }
         .opacity(account.stale ? HomeWidgetTokens.staleOpacity : 1)
     }
@@ -819,8 +840,8 @@ private struct HourChart: View {
                 }
             }
             .frame(height: HomeWidgetTokens.chartHeight, alignment: .bottom)
-            .overlay(alignment: .bottom) { Rectangle().frame(height: 1).foregroundStyle(HomeWidgetTokens.rule) }
-            HStack(spacing: 0) {
+            .overlay(alignment: .bottom) { Rectangle().frame(height: HomeWidgetTokens.hairline).foregroundStyle(HomeWidgetTokens.rule) }
+            HStack(spacing: HomeWidgetTokens.flush) {
                 ForEach([0, 6, 12, 18], id: \.self) { h in
                     Text(Calendar.current.date(bySettingHour: h, minute: 0, second: 0, of: now) ?? now, format: .dateTime.hour())
                         .font(HomeWidgetTokens.caption).lineLimit(1).homeInk(.tertiary).frame(maxWidth: .infinity, alignment: .leading)
@@ -871,7 +892,7 @@ private struct ComputersWidget: View {
                     .frame(maxWidth: .infinity)
                 case .systemMedium:
                     Spacer(minLength: 0)
-                    HStack(alignment: .top, spacing: 0) {
+                    HStack(alignment: .top, spacing: HomeWidgetTokens.flush) {
                         ForEach(list.prefix(4)) { ComputerRing(machine: $0, side: HomeWidgetTokens.ringMedium, named: true).frame(maxWidth: .infinity) }
                     }
                     Spacer(minLength: 0)
@@ -926,7 +947,8 @@ private func computerSymbol(_ m: HomeSnapshot.Machine) -> String {
     }
 }
 
-/// A computer's ring: its mark inside, its load around, the state's color.
+/// A computer's ring: its mark inside, its load around, the state's color. Without its name under it (the small
+/// widget), VoiceOver still reads which computer it is, what it does and its load.
 private struct ComputerRing: View {
     var machine: HomeSnapshot.Machine
     var side: CGFloat
@@ -934,11 +956,13 @@ private struct ComputerRing: View {
 
     var body: some View {
         let state = computerState(machine)
+        let spoken = [machine.name, state.words, machine.online ? machine.load.map { interfaceText("Load \($0)% [Home Widgets]") } : nil]
+            .compactMap { $0 }.joined(separator: ", ")
         VStack(spacing: HomeWidgetTokens.tight) {
             ZStack {
                 HomeRing(fraction: Double(machine.load ?? 0) / 100, color: state.color ?? HomeWidgetTokens.computerCalm,
                          width: HomeWidgetTokens.ringStrokeSmall, dashed: !machine.online)
-                Image(systemName: computerSymbol(machine)).font(named ? HomeWidgetTokens.headline : HomeWidgetTokens.body)
+                HomeWidgetTokens.symbol(computerSymbol(machine)).font(named ? HomeWidgetTokens.headline : HomeWidgetTokens.body)
                     .homeInk(machine.online ? .primary : .tertiary)
             }
             .frame(width: side, height: side)
@@ -950,6 +974,8 @@ private struct ComputerRing: View {
                 .font(HomeWidgetTokens.caption).lineLimit(1)
             }
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(verbatim: spoken))
     }
 }
 
@@ -1053,7 +1079,7 @@ private struct RecordDisc: View {
         let full = mode == .fullColor
         ZStack {
             Circle().fill(full ? HomeWidgetTokens.recordButton : .white)
-            Image(systemName: recording ? HomeWidgetTokens.stopSymbol : HomeWidgetTokens.recordSymbol)
+            HomeWidgetTokens.symbol(recording ? HomeWidgetTokens.stopSymbol : HomeWidgetTokens.recordSymbol)
                 .font(.system(size: side * 0.4, weight: .bold))
                 .foregroundStyle(full ? Color.white : Color.black)
                 .blendMode(full ? .normal : .destinationOut)
@@ -1135,7 +1161,7 @@ private struct HealthWidget: View {
     private func measure(_ symbol: String, _ value: String, _ words: String, _ color: Color) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: HomeWidgetTokens.tight) {
-                Image(systemName: symbol).font(HomeWidgetTokens.captionStrong).homeTone(color)
+                HomeWidgetTokens.symbol(symbol).font(HomeWidgetTokens.captionStrong).homeTone(color)
                 Text(verbatim: words).font(HomeWidgetTokens.captionStrong).lineLimit(1).homeInk(.secondary)
             }
             Text(verbatim: value).font(HomeWidgetTokens.heroSmall).lineLimit(1).minimumScaleFactor(HomeWidgetTokens.heroMinScale).homeInk(.primary)
@@ -1164,7 +1190,7 @@ private struct WeekChart: View {
             .overlay(alignment: .bottom) {
                 if let average {
                     Rectangle().stroke(style: StrokeStyle(lineWidth: 1, dash: [HomeWidgetTokens.tight, HomeWidgetTokens.tight - 1]))
-                        .frame(height: 1).homeInk(.secondary)
+                        .frame(height: HomeWidgetTokens.hairline).homeInk(.secondary)
                         .offset(y: -HomeWidgetTokens.chartHeight * CGFloat(average) / CGFloat(peak))
                 }
             }
@@ -1325,7 +1351,7 @@ struct HomeLockView: View {
                 if c.agentCounts.needsYou > 0 {
                     VStack(spacing: 0) {
                         Text(verbatim: "\(c.agentCounts.needsYou)").font(HomeWidgetTokens.heroSmall).homeAccent()
-                        Image(systemName: symbol).font(HomeWidgetTokens.caption)
+                        HomeWidgetTokens.symbol(symbol).font(HomeWidgetTokens.caption)
                     }
                 } else {
                     HomeFace(size: HomeWidgetTokens.faceLock * 1.25, mood: c.mood(.agents), pictures: entry.pictures, disc: false)
@@ -1333,18 +1359,18 @@ struct HomeLockView: View {
             }
         case .usage:
             let w = c.accounts.first?.windows.max { $0.percent < $1.percent }
-            Gauge(value: min(100, w?.percent ?? 0), in: 0...100) { Image(systemName: symbol) } currentValueLabel: { Text(verbatim: "\(Int(w?.percent ?? 0))") }
+            Gauge(value: min(100, w?.percent ?? 0), in: 0...100) { HomeWidgetTokens.symbol(symbol) } currentValueLabel: { Text(verbatim: "\(Int(w?.percent ?? 0))") }
                 .gaugeStyle(.accessoryCircularCapacity).homeAccent()
         case .health:
             let steps = c.snapshot.health?.steps ?? 0
             let avg = max(1, c.snapshot.health?.stepsAverage ?? 1)
-            Gauge(value: min(1, Double(steps) / Double(avg))) { Image(systemName: symbol) } currentValueLabel: { Text(verbatim: homeShort(steps)) }
+            Gauge(value: min(1, Double(steps) / Double(avg))) { HomeWidgetTokens.symbol(symbol) } currentValueLabel: { Text(verbatim: homeShort(steps)) }
                 .gaugeStyle(.accessoryCircular).privacySensitive()
         case .record:
             Button(intent: StartMeetingRecordingIntent()) {
                 ZStack {
                     AccessoryWidgetBackground()
-                    Image(systemName: symbol).font(HomeWidgetTokens.recordMarkLock).homeAccent()
+                    HomeWidgetTokens.symbol(symbol).font(HomeWidgetTokens.recordMarkLock).homeAccent()
                 }
             }
             .buttonStyle(.plain)
@@ -1360,7 +1386,7 @@ struct HomeLockView: View {
             ZStack {
                 AccessoryWidgetBackground()
                 VStack(spacing: 0) {
-                    Image(systemName: symbol).font(HomeWidgetTokens.caption)
+                    HomeWidgetTokens.symbol(symbol).font(HomeWidgetTokens.caption)
                     Text(verbatim: circleNumber).font(HomeWidgetTokens.heroSmall).minimumScaleFactor(HomeWidgetTokens.heroMinScale).homeAccent()
                 }
                 .padding(HomeWidgetTokens.tight)
@@ -1384,7 +1410,7 @@ struct HomeLockView: View {
                 HomeFace(size: HomeWidgetTokens.faceLock, mood: c.mood(.agents), pictures: entry.pictures)
             } else if kind == .record {
                 Button(intent: StartMeetingRecordingIntent()) {
-                    Image(systemName: symbol).font(HomeWidgetTokens.recordMarkLock).homeAccent()
+                    HomeWidgetTokens.symbol(symbol).font(HomeWidgetTokens.recordMarkLock).homeAccent()
                 }
                 .buttonStyle(.plain)
             }
@@ -1432,7 +1458,7 @@ struct HomeLockView: View {
             return (c.snapshot.todos?.items ?? []).prefix(2).map(\.title)
         case .usage:
             guard let a = c.accounts.first else { return [] }
-            return [a.windows.sorted { $0.minutes < $1.minutes }.map { "\($0.label) \(Int($0.percent))%" }.joined(separator: " · ")]
+            return [WindowName.list(a, short: true)]
         case .computers:
             return c.machines.prefix(2).map { $0.name + " · " + computerState($0).words }
         case .record:
@@ -1456,3 +1482,4 @@ struct HomeLockView: View {
         }
     }
 }
+#endif
