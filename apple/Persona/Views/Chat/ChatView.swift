@@ -3889,9 +3889,12 @@ struct ChatView: View {
             Button { resumeInTerminal() } label: { Label("Resume in Terminal", systemImage: Theme.Icon.resume).lineLimit(1) }
                 .accessibilityIdentifier("chat-resume-terminal")
         case .noEngine:
+            // The reason under the name, as the mode menu's Allow Everything says why (one label: the row dims whole).
             Button {} label: {
-                Label("Resume in Terminal", systemImage: Theme.Icon.resume)
-                Text("No terminal engine on \(machine?.name ?? s.machineID)", comment: "Why Resume in Terminal is off: the computer enables no terminal engine")
+                Label {
+                    Text("Resume in Terminal")
+                    Text("No terminal engine on \(machine?.name ?? s.machineID)", comment: "Why Resume in Terminal is off: the computer enables no terminal engine")
+                } icon: { Image(systemName: Theme.Icon.resume) }
             }
             .disabled(true)
             .accessibilityIdentifier("chat-resume-terminal")
