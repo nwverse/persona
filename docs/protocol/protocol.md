@@ -436,10 +436,10 @@ Both APIs require authentication; the feature flag is `android_update`:
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| GET | `/api/v1/app/android/latest` | Returns the published `latest.json` as-is; the release script writes `{version_code,version_name,min_sdk,notes,sha256,size}` |
+| GET | `/api/v1/app/android/latest` | Returns the published `latest.json` as-is, with `download_url` set to the pinned APK below; the release script writes `{package_name,version_code,version_name,min_sdk,certificate_sha256,notes,sha256,size,source_sha}`, and one taken from a release's `android.json` adds `version` and `name` |
 | GET | `/api/v1/app/android/apk` | Reads the APK by the manifest's `sha256`; MIME `application/vnd.android.package-archive`, attachment name `persona.apk`, ETag is the quoted digest, supports ServeContent range and conditional requests. A GET that takes gzip (no range) gets the published gzip copy with `Content-Encoding: gzip`, `Vary: Accept-Encoding` and the ETag `"<sha256>-gzip"`; the decoded bytes are the APK |
 
-Published files live in `apps/android/` under the hub's config directory, with APKs named `<sha256>.apk` and their gzip copies `<sha256>.apk.gz` (an APK stores its dex files uncompressed, so the copy is about half the size; without it the APK goes out as it is). Unpublished returns 404; an invalid manifest digest returns 500. Clients should verify size and digest, keep downloads same-origin, and leave installation to the system's confirmation. Upgrades with the same package name and signature still need on-device sign-off after artifacts are published.
+Published files live in `apps/android/` under the hub's config directory, with APKs named `<sha256>.apk` and their gzip copies `<sha256>.apk.gz` (an APK stores its dex files uncompressed, so the copy is about half the size; without it the APK goes out as it is). They come from a publisher over SSH (`scripts/release/publish_android_apk.py`) or, on a hub with an update source, from the newest release's `android.json` (`docs/operations/hub-update.md` ("The Android app")); either way `latest.json` is written last, under `.publish.lock`. Unpublished returns 404; an invalid manifest digest returns 500. Clients should verify size and digest, keep downloads same-origin, and leave installation to the system's confirmation. Upgrades with the same package name and signature still need on-device sign-off after artifacts are published.
 
 ## Codex sources and capabilities
 
@@ -2446,6 +2446,7 @@ the video shows as a card above the input box (reading → compressing if needed
   and dropping a tier if it's over. iPhone originals are about 60 MB/minute at 1080p30 HEVC and 170 MB/minute at 4K30, so up to about 3 minutes at 1080p or about 1 minute at 4K goes as is.
 - **Limit**: even compressed it must stay within 200 MB, which at 540p fits about **5 minutes** (the estimate goes by bitrate and depends little on the content). Longer ones aren't uploaded, with the message
   ""IMG_0002.MOV" is 12:34 long and still over 200 MB at 540p, so it can't be sent. Trim it in Photos first." One still in iCloud that can't be downloaded shows "Couldn't read a video".
+- Android sends videos the same way (+ › Photos, the system photo picker) but does not transcode: a video over 200 MB is refused with the file limit's message (the composer section of `docs/android/android.md`).
 - Tapping the card uses the system player (a full-screen AVPlayerViewController on iOS, AVKit's player on Mac): videos sent from this phone play the local copy directly (`Caches/attached-videos`,
   keeping 1 GB by most recently played, counted under "Other Caches" in **Settings › Storage**); ones sent from other devices are first downloaded from that computer (`/file/download`, progress shown on the card, tap again to stop),
   and a copy is kept afterwards too. Once the temporary file on the computer is cleaned up, it can't be played ("Can't play").

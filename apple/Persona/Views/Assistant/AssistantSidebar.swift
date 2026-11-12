@@ -772,9 +772,9 @@ struct AssistantSidebar: View {
     var onOpenExtension: ((ExtensionNavRoute) -> Void)? = nil
     /// Health: the health space's page (docs/assistant/health.md); nil leaves the row out.
     var openHealth: (() -> Void)? = nil
-    /// Record (docs/apple/recording.md「Meeting recordings」): starts recording a meeting and opens Recordings; while
-    /// something records, opens it. nil leaves the row out (the Mac records nothing).
-    var startMeeting: (() -> Void)? = nil
+    /// Recordings (docs/apple/recording.md「Meeting recordings」): opens the Recordings page, whose Record starts one, or
+    /// the recording running. nil leaves the row out (the Mac records nothing).
+    var openRecordingsPage: (() -> Void)? = nil
     /// The column's own button that folds it away, at its top trailing corner, as ChatGPT's on iPhone Duo open (#2623).
     /// Search goes to its foot then, beside Persona's name and where it runs, and the main conversation's row holds what
     /// the face's menu at the top of the page did (the switch has that place). nil elsewhere.
@@ -1066,14 +1066,15 @@ struct AssistantSidebar: View {
         }
     }
 
-    /// First among the places: one tap from the drawer records the meeting in the room (Record, the one name every entry
-    /// point uses, #5243); while a recording runs, the row says so and opens it.
+    /// First among the places: Recordings, a place like the rows under it, so a tap opens the page and its Record button
+    /// starts a recording (#5517: as Record, the tap recorded at once, and in zh-Hans and ja it reads as the page's name).
+    /// While a recording runs, the row says so and opens it.
     @ViewBuilder private var meetingRow: some View {
         #if os(iOS)
-        if let startMeeting {
+        if let openRecordingsPage {
             let recording = RecordingCapture.shared.state != .idle
-            action(recording ? String(localized: "Recording… Open") : String(localized: "Record [Recordings Section ef2821]"),
-                   Theme.Icon.recording, id: "sidebar-meeting-recording", run: startMeeting)
+            action(recording ? String(localized: "Recording… Open") : String(localized: "Recordings"),
+                   Theme.Icon.recording, id: "sidebar-meeting-recording", run: openRecordingsPage)
         }
         #endif
     }
