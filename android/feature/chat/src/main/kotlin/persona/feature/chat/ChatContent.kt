@@ -326,6 +326,7 @@ internal fun ChatLineContent(
                 ?: ChatSystemLine(line.row.item?.text.orEmpty(), line.row.item?.task?.failed == true)
         }
         is ChatLine.Recaps -> RecapLine(line.items.map { it.item })
+        is ChatLine.Viewed -> ViewedImagesRow(line.images, session, loader)
         is ChatLine.Extra -> {
             val round = line.payload as? persona.core.domain.tasks.BackgroundRound
             if (round != null) BackgroundRoundLine(round, onToggle) else AssistantExtraLine(line.payload, LocalAssistantTaskHost.current)
@@ -444,13 +445,14 @@ private fun WorkStep(step: WorkItem, session: SessionKey, loader: ImageLoader, o
                     },
                     last = last, mono = presentation.mono, added = diff?.added ?: 0, removed = diff?.removed ?: 0,
                     onClick = { open = !open })
-                if (todos != null) TodoList(todos, call.failed)
+                if (todos != null) Box(Modifier.workDetail()) { TodoList(todos, call.failed) }
                 if (call.name == "Task" || call.name == "Agent") SubagentEntry(call.use.item.toolUseId)
                 if (call.failed && !open && call.result?.task?.kind != "agent") call.result?.text?.takeIf { it.isNotBlank() }?.let {
-                    Text(it, maxLines = 3, overflow = TextOverflow.Ellipsis, color = PersonaTheme.palette.danger.text,
+                    Text(it, Modifier.workDetail(), maxLines = 3, overflow = TextOverflow.Ellipsis, color = PersonaTheme.palette.danger.text,
                         style = PersonaTheme.type.caption)
                 }
-                if (open) Column(Modifier.fillMaxWidth().padding(start = Tokens.Space.m),
+                // Right of the rail on Glass, under the step's words (iOS's timeline, `detailLeading`).
+                if (open) Column(Modifier.fillMaxWidth().workDetail(Tokens.Space.m),
                     verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
                     if (diff != null) {
                         toolPath(call.use.item)?.let { DiffHeader(it, diff.added, diff.removed) }
@@ -519,8 +521,10 @@ private fun userPictures(images: List<Item>, session: SessionKey, loader: ImageL
  * press opens the menu for a message not sent ("Copy", "Select", "Share", "Delete"), without one none.
  */
 @Composable
-internal fun UserBubble(text: String, id: String = "pending", pending: persona.core.contracts.api.DeliveryState? = null) {
-    MergedUserBubble(listOf(Item(id, role = "user", kind = "text", text = text)), menu = pending != null, pending = pending)
+internal fun UserBubble(text: String, id: String = "pending", pending: persona.core.contracts.api.DeliveryState? = null,
+    faded: Boolean = false, leading: (@Composable () -> Unit)? = null) {
+    MergedUserBubble(listOf(Item(id, role = "user", kind = "text", text = text)), menu = pending != null, pending = pending,
+        faded = faded, leading = leading)
 }
 
 @Composable

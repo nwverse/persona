@@ -772,8 +772,8 @@ struct AssistantSidebar: View {
     var onOpenExtension: ((ExtensionNavRoute) -> Void)? = nil
     /// Health: the health space's page (docs/assistant/health.md); nil leaves the row out.
     var openHealth: (() -> Void)? = nil
-    /// Meeting Recording (docs/apple/recording.md「Meeting recordings」): starts recording a meeting and opens Recordings;
-    /// while something records, opens it. nil leaves the row out (the Mac records nothing).
+    /// Record (docs/apple/recording.md「Meeting recordings」): starts recording a meeting and opens Recordings; while
+    /// something records, opens it. nil leaves the row out (the Mac records nothing).
     var startMeeting: (() -> Void)? = nil
     /// The column's own button that folds it away, at its top trailing corner, as ChatGPT's on iPhone Duo open (#2623).
     /// Search goes to its foot then, beside Persona's name and where it runs, and the main conversation's row holds what
@@ -1066,13 +1066,13 @@ struct AssistantSidebar: View {
         }
     }
 
-    /// First among the places: one tap from the drawer records the meeting in the room; while a recording runs, the row
-    /// says so and opens it.
+    /// First among the places: one tap from the drawer records the meeting in the room (Record, the one name every entry
+    /// point uses, #5243); while a recording runs, the row says so and opens it.
     @ViewBuilder private var meetingRow: some View {
         #if os(iOS)
         if let startMeeting {
             let recording = RecordingCapture.shared.state != .idle
-            action(recording ? String(localized: "Recording… Open") : String(localized: "Meeting Recording"),
+            action(recording ? String(localized: "Recording… Open") : String(localized: "Record [Recordings Section ef2821]"),
                    Theme.Icon.recording, id: "sidebar-meeting-recording", run: startMeeting)
         }
         #endif

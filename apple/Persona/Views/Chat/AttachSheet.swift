@@ -1151,10 +1151,11 @@ extension AttachMoreSection {
     /// The rows every composer's + offers besides photos and files, in their order (#3225, #3805): the calls and the
     /// camera, then Mention. A row whose action is nil is not there (no call before a conversation exists, no camera).
     /// `scan`: Scan Document (#3720), next to Take Photo. `meeting`: Persona's main conversation's Meeting Recording
-    /// (#3723), the sidebar's row by its words: with a recording under way it says so and opens it.
+    /// (#3723), the sidebar's row by its words: with a recording under way it says so and opens it. `context`: Add as
+    /// Context › Knowledge Note… / To-do… / Inbox Item… (#3721), folded under Mention.
     static func common(voice: (() -> Void)?, camera: (() -> Void)?, scan: (() -> Void)? = nil, glasses: (() -> Void)?,
-                       meeting: (() -> Void)? = nil,
-                       mention: @escaping () -> Void) -> [AttachMoreSection] {
+                       meeting: (() -> Void)? = nil, mention: @escaping () -> Void,
+                       context: ((ContextPickKind) -> Void)? = nil) -> [AttachMoreSection] {
         var capture: [AttachMoreRow] = []
         if let voice { capture.append(AttachMoreRow(id: "composer-menu-voice", title: String(localized: "Voice Chat"), symbol: Theme.Icon.voiceChannel, action: voice)) }
         if let camera { capture.append(AttachMoreRow(id: "composer-menu-camera", title: String(localized: "Take Photo [Chat View 6e3a10]"), symbol: Theme.Icon.camera, action: camera)) }
@@ -1162,7 +1163,7 @@ extension AttachMoreSection {
         if let glasses { capture.append(AttachMoreRow(id: "attach-glasses", title: String(localized: "Glasses Photo"), symbol: Theme.Icon.glasses, action: glasses)) }
         if let meeting {
             let recording = RecordingCapture.shared.state != .idle
-            capture.append(AttachMoreRow(id: "composer-menu-meeting", title: recording ? String(localized: "Recording… Open") : String(localized: "Meeting Recording"),
+            capture.append(AttachMoreRow(id: "composer-menu-meeting", title: recording ? String(localized: "Recording… Open") : String(localized: "Record [Recordings Section ef2821]"),
                                          symbol: Theme.Icon.recording, action: meeting))
         }
         var sections: [AttachMoreSection] = []
@@ -1170,6 +1171,11 @@ extension AttachMoreSection {
         sections.append(AttachMoreSection(id: "mention", title: nil, rows: [
             AttachMoreRow(id: "composer-menu-mention", title: String(localized: "Mention a File or Session"), symbol: Theme.Icon.mention, action: mention),
         ]))
+        if let context {
+            sections.append(AttachMoreSection(id: "context", title: String(localized: "Add as Context"), rows: ContextPickKind.allCases.map { kind in
+                AttachMoreRow(id: "attach-context-\(kind.rawValue)", title: kind.menuTitle, symbol: kind.symbol) { context(kind) }
+            }, symbol: Theme.Icon.addContext))
+        }
         return sections
     }
 

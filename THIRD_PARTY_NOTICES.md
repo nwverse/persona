@@ -538,6 +538,20 @@ bounds (the work ledger, the index of earlier turns, the latest turns word for w
 from Persona's transcript items; the transcript files on the computer take the place of cindy's history tools, and the
 cap squeezes the data instead of cutting the text.
 
+Switching an Agent between Claude Code and Codex in the web chat follows cindy's design at the owner's request
+(2026-11-12): the "Switch Agent?" confirmation (`web/src/views/chat/EngineSwitchDialog.tsx`, after cindy's
+`ConfirmDialog` and `agentSwitchConfirmation.ts`: layout, order, wording and when it asks) and the switch divider with
+its handoff panel (`web/src/views/chat/EngineSwitchDivider.tsx`, after the agent switch card in cindy's `SystemCard.tsx`:
+layout, states and wording). No code is copied for those.
+
+What a turn cost on the web chat's reply bar (`web/src/views/chat/TurnUsage.tsx` and `web/src/lib/turn-cost.ts`, #5426)
+is ported from cindy's `MessageActionBar.tsx` usage cell, `UsageCostPopover.tsx`, `lib/turnUsageTooltip.ts`
+(`buildTurnUsageTooltipLines`, `formatPercent`, `getTurnUsageSuggestion`), `lib/usageFormat.ts` (`formatTurnCostMoney`)
+and the per-model pricing of `main/usage/turnCostCalculator.ts`, with changes: the usage is summed in the browser from the
+transcript items (`web/src/lib/turn-usage.ts`) and priced at the hub catalog's reference prices, the duration line uses
+the work summary's time, and the Persona conversation's plain variant is Persona's own. The card's English, Chinese and
+Japanese lines take cindy's `chat.messageActionBar` and `usageDetails` strings.
+
 https://github.com/makecindy/cindy
 
 Licensed under the Apache License, Version 2.0 (the "License"); you may not use these files except in compliance with

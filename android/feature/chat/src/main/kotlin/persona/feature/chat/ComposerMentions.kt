@@ -13,7 +13,8 @@ import persona.core.contracts.SessionKey
 /**
  * The composer's @ menu (iOS `PromptItems.files` / `sessions`, web `lib/mentions.ts`): files this chat's tools read or
  * wrote (picking one types `@path`, which Claude Code and Codex read as that file), then other agents' sessions
- * (picking one quotes it as a `<persona-context>` before the message, not as text).
+ * (picking one quotes it as a `<persona-context>` before the message, not as text). In Persona's conversations the
+ * conversation's open tasks come first (iOS `TaskMentionList`): picking one routes the next message to it.
  */
 @Immutable
 data class ComposerMentions(
@@ -25,7 +26,13 @@ data class ComposerMentions(
     val sessions: List<Session>,
     /** This chat, left out of the sessions. */
     val except: SessionKey?,
+    /** The conversation's open tasks ([mentionTasks]); null outside Persona's conversations. */
+    val tasks: List<MentionTask>? = null,
 )
+
+/** One of the conversation's tasks in the @ menu: its [status] dot, title and where it runs ([place]). */
+@Immutable
+data class MentionTask(val id: String, val title: String, val place: String, val status: persona.core.designsystem.Status)
 
 /** The `@word` being typed just before the caret: [start] is the `@`, [end] the caret. */
 internal data class MentionToken(val start: Int, val end: Int, val query: String)
@@ -86,20 +93,26 @@ internal fun otherSessions(all: List<Session>, except: SessionKey?, query: Strin
 
 internal fun sessionMentionDetail(session: Session): String = listOf(session.agentLabel, session.folderName).filter(String::isNotEmpty).joinToString(" · ")
 
-/** One row of the @ menu: a file to type, or a session to quote. */
+/** One row of the @ menu: a task to route the next message to, a file to type, or a session to quote. */
 internal sealed interface MentionRow {
     val key: String
+    data class Task(val task: MentionTask, override val key: String = "task:${task.id}") : MentionRow
     data class File(val path: String, val insert: String, override val key: String = "file:$path") : MentionRow
     data class Quote(val session: Session, override val key: String = "session:${session.key.path}") : MentionRow
 }
 
-/** The @ menu for [query]: files whose relative path contains it, then the sessions it matches. */
+/**
+ * The @ menu for [query]: the tasks whose title contains it, the files whose relative path does, then the sessions it
+ * matches. iOS lists every task whatever follows the @ in a panel of its own; here they share the files' list, so the
+ * typed word narrows them too.
+ */
 internal fun mentionRows(mentions: ComposerMentions, query: String): List<MentionRow> {
     val q = query.lowercase()
+    val tasks = mentions.tasks.orEmpty().filter { q.isEmpty() || it.title.lowercase().contains(q) }.map { MentionRow.Task(it) }
     val files = mentions.files.map { relativeMentionPath(it, mentions.cwd) to it }
         .filter { (relative, _) -> q.isEmpty() || relative.lowercase().contains(q) }
         .map { (relative, path) -> MentionRow.File(path, "@$relative ") }
-    return files + otherSessions(mentions.sessions, mentions.except, query).map { MentionRow.Quote(it) }
+    return tasks + files + otherSessions(mentions.sessions, mentions.except, query).map { MentionRow.Quote(it) }
 }
 
 /** The quote for a picked session (iOS `PromptItems.quote`): its title, agent, folder and last words, as context. */

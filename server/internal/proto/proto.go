@@ -94,6 +94,7 @@ var Features = []string{
 	"launcher_auto_name",       // POST /api/v1/launchers without a preset takes an empty name; GET /api/v1/machines/{mid}/launchers carries display_name (docs/integrations/launchers.md "Display names")
 	"launcher_import_parse",    // POST /api/v1/launchers/import/parse reads a pasted configuration into provider drafts; GET / POST /api/v1/launchers/import take alias (#5193)
 	"launcher_auth_auto",       // POST /api/v1/launchers/test and /discover send only the credential header auth names, take auth "auto" and answer the auth that worked (docs/integrations/launchers.md "Authentication method")
+	"launcher_import_link",     // POST /api/v1/launchers/import/parse reads provider import links: cindy://provider/import and the web's #import= (#5420)
 	"upload_dir",               // POST /api/v1/machines/{mid}/files?dest=dir&dir=&conflict=: into a folder of the home (docs/protocol/protocol.md "Changing files")
 	"file_edit",                // POST /api/v1/machines/{mid}/files/{rename,move,trash,restore} (docs/protocol/protocol.md "Changing files")
 	"launcher_scope",           // a Persona-managed provider's share, scope_machines, delivery, own_service and machine_keys (docs/integrations/launchers.md "Device scope and on-demand delivery")
