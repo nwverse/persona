@@ -66,8 +66,6 @@
   "speed_standard": "Standard",
   "speed_fast": "Fast",
   "header_mode": "Permission mode: {mode}",
-  "mode_unknown": "Unknown",
   "leave_bypass_confirm": "Switch to {mode}",
-  "leave_bypass_detail": "This agent wasn't started with Full access, so it can't be switched back to it from here.",
-  "modes_locked": "Not running: the mode changes while it runs"
+  "leave_bypass_detail": "This agent wasn't started with Full access, so it can't be switched back to it from here."
 }

@@ -31,6 +31,7 @@ var toolNames = []string{"ask_user", "notify_user", "supervision_finish", "sched
 	"cancel_followup", "list_places", "save_place", "machines_list", "agents_list", "agent_read", "agent_send", "agent_interrupt", "agent_start", "agent_supervise", "agent_archive", "agent_unarchive", "interaction_answer", "ask_escalate", "inbox_suggest", "inbox_draft",
 	"inbox_folders", "inbox_move", "kb_search", "kb_list", "kb_get", "kb_update", "kb_history_plan", "kb_history_status", "kb_history_stop", "kb_history_resume", "persona_settings", "secret_run",
 	"model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback",
+	"repositories_list", "repository_get",
 	"conversations_list", "conversation_read", "conversation_rename", "conversation_archive", "conversation_unarchive",
 	"conversation_new", "conversation_send", "task_plan", "task_review", "task_scope", "task_start_screen", "task_start_keys", "task_retry",
 	"todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete", "concern_report",
@@ -102,6 +103,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 	}
 	switch name {
+	case "repositories_list", "repository_get":
+		return s.toolRepositories(ctx, name, args)
 	case "supervision_finish":
 		return s.toolSupervisionFinish(ctx, self, args)
 	case "ask_user":

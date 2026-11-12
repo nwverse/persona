@@ -85,6 +85,10 @@ or the manager restarts and retries). A previous interrupted send (hub stopped o
 - Messages sent by the app bound to `lark-cli` (the `appId` reported by `lark-cli auth status --json`) are marked seen and omitted to prevent Persona's own bot replies from looping back into the Inbox. If that app id is unavailable, the connector keeps the existing behavior; messages from other apps remain eligible.
 - Mail: unread messages in each account's latest 40 Inbox messages, within 7 days. The list API reads only the first 2 KB of body (HTML mail often contains nothing but `<style>`),
   so new mails fetch the full body again (IMAP `BODY.PEEK`, without marking read) for preview and AI context (`BodyOf` tracks which mail was read).
+- Mail's **Add to Inbox** (#5307; Settings › Connectors › Mail and Settings › Inbox Sources, `PUT /api/v1/connectors/mail/settings {inbox}`) is on
+  until turned off and kept with the other connector switches. Off, the mail rounds read no account (`readMail`), so the mail items the
+  Inbox has stay as they are (and its accounts' read errors as last read); search, replies and the knowledge base go on. Turned on again, the
+  next round is a full one and reads mail at once. `mail` declares no inbox capability: `Manifest.InboxSwitch` gives it the switch.
 
 ## Docs: mentions in sheets, bases, and documents (2026-10-31)
 
@@ -317,8 +321,9 @@ Settings › Inbox Sources (#5278) shows the same mutes per source on each built
   Item `mutes` lists allowed mute targets, which the menu renders.
 
 - **Manager** (`assistant/inbox_mutes.go`): mutes live in `inbox_mutes` settings (source + tag + value + name). Each collection handles covered open items, so future
-  messages arrive already done. Item mute targets (`mutes`): connector `InboxThing.Tags` (`repo`, `chat`, `sender`); Lark chat (`lark.feed_id`)
-  and latest group speaker (`lark.sender_id`); lowercase mail sender address. Lark Docs and Moments items have none.
+  messages arrive already done. Item mute targets (`mutes`): connector `InboxThing.Tags` (`repo`, `chat`, `sender`; a subscription's rows carry
+  their newest item's `sender`, #5306); Lark chat (`lark.feed_id`) and latest group speaker (`lark.sender_id`); lowercase mail sender address.
+  Lark Docs and Moments items have none.
 - **GitHub muted repositories**: formerly GitHub connector setting `muted_repos`, now source `github`, tag `repo` mutes. On manager connection,
   hub migrates old entries through `inbox.repo_mutes` and clears them from GitHub settings. Settings › Connectors › GitHub (and old Apps) still read / write `muted_repos`;
   hub translates through the manager, so both entry points share the same data.

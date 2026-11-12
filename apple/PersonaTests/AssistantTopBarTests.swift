@@ -177,8 +177,9 @@ struct AssistantTopBarTests {
         #expect(AssistantSidebarGroups.directions(all, leaders: [], main: main).isEmpty)
     }
 
-    /// The sidebar's Recent (#4873): the newest five of the user's own chats, never the main one or a direction (listed
-    /// above it) and never one Persona opened by itself; nothing when no chat is left.
+    /// The sidebar's Recent (#4873, #5195): the newest five chats whoever opened them (an Inbox item's, a scheduled
+    /// task's, a channel's), never the main one, a direction (listed above it) or the background supervisor; nothing
+    /// when no chat is left.
     @Test func recentIsTheNewestFiveOfTheRest() throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         func s(_ id: String, hoursAgo: Double?, origin: String? = nil) throws -> Session {
@@ -188,20 +189,20 @@ struct AssistantTopBarTests {
             x.updatedAt = hoursAgo.map { now.addingTimeInterval(-$0 * 3600) }
             return x
         }
-        let all = [try s("main", hoursAgo: 0), try s("lead", hoursAgo: 0.5), try s("inbox", hoursAgo: 0.2, origin: "inbox"),
-                   try s("task", hoursAgo: 0.3), try s("a", hoursAgo: 1), try s("b", hoursAgo: 2), try s("wx", hoursAgo: 3, origin: "channel"),
-                   try s("d", hoursAgo: 4), try s("e2", hoursAgo: 5), try s("e1", hoursAgo: 5), try s("never", hoursAgo: nil)]
+        let all = [try s("main", hoursAgo: 0), try s("lead", hoursAgo: 0.5), try s("bg", hoursAgo: 0.1, origin: "task"),
+                   try s("inbox", hoursAgo: 0.2, origin: "inbox"), try s("task", hoursAgo: 0.3, origin: "task"),
+                   try s("a", hoursAgo: 1), try s("lark", hoursAgo: 2, origin: "lark_agent"), try s("wx", hoursAgo: 3, origin: "channel"),
+                   try s("e2", hoursAgo: 5), try s("e1", hoursAgo: 5), try s("never", hoursAgo: nil)]
         let main = all[0].key
-        let tasks = AssistantTaskChats(tasks: [], runs: [APIClient.ScheduleRun(id: "1", kind: "routine", refID: "t", title: "", due: now, at: now,
-                                                                               status: "ok", machineID: "hub", sessionID: "task")])
-        let recent = AssistantSidebarGroups.recent(all, leaders: ["lead"], main: main, tasks: tasks, hubSays: true)
-        #expect(recent.map(\.sessionID) == ["a", "b", "wx", "d", "e1"]) // equal times: by session id
-        // An ended direction comes back among the rest; a hub that never says who opened them leaves only the tasks' out.
-        #expect(AssistantSidebarGroups.recent(all, leaders: [], main: main, tasks: tasks, hubSays: true).map(\.sessionID).first == "lead")
-        let older = all.map { var x = $0; x.origin = nil; return x }
-        #expect(AssistantSidebarGroups.recent(older, leaders: ["lead"], main: main, tasks: tasks, hubSays: false).map(\.sessionID)
-            == ["inbox", "a", "b", "wx", "d"])
-        #expect(AssistantSidebarGroups.recent(Array(all.prefix(2)), leaders: ["lead"], main: main, tasks: tasks, hubSays: true).isEmpty)
+        let recent = AssistantSidebarGroups.recent(all, leaders: ["lead"], main: main, background: "bg")
+        #expect(recent.map(\.sessionID) == ["inbox", "task", "a", "lark", "wx"])
+        let more = AssistantSidebarGroups.recent(all.filter { !["inbox", "task", "a"].contains($0.sessionID) }, leaders: ["lead"],
+                                                 main: main, background: "bg")
+        #expect(more.map(\.sessionID) == ["lark", "wx", "e1", "e2", "never"]) // equal times: by session id; no time: last
+        // An ended direction comes back among the rest; a hub without a background supervisor lists that chat as any other.
+        #expect(AssistantSidebarGroups.recent(all, leaders: [], main: main, background: "bg").map(\.sessionID) == ["inbox", "task", "lead", "a", "lark"])
+        #expect(AssistantSidebarGroups.recent(all, leaders: ["lead"], main: main, background: nil).map(\.sessionID).first == "bg")
+        #expect(AssistantSidebarGroups.recent(Array(all.prefix(3)), leaders: ["lead"], main: main, background: "bg").isEmpty)
     }
 
     /// A direction's name comes from GET /api/v1/assistant/leaders: current ones with a name only.

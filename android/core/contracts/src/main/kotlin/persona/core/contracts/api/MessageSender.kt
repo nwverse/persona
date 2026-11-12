@@ -1,6 +1,7 @@
 package persona.core.contracts.api
 
 import persona.core.contracts.SessionKey
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 enum class DeliveryState {
@@ -15,12 +16,16 @@ data class OutboxMessage(
     val state: DeliveryState,
     val error: String? = null,
     val mainTarget: Boolean = false,
-    /** When this phone wrote it (epoch milliseconds), for where a failed one sits among the messages sent after it; null: unknown. */
+    /** When this phone wrote it, epoch millis. Absent on an outbox restored from before that was stored. */
     val createdAt: Long? = null,
 )
 
+private val NoWrittenAt = MutableStateFlow(emptyMap<String, Long>())
+
 interface MessageSender {
     val outbox: StateFlow<List<OutboxMessage>>
+    /** When this phone wrote each send, including ones already in the transcript. Epoch millis, by client message id. */
+    val writtenAt: StateFlow<Map<String, Long>> get() = NoWrittenAt
     suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String? = null)
     suspend fun cancel(clientMessageId: String): Boolean = false
     /**

@@ -20,28 +20,19 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
-import persona.core.contracts.Item
-import persona.core.contracts.SessionKey
 import persona.core.contracts.api.DeliveryState
-import persona.core.contracts.api.OutboxMessage
 import persona.core.designsystem.AppStyle
 import persona.core.designsystem.PersonaTheme
-import persona.core.domain.lines.ChatLine
-import persona.core.domain.lines.ChatRow
-import persona.core.domain.lines.LineItem
-import java.time.Instant
 
 /**
- * An unsent message on Glass as iOS's `PendingBubble` (#4339 C9): its mark and small menu by state, the long press's last
- * word, and where one that did not go sits among the messages sent after it (iOS `ChatLines.placeFailed`).
+ * An unsent message on Glass as iOS's `PendingBubble` (#4339 C9): its mark and small menu by state, and the long press's last
+ * word.
  */
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35], qualifiers = "en")
 class ChatOutboxBubbleTest {
     @get:Rule val rule = createComposeRule()
     private val res get() = ApplicationProvider.getApplicationContext<Context>().resources
-    private val key = SessionKey("m", "s")
-    private val start = Instant.parse("2026-11-12T01:00:00Z")
 
     @Test fun eachStateHasIOSsMarkAndMenu() {
         assertEquals(OutboxMark.Sending, outboxMark(DeliveryState.Sending))
@@ -75,32 +66,6 @@ class ChatOutboxBubbleTest {
         assertEquals("Don't send", last(MessageExtras(delete = true, dontSend = true)))
         assertEquals("Cancel send", last(MessageExtras(delete = true)))
         assertEquals("Delete", last(MessageExtras(delete = true, dontSend = true), waiting.copy(pending = DeliveryState.Refused)))
-    }
-
-    private fun user(seq: Int, minutes: Long) = ChatLine.Row(ChatRow("user",
-        LineItem(Item("u$seq", seq, role = "user", kind = "text", text = "message $seq", ts = start.plusSeconds(minutes * 60).toString()))))
-    private fun reply(seq: Int) = ChatLine.Row(ChatRow("reply", LineItem(Item("a$seq", seq, kind = "text", text = "answer $seq"))))
-    private fun unsent(id: String, state: DeliveryState, minutes: Long?) =
-        OutboxMessage(id, key, id, state, createdAt = minutes?.let { start.plusSeconds(it * 60).toEpochMilli() })
-
-    @Test fun aFailedMessageKeepsItsPlace() {
-        val lines = listOf(user(1, 0), reply(2), user(3, 10), reply(4), user(5, 20))
-        val failed = unsent("failed", DeliveryState.Refused, 5)
-        val waiting = unsent("waiting", DeliveryState.WaitingForNetwork, 6)
-        val placed = placeFailed(lines, listOf(failed, waiting))
-        // Before the first message of yours written after it, at the end of its own exchange; one still going stays at the end.
-        assertEquals(mapOf("u3" to listOf(failed)), placed.before)
-        assertEquals(listOf(waiting), placed.rest)
-        // Two failed in a row go before the same line, in the order written.
-        val second = unsent("second", DeliveryState.Rejected, 7)
-        assertEquals(mapOf("u3" to listOf(failed, second)), placeFailed(lines, listOf(failed, second)).before)
-        // Nothing written after it, no time, or a near tie (inside the two minutes for the computer's clock): at the end.
-        for (message in listOf(unsent("late", DeliveryState.Refused, 25), unsent("untimed", DeliveryState.Refused, null),
-            unsent("tie", DeliveryState.Refused, 19))) {
-            assertEquals(message.clientMessageId, PlacedOutbox(emptyMap(), listOf(message)), placeFailed(lines, listOf(message)))
-        }
-        // No failed message: all stay where they were.
-        assertEquals(PlacedOutbox(emptyMap(), listOf(waiting)), placeFailed(lines, listOf(waiting)))
     }
 
     /** The waiting mark's menu: Retry now, then Don't send; also TalkBack's actions on the mark. */

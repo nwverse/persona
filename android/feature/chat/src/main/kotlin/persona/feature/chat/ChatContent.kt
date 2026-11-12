@@ -445,13 +445,14 @@ private fun WorkStep(step: WorkItem, session: SessionKey, loader: ImageLoader, o
                     },
                     last = last, mono = presentation.mono, added = diff?.added ?: 0, removed = diff?.removed ?: 0,
                     onClick = { open = !open })
-                if (todos != null) TodoList(todos, call.failed)
+                if (todos != null) Box(Modifier.workDetail()) { TodoList(todos, call.failed) }
                 if (call.name == "Task" || call.name == "Agent") SubagentEntry(call.use.item.toolUseId)
                 if (call.failed && !open && call.result?.task?.kind != "agent") call.result?.text?.takeIf { it.isNotBlank() }?.let {
-                    Text(it, maxLines = 3, overflow = TextOverflow.Ellipsis, color = PersonaTheme.palette.danger.text,
+                    Text(it, Modifier.workDetail(), maxLines = 3, overflow = TextOverflow.Ellipsis, color = PersonaTheme.palette.danger.text,
                         style = PersonaTheme.type.caption)
                 }
-                if (open) Column(Modifier.fillMaxWidth().padding(start = Tokens.Space.m),
+                // Right of the rail on Glass, under the step's words (iOS's timeline, `detailLeading`).
+                if (open) Column(Modifier.fillMaxWidth().workDetail(Tokens.Space.m),
                     verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
                     if (diff != null) {
                         toolPath(call.use.item)?.let { DiffHeader(it, diff.added, diff.removed) }

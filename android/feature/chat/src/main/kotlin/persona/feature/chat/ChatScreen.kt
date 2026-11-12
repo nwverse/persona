@@ -19,6 +19,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -33,6 +34,7 @@ import persona.core.domain.ChatTaps
 import persona.core.domain.chatBubbles
 import persona.core.domain.lines.ChatLine
 import persona.core.domain.lines.isLiveStatus
+import persona.core.domain.lines.placeFailed
 import persona.core.domain.sort.READ_ONLY
 import persona.core.domain.sort.canApprove
 import persona.core.domain.sort.canChangeEffortOnly
@@ -143,6 +145,7 @@ private fun ChatPage(
     val machines by sessions.machines.collectAsStateWithLifecycle()
     val allRequests by interactions.pending.collectAsStateWithLifecycle()
     val allMessages by sender.outbox.collectAsStateWithLifecycle()
+    val writtenAt by sender.writtenAt.collectAsStateWithLifecycle()
     val parent = sessionList.firstOrNull { it.machineId == key.machineId && it.subagents.orEmpty().any { child -> child.sessionId == key.sessionId } }
     val child = parent?.subagents?.firstOrNull { it.sessionId == key.sessionId }
     // A workflow's agent reads like a subagent (`<session>@<agent id>`, #2935).
@@ -337,6 +340,17 @@ private fun ChatPage(
     var linkVisible by remember { mutableStateOf(false) }
     val chatList = rememberChatListState(readingKey, anchorStore)
     val search = remember { ChatSearchState() }
+    // Glass folds an Agent chat's header into its slim bar (#4339 C4, iOS ChatChrome): on the list's scrolling, and by
+    // itself after 3 s without a touch while animations are on.
+    val foldsHeader = HeaderFoldRules.folds(PersonaTheme.style, showTopBar, renderStyle)
+    val reduceMotion = PersonaTheme.reduceMotion
+    val headerFold = remember { ChatHeaderFold(scope) }
+    val headerMotion = PersonaTheme.motion.layout?.spec<Float>()
+    SideEffect { headerFold.moves = !reduceMotion; headerFold.motion = headerMotion }
+    val newestEdge = with(LocalDensity.current) { HeaderFoldRules.NEWEST_EDGE_DP.dp.roundToPx() }
+    val headerScroll = remember(headerFold, chatList, newestEdge) {
+        headerFold.connection { chatList.list.firstVisibleItemIndex == 0 && chatList.list.firstVisibleItemScrollOffset < newestEdge }
+    }
     // Not chatList.position: that changes every frame of a scroll, and reading it here re-ran this whole page (#4039).
     val openWork = chatList.expanded
     var timelineVersion by remember { mutableIntStateOf(0) }
@@ -454,11 +468,7 @@ private fun ChatPage(
     val errorLine = snapshot.error?.takeIf { glass && agentChat }
     val readyLine = if (readOnly || !agentChat) null else gettingReady(res, session, messages, liveWork = liveWorkLines.isNotEmpty())
     val tailRows = listOfNotNull(ERROR_ROW.takeIf { errorLine != null }, READY_ROW.takeIf { readyLine != null })
-    // On Glass an unsent message that did not go keeps its place among the messages sent after it (iOS `placeFailed`);
-    // the others, and every one in Brief and Board, stay at the newest end.
-    val outbox = remember(lines, messages, glass) { if (glass) placeFailed(lines.asReversed(), messages) else PlacedOutbox(emptyMap(), messages) }
-    // Rows before the lines in the list: the tail rows and the unsent messages at the newest end.
-    val currentLeadRows by rememberUpdatedState(tailRows.size + outbox.rest.size)
+    // Rows before the lines in the list: the tail rows and the unsent messages.
     // The newest "while you were away" recap open as the last line until tapped or typing starts (Glass, an Agent's chat).
     val recapContext = LocalContext.current
     val closedRecaps = remember(recapContext) { ClosedRecaps(recapContext) }
@@ -474,13 +484,14 @@ private fun ChatPage(
     var planSheet by remember { mutableStateOf(false) }
     var sheetPlan by remember { mutableStateOf<LinePlan?>(null) }
     val currentItems by rememberUpdatedState(snapshot.items)
-    val currentLines by rememberUpdatedState(lines)
+    // Rows map to lines by key, never by position: a failed send can sit between lines (#2769).
+    val currentLinesByKey by rememberUpdatedState(remember(lines) { lines.associateBy { it.contentKey } })
     val list = chatList.list
     var reportedSeen by remember { mutableStateOf<Item?>(null) }
     val newestVisibleItem by remember {
         derivedStateOf {
             list.layoutInfo.visibleItemsInfo.mapNotNull { visible ->
-                currentLines.getOrNull(visible.index - currentLeadRows)?.lastItem()
+                currentLinesByKey[visible.key]?.lastItem()
             }.maxWithOrNull(chatItemOrder)
         }
     }
@@ -830,6 +841,21 @@ private fun ChatPage(
     // `turnFix`). Persona's conversations only, as iOS and the web.
     val turnFix = if (renderStyle == ChatRenderStyle.Assistant) TurnErrorFix.of(session?.turnErrorCode) else null
     val fixModel = chrome.onFixModel?.let { open -> { action: persona.core.designsystem.ReadinessActionId -> open(action, session?.launcher, session?.manager) } }
+    // Nothing is up over the page: the header may fold by itself (iOS waits while a sheet or menu is presented).
+    val headerBusy by rememberUpdatedState(chrome.covered || overlay || chromeOverlay || linkVisible || statusSheet ||
+        terminalHelp || taskPageVisible || fullText != null || search.visible)
+    LaunchedEffect(headerFold, foldsHeader, reduceMotion) {
+        if (!foldsHeader || reduceMotion) return@LaunchedEffect
+        while (true) {
+            delay(HeaderFoldRules.TICK_MILLIS)
+            headerFold.tick(HeaderFoldRules.TICK_MILLIS, headerBusy, reduceMotion)
+        }
+    }
+    // A request arriving opens it, so its line says the agent needs you (chats.md "Risks"); and so does coming back
+    // from the terminal or the files over the chat (iOS: a pane switch).
+    val requestIds = remember(requests) { requests.map { it.id }.toSet() }
+    LaunchedEffect(headerFold, requestIds) { if (foldsHeader) headerFold.requests(requestIds) }
+    LaunchedEffect(headerFold, chrome.covered) { if (!chrome.covered) headerFold.open() }
     ChatCompletionFeedback(lastUserId, session?.status,
         lifecycle == Lifecycle.State.RESUMED && !chrome.covered && !overlay && !chromeOverlay && !linkVisible &&
             !statusSheet && !terminalHelp && !taskPageVisible && fullText == null && !search.visible &&
@@ -839,7 +865,20 @@ private fun ChatPage(
     val unreadEntry = if (session?.agentState == AgentState.Unread) lines.firstOrNull { line ->
         line.holds(lastUserId)
     }?.let { ChatListEntry(it.contentKey, lastLineAtTop = true) } else null
-    ChatListEffects(chatList, tailRows + outbox.rest.asReversed().map { "outbox-${it.clientMessageId}" } + lines.map { it.contentKey },
+    val placed = remember(lines, messages, writtenAt) { placeFailed(lines.asReversed(), messages, writtenAt) }
+    // The list's keys from the bottom (reverse layout): the tail rows, the outbox's bubbles still on their way, then the
+    // lines, each with the failed sends written before it just above it (#2769).
+    val listKeys = remember(lines, placed, tailRows) {
+        buildList {
+            addAll(tailRows)
+            placed.rest.asReversed().forEach { add("outbox-${it.clientMessageId}") }
+            for (line in lines) {
+                add(line.contentKey)
+                placed.before[line.id].orEmpty().asReversed().forEach { add("outbox-${it.clientMessageId}") }
+            }
+        }
+    }
+    ChatListEffects(chatList, listKeys,
         ready = !snapshot.loading && (snapshot.items.isEmpty() || lines.isNotEmpty() ||
             (renderStyle.compactToolSummary && projectedFrom === snapshot.items && assistantPresentation.foreground.isEmpty())) &&
             (unreadEntry == null || markdownReadyFor == snapshot.items), entry = unreadEntry,
@@ -858,7 +897,7 @@ private fun ChatPage(
         if (chrome.covered || search.visible || search.pending || search.returning || !chatList.restored || chatList.programmaticScroll || overlay || chromeOverlay || fullText != null || linkVisible || statusSheet || terminalHelp || taskPageVisible || lifecycle != Lifecycle.State.RESUMED || !snapshot.verified) return@LaunchedEffect
         snapshotFlow {
             if (list.isScrollInProgress) null else list.layoutInfo.visibleItemsInfo.mapNotNull { visible ->
-                currentLines.getOrNull(visible.index - currentLeadRows)?.seenItem()
+                currentLinesByKey[visible.key]?.seenItem()
             }.maxWithOrNull(chatItemOrder)
         }.debounce(450).distinctUntilChanged().collect { item ->
             if (item != null && (reportedSeen == null || chatItemOrder.compare(item, reportedSeen!!) > 0)) try {
@@ -927,21 +966,28 @@ private fun ChatPage(
                     topScrollEdgeStyle = if (siblingSessions.size > 1) TabbedChatScrollEdgeStyle else ScrollEdgeStyle.Gradient,
                     topBar = {
                         Column {
-                            if (showTopBar) ChatHeader(session, machine, sessionList, controls, connection, readOnly, onBack,
-                                chrome.onOpenSession, chrome.onConnectionDetails, onOverlay = { headerOverlay = it },
-                                onFiles = chrome.onFiles, onGit = chrome.onGit, gitLabel = chrome.gitLabel,
-                                statusState = status, onDetails = { statusSheet = true },
-                                onOpenTodo = chrome.onOpenTodo, agentShares = chrome.agentShares, worktrees = chrome.worktrees,
-                                onSearch = { search.open(chatList) { timeline.freeze(currentItems); timelineVersion++ } },
-                                onTerminal = agentTerminal, onTerminalHelp = if (hasTerminal && terminal == null) ({ terminalHelp = true }) else null)
-                            // The space's other tabs under the title (iOS SiblingTabs); not for the assistant's conversation.
-                            if (session != null && onOpenSibling != null && siblingSessions.size > 1) {
-                                ChatSiblingTabs(session, siblingSessions, onOpenSibling)
+                            val header: @Composable () -> Unit = {
+                                Column {
+                                    if (showTopBar) ChatHeader(session, machine, sessionList, controls, connection, readOnly, onBack,
+                                        chrome.onOpenSession, chrome.onConnectionDetails, onOverlay = { headerOverlay = it },
+                                        onFiles = chrome.onFiles, onGit = chrome.onGit, gitLabel = chrome.gitLabel,
+                                        statusState = status, onDetails = { statusSheet = true },
+                                        onOpenTodo = chrome.onOpenTodo, agentShares = chrome.agentShares, worktrees = chrome.worktrees,
+                                        onSearch = { search.open(chatList) { timeline.freeze(currentItems); timelineVersion++ } },
+                                        onTerminal = agentTerminal, onTerminalHelp = if (hasTerminal && terminal == null) ({ terminalHelp = true }) else null)
+                                    // The space's other tabs under the title (iOS SiblingTabs); not for the assistant's conversation.
+                                    if (session != null && onOpenSibling != null && siblingSessions.size > 1) {
+                                        ChatSiblingTabs(session, siblingSessions, onOpenSibling)
+                                    }
+                                    // The ports it listens on (its dev servers, docs/operations/ports.md): a tap opens the page.
+                                    if (showTopBar && renderStyle != ChatRenderStyle.Assistant) ChatPortChips(session?.ports)
+                                    // The goal it works toward (Claude Code's /goal, a Codex thread goal; docs/integrations/agent-goal.md): a tap opens it.
+                                    if (showTopBar) ChatGoalBar(session?.goal)
+                                }
                             }
-                            // The ports it listens on (its dev servers, docs/operations/ports.md): a tap opens the page.
-                            if (showTopBar && renderStyle != ChatRenderStyle.Assistant) ChatPortChips(session?.ports)
-                            // The goal it works toward (Claude Code's /goal, a Codex thread goal; docs/integrations/agent-goal.md): a tap opens it.
-                            if (showTopBar) ChatGoalBar(session?.goal)
+                            if (foldsHeader) JFoldingHeader({ headerFold.fold }, onRange = { headerFold.range = it }, onTouch = headerFold::touched,
+                                full = header, compact = { ChatSlimHeader(session, status, connection, onBack, onOpen = headerFold::open) })
+                            else header()
 
                             ChatTasks(projection.tasks, lines, chatList,
                                 onFreeze = { timeline.freeze(currentItems); timelineVersion++ },
@@ -1102,7 +1148,34 @@ private fun ChatPage(
                             CloseoutCard(closeout, closeoutWork?.artifacts.orEmpty(), key.path, Modifier.padding(
                                 start = horizontalPadding, end = horizontalPadding, top = pagePaddingValues.calculateTopPadding() + Tokens.Space.s))
                         }
-                        Box(Modifier.weight(1f)) {
+                        Box(Modifier.weight(1f).then(if (foldsHeader) Modifier.nestedScroll(headerScroll) else Modifier)) {
+                            val outboxBubble: @Composable (OutboxMessage) -> Unit = { message ->
+                                val delivery = composerDeliveries[message.clientMessageId]
+                                val deliveryState = if (message.state in setOf(DeliveryState.Refused, DeliveryState.Rejected))
+                                    delivery?.state ?: message.state else message.state
+                                val busy = message.clientMessageId in deliveryActions.busyIds
+                                val onAction: ((DeliveryAction) -> Unit)? = if (readOnly) null else { action -> deliveryAction(message, action) }
+                                val failed = deliveryState == DeliveryState.Rejected || deliveryState == DeliveryState.Refused
+                                Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+                                    // Glass: iOS's bubble, its mark and small menu in place of the status line, which still says why
+                                    // one did not go (#4339 C9); a delivery to check keeps the status line.
+                                    if (glass && drawsAsPendingBubble(deliveryState)) {
+                                        OutboxBubble(composerMessagePreview(message.text), message.clientMessageId, deliveryState, busy, onAction)
+                                        if (failed) PendingBadge(PendingStatus.Refused, Modifier.align(Alignment.End),
+                                            reason = message.copy(error = delivery?.refusal?.code ?: message.error).refusalReason())
+                                    } else {
+                                        UserBubble(composerMessagePreview(message.text), message.clientMessageId, deliveryState)
+                                        OutboxStatus(message.copy(state = deliveryState,
+                                            error = delivery?.refusal?.code ?: message.error),
+                                            busy = busy, onAction = onAction, onDetails = { statusSheet = true })
+                                    }
+                                    if (!readOnly && failed) {
+                                        // Edit puts the words back in the box and drops the refused bubble (nothing reached the computer).
+                                        ComposerRefusalActions(message, composerService, delivery, terminal,
+                                            edit = { deliveryAction(message, DeliveryAction.Edit) }, notice = { notice = it })
+                                    }
+                                }
+                            }
                             ChatList(state = chatList, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(
                                 start = horizontalPadding, end = horizontalPadding,
                                 top = padding.calculateTopPadding() + 12.dp,
@@ -1110,70 +1183,43 @@ private fun ChatPage(
                             )) {
                                 errorLine?.let { error -> item(key = ERROR_ROW, contentType = ERROR_ROW) { ChatSystemLine(error, failed = true) } }
                                 readyLine?.let { words -> item(key = READY_ROW, contentType = READY_ROW) { TypingLine(words) } }
-                                @Composable fun Unsent(message: OutboxMessage) {
-                                    val delivery = composerDeliveries[message.clientMessageId]
-                                    val deliveryState = if (message.state in setOf(DeliveryState.Refused, DeliveryState.Rejected))
-                                        delivery?.state ?: message.state else message.state
-                                    val busy = message.clientMessageId in deliveryActions.busyIds
-                                    val onAction: ((DeliveryAction) -> Unit)? = if (readOnly) null else { action -> deliveryAction(message, action) }
-                                    val failed = deliveryState == DeliveryState.Rejected || deliveryState == DeliveryState.Refused
-                                    Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-                                        // Glass: iOS's bubble, its mark and small menu in place of the status line, which still says why
-                                        // one did not go; a delivery to check keeps the status line.
-                                        if (glass && drawsAsPendingBubble(deliveryState)) {
-                                            OutboxBubble(composerMessagePreview(message.text), message.clientMessageId, deliveryState, busy, onAction)
-                                            if (failed) PendingBadge(PendingStatus.Refused, Modifier.align(Alignment.End),
-                                                reason = message.copy(error = delivery?.refusal?.code ?: message.error).refusalReason())
-                                        } else {
-                                            UserBubble(composerMessagePreview(message.text), message.clientMessageId, deliveryState)
-                                            OutboxStatus(message.copy(state = deliveryState,
-                                                error = delivery?.refusal?.code ?: message.error),
-                                                busy = busy, onAction = onAction, onDetails = { statusSheet = true })
-                                        }
-                                        if (!readOnly && failed) {
-                                            // Edit puts the words back in the box and drops the refused bubble (nothing reached the computer).
-                                            ComposerRefusalActions(message, composerService, delivery, terminal,
-                                                edit = { deliveryAction(message, DeliveryAction.Edit) }, notice = { notice = it })
+                                // Newest at the bottom (reverse layout). A failed send sits above the first line written after it.
+                                placed.rest.asReversed().forEach { message ->
+                                    item(key = "outbox-${message.clientMessageId}", contentType = "outbox") { outboxBubble(message) }
+                                }
+                                for (line in lines) {
+                                    item(key = line.contentKey, contentType = line.contentType()) {
+                                        ChatSearchHighlight(search, line.contentKey) {
+                                            androidx.compose.runtime.CompositionLocalProvider(LocalAssistantTaskHost provides taskHost,
+                                                LocalTurnErrorFixAction provides fixModel, LocalOpenRecap provides openRecap) {
+                                            ChatLineContent(line, key, loader,
+                                            line.recordedDuration(snapshot.recordedTurnDurations),
+                                            ::toggle, ::expand, folding, foldErrors,
+                                            lastUserId = lastUserId,
+                                            turnFix = turnFix.takeIf { line.contentKey == lines.firstOrNull()?.contentKey },
+                                            onLastLine = { extent -> chatList.reportLastLine(line.contentKey, extent) }, onFullText = { item ->
+                                            scope.launch {
+                                                try { fullText = repository.fullText(key, item.id) }
+                                                catch (e: CancellationException) { throw e }
+                                                catch (e: Exception) { if (feedback?.failure(e) != true) notice = operationFeedback(e).text.resolve(res) }
+                                            }
+                                        }, style = renderStyle, textUpdates = liveTextUpdates,
+                                            userImages = contentUserImages[line.id].orEmpty(),
+                                            imagesInUserBubble = line.id in contentHiddenImages,
+                                            workRunning = (line as? ChatLine.Step)?.let { contentWorkGroups[it.groupId]?.live } == true,
+                                            lastWorkStep = (line as? ChatLine.Step)?.let {
+                                                // A nested subagent's card can come after the line's own last step (Glass).
+                                                if (subagentCards) contentLastSteps[it.groupId] == it.step.id
+                                                else contentWorkGroups[it.groupId]?.steps?.lastOrNull()?.id == it.step.id
+                                            } == true,
+                                            plan = (line as? ChatLine.Step)?.let { contentPlans[it.groupId] },
+                                            showSourceLabel = line.id in contentSourceLabels, waiting = waitingOnYou,
+                                            closeoutReply = closeoutReply, hideTaskPrompts = foldsBackground, onTerminal = agentTerminal)
+                                            }
                                         }
                                     }
-                                }
-                                @Composable fun Line(line: ChatLine) {
-                                    ChatSearchHighlight(search, line.contentKey) {
-                                        androidx.compose.runtime.CompositionLocalProvider(LocalAssistantTaskHost provides taskHost,
-                                            LocalTurnErrorFixAction provides fixModel, LocalOpenRecap provides openRecap) {
-                                        ChatLineContent(line, key, loader,
-                                        line.recordedDuration(snapshot.recordedTurnDurations),
-                                        ::toggle, ::expand, folding, foldErrors,
-                                        lastUserId = lastUserId,
-                                        turnFix = turnFix.takeIf { line.contentKey == lines.firstOrNull()?.contentKey },
-                                        onLastLine = { extent -> chatList.reportLastLine(line.contentKey, extent) }, onFullText = { item ->
-                                        scope.launch {
-                                            try { fullText = repository.fullText(key, item.id) }
-                                            catch (e: CancellationException) { throw e }
-                                            catch (e: Exception) { if (feedback?.failure(e) != true) notice = operationFeedback(e).text.resolve(res) }
-                                        }
-                                    }, style = renderStyle, textUpdates = liveTextUpdates,
-                                        userImages = contentUserImages[line.id].orEmpty(),
-                                        imagesInUserBubble = line.id in contentHiddenImages,
-                                        workRunning = (line as? ChatLine.Step)?.let { contentWorkGroups[it.groupId]?.live } == true,
-                                        lastWorkStep = (line as? ChatLine.Step)?.let {
-                                            // A nested subagent's card can come after the line's own last step (Glass).
-                                            if (subagentCards) contentLastSteps[it.groupId] == it.step.id
-                                            else contentWorkGroups[it.groupId]?.steps?.lastOrNull()?.id == it.step.id
-                                        } == true,
-                                        plan = (line as? ChatLine.Step)?.let { contentPlans[it.groupId] },
-                                        showSourceLabel = line.id in contentSourceLabels, waiting = waitingOnYou,
-                                        closeoutReply = closeoutReply, hideTaskPrompts = foldsBackground, onTerminal = agentTerminal)
-                                        }
-                                    }
-                                }
-                                items(outbox.rest.asReversed(), key = { "outbox-${it.clientMessageId}" }, contentType = { "outbox" }) { Unsent(it) }
-                                items(lines, key = { it.contentKey }, contentType = { it.contentType() }) { line ->
-                                    // A message that did not go, written before this one (Glass): above it, where it was written.
-                                    val placed = outbox.before[line.id]
-                                    if (placed == null) Line(line) else Column(Modifier.fillMaxWidth()) {
-                                        placed.forEach { Unsent(it) }
-                                        Line(line)
+                                    placed.before[line.id].orEmpty().asReversed().forEach { message ->
+                                        item(key = "outbox-${message.clientMessageId}", contentType = "outbox") { outboxBubble(message) }
                                     }
                                 }
                                 if (snapshot.loadingOlder) item(key = "loading-older", contentType = "loading") { JLoading() }
@@ -1182,7 +1228,7 @@ private fun ChatPage(
                                 }
                             }
                             // Under the top bar: in glass the list (and this box) runs under it, up to the status bar.
-                            WorkCollapseOverlay(lines, list, tailRows.size + outbox.rest.size, ::toggle, Modifier.align(Alignment.TopStart)
+                            WorkCollapseOverlay(lines, list, listKeys, ::toggle, Modifier.align(Alignment.TopStart)
                                 .padding(start = horizontalPadding, top = padding.calculateTopPadding() + Tokens.Space.s))
                             val settling = snapshot.loading || projectedFrom == null || (snapshot.items.isNotEmpty() && projectedFrom !== snapshot.items)
                             if (settling && lines.isEmpty() && messages.isEmpty()) {

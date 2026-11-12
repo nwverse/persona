@@ -189,10 +189,10 @@ internal fun ThoughtContent(text: String, id: String, collapsed: Boolean, last: 
         val thought = stringResource(R.string.chat_work_thought)
         TimelineStep(PhIcons.Lightbulb, thought, verb = thought, last = last, onClick = { open = !open })
         if (open) {
-            Column(Modifier.padding(start = Tokens.Space.m)) {
+            Column(Modifier.workDetail(Tokens.Space.m)) {
                 ChatMarkdown(text, id, PersonaTheme.type.callout, PersonaTheme.palette.ink2)
             }
-            ReaderEntry(text, thought)
+            Box(Modifier.workDetail()) { ReaderEntry(text, thought) }
         }
     }
 }

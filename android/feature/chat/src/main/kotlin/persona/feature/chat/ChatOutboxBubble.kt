@@ -24,7 +24,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import persona.core.contracts.api.DeliveryState
-import persona.core.contracts.api.OutboxMessage
 import persona.core.designsystem.JAction
 import persona.core.designsystem.JIcon
 import persona.core.designsystem.JMenu
@@ -32,7 +31,6 @@ import persona.core.designsystem.PendingStatus
 import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.Tokens
 import persona.core.designsystem.icons.PersonaIcons
-import persona.core.domain.lines.ChatLine
 
 /**
  * The mark before an unsent message's bubble on Glass (iOS `PendingBubble`): a quiet clock while it sends; a clock with a
@@ -57,38 +55,6 @@ internal fun outboxMarkActions(mark: OutboxMark): List<DeliveryAction> = when (m
     OutboxMark.Waiting -> listOf(DeliveryAction.RetryNow, DeliveryAction.Cancel)
     OutboxMark.Failed -> listOf(DeliveryAction.Retry, DeliveryAction.Delete)
 }
-
-/** Where the unsent messages go: [before] by the id of the line each goes before, the [rest] at the chat's newest end. */
-internal data class PlacedOutbox(val before: Map<String, List<OutboxMessage>>, val rest: List<OutboxMessage>)
-
-/**
- * Where unsent messages go on Glass (iOS `ChatLines.placeFailed`): one that did not go with a message of yours after it in
- * the chat goes right before the first such message, at the end of the exchange it was written in, so the chat reads in
- * the order things were written. One with nothing after it, one without a time and every one still on its way stay at the
- * newest end, in the order they were written. A message in the chat goes by the computer's time less two minutes for its
- * clock, so a near tie leaves the failed one below (iOS goes by this phone's own time for what it sent, which Android's
- * outbox does not keep once a message is in the chat). [lines] in reading order.
- */
-internal fun placeFailed(lines: List<ChatLine>, pending: List<OutboxMessage>): PlacedOutbox {
-    if (pending.none { outboxMark(it.state) == OutboxMark.Failed && it.createdAt != null }) return PlacedOutbox(emptyMap(), pending)
-    val after = lines.mapNotNull { line -> placeTime(line)?.let { line.id to it } }
-    val before = linkedMapOf<String, MutableList<OutboxMessage>>()
-    val rest = mutableListOf<OutboxMessage>()
-    for (message in pending) {
-        val at = message.createdAt
-        val next = if (outboxMark(message.state) == OutboxMark.Failed && at != null) after.firstOrNull { it.second > at } else null
-        if (next == null) rest += message else before.getOrPut(next.first) { mutableListOf() } += message
-    }
-    return PlacedOutbox(before, rest)
-}
-
-/** When a line was written, for [placeFailed]: a message the user sent, by the computer's time less two minutes; null for others. */
-private fun placeTime(line: ChatLine): Long? {
-    val row = (line as? ChatLine.Row)?.row?.takeIf { it.type == "user" } ?: return null
-    return row.item?.time?.minusSeconds(CLOCK_SLACK_SECONDS)?.toEpochMilli()
-}
-
-private const val CLOCK_SLACK_SECONDS = 120L
 
 /**
  * An unsent message on Glass, as iOS's `PendingBubble`: its [OutboxMark] before the bubble, a tap on it opens the small menu

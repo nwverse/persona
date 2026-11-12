@@ -405,3 +405,19 @@ func TestSourcesPagesFit(t *testing.T) {
 		}
 	}
 }
+
+// A subscription's page lists who is muted of it, as a built-in source's does (#5306): by sender, with the mutes page.
+func TestSubscriptionMutes(t *testing.T) {
+	f, b := newFake(), newBuiltins()
+	b.mutes = append(b.mutes, Mute{ID: "m9", Source: "sub_outlook", Tag: "sender", Name: "news@example.com", At: now})
+	r := item(draw(t, f, sourcesEnv(i18n.En, true, b), state{P: pageSource, ID: "sub_outlook"}), "h.mutes")
+	if r == nil || r.Value != "1" || r.Action == nil || r.Action.Push == nil || !strings.Contains(r.Action.Push.State, `"c":"sub_outlook"`) {
+		t.Fatalf("the Muted row: %+v", r)
+	}
+	if item(draw(t, f, sourcesEnv(i18n.En, true, b), state{P: pageMutes, C: "sub_outlook"}), "m.m9") == nil {
+		t.Error("its mutes page lists it")
+	}
+	if item(draw(t, f, env(i18n.En, true), state{P: pageSource, ID: "sub_outlook"}), "h.mutes") != nil {
+		t.Error("a Muted row without the Inbox to ask")
+	}
+}
