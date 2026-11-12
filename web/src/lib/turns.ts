@@ -6,6 +6,7 @@ import { CONTEXT_RE, FILE_RE, PERSONA_SERVERS, canonicalTool } from "./compatibi
 import { t } from "../i18n";
 import { errorSignature, isRetryText, parseAPIError, type APIErrorInfo } from "./api-errors";
 import { foldCompactions, isCompaction } from "./compaction";
+import { engineSwitchOf, type EngineSwitch } from "./engine-switch";
 import { injectedOf } from "./injected";
 import { markModelChanges, type ModelChange } from "./model-change";
 import { sourceKey, sourceOf, userSourceSentinel } from "./message-source";
@@ -85,6 +86,9 @@ export interface Segment {
   supervision?: boolean;
   /** Its reply came from another model than the previous visible reply (lib/model-change.ts): a divider before it. */
   modelChange?: ModelChange;
+  /** Its message is the first the conversation's new engine got (#5054, lib/engine-switch.ts): the switch divider
+   *  before it, with the handoff its block carried (never a context chip). */
+  engineSwitch?: EngineSwitch;
   /** The exchange ended in a model API error or an interruption after everything in it (turnLines, lineError): its last
    *  words are not a finished reply, and say so (cindy's "This reply did not complete", #5314). */
   cut?: boolean;
@@ -138,8 +142,15 @@ export function withoutFolded(have: Item[], page: Item[]): Item[] {
 
 const ATTR_RE = /(\w+)="([^"]*)"/g;
 
+const NAMED_ENTITIES: Record<string, string> = { quot: '"', apos: "'", lt: "<", gt: ">", amp: "&" };
+
+/** One pass, so an escaped entity stays itself; numeric ones too (Go's html.EscapeString writes `&#34;` and `&#39;`). */
 function unescapeAttr(s: string) {
-  return s.replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+  return s.replace(/&(quot|apos|lt|gt|amp|#\d+|#[xX][0-9a-fA-F]+);/g, (m, e: string) => {
+    if (e[0] !== "#") return NAMED_ENTITIES[e];
+    const code = e[1] === "x" || e[1] === "X" ? parseInt(e.slice(2), 16) : Number(e.slice(1));
+    return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : m;
+  });
 }
 
 /** A tag's `name="value"` attributes, unescaped. */
@@ -279,7 +290,13 @@ export function segments(items: Item[], results?: ReadonlyMap<string, Item>): Se
       else {
         const p = parseUserText(it.text ?? "");
         cur.user!.text = cur.user!.text ? `${cur.user!.text}\n${p.text}` : p.text;
-        cur.user!.contexts.push(...p.contexts.filter((c) => c.kind !== "message-source"));
+        for (const c of p.contexts) {
+          if (c.kind === "message-source") continue;
+          // a real switch is the divider, not a chip; a block that only looks like one (pasted, naming no engines) stays a chip
+          const sw = engineSwitchOf(c);
+          if (sw) cur.engineSwitch ??= sw;
+          else cur.user!.contexts.push(c);
+        }
         if (p.files.length) cur.user!.files = [...(cur.user!.files ?? []), ...p.files];
         if (p.photos.length) cur.user!.photos = [...new Set([...(cur.user!.photos ?? []), ...p.photos])];
       }

@@ -309,7 +309,10 @@ python3 scripts/release/asc_testflight.py external   # create the group, enable/
   (requires `app.push_relay` in the release config and successful device registration; see `docs/operations/push-relay.md`); older versions without a relay only receive live updates while the App is open.
   For Gmail login they must create their own Google OAuth client and put it in their manager's `manager.json` on the hub machine (`docs/extensions/mail.md`).
 - Test info needs a privacy policy URL (`app_store.external.privacy_url`); Chinese and English descriptions live in `BETA_INFO` in `asc_testflight.py`.
-- Without a hub, the App only has a pairing page: review notes (`review.notes`) must explain that this App works with a self-hosted hub, or reviewers may ask how to use it.
+- Without a hub, reviewers can choose **"Try it first (made-up data)"** on the welcome page. This offline demo ships in Release,
+  needs no account or server, and uses bundled fictional data with canned replies; external operations are not performed
+  (`docs/apple/ios.md`, "Demo mode"). Review notes (`review.notes`) must give that entry and its limits, and explain that full use
+  requires the user's own self-hosted hub. Never give reviewers access to a developer's personal hub or private data.
 
 ## Mac version (2026-11-02)
 

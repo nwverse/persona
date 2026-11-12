@@ -433,11 +433,16 @@ const (
 )
 
 // PendingSwitch is Session.PendingSwitch: the launcher the Agent moves to, the model and effort to run it with ("":
-// the launcher's own default model; the effort it runs with now), and when the user picked it.
+// the launcher's own default model; the effort it runs with now), and when the user picked it. Agent is the engine
+// ("claude" or "codex") a switch to another engine moves the conversation to (#5054, docs/protocol/protocol.md
+// "Switching a running Agent to another engine"): its next message starts that engine in the same terminal, with a
+// handoff summary, or resumes the conversation's own earlier session of it. Empty for a switch between launchers of
+// the same engine (#5035).
 type PendingSwitch struct {
 	Launcher string    `json:"launcher"`
 	Model    string    `json:"model,omitempty"`
 	Effort   string    `json:"effort,omitempty"`
+	Agent    string    `json:"agent,omitempty"`
 	At       time.Time `json:"at"`
 }
 

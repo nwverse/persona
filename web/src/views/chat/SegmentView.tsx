@@ -9,6 +9,7 @@ import { TurnImages } from "./TurnImages";
 import { exchangeSteps, segmentIdentity, isLoopTick, isOwnMessage, type Context, type Segment, type UserMessage } from "../../lib/turns";
 import { usageKey } from "../../lib/turn-usage";
 import type { Item } from "../../lib/types";
+import { ENGINE_SWITCH_KIND } from "../../lib/engine-switch";
 import { planCardStep, workBlocks, type ToolStep, type WorkNode } from "../../lib/work-groups";
 import { NO_WORKFLOW_CALLS } from "../../lib/workflows";
 import { channelOf, useChannels } from "../../lib/channels";
@@ -21,6 +22,7 @@ import { CardConversation, CardItem } from "../../ui/AssistantCard";
 import { cardReply } from "../../lib/assistant-blocks";
 import { InjectedHint, LoopTick, MergedBubble, PeerMessage } from "./Messages";
 import { ModelChangeDivider } from "./ModelChangeDivider";
+import { EngineSwitchDivider } from "./EngineSwitchDivider";
 import { SourceMessage } from "./SourceMessage";
 import { ContextGroup } from "./ContextGroup";
 import { ForwardBlock } from "./ForwardCard";
@@ -29,6 +31,7 @@ import { useFullText } from "./FullText";
 import { FileCards, ReplyFiles } from "./FileCards";
 import { ReplyPorts } from "./PortChips";
 import { MessageActions } from "./MessageActions";
+import { useIsLatestMessage } from "./latest-message-time";
 import { QuoteStack } from "./Quote";
 import { PathText } from "../../ui/PathLinks";
 import { Thumb } from "./Steps";
@@ -60,20 +63,25 @@ export function bubbleLines(text: string, perLine = CHARS_PER_LINE): number {
 /** ModelChangeDivider's height as drawn (Chrome, 2026-11-12): its 8 px above and below, the chip's 4 px padding, 1 px
  *  border and 16.5 px line (11 px text, the inherited 1.5). The exchange's 14 px gap comes on top. */
 export const MODEL_DIVIDER_HEIGHT = 42.5;
+/** EngineSwitchDivider's height folded: the model change divider's row (the same 8 px above and below, and a chip of the
+ *  same padding, border and 16.5 px line; its 12 px icons are shorter than the line). The handoff opened adds its own
+ *  once drawn. */
+export const ENGINE_DIVIDER_HEIGHT = MODEL_DIVIDER_HEIGHT;
 
 /** A finished exchange's height in px before it is first drawn (content-visibility, docs/web/web.md "Long chats"), by
  *  its text the way bubbleLines counts it: its bubble (folded past BUBBLE_MAX_LINES), its words at 2.5 times the
  *  bubble's characters to a line (the column is wider, and Markdown's short and blank lines take less than a line), a
- *  row for each other block, and the model change divider when it has one (`modelChange`). Once drawn it keeps its
- *  own height. */
-export function segmentHeight(user: UserMessage | undefined, nodes: WorkNode[], modelChange = false): number {
+ *  row for each other block, and the model change divider when it has one (`modelChange`), the engine switch divider
+ *  folded likewise (`engineSwitch`). Once drawn it keeps its own height. */
+export function segmentHeight(user: UserMessage | undefined, nodes: WorkNode[], modelChange = false, engineSwitch = false): number {
   // gap: the exchange's blocks stand 14 px apart (`gap-3.5`, cindy's msg-stream-items)
   const line = 24, gap = 14, row = 28;
   const lines = user ? bubbleLines(user.text) : 0;
   let h = user ? (lines > BUBBLE_MAX_LINES ? 10 : lines) * line + 20 + (user.images.length ? 102 : 0) : 0;
   for (const n of nodes) h += n.kind === "step" && n.step.kind === "text" ? bubbleLines(n.step.item.text ?? "", CHARS_PER_LINE * 2.5) * line : row;
   if (modelChange) h += MODEL_DIVIDER_HEIGHT;
-  return Math.round(h + gap * Math.max(0, nodes.length + (user ? 1 : 0) + (modelChange ? 1 : 0) - 1));
+  if (engineSwitch) h += ENGINE_DIVIDER_HEIGHT;
+  return Math.round(h + gap * Math.max(0, nodes.length + (user ? 1 : 0) + (modelChange ? 1 : 0) + (engineSwitch ? 1 : 0) - 1));
 }
 
 /** `sendState`: a message not in the transcript yet (a sending bubble, the outbox's), marked for the sync scenarios
@@ -84,6 +92,8 @@ export function segmentHeight(user: UserMessage | undefined, nodes: WorkNode[], 
  *  the transcript to go back to). */
 export function UserBubble({ msg, mid, sid, pending, sendState, starting, onDelete }: { msg: UserMessage; mid: string; sid: string; pending?: boolean; sendState?: "sending" | "sent" | "failed"; starting?: boolean; onDelete?: () => void }) {
   const own = isOwnMessage(msg);
+  // the chat's last message keeps its time on screen under the bubble (#5285); a hover shows the others' beside it
+  const pinned = useIsLatestMessage(msg.ts) && !pending && !starting;
   // the message an extension opened the conversation with (#3758)
   const { opening } = useChatContext();
   const openedBy = opening && opening.id === msg.id ? opening.origin : undefined;
@@ -113,6 +123,7 @@ export function UserBubble({ msg, mid, sid, pending, sendState, starting, onDele
             <BubbleText text={msg.text} forwards={forwards} ts={msg.ts} mid={mid} sid={sid} own={own} />
           </MessageActions>
         ))}
+      {pinned && <span className="text-[11px] text-ink-3 tabular-nums" data-latest-time>{clock(msg.ts)}</span>}
       {(pending || msg.queued) && <span className="text-[11px] text-ink-3">{pending ? t("chat-segmentview.sending") : t("chat-segmentview.queued")}</span>}
       {!pending && !starting && <ChannelSource clientMsgId={msg.client_msg_id} openedBy={openedBy} />}
     </div>
@@ -364,9 +375,12 @@ export const SegmentView = memo(function SegmentView({
   const usage = !live && !trace ? usageKey(seg.usage) : undefined;
   const groups = usage ? nodes.filter((n) => n.kind === "group") : [];
   const usageMs = groups.length === 1 ? groups[0].durationMs : undefined;
-  const guess = useMemo(() => (offscreen ? ({ "--seg-est": `${segmentHeight(seg.user, nodes, divided) + (changes ? 12 + turnChangesHeight(changes) : 0)}px` } as CSSProperties) : undefined), [offscreen, seg.user, nodes, divided, changes]);
+  const switched = Boolean(seg.engineSwitch);
+  const guess = useMemo(() => (offscreen ? ({ "--seg-est": `${segmentHeight(seg.user, nodes, divided, switched) + (changes ? 12 + turnChangesHeight(changes) : 0)}px` } as CSSProperties) : undefined), [offscreen, seg.user, nodes, divided, switched, changes]);
   return (
     <section ref={box} className={offscreen ? "seg-cv flex flex-col gap-3.5" : "flex flex-col gap-3.5"} style={guess} data-segment>
+      {/* the first message the conversation's new engine got (#5054): the switch divider above it, the user's words below */}
+      {seg.engineSwitch && <EngineSwitchDivider sw={seg.engineSwitch} id={seg.id} item={switchItem(seg)} mid={mid} sid={sid} />}
       {trace && seg.user?.rawInput && !seg.user.promptHidden && !seg.user.sourceInTrace ? <RawInjectedInput items={seg.user.rawInput} mid={mid} sid={sid} /> : seg.user && (seg.user.source ? <SourceMessage msg={seg.user} mid={mid} sid={sid} /> : seg.user.injected ? <InjectedHint msg={seg.user} sid={sid} /> : seg.user.parts ? <MergedBubble msg={seg.user} mid={mid} sid={sid} /> : seg.user.from ? <PeerMessage msg={seg.user} /> : isLoopTick(seg.user) ? <LoopTick msg={seg.user} /> : <UserBubble msg={seg.user} mid={mid} sid={sid} />)}
       {/* the reply below came from another model than the one before it (cindy: after the message that started it) */}
       {seg.modelChange && <ModelChangeDivider from={seg.modelChange.from} to={seg.modelChange.to} />}
@@ -384,6 +398,11 @@ export const SegmentView = memo(function SegmentView({
     </section>
   );
 });
+
+/** The message's transcript item that carried the switch's block (its rest is fetched from it when the hub cut it). */
+function switchItem(seg: Segment): Item | undefined {
+  return seg.user?.rawInput?.find((i) => i.kind === "text" && i.text?.includes(`kind="${ENGINE_SWITCH_KIND}"`));
+}
 
 function RawInjectedInput({ items, mid, sid }: { items: Item[]; mid: string; sid: string }) {
   return (
