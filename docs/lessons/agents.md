@@ -294,7 +294,8 @@ its first request on one machine), so the person it answered could ask for them.
 the rules through (about 27k of those tokens): for a directory below the home, Claude Code reads `~/.claude` as the home
 directory's project `.claude`, rules included. `claudeMdExcludes` takes paths and globs and covers rules files too, so
 every guest now also excludes `<dir>/.claude/rules/**` for each directory above its own, the home's and the profile's;
-the same first request was under 3k tokens. Check such isolation on the real CLI: pick a marker line from each source and
+the same first request was under 3k tokens. The same goes for `AGENTS.md` and `.claude/AGENTS.md` above it, which Claude
+Code reads in place of CLAUDE.md when the guest's directory has no CLAUDE.md of its own. Check such isolation on the real CLI: pick a marker line from each source and
 count it in the run's transcript, which records the instructions the process loaded.
 
 ## Read colors to determine whether Claude's input box is empty (#1434)

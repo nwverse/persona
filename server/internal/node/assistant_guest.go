@@ -18,10 +18,10 @@ import (
 // Guest conversations (the hub's assistant/guest.go, docs/assistant/assistant.md ("Guest conversations")): an assistant conversation that
 // answers someone else for the user. It runs on Claude Code on the CLI or the Agent SDK (no other agent or runtime),
 // never in the warm spare, and every CLI process has no built-in tools (--tools "") and none of the owner's Claude Code
-// setup (guestSettingArgs, guestSettingsFile: no user settings, CLAUDE.md files, rules or auto memory). The SDK uses
-// tools: [], settingSources: [], the same guest settings and an in-process server for its declared MCP tools. Both
-// load only Persona's MCP server (strict MCP config, no user's or extensions' servers), and only their own tools. The
-// hub lists and runs only those for it and gives it no live snapshot; the tools it has are kept in its
+// setup (guestSettingArgs, guestSettingsFile: no user settings, CLAUDE.md or AGENTS.md files, rules or auto memory).
+// The SDK uses tools: [], settingSources: [], the same guest settings and an in-process server for its declared MCP
+// tools. Both load only Persona's MCP server (strict MCP config, no user's or extensions' servers), and only their own
+// tools. The hub lists and runs only those for it and gives it no live snapshot; the tools it has are kept in its
 // sessionState.Guest.
 
 // maxGuestTools is the hub's bound (assistant/guest.go).
@@ -269,16 +269,17 @@ var errRoomRecord = errors.New("this meeting's room lost its record on this comp
 // (docs/assistant/assistant.md "Guest conversations", docs/assistant/meeting-minutes.md "Nothing of the owner's Claude
 // Code setup"): only the project's settings sources (never the user's: their CLAUDE.md, rules, auto memory, hooks,
 // output style, plugins and permissions), and the guest's own --settings (guestSettingsFile), which carries the
-// launcher's environment and excludes every CLAUDE.md and .claude/rules of the directories above the guest's
-// (~/CLAUDE.md, ~/.claude/rules…), which the project source would load too.
+// launcher's environment and excludes every CLAUDE.md, AGENTS.md and .claude/rules of the directories above the
+// guest's (~/CLAUDE.md, ~/.claude/rules…), which the project source would load too.
 func guestSettingArgs() []string {
 	return []string{"--setting-sources", "project"}
 }
 
-// guestIsolation adds to a guest's settings s what keeps the owner's instructions out: the CLAUDE.md files and rules of
-// every directory above cwd and of its profile (configDir, "" for none) excluded, no auto-memory. --setting-sources
-// project still reads a directory above cwd as a project's: below the home that is ~/.claude/CLAUDE.md and every
-// ~/.claude/rules file (#5786), which claudeMdExcludes takes as paths or globs.
+// guestIsolation adds to a guest's settings s what keeps the owner's instructions out: the CLAUDE.md and AGENTS.md
+// files and rules of every directory above cwd and of its profile (configDir, "" for none) excluded, no auto-memory.
+// --setting-sources project still reads a directory above cwd as a project's: below the home that is
+// ~/.claude/CLAUDE.md and every ~/.claude/rules file (#5786), which claudeMdExcludes takes as paths or globs. AGENTS.md
+// is read in place of CLAUDE.md where the guest's directory has none of its own.
 func guestIsolation(s map[string]any, cwd, home, configDir string) {
 	var excludes []string
 	add := func(f string) {
@@ -287,7 +288,8 @@ func guestIsolation(s map[string]any, cwd, home, configDir string) {
 		}
 	}
 	for dir := filepath.Dir(filepath.Clean(cwd)); ; dir = filepath.Dir(dir) {
-		for _, name := range []string{"CLAUDE.md", "CLAUDE.local.md", filepath.Join(".claude", "CLAUDE.md"), filepath.Join(".claude", "rules", "**")} {
+		for _, name := range []string{"CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", filepath.Join(".claude", "CLAUDE.md"),
+			filepath.Join(".claude", "AGENTS.md"), filepath.Join(".claude", "rules", "**")} {
 			add(filepath.Join(dir, name))
 		}
 		if dir == filepath.Dir(dir) {
@@ -296,11 +298,13 @@ func guestIsolation(s map[string]any, cwd, home, configDir string) {
 	}
 	if home != "" {
 		add(filepath.Join(home, ".claude", "CLAUDE.md"))
+		add(filepath.Join(home, ".claude", "AGENTS.md"))
 		add(filepath.Join(home, ".claude", "rules", "**"))
 	}
 	for _, cfg := range []string{os.Getenv("CLAUDE_CONFIG_DIR"), configDir} {
 		if cfg != "" {
 			add(filepath.Join(cfg, "CLAUDE.md"))
+			add(filepath.Join(cfg, "AGENTS.md"))
 			add(filepath.Join(cfg, "rules", "**"))
 		}
 	}

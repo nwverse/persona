@@ -172,6 +172,13 @@ func TestGuestAgentSDKStart(t *testing.T) {
 	if got, _ := o["allowedTools"].([]any); len(got) != 1 || got[0] != "mcp__persona__larkbridge_docs" {
 		t.Fatalf("allowed tools: %#v", o["allowedTools"])
 	}
+	// Its settings are the guest's own on the SDK too (#5786): the owner's instructions excluded, no auto memory.
+	settings, _ := o["settings"].(map[string]any)
+	excludes, _ := settings["claudeMdExcludes"].([]any)
+	settingsEnv, _ := settings["env"].(map[string]any)
+	if !slices.Contains(excludes, any(filepath.Join(f.n.home, ".claude", "rules", "**"))) || settingsEnv["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] != "1" {
+		t.Fatalf("the guest's settings: %v", o["settings"])
+	}
 }
 
 // Its directory holds only its instructions; a path out of the home is refused. Tool names are plain identifiers.
@@ -356,12 +363,13 @@ func assertGuestSettings(t *testing.T, line, file, cwd string) {
 	home := os.Getenv("HOME")
 	for _, want := range []string{filepath.Join(home, "CLAUDE.md"), filepath.Join(home, ".persona", "CLAUDE.md"),
 		filepath.Join(home, ".claude", "CLAUDE.md"), filepath.Join(filepath.Dir(cwd), "CLAUDE.md"),
+		filepath.Join(home, "AGENTS.md"), filepath.Join(home, ".claude", "AGENTS.md"), filepath.Join(filepath.Dir(cwd), "AGENTS.md"),
 		filepath.Join(home, ".claude", "rules", "**"), filepath.Join(filepath.Dir(cwd), ".claude", "rules", "**")} {
 		if !slices.Contains(settings.Excludes, want) {
 			t.Errorf("%s is not excluded: %v", want, settings.Excludes)
 		}
 	}
-	for _, own := range []string{filepath.Join(cwd, "CLAUDE.md"), filepath.Join(cwd, ".claude", "rules", "**")} {
+	for _, own := range []string{filepath.Join(cwd, "CLAUDE.md"), filepath.Join(cwd, "AGENTS.md"), filepath.Join(cwd, ".claude", "rules", "**")} {
 		if slices.Contains(settings.Excludes, own) {
 			t.Errorf("its own %s is excluded: %s", own, raw)
 		}
