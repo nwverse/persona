@@ -5,22 +5,22 @@ import SwiftUI
 /// names only its own tasks, each independently openable. Titles come from the live to-do when loaded; a task whose Agent
 /// did not start says why in red, and one with none yet says it is starting. The web draws one card per Agent; here a
 /// task is one card, its lead Agent.
-struct HandoffCards: View {
+struct DispatchHandoffCards: View {
     var tasks: [DispatchedTasks.Entry]
 
     var body: some View {
         if !tasks.isEmpty {
             VStack(alignment: .leading, spacing: Theme.Space.s) {
-                ForEach(tasks) { HandoffCard(entry: $0) }
+                ForEach(tasks) { DispatchHandoffCard(entry: $0) }
             }
         }
     }
 }
 
 /// What a hand-off card says about its task, worked out from the stores. The card reads them (which makes it re-evaluate
-/// on any to-do or session change, as the stores are shared) and hands this value to `HandoffCardBody`, which is
+/// on any to-do or session change, as the stores are shared) and hands this value to `DispatchHandoffCardBody`, which is
 /// `Equatable`: a change that leaves it as it was redraws nothing below (docs/apple/performance.md P5, P6).
-struct HandoffCard: View {
+struct DispatchHandoffCard: View {
     var entry: DispatchedTasks.Entry
     private var store: TasksStore { .shared }
 
@@ -38,7 +38,7 @@ struct HandoffCard: View {
         let todo = entry.todoID.flatMap { store.todos[$0] }
         let lead = todo.flatMap { store.leadSession($0) }
         let meta = meta(todo: todo, lead: lead)
-        HandoffCardBody(entry: entry, meta: meta).equatable()
+        DispatchHandoffCardBody(entry: entry, meta: meta).equatable()
     }
 
     private func meta(todo: TodoItem?, lead: Session?) -> Meta {
@@ -60,9 +60,9 @@ struct HandoffCard: View {
     }
 }
 
-struct HandoffCardBody: View, Equatable {
+struct DispatchHandoffCardBody: View, Equatable {
     var entry: DispatchedTasks.Entry
-    var meta: HandoffCard.Meta
+    var meta: DispatchHandoffCard.Meta
     private var store: TasksStore { .shared }
 
     /// "3 min. ago": minutes are enough for when an Agent last moved.

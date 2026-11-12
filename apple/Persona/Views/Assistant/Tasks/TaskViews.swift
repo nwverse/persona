@@ -410,7 +410,7 @@ struct FeedLine: View {
         case .plan, .task:
             if let tasks = DispatchedTasks.entries(for: item, plans: store.plans,
                                                   titleOf: { store.todos[$0]?.title }, fallback: String(localized: "Tasks")) {
-                HandoffCards(tasks: tasks)
+                DispatchHandoffCards(tasks: tasks)
             } else if let id = item.ref, let plan = store.plans[id] ?? item.plan {
                 PlanCard(plan: plan)
             }

@@ -300,7 +300,7 @@ Web 的 `--orange` 浅色 `#a64c00` 比 iOS 的 `caution` 暗很多，更接近 
 | P4 一对词 | 已做：Later / Don't handle（稍后 / 不处理，あとで / 対応しない）；拍板行的 Later 只在本次 App 运行内，Don't handle 落库、可撤销（6 秒 Undo） |
 | §3.1 计划卡 | 已做：Start 满宽、放不下时 Edit / Don't Start 换到下一行；brief 折叠显示；托盘里按钮钉在列表下方；「Start these directly from now on」 |
 | §3.2 进度行 / D3 | 已做：状态词右列带色、行尾 ›、第二行（用量限制 = 原因 + 重置时间，橙色时钟）、Starting 空心圈 + caution 点 |
-| D6 交接卡 | 已做：`HandoffCard`，**一个任务一张卡**（Web 是每个 Agent 一张，120 秒内合并）；这是可接受的差别 |
+| D6 交接卡 | 已做：`DispatchHandoffCard`，**一个任务一张卡**（Web 是每个 Agent 一张，120 秒内合并）；这是可接受的差别 |
 | P7 清理 | 已做：`TaskCard`、`TaskLine`、`TaskNowLine`、`TaskSentList`、`TaskProgressLine`、`TaskOpenButton` 已删；`SentToAgents.takenIn` / `shown` 没动，但 App 里本来就没有调用它们（交接消息一直按普通消息画成 exchange 行），所以这次没有消息消失；要让交接卡列出它们是后续的事 |
 | 与 Web 的已知差别 | iOS 的 usage limit 状态不加 10 分钟宽限（共用的 `entries` fixture 不认）；宽限只用在第二行的重置时间和结论卡上 |
 
