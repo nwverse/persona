@@ -140,7 +140,10 @@ export function weeklyQuota(answer: LauncherQuotaAnswer | undefined): WeeklyQuot
     if (!/week|周|週/i.test(w.label)) continue;
     let used = w.used_ratio !== undefined && Number.isFinite(w.used_ratio) ? w.used_ratio : undefined;
     if (used === undefined && w.used !== undefined && w.limit !== undefined && Number.isFinite(w.used) && w.used >= 0 && Number.isFinite(w.limit) && w.limit > 0) used = w.used / w.limit;
-    if (used === undefined) continue;
+    if (used === undefined) {
+      if (!w.exhausted) continue;
+      used = 1;
+    }
     if (!found || (w.exhausted && !found.window.exhausted) || (w.exhausted === found.window.exhausted && used > found.used)) found = { window: w, used };
   }
   if (!found) return undefined;
