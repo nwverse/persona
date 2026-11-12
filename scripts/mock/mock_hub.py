@@ -1387,6 +1387,15 @@ if os.environ.get("MOCK_SOURCES"):
              read_only_reason="这个 Claude 没有开放会话之间的消息通道（版本较旧或功能关着）：手机上只能看，回复请在电脑上",
              capabilities={"read": True}, **NO_SPACE),
     ]
+# MOCK_OUTSIDE_DIALOG=1 (#5890): a Claude Code session started in a plain terminal, waiting on a question only the
+# computer can answer; a message to it goes into its queue, and the answer says so (waits_on_computer).
+OUTSIDE_DIALOG = "c1a0de00-0000-4000-8000-000000005890"
+if os.environ.get("MOCK_OUTSIDE_DIALOG"):
+    SESSIONS.append(sess("macbook", OUTSIDE_DIALOG, "整理更新日志", "/Users/me/code/notes", "blocked", "needs_you", "", 0, "", 0, 1,
+                         "要不要把旧版本的条目也一起改？", agent="claude", source_kind="claude_cli", agent_surface="cli",
+                         started_by_persona=False, attention_reason="它在等电脑上的一个问题或权限请求：手机上答不了，请到电脑上处理",
+                         capabilities={"read": True, "send": True, "interrupt": False, "approve": False, "terminal": False,
+                                       "attach": False, "modes": False}, **NO_SPACE))
 if os.environ.get("MOCK_MODE_CAPS"):
     # A runtime that explicitly takes Claude-style modes, and a desktop Claude that explicitly cannot (#1843).
     SESSIONS.append(
@@ -2879,6 +2888,9 @@ RULE_SUGGESTIONS = {
         "scope": {}, "creates": "", "setting": "agents.delegate", "count": 3},
 } if os.environ.get("MOCK_RULE_SUGGESTIONS") == "1" else {}
 RULE_SUGGESTIONS_ANSWERED = set()  # answered with Always or Not now
+RULE_GRANTS = []  # the standing authorizations Always granted, as GET /api/v1/assistant/standing-authorizations lists them
+RULE_GRANTS_REVISION = [1]
+RULE_TRUST_ADDED = set()  # the tasks.trust keys Always added, which /mock/reset takes away again
 RULE_SUGGESTION_ON = {"todo_review": "rs_mock_merge", "ix_tests": "rs_mock_delegate", "plan_mock_3": "rs_mock_start"}
 
 
@@ -2895,7 +2907,20 @@ def suggested_plan(plan):
 
 
 def rule_suggestions_area(h, method, p):
-    """POST /api/v1/assistant/rule-suggestions/{id}/always | not-now (MOCK_RULE_SUGGESTIONS=1)."""
+    """POST /api/v1/assistant/rule-suggestions/{id}/always | not-now (MOCK_RULE_SUGGESTIONS=1), and the standing
+    authorizations Always granted: GET /api/v1/assistant/standing-authorizations lists them, DELETE …/{id} revokes one."""
+    if RULE_SUGGESTIONS and p == "/api/v1/assistant/standing-authorizations" and method == "GET":
+        h.send_json({"revision": RULE_GRANTS_REVISION[0], "authorizations": RULE_GRANTS})
+        return True
+    if RULE_SUGGESTIONS and p.startswith("/api/v1/assistant/standing-authorizations/") and method == "DELETE":
+        kept = [g for g in RULE_GRANTS if g["id"] != unquote(p.rsplit("/", 1)[1])]
+        if len(kept) == len(RULE_GRANTS):
+            h.send_json({"error": "not found", "code": "not_found"}, 404)
+            return True
+        RULE_GRANTS[:] = kept
+        RULE_GRANTS_REVISION[0] += 1
+        h.send_json({"revision": RULE_GRANTS_REVISION[0], "authorizations": RULE_GRANTS})
+        return True
     m = re.fullmatch(r"/api/v1/assistant/rule-suggestions/([^/]+)/(always|not-now)", p)
     if not m or method != "POST":
         return False
@@ -2910,11 +2935,18 @@ def rule_suggestions_area(h, method, p):
         key = "macbook|/Users/me/code/weather|edit"
         if MOCK_TASKS and not any(k["key"] == key for k in TASK_TRUST):
             TASK_TRUST.append({"key": key, "machine": "macbook", "cwd": "/Users/me/code/weather", "readonly": False})
+            RULE_TRUST_ADDED.add(key)
         h.send_json({"ok": True, "kind": sg["kind"], "creates": "tasks.trust", "key": key})
     elif sg["kind"] == "standing_authorization":
-        h.send_json({"ok": True, "kind": sg["kind"], "creates": "standing_authorization", "revision": 2,
-                     "authorization": {"id": "sa_mock_1", "action": "merge", "machine_id": "macbook", "directory": "/Users/me/code/weather",
-                                       "conditions": ["ci_green", "no_conflicts"], "quote": sg["scope"]["quote"]}})
+        grant = {"id": "sa_mock_%d" % (len(RULE_GRANTS) + 1), "action": "merge", "actions": ["merge"], "machine_id": "macbook",
+                 "directory": "/Users/me/code/weather", "conditions": ["ci_green", "no_conflicts"], "quote": sg["scope"]["quote"],
+                 # The hub's own words (server/internal/i18n/locales/en/assistant-rule_suggest.json "source").
+                 "source": "Suggested rule: the same answer 3 times in 14 days, confirmed with Always.",
+                 "granted_at": ago(), "reversible": True}
+        RULE_GRANTS.append(grant)
+        RULE_GRANTS_REVISION[0] += 1
+        h.send_json({"ok": True, "kind": sg["kind"], "creates": "standing_authorization", "revision": RULE_GRANTS_REVISION[0],
+                     "authorization": grant})
     else:
         h.send_json({"ok": True, "kind": sg["kind"], "creates": "", "setting": sg["setting"]})
     push_todos()  # a decision is worded again without the line; a pending card is sent again without it
@@ -3534,7 +3566,7 @@ def recording_minutes(body, rid=None):
 
 # The managers' roster (docs/assistant/managers.md): the hub's own assistant (the default), one on another computer, one offline,
 # one still installing. MOCK_MANAGER_COMMANDS=1 adds the install commands to a new code's answer; MOCK_MANAGERS=0 is a
-# hub from before the roster (404); MOCK_MANAGERS=1 only the hub's own (one manager: no switcher, no grouping).
+# hub from before the roster (404); MOCK_MANAGERS=1 only the hub's own (one manager: a one-row switcher without Default, no grouping).
 def _managers_seed():
     if os.environ.get("MOCK_MANAGERS") == "1":
         return [{"id": "assistant", "name": "助手", "online": True, "builtin": True, "host": "server", "os": "linux", "arch": "amd64",
@@ -10404,6 +10436,40 @@ if MOCK_INBOX_EVENTS:
             if _x["id"] in _event_mutes: _x["mutes"] = _event_mutes[_x["id"]]
 
 
+# MOCK_HANDOFF_CARD=1 (with MOCK_TASKS=1): an item handed to the main conversation that wrote back (#5932,
+# docs/assistant/inbox.md "Item actions"): the item carries the hand-off and the conversation's reply suggestion, and the
+# main conversation's feed has the write-back card (kind inbox_suggestion), so the chat draws the card and "Wrap up".
+# MOCK_HANDOFF_CARD=sent: the reply was confirmed and sent (the card says so). Confirming the card's suggestion files the
+# item as replied, as the hub does for a hand-off conversation's reply.
+MOCK_HANDOFF_CARD = os.environ.get("MOCK_HANDOFF_CARD", "")
+if MOCK_HANDOFF_CARD:
+    _hid = "lark:oc_handoff:300"
+    _hcard = {"version": 2, "kind": "reply", "text": "王总您好，报价单我周五上午发您，按三年维保报，有问题随时找我。",
+              "note": "上次给同类客户的报价按三年维保；周五上午有空。",
+              "recap": "示例客户问报价和维保年限。我们在对话里定了：周五上午发报价单，按三年维保报。",
+              "title": "示例客户", "source": "lark", "account": "飞书", "sender": "示例客户"}
+    _hitem = {"id": _hid, "source": "lark", "kind": "dm", "account": "lark", "account_name": "飞书", "title": "示例客户",
+              "sender": "示例客户", "preview": "周五前能给个报价吗？维保按几年算？", "count": 2, "started_at": ago(minutes=50),
+              "updated_at": ago(minutes=3), "tier": "action", "status": "action", "summary": "示例客户问报价和维保年限",
+              "read": True, "recap": _hcard["recap"], "lark": {"feed_id": "oc_handoff", "is_group": False, "start_position": "300"},
+              "handoffs": [{"machine_id": "server", "session_id": ASK1, "at": ago(minutes=40)}],
+              "suggestion": {"version": 2, "kind": "reply", "text": _hcard["text"], "note": _hcard["note"], "at": ago(minutes=3),
+                             "conversation": {"machine_id": "server", "session_id": ASK1}},
+              "chain": [{"id": "c1", "at": ago(minutes=50), "kind": "received", "text": "收到 2 条消息 · 示例客户", "count": 2, "sender": "示例客户"},
+                        {"id": "c2", "at": ago(minutes=40), "kind": "handling", "text": "交给了 Persona 主对话",
+                         "link": {"type": "session", "machine_id": "server", "session_id": ASK1}}]}
+    if MOCK_HANDOFF_CARD == "sent":
+        _hitem.pop("suggestion")
+        _hitem.pop("status")
+        _hitem.update(done_at=ago(minutes=1), done_by="replied")
+        _hitem["chain"] += [{"id": "c3", "at": ago(minutes=1), "kind": "confirmed", "text": "你确认了", "detail": _hcard["text"]},
+                            {"id": "c4", "at": ago(minutes=1), "kind": "sent", "text": "发了飞书消息", "link": {"type": "source"}}]
+    INBOX.insert(0, _hitem)
+    if MOCK_TASKS:
+        TASK_FEED.setdefault(ASK1, []).append({"id": "feed_handoff", "conversation": ASK1, "at": ago(minutes=0.4), "kind": "inbox_suggestion",
+                                               "ref": _hid, "body": _hcard})
+
+
 def _chain_add(x, kind, text, **more):
     x.setdefault("chain", []).append(dict({"id": "c%d" % (len(x["chain"]) + 1), "at": ago(), "kind": kind, "text": text}, **more))
 
@@ -10421,7 +10487,8 @@ def inbox_suggestion(iid, body):
     SENT.append(dict(body, inbox=iid))
     x.pop("suggestion", None)
     x.pop("agent", None)
-    h = x.setdefault("handling", {"owner": "manager"})
+    # a hand-off conversation's suggestion leaves the item's processing state alone (assistant/inbox_handoff.go)
+    h = {} if s.get("conversation") else x.setdefault("handling", {"owner": "manager"})
     if action == "reject":
         _chain_add(x, "rejected", "你驳回了")
         h.update(state="looking", since=ago()); x["status"] = "working"
@@ -10435,7 +10502,12 @@ def inbox_suggestion(iid, body):
         text = body.get("text") or s["text"]
         edited = text != s["text"]
         _chain_add(x, "confirmed", "你确认了（改过文字）" if edited else "你确认了", detail=text, **({"edited": True} if edited else {}))
-        if s["kind"] == "reply":
+        if s["kind"] == "reply" and s.get("conversation"):
+            # a hand-off conversation's reply (#5932): sent and filed as replied; nobody follows the other side's answer
+            _chain_add(x, "sent", "发了邮件" if x.get("mail") else "发了飞书消息", link={"type": "source"})
+            x.pop("status", None)
+            x["done_at"], x["done_by"] = ago(), "replied"
+        elif s["kind"] == "reply":
             _chain_add(x, "sent", "发了邮件" if x.get("mail") else "发了飞书消息", link={"type": "source"})
             h.update(state="waiting", since=ago()); x["status"] = "working"
         elif s["kind"] == "agent":
@@ -14110,7 +14182,9 @@ if os.environ.get("MOCK_CHAT_CONTENT") == "1":
         + tool("AskUserQuestion", {"questions": [{"question": "快照测试放在哪个 target？", "header": "Target", "multiSelect": False,
                                                   "options": [{"label": "WeatherWidgetTests (Recommended)", "description": "和小组件放在一起"},
                                                               {"label": "新建 SnapshotTests", "description": "单独的 target，跑得更快"}]}]},
-               "User answered: WeatherWidgetTests", 28)
+               # Claude Code's own answer shape (#5937)
+               'User has answered your questions: "快照测试放在哪个 target？"="WeatherWidgetTests (Recommended)". '
+               "You can now continue with the user's answers in mind.", 28)
         + tool("Task", {"description": "补齐深色模式的快照测试", "subagent_type": "general-purpose",
                         "prompt": "在 WeatherWidgetTests 里给 WidgetView 补快照测试：\n1. 深色、浅色各一套\n2. 六个城市：上海、北京、Tokyo、"
                                   "Lisbon、Reykjavík、Nairobi\n3. 每张图检查温度文字和背景的对比度，低于 4.5:1 就失败\n4. 跑一遍 "
@@ -21153,6 +21227,11 @@ class H(BaseHTTPRequestHandler):
             wire_reset()
             SEND_FAIL["on"] = False  # a FailedSendPlacementTests run that died before turning it off
             COOKIES_FAILED[0] = False  # MOCK_COOKIES_FAIL: the next read fails again
+            # MOCK_RULE_SUGGESTIONS: every suggestion is offered again, and what Always made is gone (web/e2e/rule-suggestions.mjs)
+            RULE_SUGGESTIONS_ANSWERED.clear(); del RULE_GRANTS[:]; RULE_GRANTS_REVISION[0] = 1
+            if MOCK_TASKS and RULE_TRUST_ADDED:
+                TASK_TRUST[:] = [k for k in TASK_TRUST if k["key"] not in RULE_TRUST_ADDED]
+                RULE_TRUST_ADDED.clear()
             HERDR_STOPPED.clear(); HERDR_STOPPED.update(herdr_env()); HERDR_STARTS.clear()  # the herdr row (#1916)
             HERDR_MODE["start"] = os.environ.get("MOCK_HERDR_START", ""); HERDR_MODE["gen"] += 1
             # A test that died before putting them back: the start-up delay (MOCK_DELAY), no paging.
@@ -21271,6 +21350,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/assistant":
             q = parse_qs(urlparse(self.path).query)
             return self.send_json(assistant_state(q.get("space", [""])[0], q.get("archived", [""])[0] == "1"))
+        if rule_suggestions_area(self, "GET", p): return  # the standing authorizations Always granted
         if p == "/api/v1/model-config": return self.send_json(listed_model_configuration())
         if p == "/api/v1/model-config/purposes/" + SUPERVISE_PURPOSE and (own := supervise_model_purpose()):
             return self.send_json(own)
@@ -24643,6 +24723,8 @@ def mock_showcase(handler, ui, body):
     request = json.loads(body) if body else {}
     if ui == "controls":
         return _showcase_controls(handler, view, request)
+    if request.get("action") == "context":
+        return _showcase_context(handler, request.get("values") or {})
     if request.get("action"):
         handler.send_json({"toast": "快照测试不执行写操作"})
     else:
@@ -24684,6 +24766,17 @@ def _showcase_controls(handler, view, request):
         if when is not None and bool(c.get("on")) == when:
             c["action"]["confirm"] = words
     handler.send_json({"items": [changed]} if changed else {"view": view})
+    return True
+
+
+def _showcase_context(handler, values):
+    """A diff's hidden lines (UI version 5's `context`, #827): made-up lines of a 90-line file, as many as asked."""
+    total = 90
+    start = max(1, int(values.get("from") or 1))
+    to = values.get("to")
+    end = total if to in (None, "", "end") else min(total, int(to))
+    lines = [f"// {values.get('path', 'file')}: line {n}" for n in range(start, end + 1)]
+    handler.send_json({"lines": {"path": values.get("path", ""), "side": "new", "start": start, "lines": lines, "total": total}})
     return True
 
 
@@ -24998,6 +25091,18 @@ ADD_COMPUTER_ERRORS = {
     "mesh_member": (409, "这台 hub 是组里的成员，到中心 hub 上添加电脑"),
     "too_many_pending": (429, "已经有 3 台电脑在等确认"),
 }
+# add.manager's own refusals, as the hub words them (server/internal/hub/machines_add.go, locales hub-pairing: no_assistant,
+# assistant_installing, assistant_away; owners_unknown is the hub's plain English), by the request's Accept-Language.
+ADD_MANAGER_ERRORS = {
+    "no_manager": (404, {"en": "There\u2019s no such assistant", "zh-Hans": "没有这个助手", "ja": "そのアシスタントはありません"}),
+    "installing": (409, {"en": "This assistant isn\u2019t installed yet. Add the computer once it is",
+                         "zh-Hans": "这个助手还没装好，装好后再添加电脑",
+                         "ja": "このアシスタントはまだインストールされていません。インストールが終わってからコンピュータを追加してください"}),
+    "assistant_offline": (503, {"en": "This computer is with an assistant that\u2019s offline right now, so it can\u2019t be moved. Try again when that assistant is back",
+                                "zh-Hans": "这台电脑现在所在的助手不在线，挪不过来。等那个助手上线后再试",
+                                "ja": "このコンピュータが今いるアシスタントがオフラインのため、移動できません。そのアシスタントがオンラインに戻ってからもう一度お試しください"}),
+    "owners_unknown": (503, "the hub could not read which manager carries which machine; try again"),
+}
 
 
 def _add_computer_push():
@@ -25057,7 +25162,11 @@ if ADD_COMPUTER:
                 return False  # an app's code: the handler's own
             code = os.environ.get("MOCK_ADD_COMPUTER_ERROR", "")
             if add and code:
-                status, text = ADD_COMPUTER_ERRORS.get(code, (409, code))
+                if code in ADD_MANAGER_ERRORS:
+                    status, text = ADD_MANAGER_ERRORS[code]
+                    if isinstance(text, dict): text = text[cron_lang(handler.headers.get("Accept-Language"))]
+                else:
+                    status, text = ADD_COMPUTER_ERRORS.get(code, (409, code))
                 reply = {"error": text, "code": code}
                 if code == "tls_required":
                     reply["action"] = "enable_tls"
@@ -25162,7 +25271,7 @@ if ADD_COMPUTER:
 
 MOCK_HELP.append("MOCK_ADD_COMPUTER=1|seed  机器 › 添加电脑（#287）：features 有 machines_add / machine_trust，pair-codes 的 add 加一台待确认的电脑，"
                  "MOCK_ADD_COMPUTER_JOIN 秒后（默认 8，0 = 不来）它连上来等确认；seed 另列一台没连过的待确认电脑、Mac Studio 离线（link_offline）；"
-                 "MOCK_ADD_COMPUTER_ERROR=tls_required|mesh_member|too_many_pending 拒绝添加，MOCK_ADD_COMPUTER_NO_SITE=1 不给安装命令；"
+                 "MOCK_ADD_COMPUTER_ERROR=tls_required|mesh_member|too_many_pending|no_manager|installing|assistant_offline|owners_unknown 拒绝添加，MOCK_ADD_COMPUTER_NO_SITE=1 不给安装命令；"
                  "add.manager 把电脑加到那个助手名下（回包 manager；助手离线时 /machines 先不列它），MOCK_ADD_COMPUTER_NO_MANAGER=1 模拟不认它的旧 hub（回包没有 manager）")
 
 # ---------- area: the main conversation's readiness (#287, docs/assistant/onboarding.md 4.4–4.6, 5.1–5.4) ----------
@@ -26052,6 +26161,21 @@ _plugins_route_without_agent_archives = plugins_route
 
 def plugins_route(handler, p, body):
     return agent_archives_route(handler, p, body) or _plugins_route_without_agent_archives(handler, p, body)
+
+
+_plugins_route_without_outside_dialog = plugins_route
+
+
+def plugins_route(handler, p, body):
+    """MOCK_OUTSIDE_DIALOG: a message to the waiting terminal Claude is delivered into its queue (#5890)."""
+    if (os.environ.get("MOCK_OUTSIDE_DIALOG") and handler.command == "POST"
+            and p == "/api/v1/sessions/macbook/%s/messages" % OUTSIDE_DIALOG):
+        return handler.send_json({"ok": True, "waits_on_computer": True}) or True
+    return _plugins_route_without_outside_dialog(handler, p, body)
+
+
+MOCK_HELP.append("MOCK_OUTSIDE_DIALOG=1  A Claude Code session in a plain terminal on the MacBook waits on a question only the computer "
+                 "can answer (#5890): a message to it answers {ok, waits_on_computer}")
 
 
 _features_without_agent_archives = features

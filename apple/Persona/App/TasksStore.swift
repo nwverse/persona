@@ -417,6 +417,8 @@ final class TasksStore {
     }
 
     func later(_ cardID: String) { laterMessages.insert(cardID) }
+    /// A card put off with Later, opened again (a hand-off card's one line, #5932).
+    func unlater(_ cardID: String) { laterMessages.remove(cardID) }
 
     // MARK: Decisions (Later / Don't handle on a decision row)
 

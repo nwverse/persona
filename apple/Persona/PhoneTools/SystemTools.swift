@@ -69,7 +69,8 @@ enum Foreground {
 /// One-line wording of a time on an approval card: the phone's locale, and the request's offset when it has one.
 nonisolated enum CardTime {
     static func text(_ date: Date, allDay: Bool = false, timeZone: TimeZone? = nil) -> String {
-        let format = Date.FormatStyle(date: .abbreviated, time: allDay ? .omitted : .shortened, timeZone: timeZone ?? .current)
+        var format = Date.FormatStyle(date: .abbreviated, time: allDay ? .omitted : .shortened)
+        format.timeZone = timeZone ?? .current
         return date.formatted(format)
     }
 
