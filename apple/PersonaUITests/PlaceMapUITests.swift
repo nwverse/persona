@@ -2,7 +2,9 @@ import XCTest
 
 /// Place maps in the main conversation (#5543): "where am I" and a nearby search each draw a map card under the turn's
 /// work line, with the tool calls still folded; tapping a map opens the full map with the same places, and Done closes
-/// it. Against scripts/mock/mock_hub.py with MOCK_TASKS=1 MOCK_PLACE_MAP=1 MOCK_TASKS_NO_ASKS=1 (PERSONA_MOCK_HUB).
+/// it. A walk worked out as a route draws its line (#5544), and the directions handed to Maps draw the destination's card
+/// (#5545), the conversation's last.
+/// Against scripts/mock/mock_hub.py with MOCK_TASKS=1 MOCK_PLACE_MAP=1 MOCK_TASKS_NO_ASKS=1 (PERSONA_MOCK_HUB).
 /// PERSONA_SHOTS saves the cards and the sheet there (PERSONA_SHOTS_APPEARANCE names the simulator's appearance);
 /// PERSONA_SHOTS_LARGE=1 runs at the largest accessibility text size.
 final class PlaceMapUITests: XCTestCase {
@@ -52,6 +54,29 @@ final class PlaceMapUITests: XCTestCase {
 
         let any = app.descendants(matching: .any)
         let maps = any.matching(NSPredicate(format: "identifier BEGINSWITH %@", "chat.place-map."))
+        // A card's identifier names its kind: chat.place-map.<kind>.<call id>.
+        let handoff = any.matching(NSPredicate(format: "identifier BEGINSWITH %@", "chat.place-map.handoff.")).firstMatch
+        XCTAssertTrue(handoff.waitForExistence(timeout: 20), "no card for the directions handed to Maps:\n\(app.debugDescription)")
+        for _ in 0..<40 where !handoff.isHittable { nudge(app, older: true) } // at large text sizes it is above the answer
+        sleep(2) // the snapshot comes in
+        try shot(app, "handoff")
+
+        let route = any.matching(NSPredicate(format: "identifier BEGINSWITH %@", "chat.place-map.route.")).firstMatch
+        for _ in 0..<60 where !clear(route, in: app) { nudge(app, older: true) }
+        XCTAssertTrue(route.exists, "no card for the walk worked out as a route")
+        sleep(2)
+        try shot(app, "route")
+        route.tap()
+        let routeSheet = any["place-map-sheet.map"].firstMatch
+        XCTAssertTrue(routeSheet.waitForExistence(timeout: 5), "tapping the route did not open the full map")
+        sleep(2)
+        try shot(app, "route-sheet")
+        let close = app.buttons.matching(NSPredicate(format: "label IN %@", ["完成", "Done"])).firstMatch
+        XCTAssertTrue(close.exists, "the route's full map has no Done")
+        close.tap()
+        let closed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: routeSheet)
+        XCTAssertEqual(XCTWaiter.wait(for: [closed], timeout: 5), .completed, "Done did not close the route's full map")
+
         let nearby = maps.matching(NSPredicate(format: "label CONTAINS %@", "街角咖啡")).firstMatch
         XCTAssertTrue(nearby.waitForExistence(timeout: 20), "no map for the nearby search:\n\(app.debugDescription)")
         for _ in 0..<40 where !nearby.isHittable { nudge(app, older: true) } // at large text sizes it is above the answer
