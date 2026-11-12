@@ -94,16 +94,6 @@ export function sandboxState(s: ExtensionSandbox): string {
   return t(s.enabled ? "lib-extensions.sandbox_inactive" : "lib-extensions.sandbox_off");
 }
 
-/** What it reached through the egress proxy: "through the egress proxy: N allowed · M refused", null without counts. */
-export function sandboxEgress(s: ExtensionSandbox): string | null {
-  const e = s.egress;
-  if (!e) return null;
-  return t("lib-extensions.sandbox_egress", {
-    allowed: t("lib-extensions.sandbox_allowed", { count: e.allowed ?? 0 }),
-    denied: t("lib-extensions.sandbox_denied", { count: e.denied ?? 0 }),
-  });
-}
-
 /** The channel an extension contributes (its first `channel` id), whose page is where it is bound. */
 export function channelOf(p: Pick<HubExtension, "contributes">): string | null {
   return p.contributes?.channel?.find((id) => id.trim() !== "") ?? null;
