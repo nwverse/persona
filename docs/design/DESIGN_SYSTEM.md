@@ -691,6 +691,24 @@ A dispatched task's Open link (#3711) is a compact row using existing typography
  starting/failure detail. This targeted navigation correction reuses existing pages; no new visual style or setting.
  Details and wire contract: `docs/assistant/unified-entry.md`, "What a dispatch opens".
 
+### 4.1.1 Apple settings scope and search
+
+The shared Apple Settings page follows three scopes, in this order: **Current Assistant's Settings**, **This Device**,
+and **Hub**. With several installed assistants its first heading reuses `AssistantSwitcherHeader` (avatar, name, state,
+and a one-line Switch label); with one it retains the chosen Persona face and name, without a roster switcher.
+A caption explains that only the current assistant's settings are shown. Device and Hub captions explain their shared scope.
+
+Common model choices open **Models**, with providers and keys under **Advanced**. Runtime configuration and session triage
+open through **Agent**. Appearance and display have a device-owned page; the shared avatar belongs to Hub. Diagnostics
+(build commit and the last new-chat check) are folded inside About. Watch sync and disconnection belong to Devices & Pairing.
+Existing settings route values remain valid; changing assistants returns the settings navigation to its list and retires old drafts.
+
+Search reuses the system searchable field and SettingsRow navigation. It searches localized entry names and common aliases,
+including developer terms, and opens the existing destination directly. Results have stable catalog identities; a query changes
+only navigation, never a setting. Pairing and storage use the `Theme.Icon.pairing` and `Theme.Icon.storage` vocabulary tokens.
+Why this arrangement: the earlier unscoped list mixed shared configuration with device preferences and exposed expert controls
+before common choices. It introduces no visual style, color palette, model default, or primary navigation destination.
+
 ### 4.2 Gestures
 
 | Gesture | Behavior |
@@ -705,7 +723,7 @@ A dispatched task's Open link (#3711) is a compact row using existing typography
 | Tap a photo in the + panel's grid | its ring (and a 45 pt corner round it) picks it, as before; the rest of the photo opens it in the image editor. VoiceOver's activation picks, Edit is an action (#4963) |
 | Drag in the image editor | Box and Pen draw (Box is the default tool); in Crop, a corner or edge within 22 pt resizes the crop, inside moves it. Crop's shapes, Rotate and Reset are the controls that need no drag (#4963). The web's the same in CSS pixels, a mouse's cursor showing which handle it would take (#4991) |
 | Link card drag | to 0.6 it stops blocking the chat; further down it closes |
-| Terminal cover drag | its bar follows the finger; past 140 pt or a fast flick it closes. The bar, with a 44 pt Close, is there in every state; with no terminal the whole area drags (#4328) |
+| Terminal cover drag | its bar follows the finger; past 140 pt or a fast flick it closes. The bar, with a 44 pt Close, is there in every state; with no terminal the whole area drags (#4328). Android the same (140 dp, a flick whose half second of glide passes 420 dp; `TerminalCover`, #4339 C7), its bar under a handle, with Back closing it too |
 | Tap on a saved place's map | moves the place there (#4248); search and Use Current Location do the same without the gesture |
 
 Every gesture-only action needs a plain alternative for VoiceOver and Switch Control (see the audit).

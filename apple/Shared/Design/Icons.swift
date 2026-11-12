@@ -485,6 +485,8 @@ extension Theme {
         /// The assistant operating an iPhone through a Mac (the extension iphone): its section, its tools.
         static let phoneControl = "iphone.radiowaves.left.and.right"
         static let watch = "applewatch"
+        static let storage = "internaldrive"
+        static let scanCode = "qrcode.viewfinder"
         static let handoff = "iphone.and.arrow.forward"
         /// The default web browser (open a link outside the app).
         static let safari = "safari"
