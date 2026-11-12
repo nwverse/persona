@@ -158,6 +158,7 @@ export function Button({
   title,
   href,
   expanded,
+  testId,
 }: {
   children: React.ReactNode;
   tone?: BtnTone;
@@ -172,6 +173,8 @@ export function Button({
   href?: string;
   /** A button that shows or hides something: whether it is shown (aria-expanded). */
   expanded?: boolean;
+  /** `data-testid`, for the tests and screenshot scripts that press it. */
+  testId?: string;
 }) {
   const base = "inline-flex h-8 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-control px-3 text-[12.5px] font-medium transition-[background-color,color,transform,opacity,filter] duration-150";
   if (href && !disabled && !busy) {
@@ -184,7 +187,7 @@ export function Button({
       danger: "bg-danger-fill text-white hover:brightness-105",
     };
     return (
-      <a href={href} target="_blank" rel="noopener noreferrer" title={title} onClick={onClick} className={cx(base, "active:scale-[0.96]", links[tone], className)}>
+      <a href={href} target="_blank" rel="noopener noreferrer" title={title} data-testid={testId} onClick={onClick} className={cx(base, "active:scale-[0.96]", links[tone], className)}>
         {icon ? <Icon name={icon} size={14} stroke={2.1} /> : null}
         {children}
       </a>
@@ -206,6 +209,7 @@ export function Button({
       // the spinner is aria-hidden, so without this a busy button just reads as disabled
       aria-busy={busy || undefined}
       aria-expanded={expanded}
+      data-testid={testId}
       onClick={onClick}
       className={cx(
         base,

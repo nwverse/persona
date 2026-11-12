@@ -85,7 +85,7 @@ import { containsInput, indexedNavTicks, userInputRevision, windowUserInputs, US
 import { useRevealedInputSeq, useUserInputs } from "./useUserInputs";
 import { NavRail } from "./NavRail";
 import { useChatScrollbar } from "./useChatScrollbar";
-import { ChatLineView, closedRecap, closeRecap, OpenRecapLine } from "./Lines";
+import { ChatLineView, closedRecap, closeRecap, dismissedError, dismissError, ErrorBanner, errorKey, OpenRecapLine } from "./Lines";
 import { useTranscript } from "./useTranscript";
 import { ArchiveCloseDialog, CloseAgentDialog, DeleteSessionDialog, HeaderModeButton, ModeChips, RenameDialog, RenameSpaceDialog, SessionInfoDialog } from "./SessionDialogs";
 import { showsInHeader } from "../../lib/header-mode";
@@ -119,6 +119,7 @@ import { useVoiceEntry, VoiceEnded, VoiceTail } from "./voice/VoiceParts";
 import { ChatOnlyNote, FailureCard, ReadinessCard, useReadinessGate, type ReadinessGate } from "../assistant/Readiness";
 import { codedFailure, refreshReadiness, turnErrorFix, type CodedFailure } from "../../lib/readiness";
 import { FALLBACK_UNAVAILABLE } from "../../lib/model-fallback";
+import { BASE } from "../../lib/base";
 import { ModelFallbackCard } from "./ModelFallbackCard";
 import { usageLimitLabel } from "../../lib/usage-limit";
 import { displayLines, getFeedState, loadedFrom, loadFeed, loadToday, sendRouted, startOfDay, useFeed, type FeedItem } from "../../lib/feed";
@@ -1446,15 +1447,37 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // Close Plan in the pill's flyout hides it until the plan changes (cindy's PinnedPlanPanel)
   const [planClosed, closePlan] = usePlanClosed(`${mid}/${sid}`, plan);
   const lastLine = lines[lines.length - 1];
-  // "Retry" on an API error card: only when it is the last thing, the agent is not working (someone may have retried already)
+  // "Retry" on the error banner and the failure note: sends "continue" alone, not what is in the box
   const retry = useCallback(() => void deliver({ text: t("chat-chatview.continue_text"), images: [] }, uuid()), [deliver]);
   // the failure notice "Retry" was pressed on: kept here, not in the note, so it stays gone while the session goes through
   // needs-you and back before the hub clears it (iOS ChatView @State retried)
   const [retriedOn, setRetried] = useState<{ chat: string; reason?: string }>();
   const retried = retriedOn?.chat === `${mid}/${sid}` ? retriedOn.reason : undefined;
+  const failureNote = Boolean(session && !assistant && showsFailureNote(session, { retried }));
   // a turn that failed on the refusal fallback's missing model (#2528): "Continue" would send it to the same model
   const canRetry =
     lastLine?.kind === "apiError" && state !== "working" && !outgoing && sessionCan(session, "send") && session?.turn_error_code !== FALLBACK_UNAVAILABLE;
+  // The model error the chat stopped on (cindy's ErrorBanner, #5313): its last line, over the composer with Retry and ✕,
+  // and left out of the chat meanwhile. Not once it is dismissed (remembered in this browser), Retry was pressed on it
+  // (gone at once, before "continue" reaches the transcript), something is on its way or being worked on, or the host's
+  // failure note already says why the turn stopped; then, and once anything comes after it, it is a card in the chat.
+  const errorChat = `${BASE}/${mid}/${sid}`;
+  const [errorClosed, setErrorClosed] = useState(() => dismissedError(errorChat));
+  useEffect(() => setErrorClosed(dismissedError(errorChat)), [errorChat]);
+  const [errorRetried, setErrorRetried] = useState<string>();
+  const tailError = lastLine?.kind === "apiError" ? lastLine : undefined;
+  const tailKey = tailError ? `${errorChat}|${errorKey(tailError)}` : "";
+  const bannerError =
+    tailError && !working && canCompose && !stoppedLine && !failureNote && errorKey(tailError) !== errorClosed && tailKey !== errorRetried ? tailError : undefined;
+  const retryError = () => {
+    if (tailKey) setErrorRetried(tailKey);
+    retry();
+  };
+  const dismissBanner = () => {
+    if (!tailError) return;
+    dismissError(errorChat, errorKey(tailError));
+    setErrorClosed(errorKey(tailError));
+  };
   // Claude Code's "while you were away" recap, open in full while it is the newest thing and not closed: the chat's last
   // line, in the flow with the agent's words (#1360: above the composer it covered the end of the reply)
   const recapKey = `${mid}/${sid}`;
@@ -1663,7 +1686,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
                       <QuickResultCard key={d.id} result={d.result} />
                     ) : d.kind === "day" ? (
                       <DayLine key={d.id} date={d.date} />
-                    ) : (
+                    ) : d.line.id === bannerError?.id ? null : (
                       <ChatLineView
                         key={d.id}
                         line={d.line}
@@ -1671,18 +1694,15 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
                         sid={sid}
                         streaming={(d.line.kind === "segment" || d.line.kind === "supervision") && d.line.live ? tr.streaming || undefined : undefined}
                         expandFold={tr.expandFold}
-                        onRetry={canRetry && d.line.id === lines.at(-1)?.id ? retry : undefined}
-                        onEditLastMessage={d.line.id === lines.at(-1)?.id ? onEditLastMessage : undefined}
-                        fix={d.line.id === lines.at(-1)?.id ? turnFix : undefined}
                         limit={d.line.kind === "apiError" && d.line.id === limitOn ? limitLine : undefined}
                         assistant={assistant}
                         offscreen={offscreen(d.line)}
                       />
                     ),
                   ])
-                : lines.flatMap((line, i) => [...failedBefore(line.id), open?.line === line.id ? (
+                : lines.flatMap((line) => [...failedBefore(line.id), open?.line === line.id ? (
                 <OpenRecapLine key={line.id} open={open} onClose={dismissRecap} />
-              ) : (
+              ) : line.id === bannerError?.id ? null : (
                 <ChatLineView
                   key={line.id}
                   line={line}
@@ -1691,8 +1711,6 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
                   sid={sid}
                   streaming={(line.kind === "segment" || line.kind === "supervision") && line.live ? tr.streaming || undefined : undefined}
                   expandFold={tr.expandFold}
-                  onRetry={canRetry && i === lines.length - 1 ? retry : undefined}
-                  onEditLastMessage={i === lines.length - 1 ? onEditLastMessage : undefined}
                   limit={line.kind === "apiError" && line.id === limitOn ? limitLine : undefined}
                   assistant={assistant}
                   offscreen={offscreen(line)}
@@ -1767,17 +1785,31 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
         {session && !assistant && <ConflictNote session={session} />}
         {/* a resume turned ultracode off (#3428): one line with "Turn back on" */}
         {session && !assistant && <UltracodeLostNote session={session} />}
-        {session && !assistant && showsFailureNote(session, { retried }) && (
+        {session && failureNote && (
           <FailureNote
             session={session}
             onRetry={() => {
               setRetried({ chat: `${mid}/${sid}`, reason: failureReason(session) });
-              retry();
+              retryError();
             }}
           />
         )}
         {!short && queue}
         {voiceState === "ended" && <VoiceEnded owner={voiceOwner} />}
+        {/* the error the chat stopped on, right over the composer as cindy places it (#5313); keyed by the error, so a new
+            one opens with its details folded */}
+        {bannerError && (
+          <ErrorBanner
+            key={errorKey(bannerError)}
+            line={bannerError}
+            assistant={assistant}
+            limit={bannerError.id === limitOn ? limitLine : undefined}
+            fix={turnFix}
+            onRetry={canRetry ? retryError : undefined}
+            onEditLastMessage={onEditLastMessage}
+            onDismiss={dismissBanner}
+          />
+        )}
         </div>
         {voiceEntry.dialog}
         {voiceState === "live" && voiceCall && (

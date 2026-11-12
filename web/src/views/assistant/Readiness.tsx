@@ -12,7 +12,8 @@ import { navigate } from "../../lib/router";
 import { getState, useStore } from "../../lib/store";
 import type { PendingComputer } from "../machines/AddComputer";
 import { lazyDialog } from "../LazyOverlay";
-import { Button, Collapse, copyText, cx, Dialog, IconButton } from "../../ui/atoms";
+import { Button, copyText, cx, Dialog, IconButton } from "../../ui/atoms";
+import { ErrorDetailsText, ErrorNotice } from "../../ui/ErrorNotice";
 import { Icon, type IconName } from "../../ui/icons";
 import { t } from "../../i18n";
 
@@ -181,46 +182,43 @@ export function ChatOnlyNote({ gate }: { gate: ReadinessGate }) {
 /** A start or a send that did not go: the hub's words, a button for its code, the original under "Details" (4.6). */
 /** `onRetry`: a send that did not go and is back in the box (#4270): a "Send again" button that sends the box again. */
 export function FailureCard({ failure, onClose, onHelp, onConfirm, onRetry }: { failure: CodedFailure; onClose: () => void; onHelp: (topic: HelpTopic) => void; onConfirm?: () => void; onRetry?: () => void }) {
-  const [open, setOpen] = useState(false);
   const action = failure.action && knownAction(failure.action) ? failure.action : undefined;
   const raw = [failure.detail, failure.requestId && t("assistant-readiness.request_id", { id: failure.requestId })].filter(Boolean).join("\n");
+  // the same error notice as a model error over the composer (#5313): the hub's sentence, its buttons, the original
+  // folded under Error details, and ✕
   return (
-    <div role="alert" data-testid="readiness-failure" data-code={failure.code} className="flex flex-col gap-2 rounded-card bg-red-tint px-3.5 py-3" style={{ animation: "fade-up 200ms ease-out both" }}>
-      <div className="flex items-start gap-2">
-        <Icon name="warning" size={14} stroke={2.2} className="mt-[3px] shrink-0 text-red" />
-        <span className="min-w-0 flex-1 text-[13px] leading-relaxed font-medium text-ink">{failure.error}</span>
-        <IconButton icon="x" label={t("assistant-readiness.close")} onClick={onClose} size={24} iconSize={12} />
-      </div>
-      <div className="flex flex-wrap items-center gap-1.5 pl-[22px]">
-        {onRetry && (
-          <Button tone={action ? "quiet" : "primary"} onClick={onRetry}>
-            {t("assistant-readiness.resend")}
-          </Button>
-        )}
-        {action && (
-          <Button tone="primary" onClick={() => runAction(action, { launcher: failure.launcher, onHelp, onConfirm })}>
-            {actionLabel(action)}
-          </Button>
-        )}
-        {raw && (
-          <button type="button" aria-expanded={open} onClick={() => setOpen((o) => !o)} className="flex h-8 items-center gap-1 rounded-control px-2 text-[12px] font-medium whitespace-nowrap text-ink-2 hover:bg-hover">
-            {t("assistant-readiness.details")}
-            <Icon name="chevron" size={12} stroke={2.2} className="transition-transform duration-200" style={{ transform: open ? "rotate(180deg)" : "none" }} />
-          </button>
-        )}
-      </div>
-      {raw && (
-        <Collapse open={open}>
-          <div className="flex flex-col gap-1.5 pt-0.5 pl-[22px]">
-            <pre className="max-h-48 overflow-auto rounded-[8px] bg-surface px-2.5 py-2 font-mono text-[11.5px] leading-[1.6] whitespace-pre-wrap text-ink-2 shadow-hairline [overflow-wrap:anywhere]">{raw}</pre>
-            <button type="button" onClick={() => void copyText(raw)} className="flex w-fit items-center gap-1 text-[12px] font-medium whitespace-nowrap text-accent-ink hover:underline">
+    <ErrorNotice
+      role="alert"
+      data-testid="readiness-failure"
+      data-code={failure.code}
+      message={failure.error}
+      onDismiss={onClose}
+      actions={
+        <>
+          {onRetry && (
+            <Button tone={action ? "quiet" : "primary"} className="touch-hit h-7" onClick={onRetry}>
+              {t("assistant-readiness.resend")}
+            </Button>
+          )}
+          {action && (
+            <Button tone="primary" className="touch-hit h-7" onClick={() => runAction(action, { launcher: failure.launcher, onHelp, onConfirm })}>
+              {actionLabel(action)}
+            </Button>
+          )}
+        </>
+      }
+      details={
+        raw ? (
+          <div className="flex flex-col gap-1.5">
+            <ErrorDetailsText text={raw} />
+            <button type="button" onClick={() => void copyText(raw)} className="touch-hit flex w-fit items-center gap-1 text-[12px] font-medium whitespace-nowrap text-accent-ink hover:underline">
               <Icon name="copy" size={12} />
               {t("assistant-readiness.copy_details")}
             </button>
           </div>
-        </Collapse>
-      )}
-    </div>
+        ) : undefined
+      }
+    />
   );
 }
 

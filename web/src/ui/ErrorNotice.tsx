@@ -1,8 +1,8 @@
 // A failure said quietly (cindy's ErrorNotice, at the owner's request, 2026-11-12; docs/design/DESIGN_SYSTEM.md 3.10): a
 // neutral raised card with a hairline border, a small red mark, what happened in body text, what helps under it, the
 // caller's actions, and the raw error folded under "Error details". No red fill and no red ring: red marks only the
-// state. The caller keeps every decision about recovering; this only lays it out.
-import { useState, type ReactNode } from "react";
+// state. The caller keeps every decision about recovering and dismissing; this only lays it out.
+import { useState, type HTMLAttributes, type ReactNode } from "react";
 import { Button, cx } from "./atoms";
 import { Icon } from "./icons";
 import { t } from "../i18n";
@@ -13,8 +13,10 @@ export function ErrorNotice({
   actions,
   details,
   icon,
-  role,
+  onDismiss,
+  dismissLabel,
   className,
+  ...rest
 }: {
   /** What happened, in plain words. */
   message: ReactNode;
@@ -26,12 +28,17 @@ export function ErrorNotice({
   details?: ReactNode;
   /** Replaces the red mark (a caller whose state is not a failure). */
   icon?: ReactNode;
+  /** A ✕ at the top end that puts the notice away (cindy's banner); the caller decides what that means. */
+  onDismiss?: () => void;
+  /** The ✕'s spoken label and hover text; "Dismiss error" when not given. */
+  dismissLabel?: string;
   role?: "status" | "alert";
   className?: string;
-}) {
+} & Omit<HTMLAttributes<HTMLDivElement>, "children" | "role" | "className">) {
   const [open, setOpen] = useState(false);
+  const close = dismissLabel ?? t("ui-errornotice.dismiss");
   return (
-    <div role={role} data-error-notice className={cx("flex items-start gap-2 rounded-xl border border-line bg-surface p-3", className)}>
+    <div {...rest} data-error-notice className={cx("flex items-start gap-2 rounded-xl border border-line bg-surface p-3", className)}>
       <span aria-hidden className="mt-0.5 inline-flex shrink-0 text-red">
         {icon ?? <Icon name="alertCircle" size={16} />}
       </span>
@@ -49,6 +56,19 @@ export function ErrorNotice({
         </div>
         {details && open && <div className="mt-2" data-error-details>{details}</div>}
       </div>
+      {onDismiss && (
+        // cindy's 28 px round ✕, pulled into the card's corner so it lines up with the first line of text
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label={close}
+          title={close}
+          data-error-dismiss
+          className="touch-hit -mt-1 -mr-1 flex size-7 shrink-0 items-center justify-center rounded-full text-ink-2 transition-colors hover:bg-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none"
+        >
+          <Icon name="x" size={14} />
+        </button>
+      )}
     </div>
   );
 }

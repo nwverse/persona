@@ -2,7 +2,7 @@
 // scripts/test/web_mobile_input_e2e.py.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { Interaction, Session } from "../../lib/types";
+import type { Interaction, Item, Session } from "../../lib/types";
 import { getState, type AnsweredCard } from "../../lib/store";
 import { Header, spaceAgentsItem } from "./ChatView";
 import { HEADER_SLOT, HEADER_SLOT_END, HEADER_SLOT_START } from "./header";
@@ -13,6 +13,8 @@ import { onDraftEvent, type DraftEvent } from "../../lib/drafts";
 import { getContexts, removeContext, withContexts } from "../../lib/links";
 import { parseQueued } from "../../lib/queue";
 import { AttachmentTray } from "../../ui/AttachmentTray";
+import { parseAPIError } from "../../lib/api-errors";
+import { ErrorBanner } from "./Lines";
 
 // stores without a server snapshot: renderToStaticMarkup needs one
 vi.mock("../../lib/links", async (orig) => ({ ...(await orig<typeof import("../../lib/links")>()), useContexts: () => [] }));
@@ -304,6 +306,14 @@ describe("tap areas", () => {
     expect(hit(html, "移除 a.png")).toBe(true);
     // its tile does not clip the area
     expect(html).not.toMatch(/group\/att relative overflow-hidden/);
+  });
+
+  it("covers the error banner's ✕ and its buttons (#5313)", () => {
+    const text = "API Error: 529 overloaded";
+    const item = { id: "e1", seq: 1, role: "assistant", kind: "text", text } as Item;
+    const html = renderToStaticMarkup(<ErrorBanner line={{ kind: "apiError", id: "err-e1", item, info: parseAPIError(text)!, count: 1 }} onRetry={() => {}} onDismiss={() => {}} />);
+    expect(hit(html, "关闭错误提示")).toBe(true);
+    expect(html).toMatch(/<button[^>]*class="[^"]*touch-hit h-7[^"]*"[^>]*>(?:(?!<\/button>).)*重试<\/button>/);
   });
 });
 
