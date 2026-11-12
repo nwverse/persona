@@ -86,3 +86,36 @@ func TestStripHTMLKeepsTitleCommentsAndTagInsidesOut(t *testing.T) {
 		}
 	}
 }
+
+// A preheader padded with invisible characters (&zwnj;&nbsp; repeated, soft hyphens, zero-width spaces) must not fill
+// the text or the 160-character preview of an HTML mail; the same characters inside a word are part of it (U+200C in
+// Persian and Indic words, U+200D in emoji and Indic conjuncts, U+00AD where a word may be broken).
+func TestStripHTMLDropsInvisiblePadding(t *testing.T) {
+	const padded = "<div style=\"display:none\">Your receipt is ready &zwnj;&nbsp;&zwnj;&nbsp;&#847; &#8203; &shy;&shy;&#65279;</div><p>Hello Bob</p>"
+	for _, c := range []struct{ name, in, want string }{
+		{"padded preheader", padded, "Your receipt is ready Hello Bob"},
+		{"padding at the start and end", "<p>&zwnj;&#8203;Hi&#65279;&shy;</p>", "Hi"},
+		{"padding after a word", "<p>Hi&zwnj;&nbsp;there</p>", "Hi there"},
+		{"zero width joiner and word joiner padding", "<p>a &#8205;&#8288; b</p>", "a b"},
+		{"zero width non-joiner inside a Persian word", "<p>\u0645\u06CC\u200C\u062E\u0648\u0627\u0647\u0645</p>", "\u0645\u06CC\u200C\u062E\u0648\u0627\u0647\u0645"},
+		{"zero width joiner in an emoji sequence", "<p>\U0001F468\u200D\U0001F469\u200D\U0001F467 family</p>", "\U0001F468\u200D\U0001F469\u200D\U0001F467 family"},
+		{"soft hyphen inside a word", "<p>hyphen&shy;ation</p>", "hyphen\u00adation"},
+	} {
+		if got := PlainText(c.in); got != c.want {
+			t.Errorf("%s: PlainText(%q) = %q, want %q", c.name, c.in, got, c.want)
+		}
+	}
+	// The padding reaches neither the message's text nor its list preview.
+	pad := strings.Repeat("&zwnj;&nbsp;", 200)
+	raw := "From: a@example.com\r\nTo: b@example.com\r\nSubject: Receipt\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=utf-8\r\n\r\n" +
+		"<div style=\"display:none\">Your receipt is ready " + pad + "</div><p>Hello Bob</p>"
+	var msg MailMessage
+	parseMessage([]byte(raw), &msg)
+	if got := strings.Join(strings.Fields(msg.Text), " "); got != "Your receipt is ready Hello Bob" {
+		t.Errorf("Text = %q", got)
+	}
+	short := strings.Repeat("&zwnj;&nbsp;", 20) // the list fetch takes only the first snippetBytes of a body
+	if got := snippetOf(listSections("Content-Type: text/html; charset=utf-8\r\n\r\n", "<div style=\"display:none\">Your receipt is ready "+short+"</div><p>Hello Bob</p>")); got != "Your receipt is ready Hello Bob" {
+		t.Errorf("list snippet = %q", got)
+	}
+}
