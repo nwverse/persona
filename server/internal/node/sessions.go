@@ -144,7 +144,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				if m.title != "" && a.Agent != "codex" && a.Agent != traexAgent {
 					s.Title = m.title
 				}
-				if s.Title == "" || s.Title == "Claude Code" {
+				if s.Title == "" || s.Title == "Claude Code" && !m.titleManual {
 					s.Title = ""
 					untitled(&s, m)
 				}
@@ -191,7 +191,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			n.codexEffortRow(id, &s.Efforts, &s.Effort, rollout) // joined on its app-server: its effort (codex_effort.go)
 			n.codexSpeedRow(&s)
 		}
-		if a.Agent == piAgent {
+		if piFamily(a.Agent) {
 			n.mergePiRow(&s) // its conversation is the extension's (pi.go)
 		}
 		switch {

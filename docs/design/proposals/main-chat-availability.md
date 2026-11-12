@@ -94,6 +94,12 @@ work out as today; it no longer receives supervision messages for it.
 - **Shown where**: its tasks stay under Persona in the direction tree (#4352), as the secretary's own. The conversation
   itself is listed with the scheduled group, not among directions or quick chats. Its rounds are never pushed, as
   supervision rounds are not today.
+- **As built (step B1, #4927)**, where it differs from the above (`docs/assistant/unified-entry.md` "Background
+  supervisor" has the whole of it): the background supervisor is not recorded as `supervision.supervisor`. The ledger
+  keeps the main chat and the signals are routed when they are sent, which keeps everything that reads the ledger
+  unchanged, lets the off switch move every open task at once and leaves no task naming a conversation that is gone.
+  Asks climb through it only with leaders configured, as today. A `needs_user` writes the `escalated` entry leaders
+  write, and that entry is a supervision message to the main chat, so it is one folded main-chat round, not none.
 
 Alternatives considered:
 
@@ -160,6 +166,14 @@ in Needs you at once, and the 24-hour default for reversible decisions applies u
 that can wait" (`docs/extensions/bots.md`) from agents' questions to supervisors' decisions; it needs a briefing
 routine with facts on, and without one every decision is pushed as today.
 
+As built (R2, #4930; `docs/assistant/todos.md` "Decisions that can wait" is authoritative): the supervisor marks the
+decision with `can_wait: true` on `task_review`. A held decision is listed under the briefing's "To verify" block, where
+every open decision already is, not under "Waiting for you" (the rows that hold an Agent up), and it stays the to-do's
+ask instead of joining the `assistant.later` queue, so its default, recheck and fixed answers are unchanged. Because
+the 24-hour default still counts from when the decision is raised, it is held only when a briefing is due within 24
+hours and at least 12 hours before its deadline, and it is pushed after all when no briefing reached the owner with it
+by 11 hours before the deadline, or within 24 hours.
+
 ### 4c. A recommended setup, said once
 
 The weekly briefing gains one block when the numbers support it: which switch in 2b would have removed how many of last
@@ -181,6 +195,11 @@ what the main chat spends its time on. All of it is written as `session_work_eve
 Read through `GET /api/v1/assistant/north-star` next to #4601's two numbers, and shown in the daily briefing only when
 a value crosses its threshold in section 1. Each number has its one-line definition in `docs/assistant/assistant.md`
 (PRINCIPLES 3).
+
+As built (step M1, #4924): the four metrics are recorded and read through `GET /api/v1/assistant/availability`, a
+route of its own because the north-star read covers one day from the database alone; the reply wait starts at the
+manager's `session.user_spoke`. `docs/assistant/assistant.md` ("Availability metrics") has the definitions and their
+limits.
 
 ## 6. Steps
 

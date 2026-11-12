@@ -773,6 +773,8 @@ final class AppModel {
         links = []
         registry = HubRegistry()
         saveRegistry(registry)
+        // The watch drops the credential it holds only when told (#1870): an empty push, as `removeGroup` sends for one group.
+        pushWatchConfigs()
         applyPersonaPalette()
         forgetDeviceCredentials()
         machines = []
@@ -1195,6 +1197,28 @@ final class AppModel {
             assistantConfig = st
         } catch {
             if showsPage(of: api) { assistantConfig?.mainBackgroundFolded = was }
+            show(error)
+        }
+    }
+
+    /// Whether conversation `id` is the hub's built-in background supervisor (#5083, docs/assistant/unified-entry.md
+    /// "Background supervisor"): its row has no Archive, End or Pin (the hub refuses the first and the last).
+    func isBackgroundSupervisor(_ id: String) -> Bool { assistantConfig?.isBackgroundSupervisor(id) ?? false }
+
+    /// Settings › Assistant › Main Chat Supervises Its Own Tasks (#5083): on, the main conversation follows up the
+    /// tasks no leader supervises instead of the background supervisor. Shown at once, put back if the hub says no;
+    /// supervision messages already sent stay where they went.
+    func setMainSupervisesOwnTasks(_ on: Bool) async {
+        guard let api, var shown = assistantConfig else { return }
+        let was = shown.mainSupervisesOwnTasks
+        shown.mainSupervisesOwnTasks = on
+        assistantConfig = shown
+        do {
+            let st = try await api.setAssistant(mainSupervisesOwnTasks: on)
+            guard showsPage(of: api) else { return }
+            assistantConfig = st
+        } catch {
+            if showsPage(of: api) { assistantConfig?.mainSupervisesOwnTasks = was }
             show(error)
         }
     }
@@ -1827,6 +1851,35 @@ final class AppModel {
             notifyTransitions(old: old, new: new)
             AgentSync.shared.sessions(new)
         }
+        readSettingsForNewTaskConversations(olds)
+    }
+
+    /// Conversations the assistant settings were read again for (`readSettingsForNewTaskConversations`): once each.
+    @ObservationIgnored private var taskConversationsAskedFor: Set<String> = []
+
+    /// The hub makes its background supervisor on first use, usually while the app is open (#5083): its conversation
+    /// arrives as any other, and only the assistant settings say it is the built-in one. A task's conversation the
+    /// settings held do not list has them read again, once, so its row never offers Archive, Pin or End for longer
+    /// than that request takes. Nothing is read before the settings were read at all, or for another hub's sessions.
+    private func readSettingsForNewTaskConversations(_ changes: [(old: [Session], new: [Session])]) {
+        guard let held = assistantConfig, let group = hub?.group, assistantShows(nil) else { return }
+        var unread: [String] = []
+        for (old, new) in changes where new.first?.machineRef.group == group {
+            unread += Self.unreadTaskConversations(old: old, new: new, held: held)
+        }
+        unread.removeAll { taskConversationsAskedFor.contains($0) }
+        guard !unread.isEmpty else { return }
+        taskConversationsAskedFor.formUnion(unread)
+        Task { await refreshAssistant() }
+    }
+
+    /// The assistant's task conversations (`origin: "task"`) new in `new` that `held` neither lists nor names as the
+    /// background supervisor: the ones the settings may have something to say about.
+    static func unreadTaskConversations(old: [Session], new: [Session], held: APIClient.AssistantState) -> [String] {
+        let tasks = new.filter { $0.assistant && $0.origin == "task" && !held.isBackgroundSupervisor($0.sessionID) }
+        guard !tasks.isEmpty else { return [] }
+        let had = Set(old.map(\.sessionID)).union(held.conversations.map(\.sessionID))
+        return tasks.map(\.sessionID).filter { !had.contains($0) }
     }
 
     /// The complete fallback is authoritative on a list-negotiated hub. Older delta sockets retain their live rows
@@ -1869,6 +1922,14 @@ final class AppModel {
             if isHub { PersonalAgentSync.shared.received([]) }
             // The direction tree changes while the socket is down: read it again on every (re)connect (#4352).
             if isHub, let hubAPI = api { Task { await refreshDirectionTree(hubAPI) } }
+            #if os(iOS)
+            // `meeting_live` events sent while the socket was down are gone: the meetings on screen are read again (#3862).
+            if isHub { MeetingConversation.shared.reconnected() }
+            // The meeting flags a start without the app in front reads follow every hello, not only the Recordings page.
+            if isHub, !hello.features.isEmpty {
+                MeetingAttendanceDefaults.remember(hello: Set(hello.features), role: MeetingAttendees.hubDefault(self))
+            }
+            #endif
             Task { await refreshInAppTunnel(group) }
             Task { await refreshManagerRoster(group) }
             // Back on the hub: an install that moved on while the connection was down shows where it is now (#3307).
@@ -2002,6 +2063,14 @@ final class AppModel {
             #if os(iOS) || os(visionOS)
             ExtensionWidgetReconciliation.invalidate(group: group, owner: ext, contribution: id)
             #endif
+        #if os(iOS)
+        case .meetingLive(let recordingID, let changed, let revs):
+            // Recordings sync with the hub-level group's hub: another group's meetings are none of this phone's.
+            if isHub { MeetingConversation.shared.event(recordingID: recordingID, changed: changed, revs: revs) }
+        #else
+        case .meetingLive:
+            break // the meeting conversation is the iPhone's (#3862)
+        #endif
         case .items(let key, let items, let backlog, let hasMore, let span, let moreAfter):
             if backlog { connection.caughtUp(Self.catchUpPart(key)) }
             let store = chat(key)
@@ -2114,6 +2183,7 @@ final class AppModel {
         case .fsChanged: "fs_changed"
         case .pluginBadge: "plugin_ui"
         case .extensionInvalidate: "extension_ui"
+        case .meetingLive: "meeting_live"
         case .error: "error"
         }
     }
@@ -2170,9 +2240,16 @@ final class AppModel {
     /// This device's answer to the card is on its way (the card is hidden meanwhile).
     func isAnswering(_ uid: String) -> Bool { answering.contains(uid) }
 
-    func resolve(_ ix: Interaction, _ r: Resolution) async {
+    /// `handoffCard`: the hand-off card's own buttons answer; an approval of one from anywhere else is refused here, as
+    /// the hub would refuse it (`SecretHandoff`).
+    func resolve(_ ix: Interaction, _ r: Resolution, handoffCard: Bool = false) async {
         // To the hub of the interaction's own group (docs/protocol/multi-hub.md「Connections and routing」).
         guard canAnswer(ix), let api = api(ix.group) else { return }
+        let handoff = ix.isSecretHandoff && r.allow == true
+        if handoff && !handoffCard {
+            toast = Toast(String(localized: "Approve it on its card in the chat."), style: .error)
+            return
+        }
         // No network: the card stays as it is (taking it away and bringing it back a moment later read as "done").
         guard connection.networkUp else { notDone(); return }
         interactions[ix.uid] = nil
@@ -2184,7 +2261,7 @@ final class AppModel {
         // to a minute (OpRetry.limit), then comes back with the error.
         let op = UUID()
         do {
-            let res = try await OpRetry.untilDelivered { try await api.resolve(ix.id, r, opID: op) }
+            let res = try await OpRetry.untilDelivered { try await api.resolve(ix.id, r, opID: op, handoffCard: handoff) }
             if res.already == true, let existing = res.resolution, existing.answeredBy == AssistantAnswer.assistant, ix.kind == .question {
                 // The assistant answered first: its answer shows in the chat, where the user may change it.
                 keepDelegated(ix, AssistantAnswer(answers: existing.answers ?? [:], reason: existing.reason ?? ""))
