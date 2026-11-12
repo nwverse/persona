@@ -1266,6 +1266,29 @@
         }
       }
     },
+    "settings.search.inbox_sources": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "inbox sources subscriptions recommended mail muted"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "收件箱 来源 订阅 推荐订阅 邮件 静音"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "受信箱 ソース 購読 おすすめ メール ミュート"
+          }
+        }
+      }
+    },
     "settings.search.devices": {
       "extractionState": "manual",
       "localizations": {
@@ -65527,6 +65550,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Inbox Sources" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Inbox Sources"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "受信箱のソース"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收件箱来源"
+          }
+        }
+      }
     },
     "Include Old Chat Summary" : {
       "localizations" : {

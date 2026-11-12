@@ -1168,9 +1168,9 @@ private fun ChatPage(
                                             }
                                         }
                                         if (linkContexts.isEmpty()) ComposerSuggestion(session, composer, onSend = { text -> send(text) })
-                                        if (linkContexts.isNotEmpty()) Column(Modifier.heightIn(max = 140.dp).verticalScroll(rememberScrollState())) {
-                                            // One line each while the link card peeks: the whole cards left no room for the composer.
-                                            linkContexts.forEach { ref -> ChatContextCard(ref, compact = linkInset.value > 0f) { linkContexts = linkContexts.filterNot { it.id == ref.id } } }
+                                        // One line each while the link card peeks: the whole cards left no room for the composer.
+                                        if (linkContexts.isNotEmpty()) ComposerContextCards(linkContexts, compact = linkInset.value > 0f) { ref ->
+                                            linkContexts = linkContexts.filterNot { it.id == ref.id }
                                         }
                                     }, onOverlay = { composerOverlay = it }, agentName = session?.agentLabel ?: "Claude",
                                     canInterrupt = session?.canInterrupt ?: true,
@@ -1355,6 +1355,14 @@ private fun ChatPage(
                     photoLimitReached = composer.attachments.count { it.media } >= MAX_COMPOSER_MEDIA)
             }
         }
+    }
+}
+
+/** The contexts the next message carries, over the composer (a chat's, and New chat's sessions picked with @); a longer list scrolls. */
+@Composable
+internal fun ComposerContextCards(contexts: List<ChatLinkContext>, compact: Boolean = false, onRemove: (ChatLinkContext) -> Unit) {
+    Column(Modifier.heightIn(max = 140.dp).verticalScroll(rememberScrollState())) {
+        contexts.forEach { ref -> ChatContextCard(ref, compact = compact) { onRemove(ref) } }
     }
 }
 

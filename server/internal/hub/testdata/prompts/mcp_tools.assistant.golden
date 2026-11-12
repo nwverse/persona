@@ -1547,6 +1547,65 @@
     }
   },
   {
+    "name": "view_show",
+    "description": "Create a persistent live card in the calling assistant conversation. Use the same View schema as persona-view and extension UI: sections of components, a required plain-text fallback, and optional named pages. The card stays at its feed position; use view_update to change it. The hub validates the View and returns field-level errors for correction. At most 64 KB per card and 200 cards per conversation. This does not send a push notification. Keep the conclusion in your normal reply too. Returns {id, version}; save the id for updates. Do not collect passwords or secrets in a card. An html component can call persona.reply / persona.open only when it has a key, and each call is confirmed by the user; the card's one reply is shared with its reply actions.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "view"
+      ],
+      "properties": {
+        "view": {
+          "type": "object",
+          "description": "A View from schema/extension/view.schema.json with a required plain-text fallback and sections. Only assistant reply/open/push.page/pop actions, not extension ui.action ids."
+        }
+      }
+    }
+  },
+  {
+    "name": "view_update",
+    "description": "Replace a live card created by this assistant conversation with a complete validated View. Other conversations and ordinary agents cannot modify it. Supply the version read from view_get to reject stale updates; without it the hub uses the version it reads at the start of this call. Validation or a version conflict leaves the previous card intact. Contents are stored before update notifications are coalesced (at most one per second). Returns {version}. Keep stable component keys to preserve editing and scroll state across devices.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "id",
+        "view"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The exact id returned by view_show, including its view_ prefix."
+        },
+        "view": {
+          "type": "object",
+          "description": "The entire replacement View, including required plain-text fallback."
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "Expected version from view_get; a stale version returns a conflict instead of overwriting."
+        }
+      }
+    }
+  },
+  {
+    "name": "view_get",
+    "description": "Read a persistent live card created by the calling assistant conversation. Returns its id, conversation, version, full View, timestamps and actions (the user's selected reply and submitted values, with pending/sent/failed delivery status; kind html is a reply from an html component's persona.reply, its text the reply the user confirmed; version is the card version the user saw when choosing). Use it before updating a card after resuming work; an id from another conversation is forbidden. Updating the card never clears a committed answer.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The exact live card id returned by view_show."
+        }
+      }
+    }
+  },
+  {
     "name": "conversations_list",
     "description": "List Persona's own conversations (the 对话 sidebar), newest activity first: id, title, last activity, whether it is the main conversation, whether it is running now, and the gist of its last message. Archived ones are left out unless `include_archived`. This conversation is marked. Use it to find a conversation the user means (\"the one about the trip\") before reading, renaming, archiving or messaging it.",
     "input_schema": {

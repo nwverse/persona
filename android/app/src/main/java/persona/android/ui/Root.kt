@@ -653,7 +653,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                         onVoice = voiceExtension?.let { extension -> { navigator.navigate(VoiceRoute(extension.id, extension.name)) } },
                         onTodos = { sidebarDestination(persona.core.navigation.TodosRoute) },
                         todoCount = uncompletedTodosCount,
-                        showTodos = todosSupported)
+                        showTodos = todosSupported, mentionSessions = session.sessions.sessions)
                 }
             }
             agentsEntries(navigator, agents, machine, { machine = it },
