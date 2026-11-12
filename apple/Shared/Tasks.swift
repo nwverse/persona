@@ -46,10 +46,20 @@ nonisolated struct TaskPlan: Codable, Hashable, Identifiable, Sendable {
     var state: State
     var createdAt: Date?
     var updatedAt: Date?
+    /// A standing rule the hub suggests on this open plan (#4929, #5802): the owner started this kind three times. Filled
+    /// in where the plan is read, never stored with it; a hub from before sends none.
+    var suggestion: RuleSuggestion?
 
     enum CodingKeys: String, CodingKey {
-        case id, conversation, tasks, state
+        case id, conversation, tasks, state, suggestion
         case createdAt = "created_at", updatedAt = "updated_at"
+    }
+
+    /// The plan with no rule suggested on it: once the suggestion was answered or is gone.
+    var withoutSuggestion: TaskPlan {
+        var plan = self
+        plan.suggestion = nil
+        return plan
     }
 }
 
@@ -91,6 +101,8 @@ nonisolated enum InterruptLook: Equatable, Sendable {
 nonisolated struct FeedItem: Codable, Hashable, Identifiable, Sendable {
     enum Kind: String, Codable, Sendable {
         case plan, task, answered, receipt, routed, today, message, view, notice, review, report, brief, unknown
+        /// A hand-off conversation's write-back to an inbox item (#5932): `ref` is the item, `body` a `HandoffCardBody`.
+        case inboxSuggestion = "inbox_suggestion"
         init(from decoder: Decoder) throws {
             self = Kind(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .unknown
         }
