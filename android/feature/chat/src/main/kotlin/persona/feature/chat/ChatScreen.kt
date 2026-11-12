@@ -1,5 +1,6 @@
 package persona.feature.chat
 
+import persona.core.designsystem.dense
 import persona.core.designsystem.text
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalDensity
@@ -62,7 +63,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 // Finish the fade in the existing gap below the tab strip, without changing the chat's content padding.
-private val TabbedChatScrollEdgeStyle = ScrollEdgeStyle.Gradient.copy(overlap = Tokens.Space.s)
+private val TabbedChatScrollEdgeStyle = ScrollEdgeStyle.Gradient.copy(overlap = Tokens.Space.Standard.s)
 
 /** The shell supplies repositories and optional terminal/navigation affordances, never wire clients. */
 @OptIn(ExperimentalMaterial3Api::class, FlowPreview::class)
@@ -1244,8 +1245,8 @@ private fun ChatPage(
                             }
                             ChatList(state = chatList, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(
                                 start = horizontalPadding, end = horizontalPadding,
-                                top = padding.calculateTopPadding() + 12.dp,
-                                bottom = padding.calculateBottomPadding() + 12.dp,
+                                top = padding.calculateTopPadding() + 12.dp.dense,
+                                bottom = padding.calculateBottomPadding() + 12.dp.dense,
                             )) {
                                 errorLine?.let { error -> item(key = ERROR_ROW, contentType = ERROR_ROW) { ChatSystemLine(error, failed = true) } }
                                 readyLine?.let { words -> item(key = READY_ROW, contentType = READY_ROW) { TypingLine(words) } }
@@ -1331,7 +1332,7 @@ private fun ChatPage(
                             }
                             if (!chatList.followsEnd) JumpToLatest(timeline.newMessageCount(snapshot.items, newestVisibleItem, readThrough),
                                 onClick = chatList::returnToLatest,
-                                modifier = Modifier.align(Alignment.BottomEnd).padding(end = horizontalPadding, bottom = padding.calculateBottomPadding() + 16.dp))
+                                modifier = Modifier.align(Alignment.BottomEnd).padding(end = horizontalPadding, bottom = padding.calculateBottomPadding() + 16.dp.dense))
                         }
                     }
                 }

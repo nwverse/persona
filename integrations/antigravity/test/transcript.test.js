@@ -31,7 +31,7 @@ test('complete reads fall back to compact-only histories and unavailable full fi
   assert.equal(readTranscriptSteps(brain, true)[0].content, 'compact-only history')
 })
 
-test('cached native records refresh after same-size writes and atomic replacement', (t) => {
+test('fresh rewrites bypass the cache and settled records refresh after atomic replacement', async (t) => {
   const { brain, directory } = logs(t)
   const file = join(directory, 'transcript_full.jsonl')
   writeFileSync(file, record('first'))
@@ -39,6 +39,9 @@ test('cached native records refresh after same-size writes and atomic replacemen
   assert.equal(readTranscriptSteps(brain, true)[0].content, 'first')
   writeFileSync(file, record('other'))
   assert.equal(readTranscriptSteps(brain, true)[0].content, 'other')
+  await new Promise((resolve) => setTimeout(resolve, 1100))
+  const cached = readTranscriptSteps(brain, true)
+  assert.equal(readTranscriptSteps(brain, true), cached, 'settled files reuse parsed records')
   writeFileSync(file + '.new', record('final'))
   renameSync(file + '.new', file)
   assert.equal(readTranscriptSteps(brain, true)[0].content, 'final')

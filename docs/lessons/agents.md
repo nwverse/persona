@@ -913,3 +913,9 @@ cursor ahead of the complete export can skip content. Change the history scope w
 previews, and cache parsed files with bounded storage and file-version invalidation to keep polling responsive.
 Test normal RPC pages, live pushes, delayed export writes and same-size or atomic file updates. Preserve literal
 placeholder examples in complete source text.
+
+## Filesystem timestamps can alias rapid native rewrites (#5659)
+
+Nanosecond stat fields can repeat across same-size writes within one filesystem timestamp tick. Bypass the parsed
+cache for recently modified exports, and cache settled histories after a quiet window. Run rewrite regressions on
+the deployment filesystem as well as the development machine, including a settled cache hit and atomic replacement.
