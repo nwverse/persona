@@ -274,11 +274,12 @@ final class RecordingSync {
         return Self.uploadable(entry) ? .pending : .waiting
     }
 
-    /// The hub takes Persona's echo marked (`meeting_echo`, #5905), read as the meeting flags are: from the connected
-    /// hub's `hello`, else from the last one heard (`MeetingAttendanceDefaults.hubEcho`).
+    /// The hub this upload goes to takes Persona's echo marked (`meeting_echo`, #5905), by its own `hello` only. Before
+    /// that hello (an upload at launch, another hub just picked) nothing says so, and a "yes" kept from the last hub heard
+    /// may be another hub's: the echo lines are left out, as for an older hub. That loses only Persona's own words on the
+    /// hub's copy, never the meeting's, and an older hub never gets them into its minutes.
     private func hubEcho() -> Bool {
-        let features = hubFeatures()
-        return features.isEmpty ? MeetingAttendanceDefaults.hubEcho() : features.contains(MeetingAttendanceDefaults.echoFeature)
+        hubFeatures().contains(MeetingAttendanceDefaults.echoFeature)
     }
 
     /// Text worth sending: at least one sentence (an empty transcript is noise in the knowledge base). A meeting Persona

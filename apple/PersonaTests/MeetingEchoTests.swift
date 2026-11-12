@@ -38,6 +38,46 @@ import Testing
         #expect(body.spoken == nil)
     }
 
+    /// #5905 verification: whether the hub takes echo lines marked is that hub's own `hello`. Before it arrives, a "yes"
+    /// kept from an earlier hub (`MeetingAttendanceDefaults.echoKey`) is not taken: another hub, maybe an older one, would
+    /// put Persona's words into its minutes. The echo line is left out until this hub says `meeting_echo`.
+    @Test func onlyTheHubsOwnHelloSendsEchoLines() async throws {
+        let store = UserDefaults.standard, key = MeetingAttendanceDefaults.echoKey
+        let kept = store.object(forKey: key)
+        defer { if let kept { store.set(kept, forKey: key) } else { store.removeObject(forKey: key) } }
+        store.set(true, forKey: key) // the last hub heard listed meeting_echo
+        let lib = RecordingLibrary(root: FileManager.default.temporaryDirectory.appending(path: "meeting-echo-\(UUID())"))
+        let e = meeting()
+        try lib.save(e)
+        let hub = FakeHub()
+        let put = "/api/v1/recordings/\(e.id.uuidString.lowercased())"
+        hub.on("GET", "/api/v1/recordings", json: #"{"days":14,"recordings":[],"deleted":[]}"#)
+        hub.on("PUT", put) { req in
+            let revision = ((try? JSONSerialization.jsonObject(with: req.body ?? Data())) as? [String: Any])?["revision"] as? NSNumber
+            return Data(#"{"id":"x","revision":\#(revision?.int64Value ?? 0),"status":"stored"}"#.utf8)
+        }
+        let client = hub.client
+        var features: Set<String> = []
+        let sync = RecordingSync(library: lib, api: { client }, hubFeatures: { features })
+        func sent() throws -> [String: Any] {
+            try JSONSerialization.jsonObject(with: try #require(hub.sent("PUT", put).last?.body)) as? [String: Any] ?? [:]
+        }
+
+        await sync.syncNow() // no hello from this hub yet
+        var body = try sent()
+        #expect((body["segments"] as? [[String: Any]])?.compactMap { $0["text"] as? String }
+            == ["We keep the cap for this release.", "Bo owns the regression test."])
+        #expect(body["spoken"] == nil)
+
+        features = ["meeting_attendance", "meeting_echo"] // its hello says it takes them
+        lib.change(e.id) { $0.title = "Weekly, later" }
+        await sync.syncNow()
+        try #require(hub.sent("PUT", put).count == 2)
+        body = try sent()
+        #expect((body["segments"] as? [[String: Any]])?.map { $0["echo"] as? Bool } == [true, nil, nil])
+        #expect((body["spoken"] as? [[String: Any]])?.count == 1)
+    }
+
     @Test func aStretchSavedBeforeHasNoTextOnTheWire() throws {
         let old = try JSONDecoder().decode(RecordingSpan.self, from: Data(#"{"start":1,"end":2}"#.utf8))
         #expect(old.text == nil && old.echoes(RecordingSentence(start: 1, end: 2, text: "anything")))
