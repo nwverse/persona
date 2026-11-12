@@ -719,3 +719,21 @@ func TestTranscriptionSessionStartedAsTheJobEndsIsClosed(t *testing.T) {
 	close(ended)
 	waitFor(t, "the session closed", func() bool { return live.Open() == 0 })
 }
+
+// A verbatim session that fails to start before ready is tried again, as one that dropped is: the job does not run
+// the whole meeting one session short.
+func TestTranscriptionVerbatimStartTriedAgain(t *testing.T) {
+	trFast(t)
+	_, srv, logs, live := trLive(t, voicetest.Script{Sentences: trScript, RefuseVerbatim: 1})
+	tc := startTr(t, srv, liveStart())
+	tc.next(extwire.TFReady)
+	tc.stream(voicetest.PCM(voicetest.Script{Sentences: trScript}, trScriptLength), 20)
+	tc.send(extwire.TranscriptionFrame{Type: extwire.TFEnd})
+	sameTexts(t, tc.done(), trScript)
+	if _, verbatim := live.Sessions(); verbatim != 2 {
+		t.Errorf("%d verbatim sessions started, log:\n%s", verbatim, logs)
+	}
+	if !strings.Contains(logs.String(), "did not start") || !strings.Contains(logs.String(), "(reconnect 1)") {
+		t.Errorf("log:\n%s", logs)
+	}
+}

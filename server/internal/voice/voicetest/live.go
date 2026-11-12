@@ -50,6 +50,9 @@ type Script struct {
 	RefuseCaptions bool
 	// TextOnlyRefused: a session start with output_modalities is refused with an unknown_parameter error.
 	TextOnlyRefused bool
+	// RefuseVerbatim: the first n session starts of verbatim sessions (no caption extension asked) are refused with an
+	// upstream_unavailable error, as a service that is briefly overloaded does.
+	RefuseVerbatim int
 	// DropAfter: verbatim session n is closed by the service once it got this many seconds of audio.
 	DropAfter map[int]float64
 	// FailAfter: once this long has passed since the first session connected, every session is closed and every new
@@ -113,6 +116,7 @@ type Live struct {
 	captions int
 	first    time.Time
 	failed   bool
+	refused  int // verbatim starts refused (RefuseVerbatim)
 }
 
 // NewLive starts the stand-in; it stops with the test.
@@ -204,6 +208,17 @@ func (l *Live) serve(w http.ResponseWriter, r *http.Request) {
 	l.conns = append(l.conns, c)
 	l.mu.Unlock()
 	c.run()
+}
+
+// refuseVerbatim says whether this verbatim start is one RefuseVerbatim refuses.
+func (l *Live) refuseVerbatim() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.refused >= l.s.RefuseVerbatim {
+		return false
+	}
+	l.refused++
+	return true
 }
 
 func (l *Live) fail() {
@@ -299,6 +314,10 @@ func (c *conn) start(raw json.RawMessage) {
 	case textOnly && l.s.TextOnlyRefused:
 		c.send(map[string]any{"type": "error", "error": map[string]any{"code": "unknown_parameter", "param": "session.output_modalities",
 			"message": "unknown parameter"}})
+		return
+	case !asks && l.refuseVerbatim():
+		c.send(map[string]any{"type": "error", "error": map[string]any{"code": "upstream_unavailable", "message": "overloaded"}})
+		_ = c.ws.Close(websocket.StatusTryAgainLater, "overloaded")
 		return
 	}
 	granted := map[string]any{}

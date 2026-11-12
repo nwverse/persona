@@ -223,21 +223,10 @@ func (j *trJob) startFailed(sl *trSlot, s *trSession, err error) {
 	if captionsRefused {
 		j.memo().captions.Store(trNotGranted)
 	}
-	if !j.readySent {
-		if sl.kind == trCaption {
-			j.noCaptions(fmt.Sprintf("session %d (caption) did not start", s.no))
-			return
-		}
-		sl.dead = true
-		if j.firstErr == nil {
-			j.firstErr = err
-		}
-		if j.verbatimLeft() == 0 {
-			j.fatalErr(j.firstErr)
-		}
-		return
-	}
 	switch {
+	case !j.readySent && sl.kind == trCaption:
+		j.noCaptions(fmt.Sprintf("session %d (caption) did not start", s.no))
+		return
 	case sl.kind == trCaption && captionsRefused:
 		j.noCaptions(fmt.Sprintf("session %d (caption): the upstream refused interim captions", s.no))
 		return
@@ -245,12 +234,31 @@ func (j *trJob) startFailed(sl *trSlot, s *trSession, err error) {
 		sl.rollAt = time.Now().Add(trRollRetry) // the session it rolls over carries on
 		return
 	}
+	// A verbatim session that did not start is tried again as one that dropped is, before ready too (a transient
+	// failure at the job's start would otherwise leave it one session short for the whole meeting); a refused key
+	// is not tried again.
+	if !j.readySent && j.firstErr == nil {
+		j.firstErr = err
+	}
 	sl.tries++
-	if sl.tries > maxReconnects {
+	if sl.tries > maxReconnects || keyRefused(err) {
+		if !j.readySent {
+			sl.dead = true
+			if j.verbatimLeft() == 0 {
+				j.fatalErr(j.firstErr)
+			}
+			return
+		}
 		j.slotDead(sl)
 		return
 	}
 	sl.retryAt = time.Now().Add(trReconnectWaits[min(sl.tries-1, len(trReconnectWaits)-1)])
+}
+
+// keyRefused: the service refused the key (401, 403): opening the session again would not help.
+func keyRefused(err error) bool {
+	var hs *httpStatusError
+	return errors.As(err, &hs) && (hs.status == 401 || hs.status == 403)
 }
 
 func (j *trJob) verbatimLeft() int {
