@@ -18,6 +18,8 @@ through a twelfth line. Measure the real textarea's line height and padding at b
 remaining height; cap at six whole lines while retaining the dock's short-viewport safety share. A manual scroll
 was stable at both widths before the fix (idle, hub update and viewport resize), so leave the native scrolling alone
 and pin that behavior with browser tests rather than adding a caret-follow timer for a bug that was not reproduced.
+The follow-up #5682 keeps the six-line limit in `COMPOSER_LINES` and leaves exceptionally short-viewport safety to
+CSS, removing the redundant viewport React state/subscription and keeping the original startup budget unchanged.
 
 ## A lazy page importing a first-screen module can split it into a chunk of its own (#3962)
 
