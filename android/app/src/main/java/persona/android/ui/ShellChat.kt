@@ -58,6 +58,11 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
     val key = SessionKey(route.machineId, route.sessionId)
     val sessions by session.sessions.sessions.collectAsStateWithLifecycle()
     val metadata = sessions.firstOrNull { it.key == key }
+    val managerChoice by AssistantManagerChoice.current.collectAsStateWithLifecycle()
+    val managerId = metadata?.manager ?: managerChoice.shown
+    val assistantManagement = remember(wiring?.assistantManagement, managerId) {
+        wiring?.assistantManagement?.forManager(managerId)
+    }
     val waiting = rememberWaitingRequests(session, sessions)
     val assistant = route.kind == ConversationKind.Assistant || metadata?.assistant == true
     val editor = rememberChatDraftEditor(wiring, key)
@@ -98,6 +103,7 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
                     gitLabel = "Git${git?.files?.size?.takeIf { it > 0 }?.let { " · $it" }.orEmpty()}",
                     actions = actions, connection = wiring?.connection ?: session.connection, requestId = requestId, covered = pane != null || terminalOpen,
                     worktrees = wiring?.worktrees,
+                    assistantManagement = assistantManagement,
                     onOpenSession = { navigator.navigate(ChatRoute(it.machineId, it.sessionId)) },
                     waiting = waiting,
                     onOpenRequest = { chat, request ->
@@ -141,7 +147,7 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
  * them): a chat that has just answered its last card offers the first one of another chat (#4325).
  */
 @Composable
-private fun rememberWaitingRequests(session: ShellSession, sessions: List<persona.core.contracts.Session>): List<WaitingRequest> {
+internal fun rememberWaitingRequests(session: ShellSession, sessions: List<persona.core.contracts.Session>): List<WaitingRequest> {
     val pending by session.interactions.pending.collectAsStateWithLifecycle()
     val assistant by session.assistant.assistant.collectAsStateWithLifecycle()
     // `snapshots` builds a new flow on each read: keep one, or the collection restarts on every recomposition.

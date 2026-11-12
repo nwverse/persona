@@ -27,6 +27,10 @@ interface AssistantManagement {
     suspend fun updateConfig(update: AssistantConfigUpdate): AssistantConfig = throw UnsupportedOperationException("Assistant settings unavailable")
     /** The launchers a machine offers (GET /api/v1/machines/{id}/launchers). */
     suspend fun launchers(machineId: String): List<AgentLauncher> = throw UnsupportedOperationException("Assistant settings unavailable")
+    /** Only launchers the hub accepts for a Persona conversation; New Agent keeps using [launchers]. */
+    suspend fun assistantLaunchers(machineId: String): List<AgentLauncher> = launchers(machineId)
+    /** The models of [launcher], null on a hub without the list. */
+    suspend fun launcherModels(machineId: String, launcher: String): LauncherModels? = null
     suspend fun endConversation(session: SessionKey)
     /**
      * Compacts an assistant conversation's context now (POST /api/v1/assistant/conversations/{id}/compact, hub feature

@@ -424,6 +424,13 @@ struct ChatsView: View {
                     #endif
                     if !machineFilter.isEmpty, !model.machines.isEmpty, model.machine(MachineRef(path: machineFilter)) == nil { machineFilter = "" }
                 }
+                // Another assistant is current, and the list is its agents now: a computer picked in the menu that is
+                // not one of its own would leave the list empty, and what was pushed from the list (a chat, a space, a
+                // computer) is the assistant before's.
+                .onChange(of: model.assistantSwitches) {
+                    if !machineFilter.isEmpty, !model.scopedMachines(inFront: false).contains(where: { $0.ref.path == machineFilter }) { machineFilter = "" }
+                    if !path.isEmpty { path = NavigationPath() }
+                }
         } empty: {
             SplitPlaceholder(symbol: Theme.Icon.agents, title: String(localized: "Choose an Agent"),
                              message: String(localized: "Click an agent in the list on the left to open its chat here."))
@@ -716,7 +723,7 @@ private struct AgentsList: View {
     }
 
     private var sessions: [Session] { feed.following ? feed.sessions : model.sessionLists.sessions }
-    private var machines: [Machine] { feed.following ? feed.machines : model.machines }
+    private var machines: [Machine] { feed.following ? feed.machines : model.scopedMachines() }
     /// What the rows read (a machine's name, an agent's label), filled by each run of the body and not observed. SwiftUI
     /// tracks what each row of a `List` read when it was last drawn: a row that asked the model for its machine went on
     /// following the machines while the list was held, was drawn again by the next push, and the `List` measured its
@@ -785,7 +792,7 @@ private struct AgentsList: View {
                                                workspaceRevision: workspaceCatalog.revision)
         return feed.projection.resolve(key, immediate: !follows || feed.immediateRevision == key.revision,
             input: { .init(sessions: follows ? feed.sessions : model.sessionLists.sessions,
-                           machines: follows ? feed.machines : model.machines, settings: settings,
+                           machines: follows ? feed.machines : model.scopedMachines(), settings: settings,
                            workspaces: workspaceCatalog.workspaces) },
             valid: { key in
                 key.revision >= feed.immediateRevision && AgentListProjectionCache.partitions(model) == key.partitions &&
@@ -872,7 +879,7 @@ private struct AgentsList: View {
         // One row per session that waits for the user, its cards under it (`AgentsNeedsYou`): the section, the Needs
         // You filter and the tab's badge count these rows.
         let waiting = AgentsNeedsYou.rows(
-            cards: AgentsNeedsYou.cards(feed.following ? feed.interactions : model.pendingInteractions, session: session,
+            cards: AgentsNeedsYou.cards(feed.following ? feed.interactions : model.scopedInteractions, session: session,
                                         machine: machineFilter, hub: model.isMultiHub ? hubFilter : nil),
             waiting: AgentsNeedsYou.waiting(base)) // a subtask waiting for you is a row of its own (`CodexTasks`)
         let _ = (lookup.needsYou = waiting.count)
@@ -3271,11 +3278,11 @@ nonisolated struct AgentsListShown: Encodable, Equatable {
     /// once; watched again at every change, held or not, never twice at a time).
     private func current() -> ([Session], [Interaction], [Machine])? {
         guard let model else { return nil }
-        guard !watching else { return (model.sessionLists.sessions, model.pendingInteractions, model.machines) }
+        guard !watching else { return (model.sessionLists.sessions, model.scopedInteractions, model.scopedMachines()) }
         watching = true
         return withObservationTracking {
             let _ = AgentListProjectionCache.partitions(model)
-            return (model.sessionLists.sessions, model.pendingInteractions, model.machines)
+            return (model.sessionLists.sessions, model.scopedInteractions, model.scopedMachines())
         } onChange: { [weak self] in
             Task { @MainActor in // told before the change: read it after
                 self?.watching = false

@@ -663,7 +663,7 @@ struct RecordingCaptureControls: View {
     #endif
 }
 
-/// Recordings as a page of its own (the drawer's Record, the Control, Siri, the activity's tap): what Knowledge ›
+/// Recordings as a page of its own (the drawer's Recordings, the Control, Siri, the activity's tap): what Knowledge ›
 /// Recordings shows, one step closer.
 struct RecordingsPage: View {
     #if DEBUG
