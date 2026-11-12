@@ -250,7 +250,7 @@ func (s *Service) activeTasks(ctx context.Context) []prompts.InboxTask {
 		}
 		agents := s.taskAgents(ctx, t)
 		task := snapshotTask(t, taskState(t, agents), agents, time.Now())
-		out = append(out, prompts.InboxTask{ID: t.ID, Title: t.Title, State: task.State, Last: task.Last})
+		out = append(out, prompts.InboxTask{ID: t.ID, Title: t.Title, State: task.State, Last: task.Last, Notes: clip(t.Notes, 1200)})
 	}
 	// The assistant's brief is capped and age-filtered; the task judge must see every open candidate.
 	slices.SortFunc(out, func(a, b prompts.InboxTask) int { return cmp.Compare(a.ID, b.ID) })

@@ -54,7 +54,7 @@ func TestInboxTaskRecheckDraft(t *testing.T) {
 	if string(rawJSON(before)) != string(rawJSON(after)) || !it.open() || it.Handling.State != HandlingDone || it.Suggestion.Version != 3 {
 		t.Fatalf("processing changed: %+v / %+v / %+v", it.Agent, it.Handling, it.Suggestion)
 	}
-	if c := onlyCall(t, calls()); !strings.Contains(c.User, todo.ID) {
+	if c := onlyCall(t, calls()); !strings.Contains(c.User, todo.ID) || !strings.Contains(c.User, todo.Notes) {
 		t.Fatalf("the judge did not see the task: %s", c.User)
 	}
 	waitFor(t, "the supervisor's Inbox notice", func() bool {

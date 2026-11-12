@@ -428,6 +428,7 @@ inbox.write          POST /api/v1/inbox/{id}/draft
 inbox.write          POST /api/v1/inbox/{id}/handoff
 inbox.write          POST /api/v1/inbox/{id}/reply
 inbox.write          POST /api/v1/inbox/{id}/suggestion
+inbox.write          POST /api/v1/inbox/{id}/task-link/recheck
 agents.control       POST /api/v1/interactions/{id}/choose
 agents.control       POST /api/v1/interactions/{id}/reanswer
 agents.control       POST /api/v1/interactions/{id}/resolve
