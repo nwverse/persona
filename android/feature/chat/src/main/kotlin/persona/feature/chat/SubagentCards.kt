@@ -84,7 +84,7 @@ internal object SubagentCardText {
      */
     fun meta(res: Resources, agent: Subagent?, took: Long?, assistant: Boolean): Meta = Meta(
         harness = if (assistant) null else res.getString(R.string.chat_subagent_harness_claude),
-        model = Subagents.modelChip(agent?.model).ifEmpty { null },
+        model = persona.core.domain.modelShortName(agent?.model).ifEmpty { null },
         tokens = agent?.tokens?.takeIf { it > 0 }?.let { res.getString(R.string.chat_subagent_tokens, Subagents.tokens(it)) },
         uses = agent?.steps?.takeIf { it > 0 }?.let { res.getQuantityString(R.plurals.chat_subagent_tool_uses, it, it) },
         took = took?.let { workDuration(res, it) },
