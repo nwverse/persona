@@ -133,6 +133,7 @@ export interface EngineLeg {
 }
 
 export interface SessionCapabilities {
+  takeover?: { running: boolean; can_resume: boolean; reason?: string };
   read?: boolean;
   send?: boolean;
   interrupt?: boolean;

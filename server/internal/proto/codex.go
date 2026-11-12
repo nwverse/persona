@@ -33,6 +33,14 @@ type SessionCapabilities struct {
 	Modes *bool `json:"modes,omitempty"`
 	// Model explicitly permits changing the model through session.modes. Absent preserves older clients' heuristics.
 	Model *bool `json:"model,omitempty"`
+	// Takeover is advertised only for a local, read-only Codex CLI thread.
+	Takeover *CodexTakeover `json:"takeover,omitempty"`
+}
+
+type CodexTakeover struct {
+	Running   bool   `json:"running"`
+	CanResume bool   `json:"can_resume"`
+	Reason    string `json:"reason,omitempty"`
 }
 
 // CanModes is a Modes value.

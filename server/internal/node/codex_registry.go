@@ -651,6 +651,9 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 			s.Capabilities.Terminal = true
 			s.ReadOnlyReason = stoppedReason
 		}
+		if s.SourceKind == "codex_history" && !s.Capabilities.Send && !s.IsSubagent && !n.codexBlocked(id) {
+			s.Capabilities.Takeover = n.codexTakeoverRow(id, src, m, liveRollouts[id] != "")
+		}
 		if n.codexBlocked(id) {
 			markCodexConflict(&s)
 		}

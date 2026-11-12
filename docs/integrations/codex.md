@@ -6,6 +6,12 @@ They never write Claude's `custom-title` records into a Codex rollout. Worktree 
 Codex (`codex` CLI) running in herdr appears in the "Agents" tab like Claude: lists, chats, live state, messaging, terminals, and closing all work,
 and it can also be started from the phone ("Starting from the phone"). Supported since 2026-10-26; `server/internal/node/codex.go` + `server/internal/transcript/codex.go`.
 
+## Standalone TUI takeover
+
+Eligible sessions advertise `capabilities.takeover: {running, can_resume, reason?}`, where `reason` is `encrypted_context` or `unavailable`. A signed-in user on a full device can use the manager's `GET` then `POST /api/v1/machines/{mid}/codex/{sid}/takeover` flow; generic device-call APIs and assistant tools cannot invoke it. GET returns `{token, cwd, transcript_path, continuation_prompt}`; the single-use token expires after two minutes. POST requires `confirm_stop: true` only while the original writer is running; when it has exited, `false` is accepted.
+
+The manager sends one Ctrl+D through the selected session's terminal writer only after confirming the composer is empty, with no modal or queued input, and rechecking both process identity and terminal instance. Remote terminal-writer bridges are supported. It waits for the process to exit, the transcript to end on a complete stable line, and a fresh scan to find no writer. Any failed check or timeout refuses takeover; no signal or forced termination is used. Takeover resumes the same thread and session ID in a new terminal tab. The separate continue option starts an independent session with context and the attached to-do preserved. `encrypted_context` is continuation-only.
+
 ## Recognition
 
 - herdr reports Codex panes as `agent: "codex"`. With herdr's Codex integration installed (`~/.codex/herdr-agent-state.sh`, registered on

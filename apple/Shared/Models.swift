@@ -644,8 +644,9 @@ nonisolated struct SessionCapabilities: Codable, Hashable, Sendable {
     var terminal = false
     var attach = false
     var modes: Bool?
+    var takeover: CodexTakeoverCapability? = nil
 
-    enum CodingKeys: String, CodingKey { case read, send, interrupt, approve, terminal, attach, modes }
+    enum CodingKeys: String, CodingKey { case read, send, interrupt, approve, terminal, attach, modes, takeover }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -656,7 +657,15 @@ nonisolated struct SessionCapabilities: Codable, Hashable, Sendable {
         terminal = try c.decodeIfPresent(Bool.self, forKey: .terminal) ?? false
         attach = try c.decodeIfPresent(Bool.self, forKey: .attach) ?? false
         modes = try c.decodeIfPresent(Bool.self, forKey: .modes)
+        takeover = try c.decodeIfPresent(CodexTakeoverCapability.self, forKey: .takeover)
     }
+}
+
+nonisolated struct CodexTakeoverCapability: Codable, Hashable, Sendable {
+    var running: Bool
+    var canResume: Bool
+    var reason: String?
+    enum CodingKeys: String, CodingKey { case running, reason; case canResume = "can_resume" }
 }
 
 nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {

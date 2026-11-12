@@ -4,6 +4,9 @@ import OSLog
 import PersonaKit
 import PhotosUI
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 #if DEBUG
 import notify
 #endif
@@ -226,6 +229,7 @@ struct ChatView: View {
 
     /// A subagent of this session being looked at instead of the main agent (read-only, same message UI).
     @State private var viewing: Subagent?
+    @State private var takeoverCoordinator = CodexTakeoverCoordinator()
     /// This view's claim on its subscriptions and on `visibleSession` (another view of the same chat has its own).
     @State private var owner = UUID()
 
@@ -314,6 +318,10 @@ struct ChatView: View {
             .overlay { if liftHost == nil { MessageLiftLayer(menu: menu) } }
             .onAppear { liftHost?.menu = menu }
             .onDisappear { if liftHost?.menu === menu { liftHost?.menu = nil } }
+            .codexTakeoverDialogs(coordinator: takeoverCoordinator) { adopted in
+                model.adopt(adopted)
+                switchTo(adopted.key)
+            }
     }
 
     @ViewBuilder private var chatPage: some View {
@@ -2586,9 +2594,40 @@ struct ChatView: View {
                         .padding(.leading, Theme.Space.xs)
                 }
                 if let s = session, s.isStopped {
+                    #if os(iOS)
+                    StoppedAgentBar(session: s, coordinator: takeoverCoordinator, openTerminal: openTerminal) { adopted in
+                        model.adopt(adopted)
+                        switchTo(adopted.key)
+                    } // read-only: its terminal page has the shell and Resume (#4754)
+                    #else
                     StoppedAgentBar(openTerminal: openTerminal) // read-only: its terminal page has the shell and Resume (#4754)
+                    #endif
                 } else if let s = session, !s.canSend, let reason = s.sourceSubtitle {
+                    #if os(iOS)
+                    if UIDevice.current.userInterfaceIdiom == .phone {
+                        ViewThatFits(in: .horizontal) {
+                            HStack(alignment: .center, spacing: Theme.Space.s) {
+                                Text(reason).foregroundStyle(.secondary).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+                                CodexTakeoverControl(session: s, coordinator: takeoverCoordinator) { adopted in
+                                    model.adopt(adopted)
+                                    switchTo(adopted.key)
+                                }
+                            }
+                            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                                Text(reason).foregroundStyle(.secondary)
+                                CodexTakeoverControl(session: s, coordinator: takeoverCoordinator) { adopted in
+                                    model.adopt(adopted)
+                                    switchTo(adopted.key)
+                                }
+                            }
+                        }
+                        .font(Theme.Font.caption).frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        Text(reason).font(Theme.Font.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    #else
                     Text(reason).font(Theme.Font.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+                    #endif
                 }
                 if session?.isStopped != true { // a stopped Agent takes no messages: its line above says so (#4754)
                     Composer(key: key, status: status, placeholder: style == .assistant ? String(localized: "Ask \(model.persona.name)…") : String(localized: "Message \(session?.agentLabel ?? "Claude") [Chat View c6f021]"),
@@ -5785,9 +5824,35 @@ struct TerminalCover: View {
 /// Above a stopped Agent's composer (#4754, docs/integrations/engines.md「Agents run in a terminal」): it takes no messages;
 /// its terminal page shows the shell it left and offers Resume, the one way it runs again.
 private struct StoppedAgentBar: View {
+#if os(iOS)
+    var session: Session
+    var coordinator: CodexTakeoverCoordinator
     var openTerminal: () -> Void
+    var onSession: (Session) -> Void
+#else
+    var openTerminal: () -> Void
+#endif
 
     var body: some View {
+        Group {
+#if os(iOS)
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            HStack(spacing: Theme.Space.s) {
+                Text("This Agent has stopped. Its conversation and terminal stay; it doesn't take messages.")
+                    .font(Theme.Font.caption).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                CodexTakeoverControl(session: session, coordinator: coordinator, onSession: onSession)
+            }
+            HStack {
+                Spacer(minLength: 0)
+                Button(action: openTerminal) {
+                    Label("Terminal", systemImage: Theme.Icon.terminal).font(Theme.Font.labelStrong).lineLimit(1)
+                }
+                .themedButton()
+                .accessibilityIdentifier("chat.stopped.terminal")
+            }
+        }
+#else
         HStack(spacing: Theme.Space.s) {
             Text("This Agent has stopped. Its conversation and terminal stay; it doesn't take messages.")
                 .font(Theme.Font.caption).foregroundStyle(.secondary)
@@ -5797,6 +5862,8 @@ private struct StoppedAgentBar: View {
             }
             .themedButton()
             .accessibilityIdentifier("chat.stopped.terminal")
+        }
+#endif
         }
         .accessibilityElement(children: .contain)
     }

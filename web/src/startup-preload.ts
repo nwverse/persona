@@ -323,9 +323,10 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
  * And 183 B for the single-category stacked bar's share predicate and horizontal segmented renderer (#5386,
  * 2026-11-12: 43,782 B measured on main before the change, 43,965 B after; the chart chunk is idle by contract —
  * code-views-lazy.test enforces `idle: true` — so the renderer has no intent tier to move into).
+ * Codex takeover adds 2 B to the chat's lazy component tier (#5739; build measured 43,967 B against 43,965 B).
  * Every other lazy page loads on intent, not at idle; raise it on purpose, in the change that needs it.
  */
-export const IDLE_TIER_BUDGET = 43_965;
+export const IDLE_TIER_BUDGET = 43_967;
 
 const gzip = promisify(gzipCompress);
 

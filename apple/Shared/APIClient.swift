@@ -812,6 +812,34 @@ nonisolated struct APIClient: Sendable {
         return stamp(try await post("/api/v1/sessions", body: body, timeout: req.async == true ? 20 : 110, as: SessionResponse.self).session)
     }
 
+    struct CodexTakeoverInfo: Decodable, Sendable {
+        var running: Bool
+        var canResume: Bool
+        var reason: String?
+        var token: String
+        var cwd: String
+        var transcriptPath: String
+        var continuationPrompt: String
+        enum CodingKeys: String, CodingKey {
+            case running, reason, token, cwd
+            case canResume = "can_resume", transcriptPath = "transcript_path", continuationPrompt = "continuation_prompt"
+        }
+    }
+
+    private func codexTakeoverPath(machine: String, session: String) -> String {
+        "/api/v1/machines/\(TodosLogic.pathComponent(machine))/codex/\(TodosLogic.pathComponent(session))/takeover"
+    }
+
+    func codexTakeoverInfo(machine: String, session: String) async throws -> CodexTakeoverInfo {
+        try await get(codexTakeoverPath(machine: machine, session: session))
+    }
+
+    func codexTakeover(machine: String, session: String, token: String, confirmStop: Bool) async throws -> Session {
+        struct Body: Encodable { var token: String; var confirmStop: Bool; enum CodingKeys: String, CodingKey { case token; case confirmStop = "confirm_stop" } }
+        return stamp(try await post(codexTakeoverPath(machine: machine, session: session), body: Body(token: token, confirmStop: confirmStop),
+                                   timeout: 110, as: SessionResponse.self).session)
+    }
+
     private func sp(_ k: SessionKey) -> String { "/api/v1/sessions/\(k.machineID)/\(k.sessionID)" }
 
     /// Genuine user-input identities and full-history ordinals, without loading transcript bodies.

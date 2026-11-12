@@ -157,6 +157,7 @@ type Node struct {
 	live      liveReplies                // the replies Claude is showing, from its MessageDisplay hook (livereply.go)
 	bgWait    bgWatch                    // whether background commands only wait (bgwait.go)
 	codices   *codexRegistry
+	takeovers codexTakeovers
 	usageWin  usageWindowsState // subscription rate-limit windows (usagewindows.go, #2432)
 	machineID string
 	sends     sentLog         // recent client_msg_ids (sendsafe.go)
@@ -606,6 +607,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return clipboardGet(ctx)
 	case "clipboard.set":
 		return clipboardSet(ctx, params)
+	}
+	if method == codexTakeoverPrepare || method == codexTakeoverCommit {
+		return n.codexTakeoverCall(ctx, method, params)
 	}
 	var p struct {
 		Path             string        `json:"path"`

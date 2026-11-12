@@ -698,6 +698,7 @@ private struct AgentsList: View {
     @State private var answering: Interaction?
     /// The long-press menu's actions on a row (not observed: see `AgentRowMenu`).
     @State private var rowActions = AgentRowMenu.Actions()
+    @State private var takeoverCoordinator = CodexTakeoverCoordinator()
     /// The agents, the questions and the machines the list shows (`AgentsFeed`): held still while it is scrolled or
     /// out of sight.
     @State private var feed = AgentsFeed()
@@ -723,6 +724,7 @@ private struct AgentsList: View {
     }
 
     private var sessions: [Session] { feed.following ? feed.sessions : model.sessionLists.sessions }
+
     private var machines: [Machine] { feed.following ? feed.machines : model.scopedMachines() }
     /// What the rows read (a machine's name, an agent's label), filled by each run of the body and not observed. SwiftUI
     /// tracks what each row of a `List` read when it was last drawn: a row that asked the model for its machine went on
@@ -906,13 +908,31 @@ private struct AgentsList: View {
         let _ = macRows.update(rowsInOrder(unpinned: unpinned, pinned: pinnedAgents, active: active, quiet: quiet, tree: tree, byHost: byHost))
         #endif
         let _ = rowActions.update(rename: { renamingSession = $0 }, close: { closingSession = $0 }, linkTodo: { linkingSession = $0 },
-                                  delete: { deletingSession = $0 })
+                                  delete: { deletingSession = $0 }, takeover: { session in
+                                      Task {
+                                          if let adopted = await takeoverCoordinator.takeOver(session, model: model) {
+                                              model.adopt(adopted)
+                                              openFromList(adopted.key)
+                                          }
+                                      }
+                                  }, continueInNewSession: { session in
+                                      Task {
+                                          if let adopted = await takeoverCoordinator.continueInNewSession(session, model: model) {
+                                              model.adopt(adopted)
+                                              openFromList(adopted.key)
+                                          }
+                                      }
+                                  })
 
         observedAgentList(
             agentList(base: base, filtered: filtered, unpinned: unpinned, pinnedAgents: pinnedAgents,
                       needsYou: needsYou, unreadShown: unreadShown, active: active, quiet: quiet,
                       tree: tree, byHost: byHost, hasSearchResults: projection.hasSearchResults),
             base: base, interactions: interactions, quiet: quiet, matching: matching)
+            .codexTakeoverDialogs(coordinator: takeoverCoordinator) { adopted in
+                model.adopt(adopted)
+                openFromList(adopted.key)
+            }
     }
 
     // Opaque helper boundaries keep the same List/modifier tree while allowing
