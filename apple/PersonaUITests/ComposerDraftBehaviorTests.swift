@@ -32,6 +32,14 @@ final class ComposerDraftBehaviorTests: XCTestCase {
         field.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.75)).tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         clearDraft()
+        if ProcessInfo.processInfo.environment["PERSONA_LARGE_TYPE"] == "1" {
+            // Physical room is smaller at the largest type size; verify the controls and text, not six visible rows.
+            field.typeText("1\n2\n3")
+            capture("large-type-compact")
+            verifyExpandedLayout()
+            clearDraft()
+            return
+        }
 
         var heights: [CGFloat] = []
         for line in 1...6 {
@@ -63,7 +71,7 @@ final class ComposerDraftBehaviorTests: XCTestCase {
         XCTAssertLessThanOrEqual(before.offset, 1, "the manual drag did not reach the first line: \(before)")
         capture("scroll-first-t0")
         let started = Date()
-        // A stream of unrelated view-state updates continues while the person's reading position stays put.
+        // The DEBUG line probe keeps sampling while the person's reading position stays put.
         for _ in 0..<6 {
             pause(1)
             let current = try XCTUnwrap(readLines())
@@ -78,6 +86,11 @@ final class ComposerDraftBehaviorTests: XCTestCase {
         XCTAssertGreaterThan(afterInput.offset, before.offset + 10, "typing did not reveal the caret at the end")
         capture("typing-follows-caret")
 
+        verifyExpandedLayout()
+        clearDraft()
+    }
+
+    @MainActor private func verifyExpandedLayout() {
         element("shell-composer-expand").tap()
         let page = element("composer-page-field")
         XCTAssertTrue(page.waitForExistence(timeout: 5))
@@ -97,7 +110,6 @@ final class ComposerDraftBehaviorTests: XCTestCase {
         XCTAssertTrue(page.waitForNonExistence(timeout: 5))
         XCTAssertEqual(field.value as? String, draft)
         capture("collapsed")
-        clearDraft()
     }
 
     private struct Lines: Decodable {
@@ -112,7 +124,8 @@ final class ComposerDraftBehaviorTests: XCTestCase {
     @MainActor private func readLines() -> Lines? { app.probe("composer-lines", as: Lines.self) }
 
     @MainActor private func clearDraft() {
-        guard let text = field.value as? String, text.hasPrefix("Draft") else { return }
+        guard let text = field.value as? String,
+              text.hasPrefix("Draft") || text.hasPrefix("1\n") || text == "1" else { return }
         field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: text.count + 2))
         pause(1)
     }
