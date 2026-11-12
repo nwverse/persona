@@ -31,12 +31,13 @@ import java.io.File
 
 /**
  * #4339 C13: the hub's task records in Persona's conversation, as iOS draws them (Glass): the receipt, the review line,
- * the report and Persona's hand-off as exchanges folded to three lines, the user's own word to the task, the notice line.
+ * the report and Persona's hand-off as exchanges folded to three lines, the user's own word to the task, the notice line,
+ * and a message card with its drafted reply (Send and Edit, Later and Don't handle).
  * Brief and Board keep them behind the trays. Native JVM captures of the real renderers, with synthetic data.
  */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-@Config(sdk = [35], qualifiers = "en-w400dp-h1150dp-xhdpi")
+@Config(sdk = [35], qualifiers = "en-w400dp-h1600dp-xhdpi")
 class TaskRecordsShotsTest {
     @get:Rule val rule = createComposeRule()
     private val session = SessionKey("computer", "main")
@@ -65,6 +66,10 @@ class TaskRecordsShotsTest {
             put("pr", "https://example.com/acme/app/pull/42")
         },
         item("notice", 7, "notice", null) { put("text", "Your computer is connected again; the morning brief runs as planned.") },
+        item("message", 8, "message", "inbox-1") {
+            put("todo_id", "task"); put("source", "mail"); put("sender", "Example sender"); put("chat", "Login bug")
+            put("text", "Is the login crash fixed yet?"); put("draft", "Yes, the fix is merged and ships today.")
+        },
     )
     private class Api(val todo: Todo, val plan: TaskPlan) : TasksApi {
         override suspend fun todos() = listOf(todo)
@@ -152,8 +157,20 @@ class TaskRecordsShotsTest {
             capture("records-glass-open-$mode")
             rule.onNodeWithText("Collapse").performClick(); settle()
             rule.onNodeWithText("Expand").assertIsDisplayed()
+            // the message card: its reply reads until Edit opens it for typing, and Done closes it again
+            rule.onNodeWithText("Is the login crash fixed yet?").assertIsDisplayed()
+            rule.onNodeWithText("Reply drafted from the task's progress").assertIsDisplayed()
+            rule.onAllNodes(hasSetTextAction()).assertCountEquals(0)
+            rule.onNodeWithTag("assistant-draft-edit-message").assertTextEquals("Edit").performClick(); settle()
+            rule.onAllNodes(hasSetTextAction()).assertCountEquals(1)
+            capture("records-glass-edit-$mode")
+            rule.onNodeWithTag("assistant-draft-edit-message").assertTextEquals("Done").performClick(); settle()
+            rule.onAllNodes(hasSetTextAction()).assertCountEquals(0)
         }
         assertNotEquals("dark capture must differ from light", colors[0], colors[1])
+        // Later puts the card away from the conversation (it waits in Needs You)
+        rule.onNodeWithTag("assistant-draft-later-message").performClick(); settle()
+        rule.onNodeWithText("Is the login crash fixed yet?").assertDoesNotExist()
     }
 
     private fun keepsTheRecordsBehindTheTrays(style: AppStyle) {
@@ -161,6 +178,7 @@ class TaskRecordsShotsTest {
         rule.onNodeWithText("Your computer is connected again; the morning brief runs as planned.").assertDoesNotExist()
         rule.onNodeWithText("Fix the login crash is done").assertDoesNotExist()
         rule.onNodeWithTag("exchange-header", useUnmergedTree = true).assertDoesNotExist()
+        rule.onNodeWithText("Is the login crash fixed yet?").assertDoesNotExist()
         // the user's own word keeps its bubble and label
         rule.onNodeWithText("Use the staging key for the test.").assertIsDisplayed()
         capture("records-${style.name.lowercase()}-light")

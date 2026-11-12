@@ -96,11 +96,12 @@ metadata identifies supervision/patrol/follow-up turns; normal user messages are
 Original events and background records remain inspectable rather than being deleted from history.
 
 On Glass the conversation draws the hub's task records as iOS does ([chats](../plans/android-ios-alignment/chats.md) C13):
-`AssistantTaskCards.isBackgroundEvent(inline = true)` keeps only plans, task cards (the dispatched line stands for them) and
-message cards behind, and `FeedLine` draws the receipt (its PR button and **View**), the review line, the report as
+`AssistantTaskCards.isBackgroundEvent(inline = true)` keeps only plans and task cards (the dispatched line stands for them)
+behind, and `FeedLine` draws the receipt (its PR button and **View**), the review line, the report as
 "task → @Persona" and Persona's hand-off as "Persona → @task" (both in Persona's box, the first three lines and **Expand**,
 `ExchangeHeader` / `ExchangeText` in `feature/chat/AgentExchange.kt`), the user's own word to a task as "Me → @task" in the
-user's bubble, and the hub's `notice` line, centered. A quiet supervision round stays in the conversation as one
+user's bubble, the hub's `notice` line, centered, and a message card as iOS's `MessageCard` (the reply reads as text until
+**Edit** opens it; Send and Edit, Later and Don't handle; Later puts it away to Needs You). A quiet supervision round stays in the conversation as one
 **Supervision record** line (`· running` while it runs, iOS `SupervisionRecordLine`) that opens to the round
 (`AssistantConversation.project(…, inline = true)` folds it with `BackgroundFolding(rounds = false)` outside the main
 conversation's background folding), scheduled and follow-up rounds read as they are unless background rounds fold, and

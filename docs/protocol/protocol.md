@@ -3253,7 +3253,7 @@ Tasks dispatched from an assistant chat ([unified-entry.md](../assistant/unified
 
 **Stable task rows (#2878).** The feed endpoint additionally returns `task_cards`, a derived projection, without changing or
 removing its original `items` and `plans`. Android and web render a task only as its single row in **In progress**, or in
-**Needs you** while it waits on the user (#3387); the chat shows a small dispatched line instead of plan/task/receipt/review/report cards (Android's Glass style draws the receipts, reviews, reports, Persona's hand-offs and `notice` lines in the chat as iOS does, `docs/plans/android-ios-alignment/chats.md` C13): one task reads
+**Needs you** while it waits on the user (#3387); the chat shows a small dispatched line instead of plan/task/receipt/review/report cards (Android's Glass style draws the receipts, reviews, reports, Persona's hand-offs, message cards and `notice` lines in the chat as iOS does, `docs/plans/android-ios-alignment/chats.md` C13): one task reads
 "Dispatched: <title> · Open", several list their titles, and each opens that task's own details, never the whole tray (#3700).
 Clients take the dispatched to-dos from data they already have: a `task` item's `ref`, or a started plan's `tasks[].todo_id`
 in plan order (a task without `todo_id` did not start and has no link); no extra field is sent. Plans awaiting Start and acceptance decisions are handled in **Needs you**. Task details and the original audit records remain accessible.
