@@ -351,6 +351,14 @@ for t in "${TARGETS[@]}"; do
       hub_plat=$(machine_platform "$t") || exit 2
       install_bin "$t" "bin/personad-$hub_plat"
       for p in persona-hub persona-manager; do install_program "$t" "$hub_plat" "$p"; done
+      # What this build contains, beside its binary: the hub's deploy checks read it before asking GitHub, and it names
+      # the open PRs the build runs (docs/assistant/todo-status-sop.md "Without GitHub"). Never fails the deploy.
+      if python3 ../scripts/deploy/deployed_commits.py ${COMMIT:+--commit "${COMMIT%-dirty}"} --out bin/deployed-commits.txt; then
+        remote_state "$PERSONA_HUB_SSH" 'cat > "$PERSONA_HOME/bin/deployed-commits.txt.new" && mv "$PERSONA_HOME/bin/deployed-commits.txt.new" "$PERSONA_HOME/bin/deployed-commits.txt"' < bin/deployed-commits.txt ||
+          echo "hub: deployed-commits.txt not written; its deploy checks ask GitHub" >&2
+      else
+        echo "hub: deployed-commits.txt not made; its deploy checks ask GitHub" >&2
+      fi
       ensure_herdr "$t"
       hub_admin_access
       python3 ../scripts/persona_identity.py --service hub --prepare --prefix ../scripts/deploy/hub-systemd.sh | ssh "$PERSONA_HUB_SSH" 'bash -s'

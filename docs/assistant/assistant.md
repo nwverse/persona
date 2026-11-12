@@ -755,6 +755,11 @@ A long-used main chat accumulates large context; users can replace it: `POST /ap
    with `assistant/main_handoff.md` prepending background as `<persona-context kind="context" title="接上旧主对话">` (`title` means "Continue old main chat"; App context tag), then clearing it;
    `carry: none` still includes the old main-chat id, allowing `conversation_read`.
    Android first creates an empty `prompt`, then sends separately: bind background to the new session id (`for`) and include it with the first `POST …/messages` or Lark / channel message, all through `assistant.send_params`, not as a separate turn.
+5. The old main chat's open tasks follow (#4866, `assistant/main_handover.go`). When the new main chat starts, each task's `supervision.supervisor` and `origin` move to it together, as a closed leader's workers are rehomed. The ledger stays as it was: criteria, reviews, round, parking and owner waits.
+   A task waiting for review is signalled again, through the current main chat's supervision policy: the background supervisor by default, or the main chat when it supervises its own tasks. The card of each task the new main chat now supervises goes there with an active hand-off badge; the archived chat keeps its history.
+   A leader keeps supervising its tasks; only their `origin` moves. Closed tasks, the owner's own to-dos and other conversations' tasks stay where they are.
+   Making another conversation the main one in the settings (`PUT /api/v1/assistant` `main`) hands over the same way.
+   The supervision loop also moves whatever a former main chat (`assistant.former_main`) still holds. That covers switches made before tasks moved, and a move a restart cut short.
 
 Why:
 
@@ -762,6 +767,10 @@ Why:
 - **Carry compaction summary, not knowledge base**: people, groups, projects, memory, live snapshots already exist for every assistant chat (CLAUDE.md, tools, message snapshots); carrying them duplicates content.
   What's lost is chat-specific conclusions and ongoing work, exactly the compaction summary. Without compaction, carry only recent messages; confirmation suggests compacting first.
 - **Don't delete old chats**: archive only removes from lists; sending again automatically restores them (`unarchiveOnSend`).
+- **Tasks follow the main chat**: the background supervisor follows the current main chat's tasks without owning their ledger, and nobody reads an archived chat.
+  Every check that compares a task's supervisor with a conversation would treat the new main chat as an outsider:
+  its `agent_send` would reach the agent as a side conversation, the done judge would discount the agent's next turn, and `agent_supervise` would refuse.
+  Receipts and reviews would also go to the archived chat's feed.
 
 iOS / macOS (#1762): avatar top-bar menu (same Mac menu, also sidebar main-chat context menu) adds "Compact context" / "New main chat…", shown only with hub features `assistant_compact` / `assistant_main_new`.
 Status above input (`MainConversationActionsView.swift`): "Compacting context…", `done` shows "Context compacted" for 4 seconds, `failed` shows dismissible "Compaction failed: …";

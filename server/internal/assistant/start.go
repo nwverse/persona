@@ -525,6 +525,9 @@ func (s *Service) startMain(ctx context.Context, p StartParams) (proto.Session, 
 		}
 	}
 	s.settingsChanged(ctx)
+	if handoff.From != "" {
+		s.handOverMainTasks(context.WithoutCancel(ctx), handoff.From, sess.SessionID) // its open tasks follow (main_handover.go)
+	}
 	return sess, nil
 }
 

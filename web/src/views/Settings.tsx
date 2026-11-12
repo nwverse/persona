@@ -57,6 +57,7 @@ import { ProviderWizard } from "./settings/ProviderWizard";
 import { ProviderImport } from "./settings/ProviderImport";
 import { builtinRows, loadLaunchers, rcFilesOf, rcGroups, syncStateText, type LauncherSync } from "../lib/launcher-list";
 import { TerminalModeRow } from "./settings/TerminalModeSetting";
+import { AgentOpenRow } from "./settings/AgentOpenSetting";
 import { AGENT_KINDS, ASSISTANT_TABS, categoryState, FROM_LIST, itemIsPage, itemState, NAV_GROUPS, openedFromSub, redirectLegacySettings, settingsAt, settingsHref, SENT_SUB, stepsToList, TAB_INFO, TABS, type AgentTab, type SettingsSection, type Tab } from "./settings/nav";
 import { searchSettings, type SearchGroup } from "./settings/search";
 import { GroupAction, GroupFooter, GroupTitle, hasFooter } from "./settings/SettingsGroups";
@@ -596,7 +597,7 @@ function AssistantProfile({ onTriageModel }: { onTriageModel: () => void }) {
   );
 }
 
-/** This browser's own switches for Agents (the terminal, the sidebar, the details shown). */
+/** This browser's own switches for Agents (where they open, the terminal, the sidebar, the details shown). */
 function AgentPreferences() {
   const workBrowserReady = useStore((s) => s.features.includes("sessions_dimensions"));
   const sidebarTerminals = useSidebarTerminals();
@@ -604,6 +605,7 @@ function AgentPreferences() {
   const contextAsUsed = useContextAsUsed();
   return (
     <Group title={t("settings.agent_preferences")} anchor="agent-preferences">
+      <AgentOpenRow />
       <TerminalModeRow />
       {!workBrowserReady && <Row label={t("settings.sidebar_terminals")} hint={t("settings.sidebar_terminals_hint")}>
         <Switch on={sidebarTerminals} onChange={setSidebarTerminals} label={t("settings.sidebar_terminals")} />
