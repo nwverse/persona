@@ -213,7 +213,7 @@ The browser check opens Overview, permission/plan cards, green/orange/AI workflo
   serve the web app with `npx vite preview` (the dev server occasionally breaks module loading on reload), run `python3 scripts/test/web_sidebar_collapse_e2e.py <web URL> [--shots <dir>]`.
   End-to-end check that the chat stays at the latest message (first open, reload, switching in the sidebar, content arriving in chunks, the input growing taller, not pulled back after scrolling up, paging on a slow network; main chat and Agent chats, wide and narrow; #1340):
   start the mock hub with `MOCK_TASKS=1 MOCK_LONG_ASSISTANT=1 MOCK_LONG_HISTORY=1`, then run `python3 scripts/test/web_chat_scroll_e2e.py <web URL> [--hub <mock hub URL>] [--shots <dir>]`.
-  End-to-end check of voice chat (#2273, "Voice chat" below: the composer's entry, the bar from Connecting to Listening, captions in the order said, a run sending → working with **Stop <agent>**, the upstream paused and back, the question card marked **Asking by voice**, a refusal with **Clear and send**, the orb interrupting the voice and its queued audio stopped, 20 ms PCM16 frames reaching the mock (all-zero while muted, sound again after Unmute) at 50 a second all along, a passive end with **Continue** and the resume it sends, **End**, and the explanation a plain-HTTP page gets; agent chat and main conversation × en / zh-Hans × light / dark, plus phone width):
+  End-to-end check of voice chat (#2273, "Voice chat" below: the composer's entry, the bar from Connecting to Listening, captions in the order said, a run sending → working with **Stop <agent>**, the upstream paused and back, the question card marked **Asking by voice**, a refusal with **Clear and send**, an instruction the user-speech gate held back with **Send anyway** (#5904, the mock's `/mock/voice2?unprompted=1`), the orb interrupting the voice and its queued audio stopped, 20 ms PCM16 frames reaching the mock (all-zero while muted, sound again after Unmute) at 50 a second all along, a passive end with **Continue** and the resume it sends, **End**, and the explanation a plain-HTTP page gets; agent chat and main conversation × en / zh-Hans × light / dark, plus phone width):
   start the mock hub with `MOCK_VOICE=1 MOCK_VOICE_PACE=0.5 MOCK_ENDPOINTS=1` and `--tls-port 0`, serve the web app against it with `npx vite` (or `npx vite preview` after a build), then run
   `node web/e2e/voice.mjs <web URL> --hub <mock hub URL> --shots <dir> [--quick]` (usage at the top of the script; `--quick` is one run).
   Run it once more with the mock at its real pace (`MOCK_VOICE_PACE=1`, the default): each call is then held until the uplink has been watched for 40 seconds, past the 30 seconds after which Chrome moves a silent audio context to a slower sink, the muted window included (docs/lessons/voice.md, "The capture context must never look silent").
@@ -1133,12 +1133,35 @@ to the original chat. In a sent bubble the block is a card at the top (`views/ch
 message into view, or shows the whole text when this page does not have that chat. A reader that does not know `forward`
 folds it like other contexts. There is no Share as Image on the web, so the dialog has no such row.
 
-`src/lib/forward.test.ts` writes and reads every case of `spec/fixtures/forward` byte for byte. Browser check (wide and
-phone width, light and dark; `--shots` saves the menu, the dialog, the composer and the sent bubble):
+**Several at once** (#3838, as iOS; [the protocol](../protocol/protocol.md), "Forwarded messages"): opened for one
+message, Forward to's first row is **Select messages…**. It closes the dialog and hands the chat its picks
+(`lib/message-pick.ts`), the message Forward to was opened for already picked; `ChatView` holds them while it picks.
+Each message with a Forward then has a checkbox over it with a tick before it (`views/chat/Picking.tsx` `PickRow`), and a
+click anywhere on a message picks or unpicks it (its contents are inert; its menus and bars are off). A bar takes the
+composer's place (`PickBar`): **Cancel**, "2 selected" and **Forward 2**, off with none picked; Cancel or Escape
+leaves the chat as it was, the draft kept. At most 30: one more says "Up to 30 messages at a time". None of this is on
+the first screen: `Picking.tsx` comes with Forward to, which hands it to the chat (`views/chat/picking-parts.ts`) as it
+starts picking; not picking, a message is drawn as it always was. **Forward N** opens Forward to with them in the chat's
+order (not the order they were picked) as one card and no Select messages… row; picking a target puts one forward per
+message over its box, each cut at its share (`forwardLimit`: the smaller of 20,000 and 60,000 / N characters), and the
+photos of all of them up to the composer's limit. Forwards of one chat next to each other are one bar over the box
+(`ForwardGroupBar`: "2 forwarded messages · chat", a line each, the first three and "N more", the route, one × for all)
+and one card in the bubble (`ForwardGroupBlock`: a line each over two lines, each opening its original; past three,
+"N more"); another chat's forward or any other block starts a new one (`forwardRuns`). Both are a chunk of their own
+(`views/chat/ForwardGroup.tsx`): the bar comes after Forward to, which loads it, and until the card is in, the bubble
+says "2 forwarded messages" in a line of plain words. With no note: "Please look at the forwarded messages above.".
+
+`src/lib/forward.test.ts` writes and reads every case of `spec/fixtures/forward` byte for byte, and
+`src/lib/forward-several.test.ts` those of `several.json` (the budget, the blocks and note, the cards they make);
+`src/views/chat/MessagePick.test.tsx` checks picking and its bar, `ForwardCard.group.test.tsx` and
+`ForwardCard.pending.test.tsx` the group's bar and card. Browser check (wide and phone width, light and dark;
+`--shots` saves the menu, the dialog, the composer and the sent bubble, and the steps of several at once):
 `MOCK_ECHO_SENT=1 PORT=<port> python3 scripts/mock/mock_hub.py`, `npx vite` against it, then
 `node web/e2e/forward-message.mjs <web URL> --hub <mock hub URL> [--shots <dir>] [--channel msedge | --executable <chromium>]`.
 It forwards a reply to another computer's Agent (searching "Astro") and to Persona, checks the route line, the block and
-note the hub got (`GET /mock/sent_to`), the card in the sent bubble and that it opens the original, and New agent's card.
+note the hub got (`GET /mock/sent_to`), the card in the sent bubble and that it opens the original, and New agent's card;
+then several at once: Select messages…, Cancel, none picked, your message and the reply forwarded together to the blog's
+Agent, the two blocks in the chat's order before the note, and the one card in the sent bubble.
 
 ### Unified main-chat entry (#930)
 
