@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -128,7 +129,7 @@ internal fun SubagentCard(call: ToolCall, live: Boolean, assistant: Boolean, mod
         .semantics { testTag = "chat.subagent-card" }) {
         val state = stringResource(if (open) R.string.chat_tasks_expanded else R.string.chat_tasks_collapsed)
         val action = stringResource(if (open) R.string.chat_subagent_collapse_details else R.string.chat_subagent_expand_details)
-        Row(Modifier.fillMaxWidth().clickable(role = Role.Button, onClickLabel = action) {
+        Row(Modifier.fillMaxWidth().heightIn(min = Tokens.MinTouch.android).clickable(role = Role.Button, onClickLabel = action) {
                 if (folds != null) folds.toggle(call.id) else openHere = !openHere
             }.semantics(mergeDescendants = true) { stateDescription = state },
             verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
