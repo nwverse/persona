@@ -590,6 +590,20 @@ export interface FoldChange {
   exact: boolean;
 }
 
+/** What model requests used (proto.TokenUsage): tokens by kind, `in` without the cache; `cache_write_1h` is the part of
+ *  `cache_write` written for an hour; `fast`: Claude Code's fast speed. Entries with the same `id` (and model) are one
+ *  report, counted once. */
+export interface TokenUsage {
+  id?: string;
+  model?: string;
+  in?: number;
+  out?: number;
+  cache_read?: number;
+  cache_write?: number;
+  cache_write_1h?: number;
+  fast?: boolean;
+}
+
 export interface Item {
   id: string;
   seq: number;
@@ -605,7 +619,7 @@ export interface Item {
   queued?: boolean;
   wake?: boolean;
   task?: TaskNote;
-  fold?: { items: number; tools: number; thoughts: number; until?: string; through_seq: number; through_id?: string; images?: FoldImage[]; tasks?: FoldTaskSnapshot[]; latest_thinking?: Item; supervision_user?: boolean; changes?: FoldChange[] | null };
+  fold?: { items: number; tools: number; thoughts: number; until?: string; through_seq: number; through_id?: string; images?: FoldImage[]; tasks?: FoldTaskSnapshot[]; latest_thinking?: Item; supervision_user?: boolean; changes?: FoldChange[] | null; usage?: TokenUsage[] };
   image?: { mime: string; data?: string; lazy?: boolean; size?: number; width?: number; height?: number };
   /** Sent by another Claude session (cross-session messaging), not typed by you: its name. */
   from?: string;
@@ -619,6 +633,10 @@ export interface Item {
   /** The model that wrote this assistant item, as its transcript records it (proto.Item.Model, #5034); absent when the
    *  transcript does not say and from older nodes. Drawn only as a divider where the replies' model changes. */
   model?: string;
+  /** The tokens of the model requests this item stands for, one entry per model and speed (proto.Item.Usage, #5426):
+   *  a Claude Code request's on its first item, a Codex turn's total on its turn_duration item, a finished subagent's on
+   *  its result or notice. Absent from older nodes. lib/turn-usage.ts sums an exchange's into its usage. */
+  usage?: TokenUsage[];
   /** A message Persona typed in for the model (a task's notice, a scheduled run…), not by you (lib/injected.ts). */
   injected?: Injected;
   /** Display provenance, independent of the model-facing role. Unknown kinds remain non-user sources. */
