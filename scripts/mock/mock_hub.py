@@ -709,6 +709,13 @@ SESSIONS = [
          "搜索做好了，支持按食材和用时筛选。", space_kind=None, space_id=None, space_name=None, slot_id=None, slot_name=None),
 ]
 
+if os.environ.get("MOCK_NEXT_SUGGESTIONS") == "1":  # see NEXT_SUGGESTIONS
+    for _s in SESSIONS:
+        if _s["session_id"] == ORDERS:
+            _s.update(status="idle", state="idle", activity=None, suggestion="好，改完跑一遍压测对比一下")
+        elif _s["session_id"] == REVIEW:
+            _s["suggestion"] = "按这两条建议改一下命名"
+
 # #2430 agent-details: what the node reads off a transcript for the "Show details on agent rows" line and the usage row
 # below the composer (#5056) — the model id as Claude Code records it, the latest reply's input tokens, the model's window.
 # Some sessions say nothing (no reply yet, a model the node does not know), as real ones do.
@@ -1716,6 +1723,15 @@ if os.environ.get("MOCK_PERSONA_QUEUE") == "1":
     ASSISTANT[0].update({"state": "working", "status": "working", "queued_relayed": 1,
                          "queued": list(PERSONA_QUEUE_MESSAGES)})
 
+# MOCK_NEXT_SUGGESTIONS=1 (#4644, docs/assistant/assistant.md "Next-message suggestions"): the switch is on and sessions carry
+# the suggestion as the manager lists them: the main Persona chat and the Codex session (stopped) the suggest.next model's,
+# the PR review agent (Claude Code in a terminal) Claude Code's own, and the morning briefing chat a risky one
+# (suggestion_risky: filled in, no one-tap send).
+NEXT_SUGGESTIONS = os.environ.get("MOCK_NEXT_SUGGESTIONS") == "1"
+if NEXT_SUGGESTIONS:
+    ASSISTANT[0]["suggestion"] = "先处理第一件，其余两件下午再说"
+    ASSISTANT[1].update(suggestion="把会议纪要发给参会的人", suggestion_risky=True)
+
 # MOCK_ORIGINS=1 (#3264, docs/protocol/protocol.md "Origin of assistant chats"): conversations the hub opened by itself — the inbox's AI twin,
 # scheduled tasks, a Feishu /agent, one another conversation started — next to the user's own; one of them runs, one
 # waits for the user. The sidebar keeps them out of "Recent" under "Automatic conversations".
@@ -2143,6 +2159,8 @@ ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "A
                     # supervised task reach its supervisor (#4293), off by default; closed sessions archive themselves
                     # after this many idle days (#3618), 0 is never. Left out with MOCK_LEGACY_HUB.
                     "agent_tasks": False, "inbox_signals": False, "archive_closed_days": 3,
+                    # The manager's next-message suggestions (#4644), off by default; MOCK_NEXT_SUGGESTIONS=1 starts on.
+                    "next_suggestions": os.environ.get("MOCK_NEXT_SUGGESTIONS") == "1",
                     # The main chat follows up its own tasks instead of the background supervisor (#4927), off by
                     # default. Left out with MOCK_LEGACY_HUB.
                     "main_supervises_own_tasks": False,
@@ -2175,7 +2193,7 @@ def assistant_state(space="", archived=False):
     if not os.environ.get("MOCK_LEGACY_HUB"):
         out.update(agent_tasks=cfg["agent_tasks"], inbox_signals=cfg["inbox_signals"], archive_closed_days=cfg["archive_closed_days"],
                    idle_close_hours=cfg["idle_close_hours"], kb_topics=cfg["kb_topics"],
-                   main_supervises_own_tasks=cfg["main_supervises_own_tasks"])
+                   main_supervises_own_tasks=cfg["main_supervises_own_tasks"], next_suggestions=cfg["next_suggestions"])
         if BACKGROUND_SUPERVISOR and not space:  # once the hub has made it (#4927)
             out.update(background_supervisor=BACKGROUND_SUPERVISOR, background_supervisor_machine_id=cfg["machine_id"])
     if cfg["notes"] is not None:
@@ -10912,6 +10930,8 @@ LAUNCHER_PRESETS = [
 # provider out of a group of several), and POST /api/v1/launchers/import/parse (also in every mode) reads pasted text into
 # provider drafts with the hub's rules (parse_paste): shell aliases / exports / K=V lines, settings.json, a curl command,
 # cindy's custom providers. A draft on gw_full's address matches it, with the same key when it carries sk-example-gw.
+# With the feature launcher_auth_auto (#5329): a typed-in gateway's test and model list take `auth` "auto" (Bearer, then
+# x-api-key) and the test says which one worked; the methods the fake gateway takes come from its address (_gateway_takes).
 MOCK_PROVIDERS = os.environ.get("MOCK_PROVIDERS") == "1"
 PROVIDER_LOG = {"post": None, "put": None, "test": [], "discover": [], "catalog": [], "import": None, "parse": []}
 PROVIDER_FIELDS = ("kind", "api", "base_url", "model", "small_model", "subagent_model", "custom_model", "custom_model_name",
@@ -10988,7 +11008,7 @@ if MOCK_PROVIDERS:
     _features_without_providers = features
 
     def features():
-        return _features_without_providers() + ["launcher_auto_name", "launcher_import_parse"]
+        return _features_without_providers() + ["launcher_auto_name", "launcher_import_parse", "launcher_auth_auto"]
 
 
 # The hub's names for providers it names itself (server/internal/assistant/models_presets.go): the slug rule, the
@@ -11593,6 +11613,50 @@ def _catalog_route(h, body):
     h.send_json({"models": out})
 
 
+# A probe's `auth` (#5329): "" (what is stored for `name`, else both headers as older clients get), a method, or "auto".
+PROBE_AUTHS = ("", "api_key", "bearer", "auto")
+
+
+def _gateway_takes(base_url):
+    """The sign-in methods the fake gateway at this address takes: only x-api-key with "xapikey" in it, only Bearer with
+    "bearer-only", else both."""
+    u = base_url or ""
+    if "xapikey" in u: return ("api_key",)
+    if "bearer-only" in u: return ("bearer",)
+    return ("bearer", "api_key")
+
+
+def _probe_signed_in(b):
+    """Whether the fake gateway takes a typed-in gateway's probe, and the method "auto" found: the hub's probeTarget picks
+    the headers (Responses and Chat Completions Bearer only; a method as asked; "" what `name` stores, else both), and
+    "auto" sends Bearer, then x-api-key once that is refused. (ok, method or None)."""
+    auth = b.get("auth") or ""
+    takes = _gateway_takes(b.get("base_url"))
+    stored = next((x for x in LAUNCHERS if b.get("name") and x["name"] == b.get("name")), None)
+    # the stored key goes only to the stored address (the hub's probeTarget)
+    keyed = b.get("api_key") or (stored and stored.get("has_key") and
+                                 (b.get("base_url") or "").rstrip("/") in ("", (stored.get("base_url") or "").rstrip("/")))
+    if b.get("api") in ("responses", "chat"):
+        sent = ("bearer",)
+    elif auth == "auto" and keyed:  # no key, no header: nothing to find
+        found = next((m for m in ("bearer", "api_key") if m in takes), None)
+        return bool(found), found
+    elif auth and auth != "auto":
+        sent = (auth,)
+    elif stored and not auth:
+        sent = ("bearer",) if stored.get("auth") == "bearer" else ("api_key",)
+    else:
+        sent = ("bearer", "api_key")
+    return any(m in takes for m in sent), None
+
+
+def _hub_text(h, key):
+    """The hub's text for key in the request's language (its own catalogs, server/internal/i18n)."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import readiness_mock
+    return readiness_mock.t(readiness_mock.lang_of(h.headers.get("Accept-Language", "")), key)
+
+
 def providers_route(h, method, p, q, body):
     """The provider endpoints under MOCK_PROVIDERS; True when it answered. The import (import_route, parse_route) and the
     catalog lookup (_catalog_route) answer with or without MOCK_PROVIDERS, and so do a typed-in gateway's "Test connection"
@@ -11618,6 +11682,8 @@ def providers_route(h, method, p, q, body):
         if not isinstance(b, dict) or b.get("preset"): return False
     if p == "/api/v1/launchers/test" and method == "POST":
         PROVIDER_LOG["test"].append(_provider_redacted(b))
+        if (b.get("auth") or "") not in PROBE_AUTHS:
+            h.send_json({"ok": False, "ms": 0, "model": b.get("model", ""), "error": _hub_text(h, "assistant-models_launchers.err_auth")}); return True
         stored = next((x for x in LAUNCHERS if x["name"] == b.get("name")), None)
         if not b.get("api_key") and not (stored and stored.get("has_key")):
             h.send_json({"ok": False, "ms": 0, "model": b.get("model", ""), "error": "要填 API Key"}); return True
@@ -11626,11 +11692,20 @@ def providers_route(h, method, p, q, body):
         if BUILTIN_PRESETS and "region" in (b.get("api_key") or ""):  # Anthropic refusing the network's region (#4482), in the hub's words
             msg, code = readiness_mock.region_blocked(readiness_mock.lang_of(h.headers.get("Accept-Language", "")))
             h.send_json({"ok": False, "ms": 180, "model": b.get("model", ""), "error": msg, "code": code}); return True
-        h.send_json({"ok": True, "ms": 412, "model": b.get("model", "")}); return True
+        signed_in, found = _probe_signed_in(b)
+        if not signed_in:
+            h.send_json({"ok": False, "ms": 233, "model": b.get("model", ""), "error": _hub_text(h, "assistant-models_probe.status_401"), "code": "auth"}); return True
+        out = {"ok": True, "ms": 412, "model": b.get("model", "")}
+        if found: out["auth"] = found
+        h.send_json(out); return True
     if p == "/api/v1/launchers/discover" and method == "POST":
         PROVIDER_LOG["discover"].append(_provider_redacted(b))
+        if (b.get("auth") or "") not in PROBE_AUTHS:
+            h.send_json({"models": [], "error": _hub_text(h, "assistant-models_launchers.err_auth")}); return True
         if "bad" in (b.get("base_url") or ""):
             h.send_json({"models": [], "error": "网关没有 /v1/models", "code": "not_found"}); return True
+        if not _probe_signed_in(b)[0]:  # no method named back: only the test says what a launch needs
+            h.send_json({"models": [], "error": _hub_text(h, "assistant-models_probe.status_401"), "code": "auth"}); return True
         h.send_json({"models": PROVIDER_DISCOVERED}); return True
     if p == "/api/v1/launchers" and method == "POST" and not b.get("preset"):
         PROVIDER_LOG["post"] = _provider_redacted(b)
@@ -21938,6 +22013,8 @@ class H(BaseHTTPRequestHandler):
                 ASSISTANT_CONFIG["main_supervises_own_tasks"] = body["main_supervises_own_tasks"]
             if isinstance(body.get("kb_topics"), bool):
                 ASSISTANT_CONFIG["kb_topics"] = body["kb_topics"]
+            if isinstance(body.get("next_suggestions"), bool):
+                ASSISTANT_CONFIG["next_suggestions"] = body["next_suggestions"]
             if body.get("machine_id"):
                 if not any(m["id"] == body["machine_id"] for m in MACHINES):
                     return self.send_json({"error": "unknown machine"}, 400)
@@ -23216,7 +23293,12 @@ MOCK_HELP.append("MOCK_INBOX_ITEM_UI=1  （和 MOCK_EXTENSIONS=1 一起）收件
 # run of `live` pushes for it, one per MOCK_LIVE_STATUS_TICK seconds (default 1): thinking, "thought for 3s", tokens
 # growing, the verb changing, the count holding still for a tick; then `live: null` and the session goes idle (the
 # turn is over). Subscribing again once it is over starts another run (the session working again).
-LIVE_STATUS = os.environ.get("MOCK_LIVE_STATUS") == "1"
+# MOCK_LIVE_STATUS=steady (#5312): a long run instead (MOCK_LIVE_STATUS_TICKS, default 150) writing 40 to 60 tokens a
+# tick, counted to the hundred from 1k as Claude's line does, the count holding for six ticks in every thirty (a tool
+# running): the running bar's speed, its history card and the tokens while it pauses. Its time counts from the turn's
+# start (every run is the same turn) and its `at` is in whole seconds, as the node writes them.
+LIVE_STATUS_MODE = os.environ.get("MOCK_LIVE_STATUS", "")
+LIVE_STATUS = LIVE_STATUS_MODE in ("1", "steady")
 LIVE_STATUS_STATE = {"running": set(), "senders": set()}
 LIVE_STATUS_STEPS = [
     {"verb": "Frosting", "elapsed_s": 1, "thinking": True},
@@ -23229,6 +23311,17 @@ LIVE_STATUS_STEPS = [
     {"verb": "Moonwalking", "elapsed_s": 8, "tokens_down": 4800},
     {"verb": "Moonwalking", "elapsed_s": 9, "tokens_down": 22800},
 ]
+
+
+def live_status_steady(ticks):
+    """MOCK_LIVE_STATUS=steady: thinking for two ticks, then a steady count with a pause every thirty ticks."""
+    steps, tokens = [], 0
+    for i in range(1, ticks + 1):
+        if i > 2 and i % 30 not in range(20, 26):
+            tokens += 40 + (i * 37) % 21
+        shown = tokens if tokens < 1000 else int(round(tokens, -2))
+        steps.append({"verb": "Frosting", "elapsed_s": i, **({"tokens_down": shown} if shown else {}), **({"thinking": True} if i <= 2 else {})})
+    return steps
 
 
 def live_status_subscribe(send, mid, sid):
@@ -23250,11 +23343,22 @@ def live_status_subscribe(send, mid, sid):
     def run():
         import time
         tick = float(os.environ.get("MOCK_LIVE_STATUS_TICK", "1"))
-        s.update(status="working", state="working", state_since=utc_now(), updated_at=utc_now())
+        steady = LIVE_STATUS_MODE == "steady"
+        # steady: every run is the turn the session was in when the mock started, and the line counts from its start as
+        # Claude's does; its `at` is in whole seconds, as the node writes it
+        starts = LIVE_STATUS_STATE.setdefault("start", {})
+        if steady and sid not in starts:
+            since = s.get("state_since") if s.get("state") == "working" else None
+            starts[sid] = datetime.fromisoformat(since.replace("Z", "+00:00")).timestamp() if since else time.time()
+        since = datetime.fromtimestamp(starts[sid], timezone.utc).isoformat().replace("+00:00", "Z") if steady else utc_now()
+        s.update(status="working", state="working", state_since=since, updated_at=utc_now())
         push_machine(mid)
-        for step in LIVE_STATUS_STEPS:
+        steps = live_status_steady(int(os.environ.get("MOCK_LIVE_STATUS_TICKS", "150"))) if steady else LIVE_STATUS_STEPS
+        for step in steps:
             time.sleep(tick)
-            push({**step, "at": utc_now()})
+            if steady:
+                step = {**step, "elapsed_s": int(time.time() - starts[sid]), "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+            push({"at": utc_now(), **step})
         time.sleep(tick)
         push(None)
         s.update(status="idle", state="idle", state_since=utc_now(), updated_at=utc_now())
@@ -23263,12 +23367,13 @@ def live_status_subscribe(send, mid, sid):
     threading.Thread(target=run, daemon=True).start()
 
 
-MOCK_HELP.append("MOCK_LIVE_STATUS=1  Claude 会话的实时状态行（session_live，#1963）：声明了 session_live 的连接订阅后按 MOCK_LIVE_STATUS_TICK 秒（默认 1）一条推 live（思考中、thought for、token 增长、动词变化），最后推 null、会话变空闲；结束后再订阅会重来一轮")
+MOCK_HELP.append("MOCK_LIVE_STATUS=1|steady  Claude 会话的实时状态行（session_live，#1963）：声明了 session_live 的连接订阅后按 MOCK_LIVE_STATUS_TICK 秒（默认 1）一条推 live（思考中、thought for、token 增长、动词变化），最后推 null、会话变空闲；结束后再订阅会重来一轮。steady（#5312）：一轮更长（MOCK_LIVE_STATUS_TICKS 条，默认 150），每条多 40–60 个 token（过 1k 按百计，同 Claude 的显示），每 30 条停 6 条（像在跑工具），给运行状态栏的速度和速度历史截图；同时开着 MOCK_WORK_TIMELINE 时它的「思考中」推送不再发")
 
 
 def work_timeline_live(send, mid, sid):
-    """MOCK_WORK_TIMELINE: the two live sessions say they are thinking, every 5 s for 10 minutes or until the page goes."""
-    if sid not in (WORKTL, ASK1):
+    """MOCK_WORK_TIMELINE: the two live sessions say they are thinking, every 5 s for 10 minutes or until the page goes
+    (not with MOCK_LIVE_STATUS=steady, whose own run tells the weather Agent's state, #5312)."""
+    if sid not in (WORKTL, ASK1) or LIVE_STATUS_MODE == "steady":
         return
 
     def run():

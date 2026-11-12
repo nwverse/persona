@@ -284,20 +284,21 @@ internal fun AgentsScreen(
     // "By machine" shows a herdr tab's agents as a group (#2320), as the web's sidebar; the other groupings list one agent a row
     val tabs = page.preferences.grouping == AgentGrouping.MachineSpace
     var expandedTasks by remember { mutableStateOf(emptySet<String>()) }
-    val tree = remember(page.list, page.settings.machineFilter, tabs, page.preferences.foldedTabs, page.preferences.mutes, expandedTasks) {
+    // By Repository on Glass draws iOS's tree (#4338 A7, A8): each repository a card, its header and working trees' lines in
+    // it, the agents' rows under their line and the idle ones behind one quiet line; each computer's idle repositories a row
+    // each in its Idle Repositories. Brief and Board keep their headings and "N more idle" (decision 8).
+    val repoTree = PersonaTheme.style == AppStyle.Glass && page.preferences.grouping == AgentGrouping.Repo
+    val tree = remember(page.list, page.settings.machineFilter, tabs, page.preferences.foldedTabs, page.preferences.mutes, expandedTasks, repoTree) {
         agentTreeEntries(page.list, page.settings.machineFilter, tabs, page.preferences.foldedTabs, page.preferences.mutes, expandedTasks,
             showAll = page.settings.expandedIdle.takeIf {
                 page.settings.query.isEmpty() && page.settings.quick == AgentQuickFilter.All && !page.pagination.paged
-            })
+            }, idleRepos = repoTree)
     }
     // Rows outside the tree name their computer while the list mixes computers, By To-do's their host while it mixes
     // hosts (iOS `rowMachine`, `mixedHosts`; #4338 A9).
     val mixesComputers = remember(page.list, page.settings.machineFilter) { page.list.mixesComputers(page.settings.machineFilter) }
     val showHost = remember(page.list, page.preferences.grouping) { page.preferences.grouping == AgentGrouping.Todo && page.list.mixesHosts() }
     val spacesById = page.spacesById
-    // By Repository on Glass draws iOS's tree (#4338 A7): each repository a card, its header and working trees' lines in it,
-    // the agents' rows under their line. Brief and Board keep their headings (decision 8).
-    val repoTree = PersonaTheme.style == AppStyle.Glass && page.preferences.grouping == AgentGrouping.Repo
     val repoSlots = remember(tree, repoTree) { if (repoTree) repoCardSlots(tree) else emptyMap() }
 
     val working = page.list.counts[AgentQuickFilter.Working] ?: 0
@@ -334,6 +335,7 @@ internal fun AgentsScreen(
             // focused one scrolls into view; the root leaves keyboard padding to each page (#867).
             modifier = Modifier.imePadding().then(Modifier.nestedScroll(searchPull)),
             state = listState,
+            scrollEdgeStyle = ScrollEdgeStyle.Gradient,
             summary = summary, subtitle = subtitle, greet = true, largeTitle = LocalHomeChrome.current == null,
             titleBusy = connection in setOf(ConnectionState.Connecting, ConnectionState.Updating),
             onTitleClick = if (connection != ConnectionState.Online) connectionDetails else ({ menu = true }), refreshing = refreshing, onRefresh = model::refresh,
@@ -521,11 +523,21 @@ internal fun AgentsScreen(
                         // A history group of a session without a directory has no title of its own (AgentHistory.kt).
                         val groupTitle = group.title.text().ifBlank { stringResource(R.string.agents_history_unknown_folder) }
                         val slot = repoSlots[entry.key]
-                        if (slot != null && group.repo == RepoLevel.Repository) {
+                        if (slot != null && group.isIdleRepository) {
+                            // A row of its computer's Idle Repositories (iOS `QuietSpaceRow`, #4338 A8); the long press keeps
+                            // what its card's header offered.
+                            val actions = repoActions(group)
+                            var sheet by remember { mutableStateOf(false) }
+                            val line = idleRepoLine(group)
+                            AgentIdleRepoRow(groupTitle, line.agents, line.tabs, relativeTime(agentResources(), line.updatedAt, now),
+                                group.folded, { model.fold(group) }, Modifier.repoCard(slot.first, slot.last, spaced = false),
+                                onLongClick = if (actions.isEmpty()) null else ({ sheet = true }),
+                                actionsLabel = stringResource(R.string.agents_repo_actions))
+                            if (sheet) JActionSheet(actions, { sheet = false }, title = groupTitle)
+                        } else if (slot != null && group.repo == RepoLevel.Repository) {
                             val actions = repoActions(group)
                             var sheet by remember { mutableStateOf(false) }
                             AgentRepoHeader(groupTitle, group.folded, { model.fold(group) }, Modifier.repoCard(slot.first, slot.last),
-                                quiet = entry.quiet, agents = (group.totalCount ?: group.rows.count { !it.isNestedSubtask }).takeIf { entry.quiet },
                                 onLongClick = if (actions.isEmpty()) null else ({ sheet = true }),
                                 actionsLabel = stringResource(R.string.agents_repo_actions))
                             if (sheet) JActionSheet(actions, { sheet = false }, title = groupTitle)
@@ -597,8 +609,16 @@ internal fun AgentsScreen(
                     }
                     is TreeIdleEntry -> item(entry.key, contentType = "idle") {
                         val slot = repoSlots[entry.key]
-                        AgentIdleRow(entry.hidden, onClick = { model.showIdle(entry.group) },
+                        val fold = entry.fold
+                        // By Repository on Glass: iOS's quiet line, which folds them again once open (#4338 A8).
+                        if (fold != null) AgentRepoIdleLine(fold.rows.size, fold.names, fold.open,
+                            onClick = { if (fold.open) model.hideIdle(entry.group) else model.showIdle(entry.group) },
+                            modifier = if (slot != null) Modifier.repoCard(slot.first, slot.last) else Modifier, level = slot?.level ?: entry.depth)
+                        else AgentIdleRow(entry.hidden, onClick = { model.showIdle(entry.group) },
                             modifier = if (slot != null) Modifier.repoCard(slot.first, slot.last) else Modifier, depth = slot?.level ?: entry.depth)
+                    }
+                    is TreeIdleReposEntry -> item(entry.key, contentType = "section") {
+                        JSectionHeader(stringResource(R.string.agents_idle_repositories), count = entry.count, countTone = Status.Idle)
                     }
                     is TreeShowAllEntry -> item(entry.key, contentType = "idle") {
                         val slot = repoSlots[entry.key]
@@ -889,8 +909,8 @@ internal fun SlotRow(
                 if (source?.readOnly == true) add(RowFact(stringResource(R.string.agents_row_view_only), caution = true))
                 if (located) listOfNotNull(machine, session.spaceName?.takeIf { it.isNotBlank() } ?: session.folderName.takeIf { it.isNotBlank() })
                     .joinToString(" / ").takeIf { it.isNotBlank() }?.let { add(RowFact(it)) }
-                // The model it runs on, as iOS's row names it (#4338 A9): the session's model, else its launcher's.
-                (session.model ?: session.launcher)?.trim()?.takeIf(String::isNotEmpty)?.let { add(RowFact(it)) }
+                // The model it runs on (#4338 A9): the session's model, else its launcher's, by its short name, never the raw id.
+                session.rowModel?.let { add(RowFact(it)) }
                 session.todo?.let { add(RowFact(stringResource(R.string.agents_row_todo, it.title))) }
                 slotLabel?.let { add(RowFact(it)) }
             }

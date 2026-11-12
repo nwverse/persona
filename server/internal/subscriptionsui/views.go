@@ -132,8 +132,12 @@ func (p *pages) source() wire.View {
 	fb := row("h.fallback", p.t("source.fallback"))
 	fb.Value = p.t("tier." + cmp.Or(s.FallbackTier, "default"))
 	fb.Action = open(state{P: pageFallback, ID: s.ID}, p.t("source.fallback"))
-	v.Sections = append(v.Sections, wire.Section{Key: "how", Title: p.t("source.how"), Items: []wire.Component{recipe, rules, fb,
-		p.askRow("ask.line_subscription")}})
+	how := wire.Section{Key: "how", Title: p.t("source.how"), Items: []wire.Component{recipe, rules, fb}}
+	if p.env.Builtin != nil { // who is muted of it, by sender (#5306), as a built-in source's
+		how.Items = append(how.Items, p.mutesRow(s.ID))
+	}
+	how.Items = append(how.Items, p.askRow("ask.line_subscription"))
+	v.Sections = append(v.Sections, how)
 	v.Sections = append(v.Sections, wire.Section{Key: "try", Items: []wire.Component{p.previewPress()}})
 	v.Sections = append(v.Sections, p.previewOf(s.Recipe.Kind, s.FallbackTier)...)
 	del := button("b.delete", p.t("source.delete"), "delete")

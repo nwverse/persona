@@ -519,7 +519,8 @@ struct AssistantView: View {
                                                 effort: starterEffort.isEmpty ? nil : starterEffort,
                                                 main: makesMain, space: space, opID: op)
             }
-            if makesMain { await model.refreshAssistant() }
+            // The accepted conversation is visible before a follow-up configuration refresh.
+            if makesMain { Task { await model.refreshAssistant() } }
             Haptics.success()
             model.began(s, text: text, images: images) // the message stays on screen until claude has written it
             withAnimation(Theme.Motion.standard) {
@@ -587,7 +588,7 @@ struct FirstMessagePending: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .chatMark("chat.outbox.sending.start")
-                TypingIndicator(text: String(localized: "\(name) is getting ready…"))
+                TypingIndicator(text: String(localized: "Sending…"))
             }
         }
         .padding(.horizontal, Theme.Space.l) // the chat's list margins
