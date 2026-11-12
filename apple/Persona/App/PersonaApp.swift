@@ -74,6 +74,7 @@ struct PersonaApp: App {
         .onChange(of: phase, initial: true) { old, new in
             if new == .active {
                 model.retryRegistry() // launched in the background before the first unlock: the pairing reads now
+                PushRegistrar.shared.foreground() // notifications allowed in Settings since a denial: register now (#1861)
                 model.resumeLinks()
                 model.refreshExtensionSurfaces()
                 // Rolling recordings expire even when no segment arrives and the recording page stays closed.

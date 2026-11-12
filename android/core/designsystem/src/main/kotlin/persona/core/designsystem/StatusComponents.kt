@@ -31,18 +31,22 @@ import persona.core.designsystem.icons.PhIcons
 
 /**
  * A status mark: a glowing dot in glass, a dot in brief, a small square holder on the board.
- * Decorative for accessibility; always pair it with visible text.
+ * Decorative for accessibility; always pair it with visible text. [waiting]: the working agents it stands for only wait in
+ * the background, so Glass draws it in that state's lighter tone ([PersonaPalette.backgroundWaiting]) without the darker rim.
  */
 @Composable
-fun JStatusDot(status: Status, modifier: Modifier = Modifier, size: Dp = 8.dp) {
-    val tone = PersonaTheme.palette.status(status)
+fun JStatusDot(status: Status, modifier: Modifier = Modifier, size: Dp = 8.dp, waiting: Boolean = false) {
+    val tone = PersonaTheme.palette.status(status, waiting)
     when (PersonaTheme.style) {
         AppStyle.Glass -> {
             val breath = needsYouBreath(status == Status.NeedsYou && !PersonaTheme.reduceMotion)
+            // the lighter dot keeps its glow as light as itself, and no darker rim
+            val lighter = waiting && status == Status.Working
+            val glow = tone.dot.copy(alpha = if (lighter) tone.dot.alpha * 0.55f else 0.55f)
             Canvas(modifier.size(size).clearAndSetSemantics {}) {
-                drawCircle(Brush.radialGradient(listOf(tone.dot.copy(alpha = 0.55f), Color.Transparent), radius = this.size.minDimension), radius = this.size.minDimension)
+                drawCircle(Brush.radialGradient(listOf(glow, Color.Transparent), radius = this.size.minDimension), radius = this.size.minDimension)
                 drawCircle(tone.dot)
-                drawCircle(tone.text, style = Stroke(1.dp.toPx()))
+                if (!lighter) drawCircle(tone.text, style = Stroke(1.dp.toPx()))
                 breath?.let { drawBreathingRing(tone.dot, this.size.minDimension / 2, it()) }
             }
         }
