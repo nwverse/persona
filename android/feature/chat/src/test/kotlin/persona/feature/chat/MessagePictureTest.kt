@@ -79,8 +79,8 @@ class MessagePictureTest {
         assertNull(mine.time)
         assertNull(messagePicture(MessageTarget("u2", "x", user = true, time = "0001-01-01T00:00:00Z"), source).time)
         // Persona's own conversations: Persona answers, from nowhere in particular.
-        val assistant = shareCardSource(claude.copy(assistant = true), "Jarvis")
-        assertEquals(ShareCardSource("Jarvis", null, ""), assistant)
+        val assistant = shareCardSource(claude.copy(assistant = true), "Persona")
+        assertEquals(ShareCardSource("Persona", null, ""), assistant)
         val codex = shareCardSource(Session(machineId = "mac", sessionId = "s2", agent = "codex"), "Persona")
         assertEquals(AgentMarkKind.Codex, codex.mark?.kind)
         assertEquals("", codex.source)

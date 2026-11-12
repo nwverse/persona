@@ -53,6 +53,7 @@ import persona.core.contracts.*
 import persona.core.contracts.api.ConnectionState
 import dev.chrisbanes.haze.HazeState
 import persona.core.designsystem.*
+import persona.core.designsystem.dense
 import persona.core.designsystem.icons.PhIcons
 import androidx.compose.foundation.background
 import persona.core.domain.inbox.buildInboxList
@@ -653,7 +654,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                         onVoice = voiceExtension?.let { extension -> { navigator.navigate(VoiceRoute(extension.id, extension.name)) } },
                         onTodos = { sidebarDestination(persona.core.navigation.TodosRoute) },
                         todoCount = uncompletedTodosCount,
-                        showTodos = todosSupported)
+                        showTodos = todosSupported, mentionSessions = session.sessions.sessions)
                 }
             }
             agentsEntries(navigator, agents, machine, { machine = it },
@@ -970,7 +971,7 @@ private fun SettingsWithTools(tools: DeveloperTools?, navigator: Navigator, cont
 
 @Composable
 internal fun UnavailablePage(message: String, navigator: Navigator) {
-    Column(Modifier.fillMaxSize().statusBarsPadding().padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(Modifier.fillMaxSize().statusBarsPadding().padding(24.dp.dense), verticalArrangement = Arrangement.spacedBy(12.dp.dense)) {
         Text(message)
         TextButton(onClick = navigator::back) { Text(stringResource(R.string.app_back), maxLines = 1) }
     }
