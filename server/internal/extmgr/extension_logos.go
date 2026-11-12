@@ -21,9 +21,12 @@ func installedIconURL(id, version string) string {
 }
 
 func catalogIconURL(mid string, e *extension.MarketEntry) string {
-	pkg := e.PackageFor(extension.Platform())
-	if !extension.ValidIconPath(e.Icon) || pkg == nil || e.Parsed == nil {
+	if !extension.ValidIconPath(e.Icon) {
 		return e.IconURL
+	}
+	pkg := e.PackageFor(extension.Platform())
+	if pkg == nil || e.Parsed == nil {
+		return ""
 	}
 	return "/api/v1/extensions/-/catalog/" + url.PathEscape(mid) + "/" + url.PathEscape(e.Parsed.ID) + "/icon?sha256=" + url.QueryEscape(pkg.SHA256)
 }

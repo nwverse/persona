@@ -161,6 +161,13 @@ func TestBundledLogosCatalogInstalledAndAuthentication(t *testing.T) {
 	}
 }
 
+func TestBundledIconURLDoesNotFallBackToAnExternalHost(t *testing.T) {
+	e := &extension.MarketEntry{Icon: extension.IconPath, IconURL: "https://example.com/legacy.png", Parsed: &extension.Manifest{ID: "example", Version: "1.0.0"}, Packages: []extension.MarketPackage{{Platforms: []string{"other-platform"}, URL: "package.tgz"}}}
+	if got := catalogIconURL("market", e); got != "" {
+		t.Fatal("unavailable bundled artwork fell back to an external host", got)
+	}
+}
+
 func TestBundledCatalogLogoRejectsDigestMismatchAndMalformedPNG(t *testing.T) {
 	useOfficialMarket(t, "", "")
 	h, phone, _ := marketHub(t)
