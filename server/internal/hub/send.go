@@ -98,6 +98,12 @@ func (h *Hub) sendMessage(w http.ResponseWriter, r *http.Request, m *Machine) {
 		writeErr(w, http.StatusBadRequest, errors.New("request body must be a JSON object"))
 		return
 	}
+	if id, _ := p["client_msg_id"].(string); strings.HasPrefix(id, assistantwire.FirstMessageIDPrefix) {
+		// The manager's own, for a conversation's first message (assistant start.go humanStart): never an app's, so no
+		// later message carries one (and passes for that first message). Refused before anything else is done with it.
+		writeErrCode(w, http.StatusBadRequest, "client_msg_id_reserved", i18n.Err("hub-send.reserved_id"))
+		return
+	}
 	sid := r.PathValue("sid")
 	p["session_id"] = sid
 	todoID, _ := p["todo_id"].(string)
@@ -168,12 +174,14 @@ func (h *Hub) sendMessage(w http.ResponseWriter, r *http.Request, m *Machine) {
 	s, known := m.session(sid)
 	picked := "" // a model picked in the chat's chip that the message runs on (#1644)
 	assistantConv := false
+	note := "" // the main chat runs on another launcher than configured (#4659): told in a delivered send's answer
 	if h.isMainOn(m.cfg.ID, sid) || (known && (s.Assistant || m.isAssistant(s))) {
 		assistantConv = true
 		// One of the assistant's conversations: it says what the message runs on (and, the first one to a new main
 		// conversation started empty, what the old one left before it).
 		asked, _ := p["model"].(string)
-		if err := h.assistantSend(r.Context(), m, sid, p); err != nil {
+		var err error
+		if note, err = h.assistantSend(r.Context(), m, sid, p); err != nil {
 			writeAssistantErr(w, err)
 			return
 		}
@@ -214,6 +222,7 @@ func (h *Hub) sendMessage(w http.ResponseWriter, r *http.Request, m *Machine) {
 	}
 	if id == "" {
 		status, body, outcome := h.deliverOnce(ctx, m, p)
+		body = withLauncherNote(status, body, note)
 		if assistantConv {
 			h.conversationSent(m.cfg.ID, sid, status, body, outcome)
 		}
@@ -266,12 +275,13 @@ func (h *Hub) sendMessage(w http.ResponseWriter, r *http.Request, m *Machine) {
 	}
 	switch state {
 	case sendDelivered:
-		f.status, f.body = http.StatusOK, []byte("{}\n")
+		f.status, f.body = http.StatusOK, withLauncherNote(http.StatusOK, []byte("{}\n"), note)
 	case sendSending, sendUnknown: // an earlier hub or connection was sending it and never learned the outcome
 		f.status, f.body = callErrBytes(l, unknownDelivery(l, "hub-send.lost_before"))
 	default:
 		var outcome string
 		f.status, f.body, outcome = h.deliverOnce(ctx, m, p)
+		f.body = withLauncherNote(f.status, f.body, note)
 		if assistantConv {
 			h.conversationSent(m.cfg.ID, sid, f.status, f.body, outcome)
 		}
