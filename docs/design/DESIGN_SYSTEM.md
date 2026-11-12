@@ -337,6 +337,15 @@ For every component: use the design-system one, not a lookalike. Counts are appr
   sits in the composer's `trailing` slot, right before voice / Stop / Send, in an Agent chat and in a Persona chat
   (#5033; the new-chat page too), where the permission chip is the only chip on the left. The card is the `composer`
   container whose width sets the pill's modes ("Model pill and unified model panel" in 3.8).
+- Web `/` palette (#5325, `web/src/views/chat/SlashPalette.tsx`; cindy's slash command palette, followed at the owner's
+  request, 2026-11-12): a 320 px panel anchored at the composer's left edge above it (`rounded-xl`, `bg-surface`,
+  `shadow-overlay`, 6 px padding, at most 400 px or half the visible height, scrolling), 36 px rows (44 on touch) with
+  the command in 14 px `ink` (medium on the focused row, under the gliding `bg-hover` highlight) and its source in 12 px
+  `ink-3` on the right (none for Persona's own, the agent's name, an extension's name). The focused command's description
+  is a 280 px card (`rounded-xl`, `shadow-overlay`, 14 px padding; title 14 px medium, text 13 px / 1.5 `ink-2`, what it
+  types in `ink-3`) 8 px beside the panel, right or left, or a line under the rows when neither side has room. Empty:
+  **No matching commands**, 40 px, centered, `ink-3`. No key hint line. Ranking, keys and deviations: `docs/web/web.md`
+  ("Input (Prompt Bar)").
 - Editing state (web, #4503): editing the last message puts its words and quotes back into the box under a one-line bar at the box's top, above the context chips and quote bars. The bar has an accent pencil, **Editing last message** (`ink-2`, medium), a truncating hint (`ink-3`, precise pointers only) and a × with the quote bar's 24 px look. It is the only sign of the state, and the text field stays the same field. The irreversible step (the rewind) waits for an explicit send, which the bar's hint names. Esc or × leaves with nothing changed (`docs/web/web.md` "Pages", **Edit last message**).
 - Duplicates: four composer implementations exist (DS-19).
 
@@ -345,6 +354,12 @@ For every component: use the design-system one, not a lookalike. Counts are appr
 - User bubble: trailing, radius 20, padding 16 x 12, `ChatBox.user` fill in the unified layout, otherwise the theme's bubble gradient (`apple/Persona/DesignSystem/QuoteViews.swift:295-345`, `apple/Persona/Views/Chat/MessageViews.swift:151`).
 - Assistant text: unboxed in Agents chats; boxed in `ChatBox.persona` in Assistant chats. Streaming text re-parses only the tail.
 - Quotes sit above the words and jump to the original on tap.
+- Everything in the user's bubble takes its colors from the bubble as drawn (`Theme.UserBubbleInk`, #5204): the
+  unified layout's box (primary words) or the theme's bubble, never the style alone. Blocks at its top (quotes, forwards,
+  text to change, comment blocks) draw their rule, heading and words in the bubble's words color, on the accent's tint
+  in a pale bubble or the box, and on a 12% black shade in a colored bubble: a veil of white words would lighten what
+  they sit on. Floors (`StyleSpecTests.whatSitsInTheUsersBubble`): the block's words 4.5:1 on its fill over the
+  bubble's top and deepened bottom, linked paths 3:1.
 - Forwards (#3807) use the quote card with the forward arrow before the heading ("Forwarded from Claude · chat"), a line
   for the computer and time, and four lines of the original; a tap opens the original chat at that message. Over the
   composer the same row adds a line saying where it comes from and goes. Forward takes Share's place in the message bar
@@ -691,6 +706,24 @@ A dispatched task's Open link (#3711) is a compact row using existing typography
  starting/failure detail. This targeted navigation correction reuses existing pages; no new visual style or setting.
  Details and wire contract: `docs/assistant/unified-entry.md`, "What a dispatch opens".
 
+### 4.1.1 Apple settings scope and search
+
+The shared Apple Settings page follows three scopes, in this order: **Current Assistant's Settings**, **This Device**,
+and **Hub**. With several installed assistants its first heading reuses `AssistantSwitcherHeader` (avatar, name, state,
+and a one-line Switch label); with one it retains the chosen Persona face and name, without a roster switcher.
+A caption explains that only the current assistant's settings are shown. Device and Hub captions explain their shared scope.
+
+Common model choices open **Models**, with providers and keys under **Advanced**. Runtime configuration and session triage
+open through **Agent**. Appearance and display have a device-owned page; the shared avatar belongs to Hub. Diagnostics
+(build commit and the last new-chat check) are folded inside About. Watch sync and disconnection belong to Devices & Pairing.
+Existing settings route values remain valid; changing assistants returns the settings navigation to its list and retires old drafts.
+
+Search reuses the system searchable field and SettingsRow navigation. It searches localized entry names and common aliases,
+including developer terms, and opens the existing destination directly. Results have stable catalog identities; a query changes
+only navigation, never a setting. Pairing and storage use the `Theme.Icon.pairing` and `Theme.Icon.storage` vocabulary tokens.
+Why this arrangement: the earlier unscoped list mixed shared configuration with device preferences and exposed expert controls
+before common choices. It introduces no visual style, color palette, model default, or primary navigation destination.
+
 ### 4.2 Gestures
 
 | Gesture | Behavior |
@@ -705,7 +738,7 @@ A dispatched task's Open link (#3711) is a compact row using existing typography
 | Tap a photo in the + panel's grid | its ring (and a 45 pt corner round it) picks it, as before; the rest of the photo opens it in the image editor. VoiceOver's activation picks, Edit is an action (#4963) |
 | Drag in the image editor | Box and Pen draw (Box is the default tool); in Crop, a corner or edge within 22 pt resizes the crop, inside moves it. Crop's shapes, Rotate and Reset are the controls that need no drag (#4963). The web's the same in CSS pixels, a mouse's cursor showing which handle it would take (#4991) |
 | Link card drag | to 0.6 it stops blocking the chat; further down it closes |
-| Terminal cover drag | its bar follows the finger; past 140 pt or a fast flick it closes. The bar, with a 44 pt Close, is there in every state; with no terminal the whole area drags (#4328) |
+| Terminal cover drag | its bar follows the finger; past 140 pt or a fast flick it closes. The bar, with a 44 pt Close, is there in every state; with no terminal the whole area drags (#4328). Android the same (140 dp, a flick whose half second of glide passes 420 dp; `TerminalCover`, #4339 C7), its bar under a handle, with Back closing it too |
 | Tap on a saved place's map | moves the place there (#4248); search and Use Current Location do the same without the gesture |
 
 Every gesture-only action needs a plain alternative for VoiceOver and Switch Control (see the audit).
