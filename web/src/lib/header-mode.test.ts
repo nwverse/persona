@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { headerIcon, headerTone, modeConfirmation, modeMenuItems, showsInHeader } from "./header-mode";
+import { headerIcon, headerTone, modeConfirmation, modeMenuItems, pickerIcon, showsInHeader } from "./header-mode";
 import type { Session } from "./types";
 
 // The Agent header's permission mode (#3956), the rules of iOS SessionModes (#3719, HeaderModeTests) and Android #3957.
@@ -7,13 +7,18 @@ const claude = (permission_mode?: string, extra: Partial<Session> = {}): Session
   ({ machine_id: "m", session_id: "s", agent: "claude", status: "idle", permission_mode, ...extra }) as Session;
 
 describe("header mode", () => {
-  it("draws each mode in its tone and symbol, never a guessed Ask First", () => {
+  it("draws each mode in its tone and the composer picker's symbol, never a guessed Default permissions", () => {
+    const modes = ["default", "acceptEdits", "plan", "auto", "bypassPermissions"];
     expect(["default", "plan", "acceptEdits", "auto", "bypassPermissions"].map(headerTone)).toEqual(["asks", "plans", "acts", "acts", "allows"]);
-    expect(["default", "acceptEdits", "plan", "auto", "bypassPermissions"].map(headerIcon)).toEqual(["hand", "pencil", "list", "sparkles", "shieldAlert"]);
+    // one symbol per mode on the web (#5324): the header's and the picker's are the same
+    expect(modes.map(headerIcon)).toEqual(["palm", "code", "list", "sparkles", "warning"]);
+    expect(modes.map(headerIcon)).toEqual(modes.map(pickerIcon));
     for (const m of [undefined, "", "dontAsk"]) {
       expect(headerTone(m)).toBe("unknown");
       expect(headerIcon(m)).toBe("shield");
     }
+    // the picker reads a mode not reported yet as Default permissions, as its label does
+    expect(pickerIcon(undefined)).toBe("palm");
   });
 
   it("shows a mode to see or to change", () => {

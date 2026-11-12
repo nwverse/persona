@@ -29,23 +29,10 @@ export function headerTone(mode: string | undefined): ModeTone {
   }
 }
 
-/** The mode menu's own symbol per mode (iOS hand.raised, pencil.line, list.bullet.clipboard, wand.and.sparkles,
- *  exclamationmark.shield; the plain shield when unknown). */
+/** The header's symbol per mode: the composer picker's (`pickerIcon`, one symbol per mode on the web, #5324), and the plain
+ *  shield while no mode is reported, never a guessed Default permissions. */
 export function headerIcon(mode: string | undefined): IconName {
-  switch (mode) {
-    case "default":
-      return "hand";
-    case "acceptEdits":
-      return "pencil";
-    case "plan":
-      return "list";
-    case "auto":
-      return "sparkles";
-    case BYPASS_MODE:
-      return "shieldAlert";
-    default:
-      return "shield";
-  }
+  return mode ? pickerIcon(mode) : "shield";
 }
 
 /** The mode can be changed from here: an agent with modes that runs (the composer's chips' rule). */
@@ -97,4 +84,34 @@ export function modeMenuItems(s: Session, pick: (mode: string) => void, opts: { 
     rows.push({ key: BYPASS_MODE, label: bypass.title, detail: bypass.detail, disabled: true, onSelect: () => {} });
   }
   return rows;
+}
+
+/** The composer picker's symbol per mode (#5324, cindy's: a raised hand, code, a list, sparkles, a warning triangle); a
+ *  mode this app does not know the plain shield. Not reported yet reads as Default permissions, as the picker's label does. */
+export function pickerIcon(mode: string | undefined): IconName {
+  switch (mode) {
+    case undefined:
+    case "":
+    case "default":
+      return "palm";
+    case "acceptEdits":
+      return "code";
+    case "plan":
+      return "list";
+    case "auto":
+      return "sparkles";
+    case BYPASS_MODE:
+      return "warning";
+    default:
+      return "shield";
+  }
+}
+
+/** Where unchecking Plan mode (the + panel's check row, #5324) goes: the mode the agent had before it, as this page saw it,
+ *  while it can still switch to it; else Default permissions. Never Full access, which only the picker chooses, with its
+ *  confirmation. */
+export function leavePlanTo(s: Session, before: string | undefined, assistant?: boolean): string {
+  if (!before || before === "plan" || before === BYPASS_MODE) return "default";
+  const offered = switchableModes(assistant || s.assistant, s.agent, canSwitchToBypass(s));
+  return offered.some((m) => m.id === before) ? before : "default";
 }

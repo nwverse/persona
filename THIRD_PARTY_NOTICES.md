@@ -507,6 +507,13 @@ The web chat's bar under a turn's last reply (`web/src/views/chat/ReplyBar.tsx`,
 and when its copy check resets. `web/src/lib/relative-time.ts` is ported from cindy's `hooks/useRelativeTime.ts` with
 changes (the wording of the time and its exact form); the actions behind the buttons are Persona's own.
 
+The web composer follows cindy's design at the owner's request (2026-11-12): the toolbar, the + / @ panel and the
+permission picker (`web/src/views/chat/Composer.tsx`, `ComposerPanel.tsx`, `PermissionPicker.tsx`, after cindy's
+`ChatInput`, `ExtraDirsButton`, `AtMentionPanel`, `PermissionSelector` and `SendButton`), the `/` palette
+(`SlashPalette.tsx`, after `SlashCommandPalette`) and the queued messages (`QueuePanel.tsx`, after `PendingQueuePanel`):
+layout, states and wording, with the permission mode names and the placeholders' tone taken from cindy's English
+strings. No code is copied for those.
+
 https://github.com/makecindy/cindy
 
 Licensed under the Apache License, Version 2.0 (the "License"); you may not use these files except in compliance with

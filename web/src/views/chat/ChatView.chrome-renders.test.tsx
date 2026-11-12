@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // Each item pushed to the open conversation renders ChatView again (its transcript changed). The header and the composer
 // around it did not change, so they stay put: counted through a leaf each one draws (the header's "Session info" dialog,
-// the composer's context chips, the composer footer's mode chips).
+// the composer's context chips, the composer's permission picker).
 import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -19,8 +19,12 @@ vi.mock("./SessionDialogs", async (load) => {
   return {
     ...real,
     SessionInfoDialog: (p: Parameters<typeof real.SessionInfoDialog>[0]) => (renders.info++, createElement(real.SessionInfoDialog, p)),
-    ModeChips: (p: Parameters<typeof real.ModeChips>[0]) => (renders.modes++, createElement(real.ModeChips, p)),
   };
+});
+vi.mock("./PermissionPicker", async (load) => {
+  const real = await load<typeof import("./PermissionPicker")>();
+  const { createElement } = await import("react");
+  return { ...real, PermissionPicker: (p: Parameters<typeof real.PermissionPicker>[0]) => (renders.modes++, createElement(real.PermissionPicker, p)) };
 });
 vi.mock("../link/ContextChips", async (load) => {
   const real = await load<typeof import("../link/ContextChips")>();

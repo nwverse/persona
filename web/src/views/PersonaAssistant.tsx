@@ -4,7 +4,7 @@ import { api, errorText } from "../lib/api";
 // conversation, `/persona/<id>` one of them, `/persona/new` a new one-off conversation. With no main conversation yet, the first
 // message on `/` starts it.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { MentionSource } from "./chat/MentionMenu";
+import type { MentionSource } from "./chat/ComposerPanel";
 import { startConversation } from "../lib/assistant-start";
 import { feedCacheScope, mainConversationMachine, readFeedCache } from "../lib/feed-cache";
 import { startOfDay } from "../lib/feed";
