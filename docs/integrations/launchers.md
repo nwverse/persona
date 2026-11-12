@@ -383,11 +383,14 @@ payload works in both apps. Persona reads two carriers:
 
 - **Persona's web link**: `<web address>/settings?tab=models#import=<data>`, optionally with `&v=1` in the fragment.
   The data sits after `#`, so the browser never sends it to the hub and it is in no access log. At load the web takes
-  the fragment out of the address bar and the Back list before anything else runs (`takeImportLink` in
-  `web/src/lib/import-link.ts`, called beside `takeToken` in `App.tsx`), keeps the link in memory only, and opens
+  the fragment out of the address bar and the Back list first thing, before the language catalog loads or error
+  reports start (`takeImportLink` in `web/src/lib/import-link.ts`, called at the top of `main.tsx`; a link pasted into
+  an open page's address bar is taken on `hashchange` in `App.tsx`). It keeps the link in memory only and opens
   Settings › Model providers › Add on the paste view in its link mode, which sends the link to
-  `POST /api/v1/launchers/import/parse` as `{text}`. A browser's own history may still have recorded the address when
-  it was opened; that is one reason a copied link carries no key unless the user puts one in.
+  `POST /api/v1/launchers/import/parse` as `{text}`. Signing in to Persona first keeps it; a sign-in layer in front of
+  the hub that reloads the page gets the link put back in the address bar first, and one that sends the browser
+  elsewhere to sign in drops it (open the link again). A browser's own history may still have recorded the address
+  when it was opened; that is one reason a copied link carries no key unless the user puts one in.
 - **cindy's link**: `cindy://provider/import?v=1&data=<data>`, pasted into **Paste a configuration** (a browser does
   not open it). The legacy `xdt-maker://` scheme is not read. Persona's web link pasted there reads the same way, so
   someone with their own hub can use a link made on another one.
@@ -397,30 +400,33 @@ checks a link as cindy does and refuses the whole link on the first problem, wit
 
 | Rule | Note |
 | --- | --- |
-| cindy's: exactly `provider/import`, no fragment, only `v` and `data`, each once. The web's: only `import` (once) and `v` (at most once) in the fragment | `link_invalid` |
+| cindy's: exactly `provider/import`, no fragment, only `v` and `data`, each once. The web's: only `import` (once) and `v` (at most once) in the fragment. A link with a blank inside (a messenger wrapped it) | `link_invalid` |
 | `v` other than `1` (the web's: absent means 1) | `link_version`, named when it is a number |
-| more than 32 768 bytes after `cindy://` or in the fragment; data empty or more than 24 576 bytes decoded | `link_too_long` |
-| data that is not canonical base64url (padding, `+`, `/`, stray bits), not UTF-8 or not a JSON object | `link_invalid` |
+| more than 32 768 bytes after `cindy://` or in the fragment; data of more than 24 576 bytes decoded | `link_too_long` |
+| data that is empty, not canonical base64url (padding, `+`, `/`, stray bits), not UTF-8 or not a JSON object | `link_invalid` |
 | a field v1 does not define (a batch `{providers}` is a file's, not a link's) | `link_field`, with its path when that is a plain word |
-| a value v1 refuses: `kind`, `name` (60 at most), `endpoints` (1 to 8), `protocol`, an http(s) `baseUrl` without a user, query or fragment, `modelsUrl` on the same origin, `requestPath`, `targets`, models (256 at most, distinct, thinking levels only with `reasoning`), headers (24 at most, only with an API key), keys (4 KiB at most, 1 KiB for a built-in slot, no line breaks or control characters), no sign-in only on loopback addresses, two endpoints tied for one agent | `link_invalid`, with the field's path |
+| a value v1 refuses: `kind`, `name` (60 at most), `endpoints` (1 to 8), `protocol`, an http(s) `baseUrl` without a user, query or fragment and with a port of 65 535 at most, `modelsUrl` on the same origin, `requestPath`, `targets`, models (256 at most, distinct, thinking levels only with `reasoning`), headers (24 at most, only with an API key), keys (4 KiB at most, 1 KiB for a built-in slot, no line breaks or control characters), no sign-in only on loopback addresses, two endpoints tied for one agent | `link_invalid`, with the field's path |
 
 A note names a field's path, a parameter or a version, never a value: an unknown field whose name is no plain word,
 or starts like a service's key (`sk-`, `ghp_`…), goes unnamed. A link that passes is read as a pasted cindy
 provider is (`docs/assistant/model-config.md`, “Starting a provider from a pasted configuration”), with
-`format: "link"`: `preset`, `builtin` and OAuth links are valid but noted (`cindy_kind`, `cindy_auth`), and nothing is
+`format: "link"`: `preset`, `builtin` and OAuth links are valid but noted (`cindy_kind`, `cindy_auth`), an endpoint's
+own `requestPath` is noted (`cindy_request_path`: Persona calls the usual path), and nothing is
 saved until the user presses Save in the wizard. A link without any key does not note `no_key` on its draft: typing
 one's own key is what such a link expects. A Messages endpoint's draft names no sign-in method, since v1 does not
 say which header a gateway takes: the wizard's own check finds it (“Authentication method”). The shared cases are in
 `spec/fixtures/provider-import-link/cases.json`.
 
-**Copy import link.** The dialog of a Persona-managed Claude Code gateway or direct API in Settings › Model providers
+**Copy import link.** The dialog of a Persona-managed Claude Code gateway, direct Responses API or direct Chat
+Completions API in Settings › Model providers
 has **⋯ › Copy import link** (web). The web builds the payload from the provider as `GET /api/v1/launchers` lists it
 (`linkPayload` in `web/src/lib/provider-link.ts`): `kind: custom`, the display name (cut to 60), one endpoint on the
-stored Base URL (`anthropic-messages` for a gateway or a Messages API, `openai-responses`, `openai-chat`) and the models
+stored Base URL (`anthropic-messages` for a gateway, `openai-responses`, `openai-chat`) and the models
 with the default first, with their names, context windows and thinking levels (only their IDs, then none, when the list
 would pass 256 models, 24 KiB of JSON or 32 KiB of fragment; a model with an empty, overlong or repeated ID, or a
-thinking level cindy doesn't know, is left out rather than have the link refused). Headers, environment, proxy, tiers and the device scope stay behind. Codex,
-Antigravity and omp launchers have no v1 endpoint that reads back as themselves, so they offer no link.
+thinking level cindy doesn't know, is left out rather than have the link refused; IDs are trimmed). Headers,
+environment, proxy, tiers and the device scope stay behind. A direct Messages API, Codex, Antigravity and omp offer no
+link: no v1 endpoint reads back as them (a Messages endpoint comes back as a Claude Code gateway).
 
 The link carries no key by default: whoever opens it types their own. The hub never returns a stored key to any client,
 and links add no route that would. The dialog's **Put a key in the link** switch (off) takes a key the user pastes there,
