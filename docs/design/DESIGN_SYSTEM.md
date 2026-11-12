@@ -1968,3 +1968,36 @@ fetched from the hub and goes when the dialog closes. Reason: a link is how gate
 (principle 1), the review and Save stay the user's (principle 3), and the risky part is opt-in and explained
 (principle 2); it reuses the paste view, `Menu`, `Dialog`, `Switch` and the copy notice, and adds no setting, style or
 motion.
+
+## GitHub star prompts (#5761)
+
+Persona is open source, and, as Orca does, it asks for a GitHub star in three quiet places on the web and Android
+clients, with iOS to follow (#5910); the frozen Mac app, the watch and Vision have none. When each shows is one rule for every client, replayed from
+`spec/fixtures/star-prompt` (principle 4); the state is the device's own (browser storage, `UserDefaults`, device-wide
+preferences) and never goes to the hub. Whether the user really starred can't be known, so a tap on **Star on GitHub**
+from any of them counts and ends all three on that device. It opens the project outside the app, where the user's
+GitHub session is: a new tab on the web, the GitHub app or the browser on the phones, never the in-app links card (4.6).
+
+- **The empty Agents page's pill**: a small rounded pill, the star mark and **Star on GitHub** with a ✕ (**Hide**) at its
+  end, on the Agents page's empty surface: on the web the start area when nothing is open (pinned to its foot, under
+  "Open a session"; a phone's web never shows that area), on iOS and Android under "Start your first session". ✕ hides
+  it for good on that device.
+- **The milestone line**: once the device has started 20 Agents, a line in the hub notice's slot of the Agents list, in
+  its look (the star mark in the accent, the words in secondary text, ✕ at the end): "Enjoying Persona? It's open
+  source, and a star on GitHub helps others find it." with **Star on GitHub** under the words (beside them a narrow
+  sidebar cut the sentence short). ✕ (**Later**) doubles the count it waits for, past the Agents started so far, and
+  keeps it away three days. It never shows while a session needs the user, a card waits or a search is on, so it never
+  pushes a waiting row down (3.4, 4.8).
+- **The onboarding toast**: once per device, when first setup finishes (iOS: the checklist's **Get started**; Android:
+  the readiness screen's **Done**; the web: this tab seeing setup turn ready, or the first answer come, on a hub that
+  never answered a first message, so a long-time user whose computer went away and came back is not taken for a new
+  one), the platform's toast with an action: "All set! If you like Persona, a star helps others find it." and **Star on
+  GitHub**; it is short so the words fit a phone's three toast lines beside the button. On the web it stays until closed
+  (`sticky`); on the phones it goes after the platform's time for a toast with a button.
+
+Reason: the pill and the line live only in Agents, whose people know GitHub, and wait for a quiet moment; the toast is
+the one place an everyday user meets it, so it says what to do in plain words and goes away on its own on the phones
+(principles 1 and 2). They reuse the hub notice's line, each platform's toast with an action and the existing star
+icon (`Theme.Icon.gitHubStar`, an alias of the plugin star; Android `PersonaIcons.gitHubStar`; the web's `star`), and
+add no setting, style or motion. Deviation (principle 3): hiding the pill or putting the line off is not a setting with
+an undo; a prompt dismissed is a prompt answered, and the rule above already brings the line back less and less often.

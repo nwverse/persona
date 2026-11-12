@@ -620,12 +620,6 @@ private fun ChatPage(
         if (readOnly || !canSend) return false
         if (sending || submittedDraft != null) return false
         if (command == null && ((!composer.hasContent && linkContexts.isEmpty()) || !composer.ready)) return false
-        // Routed to a task ("Say to "xx""): straight to its agent, not to Persona (docs/assistant/unified-entry.md "Routing").
-        if (command == null && tasks != null && linkContexts.isEmpty() && composer.attachments.isEmpty() &&
-            tasks.sendRouted(key.sessionId, composer.value.text.trim()) { notice = operationFeedback(it).text.resolve(res) }) {
-            composer.clearIfUnchanged(composer.draft)
-            return true
-        }
         val draft = composer.draft
         val refs = if (command == null) linkContexts else emptyList()
         val wireText = command ?: linkMessage(composer.message(), refs, context.resources)
@@ -637,12 +631,18 @@ private fun ChatPage(
         followEnd()
         scope.launch {
             try {
-                // The user's own message carries out a launcher switch waiting on Glass, where the pill shows it (#5055):
-                // `apply_switch`; any other message leaves it waiting.
-                if (command == null && switchesNext(switchSession, glass && agentChat)) {
-                    sender.sendApplyingSwitch(key, wireText, id)
-                    drawnSwitch = null
-                } else sender.send(key, wireText, id, null, conversationLauncher, conversationModel)
+                // Routed to a task ("Say to "xx""): its accepted response, not launching the request, consumes the route
+                // and clears the draft below. Until then this has the same pending state as an ordinary send (#5949).
+                val routed = command == null && tasks != null && refs.isEmpty() && draft.attachments.isEmpty() &&
+                    tasks.sendRouted(key.sessionId, draft.text.trim())
+                if (!routed) {
+                    // The user's own message carries out a launcher switch waiting on Glass, where the pill shows it (#5055):
+                    // `apply_switch`; any other message leaves it waiting.
+                    if (command == null && switchesNext(switchSession, glass && agentChat)) {
+                        sender.sendApplyingSwitch(key, wireText, id)
+                        drawnSwitch = null
+                    } else sender.send(key, wireText, id, null, conversationLauncher, conversationModel)
+                }
                 if (command == null) {
                     composer.clearIfUnchanged(draft)
                     linkContexts = linkContexts.filterNot { ref -> refs.any { it.id == ref.id } }
