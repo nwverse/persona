@@ -4,13 +4,12 @@ import { api, enc, errorText, sessionPath } from "../../lib/api";
 import { ago, externalLink, resumeCommand, sessionCan, sessionTitle, shortPath, tabLabel } from "../../lib/format";
 import { openLink } from "../../lib/links";
 import { effortTitle, modeTitle, renameBody } from "../../lib/session-actions";
-import { headerIcon, headerTone, modeMenuItems, modesChangeable, type ModeTone } from "../../lib/header-mode";
 import { sessionLauncher } from "../../lib/model-switch";
 import { href, navigate, parse, showsSession } from "../../lib/router";
 import { stripBase } from "../../lib/base";
 import { dropSession, getSession, refresh, refreshAssistant, upsertSession } from "../../lib/store";
 import type { Session } from "../../lib/types";
-import { Button, copyText, cx, Dialog, Loading, Menu, Spinner, Switch, toast, useMenu } from "../../ui/atoms";
+import { Button, copyText, cx, Dialog, Loading, Switch, toast } from "../../ui/atoms";
 import { removeAgentWorktree, worktreeLoss, worktreeStatus, type WorktreeStatus } from "../../lib/worktree";
 import { Icon } from "../../ui/icons";
 import { t } from "../../i18n";
@@ -324,61 +323,6 @@ export async function setServiceTier(s: Session, tier: string): Promise<boolean>
     toast(t("chat-sessiondialogs.change_failed", { error: errorText(e) }), "error");
     return false;
   }
-}
-
-const MODE_LOOK: Record<ModeTone, string> = {
-  asks: "bg-field text-ink-3",
-  unknown: "bg-field text-ink-3",
-  plans: "bg-mode-plans-tint text-mode-plans",
-  acts: "bg-mode-acts-tint text-mode-acts",
-  allows: "bg-mode-allows-tint text-mode-allows",
-};
-
-/** The permission mode at the end of an Agent's header (#3956, iOS `HeaderModeButton` from #3719): the mode's symbol in its
- *  tone, no words (they are its accessible name, its tooltip and its menu). Default permissions is never hidden, so the control stays
- *  in one place. Its menu is the composer picker's (`modeMenuItems`); a spinner stands in for the symbol while a change is on
- *  its way. */
-export function HeaderModeButton({ session }: { session: Session }) {
-  const menu = useMenu();
-  const { set } = useModeSet(session);
-  const [changing, setChanging] = useState(false);
-  const mode = session.permission_mode;
-  const tone = headerTone(mode);
-  const words = t("chat-sessiondialogs.header_mode", { mode: mode ? modeTitle(mode) : t("chat-sessiondialogs.mode_unknown") });
-  const locked = !modesChangeable(session);
-  const pick = async (to: string) => {
-    setChanging(true);
-    try { await set({ permission_mode: to }); } finally { setChanging(false); }
-  };
-  const items = modeMenuItems(session, (to) => void pick(to), { locked });
-  return (
-    <>
-      <button
-        type="button"
-        onClick={menu.open}
-        disabled={changing}
-        aria-label={words}
-        aria-haspopup="menu"
-        aria-expanded={Boolean(menu.anchor)}
-        title={words}
-        data-mode-tone={tone}
-        data-testid="header-mode"
-        className={cx("touch-hit flex h-7 min-w-9 shrink-0 items-center justify-center rounded-full px-2.5 transition-colors hover:brightness-95 dark:hover:brightness-110", MODE_LOOK[tone])}
-      >
-        {changing ? <Spinner size={13} /> : <Icon name={headerIcon(mode)} size={15} stroke={2} />}
-      </button>
-      {menu.anchor && (
-        <Menu
-          anchor={menu.anchor}
-          onClose={menu.close}
-          align="right"
-          width={300}
-          header={words}
-          items={locked ? [{ key: "locked", label: t("chat-sessiondialogs.modes_locked"), note: true, onSelect: () => {} }, ...items] : items}
-        />
-      )}
-    </>
-  );
 }
 
 // "Delete chat" (issue #801): the hub takes it out of every app's list; the transcript stays on the computer and the
