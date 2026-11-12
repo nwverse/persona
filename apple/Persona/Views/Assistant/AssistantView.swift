@@ -137,7 +137,7 @@ struct AssistantView: View {
                                 collapse: column && pageTabSwitch ? { toggleSidebar() } : nil)
     }
 
-    /// The sidebar's Meeting Recording: records the meeting (opening Recordings), or `open`s the recording running already.
+    /// The sidebar's Record: records the meeting (opening Recordings), or `open`s the recording running already.
     /// nil off the iPhone and iPad (the Mac records nothing).
     private static func startMeeting(_ open: @escaping () -> Void) -> (() -> Void)? {
         #if os(iOS)
@@ -945,6 +945,11 @@ struct StarterComposer: View {
     @State private var showFiles = false
     @State private var showCamera = false
     @State private var showGlasses = false // Glasses Photo (Persona/Glasses), only when MetaGlasses.isBuiltIn
+    @State private var showScan = false // Scan Document (#3720), only where the device can scan
+    #if os(iOS)
+    /// Add as Context › (#3721): the kind whose picker is open.
+    @State private var contextPick: ContextPickKind?
+    #endif
     @State private var declarations = ExtensionTextContributions()
     #if os(iOS)
     /// The iPhone's 「+」 panel (`AttachSheet`), as in a conversation.
@@ -1006,12 +1011,21 @@ struct StarterComposer: View {
 
     private func add(_ img: UIImage) { MessagePhotos.add(img, to: &draft.held.images, model: model) }
 
+    /// A scan's pages: the next message's photos while they fit, else one PDF uploaded as a picked file is (#3720).
+    private func addScan(_ pages: [UIImage]) {
+        #if os(iOS)
+        DocumentScanner.deliver(pages, room: MessagePhotos.limit - images.count, model: model, add: { add($0) }, upload: { upload($0) })
+        #endif
+    }
+
     #if os(iOS)
     /// What + offers besides photos and files, as in a conversation (`AttachMoreSection.common`): no voice call before
     /// the conversation exists, and an agent's quick commands are not Persona's.
     private var moreSections: [AttachMoreSection] {
         var sections = AttachMoreSection.common(voice: nil, camera: CameraPicker.isAvailable ? { showCamera = true } : nil,
-                                                glasses: MetaGlasses.isBuiltIn ? { showGlasses = true } : nil, mention: { typeMention() })
+                                                scan: DocumentScanner.isAvailable ? { showScan = true } : nil,
+                                                glasses: MetaGlasses.isBuiltIn ? { showGlasses = true } : nil, mention: { typeMention() },
+                                                context: { contextPick = $0 })
         if let prompts = AttachMoreSection.prompts(declarations.prompts, fill: { prompt in
             text = ExtensionTextContributions.filling(prompt)
             selection = TextSelection(insertionPoint: text.endIndex)
@@ -1151,7 +1165,12 @@ struct StarterComposer: View {
         .modifier(attachHost)
         // The Photos library warmed off the main thread, as a conversation's composer does (#4250).
         .task { if attachOpener != nil { AttachLibrary.prewarm() } }
-        .modifier(ComposerCaptureSheets(camera: $showCamera, glasses: $showGlasses) { add($0) })
+        .modifier(ComposerCaptureSheets(camera: $showCamera, glasses: $showGlasses, scan: $showScan, pages: { addScan($0) }) { add($0) })
+        .sheet(item: $contextPick) { kind in
+            ContextPickerSheet(kind: kind) { ref in
+                if !quotes.contains(where: { $0.title == ref.title && $0.text == ref.text }) { quotes.append(ref) }
+            }
+        }
         // The hub's extensions' prompts for the shell's + list, as a conversation's composer reads them.
         .tabActiveTask(id: ExtensionTextSource(group: model.hubGroup, features: model.features(model.hubGroup),
                                                hub: model.api(model.hubGroup)?.config.url.absoluteString, active: phase == .active && shell != nil)) {
