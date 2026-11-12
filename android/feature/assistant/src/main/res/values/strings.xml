@@ -135,6 +135,10 @@
         <item quantity="one">%1$d more in Inbox</item>
         <item quantity="other">%1$d more in Inbox</item>
     </plurals>
+    <plurals name="assistant_needs_you_more_agents">
+        <item quantity="one">%1$d more needs you</item>
+        <item quantity="other">%1$d more need you</item>
+    </plurals>
     <string name="assistant_home_setup_lead">One more step and you\'re ready to start.</string>
     <string name="assistant_suggest_local_detail">Opens a short guide</string>
     <string name="assistant_suggest_needs_calendar">Uses your phone\'s calendar</string>

@@ -18,7 +18,6 @@
   "preparing": "Preparing",
   "loading_chat": "Loading chat",
   "retry": "Retry",
-  "delivering": "Delivering",
   "waiting_for_hub": "Waiting for the hub to come back",
   "view_only": "This session is view-only",
   "ask_placeholder": "What can {name} do for you today?",
@@ -123,5 +122,14 @@
   "background_tasks": "Background tasks",
   "background_running": "Background tasks, {count} running",
   "rename_title": "Rename",
-  "agent_device_label": "{agent}. {where}"
+  "agent_device_label": "{agent}. {where}",
+  "search_stopped": "Stopped. What loaded is kept.",
+  "search_busy": "The chat is updating. Try again in a moment.",
+  "search_load_failed": "Couldn't load earlier messages. Try again.",
+  "search_no_progress": "Nothing earlier came in. Try again later.",
+  "search_page_cap": "Loaded 20 pages. You can load more.",
+  "search_not_found": "Can't find this one in the chat right now. You can go back to where you were.",
+  "search_origin_changed": "Where you were has changed. Carry on from here.",
+  "search_return": "Back to where you were",
+  "search_menu": "Search in chat"
 }

@@ -213,11 +213,22 @@ final class ScrollToBottomTests: XCTestCase {
         XCTAssertTrue((r.arrow ?? false) && (r.frozen ?? false), "↓ and held back:\n\(describe(far))")
     }
 
+    /// The running turn's work line, by its header (`work-head`): the newest work line on screen, the lowest, which in a
+    /// chat at its newest end is the running one (an opened line's steps have no header of their own). Not by its words:
+    /// since #4249 a running line names the step it is on instead of saying Working (#5394). Each use looks again
+    /// (`var work: XCUIElement { runningWork() }`), as the list's rows come and go.
+    private func runningWork() -> XCUIElement {
+        let heads = app.buttons.matching(identifier: "work-head")
+        let height = app.frame.height
+        let shown = heads.allElementsBoundByIndex.filter { $0.exists && $0.frame.maxY > 0 && $0.frame.minY < height }
+        return shown.max { $0.frame.midY < $1.frame.midY } ?? heads.firstMatch
+    }
+
     /// 3. The running turn's work line opened at the newest end: its header goes up under the top bar (#1173) and stays
     /// there while the turn keeps growing under it — never held back, not following away from it; folded, it follows.
     func testC_OpenAndFoldAWorkLine() throws {
         launch(try hub("PERSONA_RUN_HUB"), chat: Self.main, assistant: true)
-        let work = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "正在工作")).firstMatch
+        var work: XCUIElement { runningWork() } // by its header, looked up at each use (#5394)
         XCTAssertTrue(work.waitForExistence(timeout: 10))
         shot("3 before")
         work.tap()

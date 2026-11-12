@@ -203,13 +203,17 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * launched it, and handing it to the reply; the prices, the sums by model, the card and their words load with the reply
  * bar). And 279 B for the same usage bar after the command card's wording landed (#5512, #5539: ja 592,943 B against
  * 592,664 B on main at 0856795596: the command-answer labels and the usage computation share the reply bar's helpers;
- * the command card itself and its usage card stay lazy, outside the idle tier). And 78 B for Resume in terminal (#5521:
- * ja 593,021 B against 592,867 B on main at c2589e2c55, +154 B, of which 76 B fit the room main had: the rule that offers it
- * in an Agent's ⋯ or disables it where its computer has no terminal engine, the item and its two strings, the one action
- * it shares with the stopped line's Resume, and Codex threads counted as stopped Agents). Raise it on purpose, in the
- * change that needs it.
+ * the command card itself and its usage card stay lazy, outside the idle tier). And 82 B for Done paging the list's last
+ * days now that the list carries only the newest done items (#5549: ja 593,025 B against 592,867 B on main at 86c439b97,
+ * +158 B, of which 76 B fit the room main had: Undo reopening what the hub moved, listed or not, a route reading an item
+ * only the history has or, once, the hub's copy by id, and the state that says it is being read). And 32 B because #5592
+ * and #4743 landed together: #5592 (+64 B, a Done group's first page starting past the done items the list holds)
+ * counted the 69 B of room main had at 0bfcf2879 as its own, and #4743 (+37 B) used part of it, merged in between; ja
+ * 593,057 B on main at 18de01b8d, with 0 B of room. And 94 B for the six-line composer (#5674, #5704, #5713: ja
+ * 593,151 B on main at 5f60a1c45: the composer's fixed maximum-height token and manual-scroll measurement; the
+ * layout is unchanged by this accounting). Raise it on purpose, in the change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 593_021;
+export const FIRST_SCREEN_BUDGET = 593_151;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").

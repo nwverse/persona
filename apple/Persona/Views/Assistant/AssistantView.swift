@@ -133,18 +133,15 @@ struct AssistantView: View {
                                 onMachines: places ? { show(.machines) } : nil,
                                 onOpenExtension: places ? { show(.extensionPage($0)) } : { r in drawer.close(); openedExtension = r },
                                 openHealth: { drawer.close(); enterHealth() },
-                                startMeeting: Self.startMeeting(places ? { show(.recordings) } : { drawer.close(); showRecordings = true }),
+                                openRecordingsPage: Self.recordingsPage(places ? { show(.recordings) } : { drawer.close(); showRecordings = true }),
                                 collapse: column && pageTabSwitch ? { toggleSidebar() } : nil)
     }
 
-    /// The sidebar's Record: records the meeting (opening Recordings), or `open`s the recording running already.
+    /// The sidebar's Recordings: `open`s the page, which shows the recording running, else Record to start one.
     /// nil off the iPhone and iPad (the Mac records nothing).
-    private static func startMeeting(_ open: @escaping () -> Void) -> (() -> Void)? {
+    private static func recordingsPage(_ open: @escaping () -> Void) -> (() -> Void)? {
         #if os(iOS)
-        return {
-            if RecordingCapture.shared.state != .idle { open() }
-            else { open(); Task { await MeetingRecorder.shared.startMeeting(inForeground: true, openPage: false) } }
-        }
+        return open
         #else
         return nil
         #endif
@@ -1579,21 +1576,22 @@ struct StarterModesMenu: View {
                 }
             }
         } else if !launchers.isEmpty {
-            Section("Model [Assistant View c98e11]") {
-                Picker("Launcher", selection: Binding(get: { modes.launcher ?? model.assistantConfig?.launcher ?? "" }, set: { modes.launcher = $0 })) {
-                    ForEach(launchers) { l in
-                        Text(SessionModes.modelName(l.model).map { "\(l.name) · \($0)" } ?? l.name).tag(l.name)
+            Section("Model [Assistant View c98e11]") { // switches, so the title is drawn (#4322, `MenuChoice`)
+                let current = modes.launcher ?? model.assistantConfig?.launcher ?? ""
+                ForEach(launchers) { l in
+                    MenuChoice(id: l.name, selected: current, pick: { modes.launcher = $0 }) {
+                        Text(SessionModes.modelName(l.model).map { "\(l.name) · \($0)" } ?? l.name)
                     }
                 }
-                .pickerStyle(.inline)
             }
         }
-        Section("Thinking Effort") {
-            Picker("Thinking Effort", selection: modes.$effort) {
-                Text("Use Launcher's").tag("")
-                ForEach(SessionModes.startEffortLevels) { o in Label { Text(o.title); Text(o.detail) } icon: { ThemedIcon(o.symbol) }.tag(o.id) }
+        Section("Thinking Effort") { // switches, so the title is drawn (#4322, `MenuChoice`)
+            MenuChoice(id: "", selected: modes.effort, pick: { modes.effort = $0 }) { Text("Use Launcher's") }
+            ForEach(SessionModes.startEffortLevels) { o in
+                MenuChoice(id: o.id, selected: modes.effort, pick: { modes.effort = $0 }) {
+                    Label { Text(o.title); Text(o.detail) } icon: { ThemedIcon(o.symbol) }
+                }
             }
-            .pickerStyle(.inline)
         }
         Picker(selection: modes.$mode) {
             Text("Use Launcher's").tag("")
