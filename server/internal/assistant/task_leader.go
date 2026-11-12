@@ -633,12 +633,13 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 		if verdict == reviewCancelled {
 			reason = "取消：" + cmp.Or(clip(oneLine(note), 80), "不做了") // i18n-ignore: done_reason, as a conversation's review writes it
 		}
-		if t.DoneAt == nil {
+		if t.DoneAt == nil || t.StartError != "" {
+			wasOpen := t.DoneAt == nil
 			closed, err := s.reviewDoneTodo(ctx, t.ID, reason, verdict == reviewAccepted)
 			if err != nil {
 				return "", err
 			}
-			if closed && verdict == reviewAccepted {
+			if wasOpen && closed && verdict == reviewAccepted { // a failed start was closed already: no acceptance to count
 				s.leaderTaskReviewed(lead, t.ID, verdict, v)
 			}
 		}

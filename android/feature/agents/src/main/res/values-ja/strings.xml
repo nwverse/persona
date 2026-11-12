@@ -143,6 +143,7 @@
     <string name="agents_repo_repository">リポジトリ</string>
     <string name="agents_repo_main_checkout">メインのワークツリー</string>
     <string name="agents_repo_worktree">ワークツリー</string>
+    <string name="agents_repo_actions">リポジトリの操作</string>
     <string name="agents_card_question">Claudeから質問があります</string>
     <string name="agents_card_question_by">%1$sから質問があります</string>
     <string name="agents_card_permission">承認を待っています</string>
@@ -257,6 +258,7 @@
     <string name="agents_directory">ディレクトリ</string>
     <string name="agents_space_tab">タブ%1$d</string>
     <string name="agents_space_new_tab">ここで新しいタブ</string>
+    <string name="agents_space_new_tab_card">このスペースで新しいタブを開く</string>
     <string name="agents_new_choose_directory">ディレクトリを選択</string>
     <string name="agents_new_back">戻る</string>
     <string name="agents_new_parent">上の階層へ</string>

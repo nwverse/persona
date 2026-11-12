@@ -44,8 +44,10 @@ Chat page:
 - A long finished answer in an Agent chat (from 6,000 bytes or 80 lines) is several lazy rows, about 24 lines each (`AnswerParts`, `AssistantTextPart`, #4970):
   one row of a 30,000-character report was laid out whole, twice, on opening and redrew every table's decoration on each scrolled frame. Cuts fall only
   between plain blocks whose reply-theme margins are fixed (paragraph, ATX heading, fenced code, table), each part drawn the gap MarkdownUI would put
-  there; lists, quotes, display math and HTML comments are never cut. A long press on any part acts on the whole answer; its file chips sit under the last
-  part. Persona's own conversation (boxed answers) and the Mac keep one row. `AnswerPartsLookTests` checks the parts draw the same pixels as the whole.
+  there; lists, quotes, display math and HTML comments are never cut. A long press on any part lifts the whole answer and acts on all of it: Copy, Select
+  Text, Quote and Forward (#5221, `AnswerPartsLift`: the parts stacked again in a lazy stack, only those near the screen laid out, placed from where the
+  pressed part is; all of them laid out once its words are to be selected, under one text view); its file chips sit
+  under the last part. Persona's own conversation (boxed answers) and the Mac keep one row. `AnswerPartsLookTests` checks the parts draw the same pixels as the whole.
 - Expanded work is one card: each step remains a separate lazy-loaded chat row (a turn may have hundreds; one giant view would hang), with each row drawing a card slice
   (`WorkCardSlice`: top corners on first step, bottom corners on Collapse N steps, backgrounds extending halfway into spacing to join neighbors), thin separators starting at the text column; tool rows 44pt high.
   **Liquid Glass (default) has no card** (requested 2026-10-31: cards did not match chat home, `StyleSpec.workList = .timeline`): steps sit directly on the page, with a thin left vertical line from first step
@@ -168,7 +170,7 @@ Chat page:
     the computer and time, and four lines; a tap opens the original chat at the message (`AppModel.openLinked`), or the
     whole text when this app does not have that chat. Nothing is written to the original chat.
   - Tests: `ForwardTests` (`spec/fixtures/forward`), `ForwardMessageTests` (the whole way on the mock hub, screenshots).
-  - Screenshots `-showSampleComments YES` (two code comments and an element over the box); `MOCK_COMMENTS=1` gives the widget chat a review sent from the web; end-to-end `CommentBubbleTests`.
+  - Screenshots `-showSampleComments YES` (two code comments and an element over the box); `MOCK_COMMENTS=1` gives the widget chat a review sent from the web, and Persona's main conversation a quote and a comment on its answer; end-to-end `CommentBubbleTests`.
 - Files: message paths and Read / Edit / Write tool paths become tappable file tags, read from the session's computer
   (`GET /api/v1/machines/{mid}/file`, at most 2 MB, iCloud directories denied), rendered Markdown / numbered code / images / PDF / directories.
 - Other Agents in the space (Agents): the left part of the header's second row is `SiblingTabs` (restored flat tabs at request 2026-10-31), one capsule each with state-color background
@@ -266,7 +268,7 @@ Chat page:
   (/clear uses existing confirmation); an exact inserted command such as /context does not reopen the list until draft changes. Beyond 5½ rows scroll internally.
   Assistant chats have none, like web. In `Composer` VStack, not overlay, because the composer's own hosting controller makes out-of-bounds overlays untappable (#518).
   + Shortcuts unchanged; `-openSlashMenu YES` screenshots, `PersonaUITests/SlashMenuTests` both layouts.
-- **Typing @ offers files, folders and sessions** (#2319, matches web `MentionMenu` / `lib/mentions.ts`): in `ShellComposerBar` (Agent and assistant chats, and the shell's
+- **Typing @ offers files, folders and sessions** (#2319, matches web `ComposerPanel` / `lib/mentions.ts`): in `ShellComposerBar` (Agent and assistant chats, and the shell's
   new conversation, `StarterComposer`), an `@word` before the caret, at the start or after whitespace (an e-mail address opens nothing) and not while the keyboard still
   has marked text (Pinyin; `TypedText.composingFocused`), shows `ComposerMentionMenu` above the input where `SlashMenu` sits: the files this chat's tools read or wrote
   (at most 12, newest first, read once per opening), the session folder's entries (at most 12, folders first; `listDir`, the web's `/fs`, cached while the list is open),
@@ -338,7 +340,9 @@ Chat page:
 - Monospace (files, diffs, terminal, `MonoTextView`): non-scrolling UITextView measured to longest line inside UIScrollView, no wrapping, both-axis scroll and selection.
 - Long-press messages (`MessageMenu.swift`, `MessageLift.swift`, #603): as in Telegram, the chat dims and blurs a little and the pressed message
   is drawn again above it (an answer on a card of its own), with the action bar right next to it (Copy / Select text / Quote / Share, own also Edit);
-  a message taller than the screen shows the part around the press and scrolls inside, the bar always on screen. A tap or a pull down puts it back.
+  a message taller than the screen shows the part around the press and scrolls inside, the bar always on screen; a long answer drawn in parts shows
+  from the pressed part's start (or from what was at the screen's top, when that part starts above it) to the screen's edge (#5221). A tap or a pull
+  down puts it back.
   In Persona's conversation the page draws it (`MessageLiftHost`, #3188), over the floating top bar, which dims and blurs with
   the chat: drawn inside the chat it ran under it. While its words are selected, a handle held at a long message's top or bottom edge
   scrolls it on, the selection following.
@@ -449,7 +453,7 @@ Chat page:
   Agents with running children show "👥 Sub-Agents N", not idle. Id `<main session>@<agent id>`, history/live/paging identical to normal.
   Running or finished goes by the chat's own lines (`Subagent.running(in:)`, #5602, as Claude Desktop): done once its Agent call's result is in (whatever the hub's list says; one dropped from the list kept Running for ever), one sent to the background once its notice came; the list's word only until then or when the call is not loaded. A running child's write time and last line are no change for its session's page (`Session.sameForItsPage`), and a tool run whose first call goes to the background keeps its id (an opened run stays open). Task-notice and long-notice rows keep their open state in the chat's `OpenTools`.
   Every Apple conversation and visual style follows `docs/SUPER_RULES.md` rule 2 (#2705): running and completed tool execution defaults to one folded summary. Only the latest assistant text segment appears outside it during execution; streaming replaces the preceding segment, and completion leaves the final result outside. Manual expansion survives live updates and completion; reloaded history starts folded and can still be opened to fetch hub folds. Compaction notices, failed tools and supervision visibility tools remain inside the same work line. Promoting a supervision round makes its input and reply visible, not its tool calls. The Agents chat and wake drawer use the same default-folded policy.
-  In a work line each Agent / Task call is its subagent's card (`SubagentCard`, #5602, as the web's and Claude Desktop's): its description; under it, while it runs, what it is doing (`last_tool.summary`, else its name, "Starting…" before its first call) and its steps, once over Done / Failed / Stopped · N steps · time (a background one's time runs to its last line, not its receipt). Open: what it was asked, its report (a background one's: its notice's detail), its latest three tool calls as they come (`SubagentRecentSteps`: the card subscribes to the subagent's own conversation while open, as the web's `RecentSteps`; the hub replays a run folded, so the card opens its newest fold when it holds at most 40 calls and fewer than three follow it, a longer one is not fetched for three rows), View Subagent. `-showSubagentDetails YES` opens every card for screenshots; on the mock, `GET /mock/subagent-step` (`MOCK_SUBAGENT_CARDS=1`) moves the background one a step on. A card never folds into a run of chips, but stays inside its work summary until that summary is opened. Subagents launched one after another share one line (`SubagentGrid`): "Running 3 agents" while any runs, "Ran 3 agents · 12 steps" after, their cards in a grid two side by side from about 540 pt (iPad, Mac; `Theme.Size.subagentColumn`), one column on a phone; the grid is visible only inside an opened work summary. While the agent waits on subagents it launched in the foreground (running, call unanswered), the running work line says so instead of its counts: "Working 6m · 2 subagents working — <what the newest does>… · +1 more" (`AgentsWorking`, the web's running bar), the count alone where the line is narrow. The plan (TodoWrite) is one line in its work: "Update To-dos  Step 3 of 4 · <the step it is on>" over a thin bar of how far along it is (`PlanBar`); a tap opens the plan sheet (`PlanSheet`), which shows the chat's newest plan whole and follows it. While that plan's line is not on screen (scrolled away, its work line folded, or folded by the hub, whose `fold.tasks` keeps the list), a pill over the composer says "Step 3 of 4" (`PlanPill`) and opens the sheet. A plan's call never joins a run of chips. A finished subagent's report ending in its `agentId` is not a background receipt (it read as Background · Running).
+  In a work line each Agent / Task call is its subagent's card (`SubagentCard`, #5602, as the web's and Claude Desktop's): its description; under it, while it runs, what it is doing (`last_tool.summary`, else its name, "Starting…" before its first call) and its steps, once over Done / Failed / Stopped · N steps · time (a background one's time runs to its last line, not its receipt). Open: what it was asked, its report (a background one's: its notice's detail), its latest three tool calls as they come (`SubagentRecentSteps`: the card subscribes to the subagent's own conversation while open, as the web's `RecentSteps`; the hub replays a run folded, so the card opens its newest fold when it holds at most 40 calls and fewer than three follow it, a longer one is not fetched for three rows), View Subagent. `-showSubagentDetails YES` opens every card for screenshots; on the mock, `GET /mock/subagent-step` (`MOCK_SUBAGENT_CARDS=1`) moves the background one a step on. A card never folds into a run of chips, but stays inside its work summary until that summary is opened. Subagents launched one after another share one line (`SubagentGrid`): "Running 3 agents" while any runs, "Ran 3 agents · 12 steps" after, their cards in a grid two side by side from about 540 pt (iPad, Mac; `Theme.Size.subagentColumn`), one column on a phone; the grid is visible only inside an opened work summary. While the agent waits on subagents it launched in the foreground (running, call unanswered), the running work line says so instead of its counts: "Working 6m · 2 subagents working — <what the newest does>… · +1 more" (`AgentsWorking`), the count alone where the line is narrow. The plan (TodoWrite) is one line in its work: "Update To-dos  Step 3 of 4 · <the step it is on>" over a thin bar of how far along it is (`PlanBar`); a tap opens the plan sheet (`PlanSheet`), which shows the chat's newest plan whole and follows it. While that plan's line is not on screen (scrolled away, its work line folded, or folded by the hub, whose `fold.tasks` keeps the list), a pill over the composer says "Step 3 of 4" (`PlanPill`) and opens the sheet. A plan's call never joins a run of chips. A finished subagent's report ending in its `agentId` is not a background receipt (it read as Background · Running).
   A subagent's report reads as one line until opened (`FoldedReport`): its first line when that is a heading, else its first 80 characters, and Expand; open, the whole of it and Collapse. In the card, in a background subagent's notice, and in a message from another session that is a subagent of this one handing its report back (its name is the subagent's id, type or description; an older node shows a handback so). Open or not is kept by the card's id on disk (`OpenReports`, StateCache, the latest 400); `-openChatsFresh` folds them all again. A report of one line of 80 characters or fewer is not folded.
   Any other message from another session (`PeerMessage`) that runs longer than three lines, as many as an exchange shows (in every chat and on every platform), shows those lines, the last one fading out, with Expand / Collapse under it (`LineFold`, cut at the height of that many body lines because `lineLimit` does not reach into Markdown's blocks; open or not kept like a report). A short one has no button (#2010, `PeerFoldUITests`).
 - Background workflows (#2935, `workflows` in `docs/protocol/protocol.md`): Claude Workflow tool multi-Agent background scripts keep Agent Working after turn ends while waiting for completion,
@@ -1620,7 +1624,7 @@ Files mentioned in chats, tool rows and the chat's Files page all open in `FileV
   Outside backticks only ASCII is recognized, stopping at Chinese or full-width punctuation (`/tmp/a.md里`, meaning "in /tmp/a.md"); sentence-final `.` is excluded. A whole backticked span counts as one path (may include Chinese and spaces); if it does not exist, check paths within the span and select existing non-overlapping ones, longer first at the same position.
   URL fragments, `and/or` and version numbers do not count; code blocks, indented code, existing links and formulas in replies remain unchanged.
 - **Rendering**: existing paths in replies (`LinkedMarkdown`) become Markdown links (`persona-path:<path>?line=N`, `PathLinkURL`), colored like other links (`.persona` link color); an entire backticked path's inline code is tappable.
-  User bubbles (`PathText`) use underlined links in `Theme.userBubbleLink`: accent in light bubbles, bubble text color in colored bubbles (accent is invisible there).
+  User bubbles (`PathText`) use underlined links in `Theme.UserBubbleInk.link`: accent on the main conversation's box and in light bubbles, bubble text color in colored bubbles (accent is invisible there).
   Before answers or when checks fail, plain text; conversion to a link changes only color, not font size or line layout.
 - **Streaming**: the currently written chunk is not recognized (its final word might be an incomplete path); completed paragraphs (`StreamChunk`) are checked and linked normally.
   That chunk is made whole for the moment before it is parsed (`StreamRepair` in PersonaKit, ported from the web's `repairStreamingMarkdown`, #2916): an open fence closed (indented as its opener, so a fence in a list item closes in it), a half-written table row and a last line of only list / heading / quote markers held back, a table header given its delimiter row (indented as the header; a table also right under a paragraph line, as cmark-gfm reads it, but not in a lazy line of a list item or quote), and on the last line `**` `*` `~~` and code spans closed, a half-written link or image shown as its text. `_` is never closed (as the web): in coding replies it is mostly `src/_app.tsx` or `_private`, and closing it set the rest of the line in italics until the line ended. It only cuts or adds to the last line, so finished blocks stay byte for byte the same. The caret ` ▍` is added only in prose (`StreamRepair.end`), never inside a fence, a table or a formula; the chunk has its own small memo (`StreamTail`), not `MarkdownMemo`.
@@ -1953,6 +1957,42 @@ Key points:
 - Card `plain_text` in Markdown contexts must decode entities such as `&nbsp;` and `<br>` / `<a href>` / `<font color>` (markup left by the Lark gateway).
 - Card callback buttons are enabled only when `actionMethod == 2` (through the Lark gateway's card-actions API); select / input and other form controls show only their current values.
 - Custom `Layout` can receive `.infinity` for `proposal.width` (ScrollView / ideal-size measurement); check `isFinite` before converting to an integer or it crashes.
+
+## Settings by scope (#5236)
+
+The shared iPhone, iPad and Mac settings page has three groups:
+
+| Scope | Entries |
+| --- | --- |
+| Current Assistant's Settings | Models, Assistant Profile, Channels, Connectors, Extensions, Knowledge Selection, Meetings, Agent, Machines (platform and hub capabilities decide availability) |
+| This Device | Appearance & Display, Language & Dictation, Notifications, Translation, Storage, Health, This iPhone, About |
+| Hub | Hub Connection, Hub Version, Assistants, Avatar, Devices & Pairing |
+
+With several installed assistants, the first heading shows the current assistant's avatar, name and existing switcher,
+with scope guidance. With one, it keeps the chosen Persona face and name without a switcher. The health space remains
+bound to the default assistant. The avatar is shared across devices; theme color, interface style, text size, list layout
+and light/dark appearance remain device preferences. The layout page is titled **Agents List Layout**.
+
+Models replaces the two separate model-provider and model-configuration entries. Common purpose/model choices come first;
+providers and keys sit under Advanced, and a purpose's runtime/provider choices are folded in its editor. Agent collects
+Claude Code, Codex and Session Triage. Applying runtime settings to all online computers affects only this assistant's
+computers in the current Hub. Connectors, extensions, markets, channels and knowledge selection use a captured assistant
+request context; switching assistants returns Settings to the list, and a late response cannot replace the new scope.
+An explicitly manager-bound detail link still opens that assistant's copy without changing the app's pick.
+
+About shows the app version and a folded Diagnostics section containing the build commit and last new-chat check.
+Devices & Pairing retains the device list, pairing again, Watch sync and confirmed disconnect. Mobile permissions,
+Health, dictation and lock-screen privacy remain available in their appropriate device pages.
+
+Settings search matches localized entry names and common aliases (for example API Key, dictation, lock screen, cache,
+Watch, and commit), then navigates directly to the destination. It changes no settings. Legacy SettingsPage values,
+ModelLaunchersRoute and existing DEBUG page-opening arguments continue to work. For a search-state capture, the existing
+`-openAppearance` argument accepts `search:<query>`; no new DEBUG switch is introduced.
+
+Regression coverage: `SettingsNavigationTests`, `AssistantSettingsScopeTests`, `SettingsResourceScopeTests`,
+`ManagerSwitchTests`, and `SettingsNavigationUITests` / `ModelsSettingsHierarchyTests`. A remembered assistant pick
+routes settings before the roster arrives; only a confirmed legacy-roster 404 suppresses it, without erasing the pick.
+These tests do not claim that an installed TestFlight app was updated.
 
 ## Engine selection
 

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // "New agent"'s recent setups (#2134): a start is remembered; the cards fill every field (computer, folder, launcher, model,
 // permission mode, effort; the model pill and its panel since #5104) and never start; picking a computer brings back its
-// model with the launcher it restores; an offline computer's card can't be picked; "Allow everything" is marked; the ⋯
+// model with the launcher it restores; an offline computer's card can't be picked; "Full access" is marked; the ⋯
 // removes one or clears them; a sheet opened on a folder of another page's has no cards.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -78,7 +78,11 @@ async function customizeCurrent() {
   await flush();
 }
 
+// The computer opens Codex with no first message too (#4961); false: an older one, whose Codex needs it.
+let codexOptional = true;
+
 beforeEach(() => {
+  codexOptional = true;
   resetModelListsForTests();
   state.machines = [
     { id: "mac", name: "MacBook", online: true },
@@ -95,7 +99,7 @@ beforeEach(() => {
     if (url.includes("/model-config/purposes/")) return json({ error: "not found" }, 404);
     const list = /\/launchers\/([^/]+)\/models/.exec(url);
     if (list) return json(LISTS[decodeURIComponent(list[1])] ?? { models: [] });
-    if (url.includes("/launchers")) return json({ launchers: [{ name: "claude", agent: "claude" }, { name: "work", agent: "claude" }, { name: "codex", agent: "codex", agent_type: "codex" }] });
+    if (url.includes("/launchers")) return json({ launchers: [{ name: "claude", agent: "claude" }, { name: "work", agent: "claude" }, { name: "codex", agent: "codex", agent_type: "codex", prompt_optional: codexOptional }] });
     return json({ path: "/code", entries: [] });
   }));
   host = document.createElement("div");
@@ -114,6 +118,25 @@ async function open(key = "a", preset?: { machineId?: string; cwd?: string }) {
   await flush();
 }
 
+describe("New agent's first message for Codex (#4961)", () => {
+  it("is required only where the computer needs it, and a Codex start takes it with the start", async () => {
+    codexOptional = false;
+    await open();
+    await pick("model:codex\ngpt-5.5");
+    expect(document.body.textContent).toContain("第一条消息");
+    expect(document.body.textContent).not.toContain("第一条消息（可选）");
+    expect(button("启动")!.disabled).toBe(true);
+
+    codexOptional = true;
+    await open("b");
+    await pick("model:codex\ngpt-5.5");
+    expect(document.body.textContent).toContain("第一条消息（可选）");
+    expect(button("启动")!.disabled).toBe(false);
+    act(() => button("启动")!.click());
+    expect(launched).toEqual([expect.objectContaining({ launcher: "codex", agentType: "codex", inlinePrompt: true, text: "" })]);
+  });
+});
+
 describe("New agent's recent setups (#2134)", () => {
   it("shows no section before anything started, and remembers a start with the model and effort it sent", async () => {
     await open();
@@ -124,7 +147,7 @@ describe("New agent's recent setups (#2134)", () => {
     for (const k of ["ArrowRight", "ArrowRight", "ArrowRight"]) await slide(k);
     expect(pillEffort()).toBe("高");
     act(() => pill().click());
-    act(() => radio("只做计划")!.click());
+    act(() => radio("计划模式")!.click());
     act(() => button("启动")!.click());
     expect(launched).toHaveLength(1);
     expect(loadRecentSetups()).toEqual([{ ...setup({ model: "opus", mode: "plan", effort: "high" }), at: expect.stringMatching(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/) }]);
@@ -132,7 +155,7 @@ describe("New agent's recent setups (#2134)", () => {
 
   it("remembers a Codex start with its launcher and model only", async () => {
     await open();
-    act(() => radio("只做计划")!.click()); // a Claude Code choice that stays for this computer's next one
+    act(() => radio("计划模式")!.click()); // a Claude Code choice that stays for this computer's next one
     await pick("model:codex\ngpt-5.5");
     act(() => button("启动")!.click());
     expect(loadRecentSetups()).toEqual([expect.objectContaining({ launcher: "codex", model: "gpt-5.5", agent_type: "codex", mode: "", effort: "" })]);
@@ -145,14 +168,14 @@ describe("New agent's recent setups (#2134)", () => {
     ]);
     await open();
     expect(cards()).toHaveLength(2);
-    expect(lines(card("notes-app"))).toEqual(["notes-app · Studio", "work · sonnet · 全部放行 · 很高"]);
+    expect(lines(card("notes-app"))).toEqual(["notes-app · Studio", "work · sonnet · 完全访问 · 很高"]);
     expect(lines(card("app"))).toEqual(["app · MacBook", "claude"]);
     act(() => card("notes-app").click());
     await flush();
     expect(machineChip("Studio").className).toContain("bg-ink");
     expect(folder()).toBe("/code/notes-app");
     expect(pill().title).toBe("Claude Code · Sonnet 5 · work · 很高");
-    expect(radio("全部放行")!.getAttribute("aria-checked")).toBe("true");
+    expect(radio("完全访问")!.getAttribute("aria-checked")).toBe("true");
     expect(card("notes-app").getAttribute("aria-pressed")).toBe("true");
     expect(document.activeElement).toBe(textarea());
     expect(launched).toHaveLength(0);
@@ -225,12 +248,12 @@ describe("New agent's recent setups (#2134)", () => {
     expect(offline.getAttribute("aria-pressed")).toBe("false");
   });
 
-  it("marks Allow everything with the warning", async () => {
+  it("marks Full access with the warning", async () => {
     seed([setup({ mode: "bypassPermissions" }), setup({ cwd: "/code/b", mode: "plan" })]);
     await open();
     const bypass = card("app");
     expect(bypass.dataset.bypass).toBe("true");
-    const mark = [...bypass.querySelectorAll("span")].find((s) => s.textContent === "全部放行" && s.className.includes("text-orange"))!;
+    const mark = [...bypass.querySelectorAll("span")].find((s) => s.textContent === "完全访问" && s.className.includes("text-orange"))!;
     expect(mark.querySelector("svg")).not.toBeNull();
     expect(cards()[1].dataset.bypass).toBeUndefined();
   });

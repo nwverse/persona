@@ -21,9 +21,9 @@
   "delivering": "Delivering",
   "waiting_for_hub": "Waiting for the hub to come back",
   "view_only": "This session is view-only",
-  "ask_placeholder": "Ask {name}…",
+  "ask_placeholder": "What can {name} do for you today?",
   "resume_placeholder": "Sending a message resumes this session on the computer…",
-  "agent_placeholder": "Message the agent…",
+  "agent_placeholder": "What shall we work on today?",
   "queue_placeholder": "Add more (queued until it finishes)",
   "draft_title": "The input on the computer has unsent text",
   "not_now": "Not now",
@@ -110,6 +110,10 @@
   "stopped_line": "This Agent has stopped. Its conversation and terminal stay here; it doesn't take messages.",
   "resume": "Resume",
   "resume_failed": "Couldn't resume this Agent. {error}",
+  "codex_waiting": "Codex is open on {computer}. Send its first message below, or type it in its terminal.",
+  "codex_first_placeholder": "First message to Codex",
   "handoff_from": "Came from {title} · click to return",
-  "handoff_dismiss": "Hide the way back"
+  "handoff_dismiss": "Hide the way back",
+  "team": "Team",
+  "team_needs_you": "Team: a worker needs you"
 }

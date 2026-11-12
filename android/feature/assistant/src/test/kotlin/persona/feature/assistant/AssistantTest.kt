@@ -139,13 +139,31 @@ class AssistantTest {
     @Test fun theHistoryRowMenu() {
         fun labels(leader: Boolean, live: Boolean, act: Boolean, end: Boolean) =
             conversationActions(resources, leader, live, if (act) ({}) else null, {}, if (end) ({}) else null).map { it.label }
-        assertEquals(listOf("设为常驻", "拷贝会话 ID", "结束对话"), labels(leader = false, live = true, act = true, end = true))
+        assertEquals(listOf("设为常驻", "拷贝会话 ID", "结束…"), labels(leader = false, live = true, act = true, end = true))
         assertEquals(listOf("取消常驻", "拷贝会话 ID"), labels(leader = true, live = false, act = true, end = true))
-        assertEquals("the main conversation is no leader", listOf("拷贝会话 ID", "结束对话"), labels(leader = false, live = true, act = false, end = true))
+        assertEquals("the main conversation is no leader", listOf("拷贝会话 ID", "结束…"), labels(leader = false, live = true, act = false, end = true))
         assertEquals(listOf("拷贝会话 ID"), labels(leader = false, live = true, act = false, end = false))
         assertTrue(conversationActions(resources, false, true, null, {}, {}).last().destructive)
-        assertEquals(listOf("设为常驻", "拷贝会话 ID", "归档", "结束对话"),
-            conversationActions(resources, false, true, {}, {}, {}, onArchive = {}).map { it.label })
+        // C12 (#4339): iOS's items in iOS's order (`AssistantSidebar.row`), End… last, apart and red.
+        val all = conversationActions(resources, false, true, {}, {}, {}, onArchive = {}, onRename = {}, onDiagnostics = {})
+        assertEquals(listOf("设为常驻", "重命名…", "归档", "拷贝会话 ID", "拷贝诊断", "结束…"), all.map { it.label })
+        assertEquals(listOf(false, false, false, false, false, true), all.map { it.destructive })
+        assertTrue(all.last().separatorBefore)
+        // Each action is the one passed for it.
+        val ran = mutableListOf<String>()
+        conversationActions(resources, true, true, { ran += "pin" }, { ran += "copy" }, { ran += "end" }, onArchive = { ran += "archive" },
+            onRename = { ran += "rename" }, onDiagnostics = { ran += "diagnostics" }).forEach { it.onClick() }
+        assertEquals(listOf("pin", "rename", "archive", "copy", "diagnostics", "end"), ran)
+    }
+
+    /** Copy diagnostics (C12): the conversation's structure, never its words. */
+    @Test fun diagnosticsCarryTheStructureAndNoWords() {
+        val session = Session(machineId = "hub", sessionId = "s1", title = "周末去哪儿", status = "idle", state = "working",
+            lastText = "去海边吧", updatedAt = "2026-11-12T09:00:00Z", origin = "user", pendingInteractions = 2,
+            queued = listOf("先订酒店"), turnErrorCode = "auth_failed")
+        val text = conversationDiagnostics(session)
+        assertTrue(text, "session=hub/s1" in text && "state=working" in text && "pending=2 queued=1" in text && "turn_error_code=auth_failed" in text)
+        listOf("周末去哪儿", "去海边吧", "先订酒店").forEach { assertFalse(it, it in text) }
     }
 
     @Test fun firstConversationBecomesMainAndSendUsesOutbox() = runTest {
