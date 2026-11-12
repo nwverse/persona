@@ -144,7 +144,7 @@ function body(p: Panel) {
     case "git":
       return <GitPanel key={directoryPanelKey(p)} mid={p.mid} sid={p.sid} cwd={p.cwd} at={p.at} onClose={closePanel} />;
     case "review":
-      return <ReviewPanel key={directoryPanelKey(p)} mid={p.mid} sid={p.sid} cwd={p.cwd} scope={p.scope} at={p.at} onClose={closePanel} />;
+      return <ReviewPanel key={directoryPanelKey(p)} mid={p.mid} sid={p.sid} cwd={p.cwd} scope={p.scope} at={p.at} opened={p} onClose={closePanel} />;
     case "file":
       return <FileViewerPanel key={`${p.mid}:${p.path}:${p.line ?? ""}-${p.to ?? ""}`} mid={p.mid} sid={p.sid} path={p.path} cwd={p.cwd} line={p.line} to={p.to} onClose={closePanel} />;
     case "link":

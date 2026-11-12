@@ -55,14 +55,16 @@ fun queueListCap(rowsHeight: Int, count: Int): Int? =
     if (rowsHeight <= 0 || count <= 0) null else rowsHeight * minOf(count, QUEUE_VISIBLE_ROWS) / count
 
 /**
- * Messages typed while the agent works and not taken yet, right above the composer (iOS QueueStrip). Folded to its
- * [title] line by default ("2 queued · Claude will handle them in order"), which opens and folds it as iOS's disclosure
- * does; opened, each one is numbered, at most two lines, and a long queue scrolls under the title (Glass shows about
- * [QUEUE_VISIBLE_ROWS] rows, as iOS). Tapping one hands its index to [onItem] (its actions). [sendNow] is a text button on
- * the title line, folded or open, for [onSendNow] (iOS Send Now, #6088). While an operation runs ([busy]) a spinner takes
- * its place and nothing can be tapped; [enabled] false shows the queue without actions. Glass floats like the composer
- * and draws each message in a well, as iOS; brief is a paper card, the board a bordered ticket. [initiallyExpanded]
- * opens it from the start (catalog, screenshots).
+ * Messages typed while the agent works and not taken yet, right above the composer (iOS QueueStrip): [title] says how
+ * many and that they go in order ("2 queued · Claude will handle them in order"), then each one numbered, at most two
+ * lines. Tapping one hands its index to [onItem] (its actions). While an operation runs ([busy]) a spinner shows and
+ * nothing can be tapped; [enabled] false shows the queue without actions. A long queue scrolls under the title.
+ *
+ * Glass is iOS's strip: folded to the title line by default, which opens and folds it as iOS's disclosure does
+ * ([initiallyExpanded] opens it from the start: catalog, screenshots); opened, each message sits in a well and about
+ * [QUEUE_VISIBLE_ROWS] show before it scrolls. Its line carries [sendNow], a text button folded or open, for
+ * [onSendNow] (iOS Send Now). Brief (a paper card) and the board (a bordered ticket) stay always open, without Send now
+ * (the alignment plan's ground rules: no new alignment work outside Glass).
  */
 @Composable
 fun QueueStrip(
@@ -77,20 +79,19 @@ fun QueueStrip(
     initiallyExpanded: Boolean = false,
 ) {
     if (items.isEmpty()) return
-    var expanded by rememberSaveable { mutableStateOf(initiallyExpanded) }
-    val spoken = stringResource(R.string.designsystem_with_state, title,
-        stringResource(if (expanded) R.string.designsystem_expanded else R.string.designsystem_collapsed))
-    val toggle = Modifier.clickable(role = Role.Button) { expanded = !expanded }.semantics { contentDescription = spoken }
-    if (PersonaTheme.style == AppStyle.Glass) GlassQueueStrip(title, items, onItem, modifier, busy, enabled, sendNow, onSendNow, expanded, toggle)
-    else PlainQueueStrip(title, items, onItem, modifier, busy, enabled, sendNow, onSendNow, expanded, toggle)
+    if (PersonaTheme.style == AppStyle.Glass) GlassQueueStrip(title, items, onItem, modifier, busy, enabled, sendNow, onSendNow, initiallyExpanded)
+    else PlainQueueStrip(title, items, onItem, modifier, busy, enabled)
 }
 
 /** iOS's strip: the title line in the label size, then the rows as wells, about three of them before it scrolls. */
 @Composable
 private fun GlassQueueStrip(
     title: String, items: List<String>, onItem: (Int) -> Unit, modifier: Modifier, busy: Boolean, enabled: Boolean,
-    sendNow: String?, onSendNow: () -> Unit, expanded: Boolean, toggle: Modifier,
+    sendNow: String?, onSendNow: () -> Unit, initiallyExpanded: Boolean,
 ) {
+    var expanded by rememberSaveable { mutableStateOf(initiallyExpanded) }
+    val spoken = stringResource(R.string.designsystem_with_state, title,
+        stringResource(if (expanded) R.string.designsystem_expanded else R.string.designsystem_collapsed))
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
     val active = enabled && !busy
@@ -100,7 +101,9 @@ private fun GlassQueueStrip(
             .floatingSurface(RoundedCornerShape(Tokens.Radius.panel)).animateContentSize(PersonaTheme.motion.size()),
     ) {
         Row(
-            Modifier.fillMaxWidth().heightIn(min = Tokens.MinTouch.android).then(toggle).padding(horizontal = Tokens.Space.m),
+            Modifier.fillMaxWidth().heightIn(min = Tokens.MinTouch.android)
+                .clickable(role = Role.Button) { expanded = !expanded }.semantics { contentDescription = spoken }
+                .padding(horizontal = Tokens.Space.m),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.sm),
         ) {
             JIcon(PhIcons.Tray, null, size = Tokens.Space.l, tint = palette.ink2)
@@ -143,12 +146,9 @@ private fun GlassQueueStrip(
     }
 }
 
-/** Brief and Board: their card and ticket as before, folding under the same title line. */
+/** Brief and Board: their card and ticket as before, always open. */
 @Composable
-private fun PlainQueueStrip(
-    title: String, items: List<String>, onItem: (Int) -> Unit, modifier: Modifier, busy: Boolean, enabled: Boolean,
-    sendNow: String?, onSendNow: () -> Unit, expanded: Boolean, toggle: Modifier,
-) {
+private fun PlainQueueStrip(title: String, items: List<String>, onItem: (Int) -> Unit, modifier: Modifier, busy: Boolean, enabled: Boolean) {
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
     val shape = RoundedCornerShape(if (style == AppStyle.Brief) 20.dp else 8.dp)
@@ -157,18 +157,14 @@ private fun PlainQueueStrip(
         else -> Modifier.padding(horizontal = 10.dp, vertical = 4.dp).clip(shape).background(palette.surface).border(1.dp, palette.line, shape)
     }
     val active = enabled && !busy
-    Column(modifier.fillMaxWidth().then(outer).animateContentSize(PersonaTheme.motion.size())
-        .padding(top = 10.dp, bottom = if (expanded) 4.dp else 10.dp)) {
-        Row(Modifier.fillMaxWidth().then(toggle).padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+    Column(modifier.fillMaxWidth().then(outer).padding(top = 10.dp, bottom = 4.dp)) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
             JIcon(PhIcons.Tray, null, size = 16.dp, tint = palette.ink2)
             Spacer(Modifier.width(8.dp))
             Text(title, style = PersonaTheme.type.caption, color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             if (busy) JSpinner(Modifier.size(14.dp), stroke = 1.8.dp)
-            else sendNow?.let { SendNowButton(it, PersonaTheme.type.labelSmall, onSendNow) }
-            Spacer(Modifier.width(Tokens.Space.s))
-            JIcon(if (expanded) PhIcons.CaretUp else PhIcons.CaretDown, null, size = 14.dp, tint = palette.ink3)
         }
-        if (expanded) Column(Modifier.fillMaxWidth().heightIn(max = 184.dp).verticalScroll(rememberScrollState()).padding(top = 4.dp)) {
+        Column(Modifier.fillMaxWidth().heightIn(max = 184.dp).verticalScroll(rememberScrollState()).padding(top = 4.dp)) {
             val itemActions = stringResource(R.string.designsystem_queue_actions)
             items.forEachIndexed { index, text ->
                 val spoken = stringResource(R.string.designsystem_queue_item, index + 1, text)
@@ -194,7 +190,7 @@ private fun PlainQueueStrip(
     }
 }
 
-/** Send Now on the title line: the accent's words, as iOS's plain button, with the platform's touch target around them. */
+/** Send Now on Glass's title line: the accent's words, as iOS's plain button, with the platform's touch target around them. */
 @Composable
 private fun SendNowButton(label: String, style: TextStyle, onClick: () -> Unit) {
     Box(
