@@ -272,6 +272,7 @@ and the Duo's inner screen; a phone, folded or not, is narrower than 600dp uprig
   Android never does), the cross-fade between pages under those bars, and the iPad's page-sized Settings card (`presentationSizing(.page)`): Android's sheet spans the window like the Duo's.
   The Agents page gets no sidebar column: the Duo's Agents tab has none either, and on an open foldable a third column would take the room the Agents list and its chat need.
 - Keyboard, mouse, trackpad: session, message and settings-row long-press menus also respond to right-click; hover has feedback; lists support the wheel; the software keyboard does not open by itself on launch.
+- Composer hardware input (`LargeWindowComposer`, `LocalLargeWindowInput`): only regular / expanded windows add Ctrl / Meta+Return Send and full-page-editor Escape. Ordinary / Shift Return, IME composition, unrelated shortcuts and terminal keys pass through. The expanded editor reads `LocalComposerHardware`; its default null preserves standalone, preview and phone behavior. Compact and wide-phone windows have no wrapper layout or new key handling.
 - Glass blurs a larger area on large screens (each pane's top bar and scroll edges); performance has not been measured.
 
 ## 4. Screenshots and verification

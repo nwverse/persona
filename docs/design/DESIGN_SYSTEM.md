@@ -385,6 +385,10 @@ For every component: use the design-system one, not a lookalike. Counts are appr
   that opens the same rows. Spec: `docs/web/web.md` ("Queued messages").
 - Duplicates: four composer implementations exist (DS-19).
 
+#### Large-window hardware input (Android)
+
+`LargeWindowComposer` adds hardware actions without replacing `ChatComposer` or its layout. In regular / expanded windows, Ctrl or Meta+Return is the same action as Send and uses the same enabled, content, attachment-readiness, sending and blocked gates; the first key-down acts once, repeats and key-up do not. Return and Shift+Return insert a newline, and an active IME composition passes every key to the IME. `LocalComposerHardware` supplies the optional action to `ExpandedComposer`: send collapses first and then invokes the caller's one `onSend`, while Escape only collapses and restores the small field's focus. Null is the default and preserves phone, preview and standalone-editor behavior. Compact and wide-phone windows do not install these actions. Ctrl+/, terminal keys and unrelated keys are not consumed by the composer.
+
 **Run status bar** (web, #5312; the owner asked on 2026-11-12 that it follow cindy's `RunningStatusBar` and
 `RunningTokenRatePopover`, and cindy wins over what this document said before; `web/src/views/chat/RunningStatusBar.tsx`,
 `docs/web/web.md` "Live status and streaming"). One row above the composer while a turn runs, 13 px medium, 8 px side and
