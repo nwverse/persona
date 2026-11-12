@@ -70,15 +70,24 @@ final class DirectCompletionUITests: XCTestCase {
         let dismiss = tray.buttons["decision.dismiss.todo_task_tests"]
         XCTAssertTrue(dismiss.waitForExistence(timeout: 15), app.debugDescription)
         XCTAssertGreaterThanOrEqual(dismiss.frame.height, 44, "a button under a finger's height")
+        try shot(app, "decision-open")
         dismiss.tap()
         XCTAssertTrue(dismiss.waitForNonExistence(timeout: 10), "the dismissed decision stayed in Needs You")
         let undo = app.buttons["toast-action"]
         XCTAssertTrue(undo.waitForExistence(timeout: 5), app.debugDescription)
+        try shot(app, "decision-undo-toast")
         undo.tap()
         app.expandTrayRows()
         XCTAssertTrue(dismiss.waitForExistence(timeout: 10), "Undo did not bring the decision back")
         let later = tray.buttons["decision.later.todo_task_tests"]
         later.tap()
         XCTAssertTrue(later.waitForNonExistence(timeout: 10), "Later left the decision in Needs You")
+    }
+
+    /// With PERSONA_SHOTS set, the screen goes there (PERSONA_SHOTS_APPEARANCE names the appearance).
+    @MainActor private func shot(_ app: XCUIApplication, _ name: String) throws {
+        guard let dir = ProcessInfo.processInfo.environment["PERSONA_SHOTS"] else { return }
+        let appearance = ProcessInfo.processInfo.environment["PERSONA_SHOTS_APPEARANCE"] ?? "unknown"
+        try app.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: "\(dir)/\(name)-\(appearance).png"))
     }
 }

@@ -382,7 +382,7 @@ struct BriefAcceptRow: View {
             Button {
                 Task { await actions.completeDirectly(row, group: group) }
             } label: {
-                Text("Complete Directly").lineLimit(1).tapTargetHeight()
+                Text("Complete Directly").lineLimit(1).buttonLabelHeight()
             }
             .font(Theme.Font.captionStrong)
             .themedButton()
@@ -395,7 +395,7 @@ struct BriefAcceptRow: View {
             Button {
                 withAnimation(Theme.Motion.state) { TasksStore.shared.laterDecision(todo) }
             } label: {
-                Text("Later [Task Views 9d2ca2]").lineLimit(1).tapTargetHeight()
+                Text("Later [Task Views 9d2ca2]").lineLimit(1).buttonLabelHeight()
             }
             .font(Theme.Font.captionStrong)
             .themedButton()
@@ -405,7 +405,7 @@ struct BriefAcceptRow: View {
             Button {
                 Task { await TasksStore.shared.dismissDecision(todo) }
             } label: {
-                Text("Do not handle [Task Draft]").lineLimit(1).tapTargetHeight()
+                Text("Do not handle [Task Draft]").lineLimit(1).buttonLabelHeight()
             }
             .font(Theme.Font.captionStrong)
             .themedButton()
@@ -430,7 +430,7 @@ struct BriefAcceptRow: View {
             Button {
                 Task { await actions.accept(row, group: group) }
             } label: {
-                Text(Self.label(take)).lineLimit(1).opacity(busy ? 0 : 1).tapTargetHeight()
+                Text(Self.label(take)).lineLimit(1).opacity(busy ? 0 : 1).buttonLabelHeight().frame(maxWidth: .infinity)
                     .overlay { if busy { ProgressView().controlSize(.small) } }
             }
             .font(Theme.Font.captionStrong)
@@ -535,6 +535,11 @@ private struct BriefOutcomeText: View {
 
 private extension View {
     @ViewBuilder func tapTargetHeightIf(_ tall: Bool) -> some View {
-        if tall { tapTargetHeight() } else { self }
+        if tall { buttonLabelHeight() } else { self }
+    }
+
+    /// A label tall enough that the glass button around it (about 14 pt of its own padding) is a finger's height.
+    func buttonLabelHeight() -> some View {
+        scaledFrame(minHeight: Theme.Size.tapTarget - 14).frame(minHeight: Theme.Size.tapTarget - 14)
     }
 }
