@@ -1,14 +1,15 @@
 // The live screen's Displays menu (#5685, docs/extensions/computer-use.md "Displays"): All Displays or one display of a
-// multi-display Mac. ScreenView loads it lazily, so its words (screen-displays) stay out of the first screen's catalog,
-// which every page of the app sends; the build makes the import wait for the rest of the catalog.
+// multi-display Mac. ScreenView imports it once there is a choice to offer, so its words (screen-displays) stay out of the
+// first screen's catalog, which every page of the app sends; the build makes the import wait for the rest of the catalog.
 import { useState } from "react";
 import { cx, Menu } from "../ui/atoms";
 import { Icon } from "../ui/icons";
 import { t } from "../i18n";
 import type { ScreenDisplay } from "./displays";
 
-/** `shown`: the display shown alone, null for all of them. The menu numbers `offered` in its order. */
-export default function DisplayMenu({ offered, shown, onChoose }: { offered: ScreenDisplay[]; shown: string | null; onChoose: (id: string | null) => void }) {
+/** `shown`: the display shown alone, null for all of them. The menu numbers `offered` in its order. `onOpen`: the menu
+ *  opened (the page asks the Mac for its displays again). */
+export default function DisplayMenu({ offered, shown, onChoose, onOpen }: { offered: ScreenDisplay[]; shown: string | null; onChoose: (id: string | null) => void; onOpen: () => void }) {
   const [at, setAt] = useState<HTMLElement | null>(null); // the button, while the menu is open
   const name = (id: string | null) => {
     const i = offered.findIndex((d) => d.id === id);
@@ -18,7 +19,10 @@ export default function DisplayMenu({ offered, shown, onChoose }: { offered: Scr
     <>
       <button
         type="button"
-        onClick={(e) => setAt(at ? null : e.currentTarget)}
+        onClick={(e) => {
+          if (!at) onOpen();
+          setAt(at ? null : e.currentTarget);
+        }}
         aria-haspopup="menu"
         aria-expanded={at !== null}
         aria-label={t("screen-displays.displays_current", { current: name(shown) })}
