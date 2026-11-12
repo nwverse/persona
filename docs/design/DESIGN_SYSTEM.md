@@ -805,7 +805,7 @@ The watch widget extension doesn't build `Theme`, so complications take their fo
 
 ### 4.1 Navigation hierarchy (super rule 3)
 
-`docs/SUPER_RULES.md` rule 3: Assistant and Agents are the only primary home destinations on iOS, Android and web. Settings opens from the sidebar. Everything else (Inbox, To-dos, Scheduled Tasks, Knowledge, Machines, Health, extension pages) is pushed from the drawer. Push by value for new pages; mixing view-based and value-based pushes in one stack is a known trap. An optional Messages page can be switched on and becomes a third primary destination; whether that fits rule 3 needs the rule owner (DS-26).
+`docs/SUPER_RULES.md` rule 3: Assistant and Agents are the only primary home destinations on iOS, Android and web. Settings opens from the sidebar. Everything else (Recordings, Inbox, To-dos, Scheduled Tasks, Knowledge, Machines, Health, extension pages) is pushed from the drawer. Push by value for new pages; mixing view-based and value-based pushes in one stack is a known trap. An optional Messages page can be switched on and becomes a third primary destination; whether that fits rule 3 needs the rule owner (DS-26).
 
 A dispatched task's Open link (#3711) is a compact row using existing typography, fill, radius and 44 pt touch-target
  tokens, not a filter or a link to the whole In Progress list. One task shows its title and Open; a plan lists only its
@@ -1554,9 +1554,15 @@ page the user watches during the meeting is the page they keep writing in after 
 
 Every place that starts a recording on the iPhone says **Record** and does one thing: it records a meeting (minutes, and
 Persona can attend with the hub's default role), named after the calendar event on now when there is one, or opens the
-recording running. That is the drawer's row, the Recordings page's button, the home screen's menu, the Control and Siri /
-Shortcuts. Reason: two large buttons, **Meeting Recording** and **Start Recording**, looked alike and owners couldn't tell
-which to press; impromptu talks are meetings too (principles 1 and 4).
+recording running. That is the Recordings page's button, the main conversation's + list, the home screen's menu, the
+Control and Siri / Shortcuts. Reason: two large buttons, **Meeting Recording** and **Start Recording**, looked alike and
+owners couldn't tell which to press; impromptu talks are meetings too (principles 1 and 4).
+
+- **The drawer's row is a place, not a start** (#5517): **Recordings** (录音 / 録音), first among the drawer's places,
+  opens the Recordings page, as each row under it opens its page; Record there starts. While a recording runs the row
+  reads **Recording… Open** and opens it. Reason: the row said Record and started at a tap, while in zh-Hans and ja it
+  reads as the page's name, so owners tapping it to see their recordings got one running (principle 4: a drawer row
+  goes somewhere; a verb belongs on the control that acts).
 
 - **The Recordings page**: Record is the one prominent button (`.themedButton(prominent: true)`, one line, the icon going
   at accessibility sizes), with the calendar line under it. The options follow as one row each: **Type**, a menu
@@ -1570,7 +1576,7 @@ which to press; impromptu talks are meetings too (principles 1 and 4).
   a note turns Persona off, and the sheet shows the live view; turning it back makes it a meeting with Persona's part as a
   start would get it, and a room meeting's page again.
 - Identifiers for tests: `recording-meeting-start` (Record), `recording-kind` and `recording-kind-detail` at the start,
-  `recording-page-menu` and `recording-kind-now` while recording; `sidebar-meeting-recording` for the drawer's row. UI
+  `recording-page-menu` and `recording-kind-now` while recording; `sidebar-meeting-recording` for the drawer's Recordings row. UI
   tests: `RecordEntryUITests`. The watch keeps its two entries for now.
 
 ## Checking typed credentials by themselves (#4881)

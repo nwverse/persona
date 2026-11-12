@@ -8,7 +8,8 @@ final class MeetingRecordingUITests: XCTestCase {
     private let live = "00000000-0000-0000-0000-000000000002"
     private let past = "00000000-0000-0000-0000-000000000003"
 
-    /// The Recordings page leads with Record, its one prominent button (#5243); the drawer has it first among the places.
+    /// The Recordings page leads with Record, its one prominent button (#5243); the drawer has the page first among its
+    /// places (#5517).
     @MainActor func testMeetingRecordingIsOneTapAway() throws {
         let hub = try mockHub()
         let app = XCUIApplication()

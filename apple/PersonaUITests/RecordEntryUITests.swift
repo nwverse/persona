@@ -2,10 +2,11 @@ import XCTest
 
 /// One Record entry on the iPhone (#5243, docs/apple/recording.md「Meeting recordings」), against a mock hub (PERSONA_MOCK_HUB)
 /// with the meeting conversation on: the Recordings page has one prominent Record button and a Meeting / Note choice under
-/// it (Note hides Persona's options), the drawer's row says Record, and a running recording's page menu turns it into a
-/// note and back (the mock's `GET /mock/recordings` shows each upload's `kind`). A made-up meeting stands in for the
-/// microphone (`-showMeetingSample room-listening`); Record itself is never tapped (it would open the microphone). The app
-/// runs in zh-Hans. PERSONA_SHOTS=<dir> saves record-<appearance>-<name>.png (PERSONA_SHOTS_APPEARANCE names the appearance).
+/// it (Note hides Persona's options), the drawer's row is Recordings and opens the page (#5517), and a running recording's
+/// page menu turns it into a note and back (the mock's `GET /mock/recordings` shows each upload's `kind`). A made-up meeting
+/// stands in for the microphone (`-showMeetingSample room-listening`); Record itself is never tapped (it would open the
+/// microphone). The app runs in zh-Hans. PERSONA_SHOTS=<dir> saves record-<appearance>-<name>.png
+/// (PERSONA_SHOTS_APPEARANCE names the appearance).
 final class RecordEntryUITests: XCTestCase {
     private let live = "00000000-0000-0000-0000-000000000002"
 
@@ -67,9 +68,11 @@ final class RecordEntryUITests: XCTestCase {
         XCTAssertTrue(role.waitForExistence(timeout: 5), "Meeting shows Persona's options again")
     }
 
-    /// The drawer's row says Record, as the page does.
-    @MainActor func testTheDrawerSaysRecord() throws {
+    /// The drawer's row is Recordings (录音), a place like the rows under it (#5517): a tap opens the page with its Record
+    /// button and records nothing (no start under way, no microphone prompt, nothing new on the hub). Record is the page's.
+    @MainActor func testTheDrawerOpensRecordings() throws {
         let hub = try mockHub()
+        let before = recordingIDs(hub)
         // Opened with its button, as a finger does: a drawer opened by the launch argument can come up without its rows.
         let app = launch(hub, ["-newAssistant", "YES"])
         let menu = app.buttons["assistant-sidebar-button"].firstMatch
@@ -79,8 +82,20 @@ final class RecordEntryUITests: XCTestCase {
         let row = app.buttons["sidebar-meeting-recording"].firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 15), app.debugDescription)
         XCTAssertTrue(row.label.contains("录音"), row.label)
-        XCTAssertFalse(row.label.contains("会议"), "Record, not Meeting Recording: \(row.label)")
+        XCTAssertFalse(row.label.contains("会议") || row.label.contains("录音中"), "Recordings, not Meeting Recording: \(row.label)")
         try shot(app, "drawer")
+
+        row.tap()
+        let record = app.buttons["recording-meeting-start"]
+        XCTAssertTrue(record.waitForExistence(timeout: 15), "the row opens Recordings: \(app.debugDescription)")
+        XCTAssertEqual(record.label, "录音")
+        sleep(3)
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        XCTAssertFalse(springboard.alerts.firstMatch.exists, "no microphone prompt: the row starts nothing")
+        XCTAssertTrue(record.isEnabled, "no start under way (Record is disabled while one starts)")
+        XCTAssertFalse(app.buttons["recording-stop"].exists, "nothing recording")
+        XCTAssertEqual(recordingIDs(hub), before, "the hub got a recording")
+        try shot(app, "drawer-opens")
     }
 
     /// A room meeting being recorded: its page menu turns it into a note (the hub gets `kind: note` without the room, and
@@ -187,6 +202,13 @@ final class RecordEntryUITests: XCTestCase {
     }
 
     private func kind(_ hub: String) -> String? { upload(hub)?["kind"] as? String }
+
+    /// Every recording the mock has been sent.
+    private func recordingIDs(_ hub: String) -> Set<String> {
+        guard let data = try? Data(contentsOf: URL(string: hub + "/mock/recordings")!),
+              let all = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [] }
+        return Set(((all["recordings"] as? [String: Any]) ?? [:]).keys)
+    }
 
     private func room(_ hub: String) -> [String: Any]? { upload(hub)?["room"] as? [String: Any] }
 }
