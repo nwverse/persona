@@ -108,6 +108,11 @@ func TestClaudeSkillCatalogDoesNotBypassCustomizationOrSkillPermissions(t *testi
 			t.Fatalf("exact-file adapter must not bypass policy: %s", settings)
 		}
 	}
+	writeFile(t, filepath.Join(profile, "settings.json"), `{}`)
+	writeFile(t, filepath.Join(profile, "remote-settings.json"), `{"strictPluginOnlyCustomization":["skills"]}`)
+	if _, err := visibleClaudeSkills(entries, profile, cwd); err == nil {
+		t.Fatal("managed policy cache must not be bypassed by exact-file instructions")
+	}
 }
 
 func TestCodexSkillCatalogToTypedTurnAndSteer(t *testing.T) {

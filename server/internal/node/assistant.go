@@ -473,9 +473,10 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 
 	n.persistModes(id, mode, effort) // after saving state, including defaults filled on resume
 	n.noteAssistantRecoveryProcess(ctx, p)
-	if launcher != selectedLauncher || execution != selectedExecution {
+	if launcher != selectedLauncher || execution != selectedExecution || len(selected) > 0 && p.agent == "claude" {
 		// An active process may retain its old environment while a switch waits. Never send selections to that
-		// different environment simply because the display names match.
+		// different environment simply because the display names match. Claude startup can also
+		// reveal a managed-policy cache; recheck before handing exact-file instructions to it.
 		selected, err = n.selectedSkills(ctx, id, cwd, launcher, text, execution)
 		if err != nil {
 			return "", err
