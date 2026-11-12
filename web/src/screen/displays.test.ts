@@ -81,6 +81,15 @@ describe("one display on the page", () => {
     expect(clampInto(box, 150, 100)).toEqual({ x: 150, y: 100 });
   });
 
+  // A centered box rarely has whole-pixel edges, and a dispatched mouse event's position comes out as whole pixels: a
+  // point kept on the edge itself (81.5) would come back as 81, outside, and be sent again without end.
+  it("keeps a point on whole pixels inside a box with fractional edges", () => {
+    const box = { left: 100.5, top: 81.5, right: 340.5, bottom: 231.5 };
+    expect(clampInto(box, 20, 20)).toEqual({ x: 101, y: 82 });
+    expect(clampInto(box, 400, 300)).toEqual({ x: 339, y: 230 });
+    expect(clampInto(box, 150.25, 100.75)).toEqual({ x: 150.25, y: 100.75 });
+  });
+
   // While a button is down noVNC hears the pointer anywhere on the page: a drag out of the box must not reach the
   // display hidden next to it.
   it("keeps a drag that leaves the box on the display shown", () => {
@@ -105,6 +114,45 @@ describe("one display on the page", () => {
     heard.length = 0;
     send("mousemove", 20, 300);
     expect(heard).toEqual([["mousemove", 20, 300, 1]]);
+    box.remove();
+  });
+
+  it("sends a drag out of a box with fractional edges again once, inside it", () => {
+    const box = document.createElement("div");
+    const canvas = document.createElement("canvas");
+    box.append(canvas);
+    document.body.append(box);
+    box.getBoundingClientRect = () => ({ left: 98.9, top: 81.5, right: 1182.1, bottom: 758.5, width: 1083.2, height: 677, x: 98.9, y: 81.5, toJSON() {} });
+    const heard: [number, number][] = [];
+    canvas.addEventListener("mouseup", (e) => heard.push([e.clientX, e.clientY]));
+    const undo = keepPointerIn(box);
+    canvas.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, clientX: 10, clientY: 20 }));
+    expect(heard).toEqual([[99, 82]]);
+    undo();
+    box.remove();
+  });
+
+  // noVNC turns touches into gesture events whose detail carries the position it then reads.
+  it("keeps a touch gesture on the display shown", () => {
+    const box = document.createElement("div");
+    const canvas = document.createElement("canvas");
+    box.append(canvas);
+    document.body.append(box);
+    box.getBoundingClientRect = () => ({ left: 100.5, top: 50, right: 340, bottom: 200, width: 239.5, height: 150, x: 100.5, y: 50, toJSON() {} });
+    const heard: [string, number, number][] = [];
+    for (const type of ["gesturestart", "gesturemove", "gestureend"]) {
+      canvas.addEventListener(type, (e) => {
+        const d = (e as CustomEvent<{ clientX: number; clientY: number }>).detail;
+        heard.push([type, d.clientX, d.clientY]);
+      });
+    }
+    const gesture = (type: string, x: number, y: number) => canvas.dispatchEvent(new CustomEvent(type, { bubbles: true, detail: { type: "drag", clientX: x, clientY: y } }));
+    const undo = keepPointerIn(box);
+    gesture("gesturestart", 150, 100);
+    gesture("gesturemove", 20, 300);
+    gesture("gestureend", 500, 120);
+    expect(heard).toEqual([["gesturestart", 150, 100], ["gesturemove", 101, 199], ["gestureend", 339, 120]]);
+    undo();
     box.remove();
   });
 });
