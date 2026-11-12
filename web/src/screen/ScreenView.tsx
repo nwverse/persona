@@ -209,13 +209,14 @@ export function ScreenView({ target }: { target: ScreenTarget }) {
   }, [fb, reask]);
 
   const offered = useMemo(() => (fb ? layoutDisplays(displays, fb) : []), [displays, fb]);
-  // A page an app embeds has no bar to choose in, so it shows every display whatever this browser kept.
-  const shown = target.embedded ? null : (offered.find((d) => d.id === choice) ?? null);
   // The menu is a chunk of its own (its words stay off the first screen's catalog), loaded once there is a choice to
   // offer. One that would not load (offline, the hub redeployed) leaves the page showing every display, and is asked for
   // again the next time the screen goes live.
   const offering = !target.embedded && phase.kind === "live" && offered.length > 1;
   const [DisplayMenu, setDisplayMenu] = useState<DisplayMenuView | null>(null);
+  // One display only while its menu is there to go back to all of them: a page an app embeds has no bar to choose in,
+  // and a menu that would not load leaves none.
+  const shown = DisplayMenu ? (offered.find((d) => d.id === choice) ?? null) : null;
   useEffect(() => {
     if (DisplayMenu || !offering) return;
     let gone = false;
